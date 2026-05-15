@@ -121,13 +121,13 @@ project/
 |   |
 |   `-- epics/
 |       |
-|       `-- E-25F-H2X9-authentication/
+|       `-- E-0V9K4F-authentication/
 |           # Một capability stream / domain lớn.
 |           |
 |           |-- README.md
 |           |   # Epic overview: mục tiêu, boundary, stories liên quan.
 |           |
-|           `-- S-25F-K3W8-oauth-login/
+|           `-- S-0V9K4G-oauth-login/
 |               # Một story / delivery slice cụ thể.
 |               |
 |               |-- README.md
@@ -154,7 +154,7 @@ project/
 |               `-- tasks/
 |                   # Nội dung human-facing cho TASK/BUG thuộc story.
 |                   |
-|                   |-- T-25F-7K9M-session-store/
+|                   |-- T-0V9K4H-session-store/
 |                   |   |
 |                   |   |-- README.md
 |                   |   |   # Canonical entry file cho task.
@@ -162,7 +162,7 @@ project/
 |                   |   `-- verification.md
 |                   |       # Narrative proof / commands / attempts / gaps cho task.
 |                   |
-|                   `-- B-25F-M8R2-mobile-oauth-bounce/
+|                   `-- B-0V9K4J-mobile-oauth-bounce/
 |                       |
 |                       |-- README.md
 |                       `-- verification.md
@@ -518,9 +518,9 @@ Dependency graph được giữ độc lập với hierarchy.
 
 Ví dụ:
 
-- `S-25F-K3W8` là child của `E-25F-H2X9`
-- `T-25F-7K9M` là child của `S-25F-K3W8`
-- `T002` phụ thuộc `T-25F-7K9M`
+- `S-0V9K4G` là child của `E-0V9K4F`
+- `T-0V9K4H` là child của `S-0V9K4G`
+- `T-0V9K4K` phụ thuộc `T-0V9K4H`
 
 Trong trường hợp này:
 
@@ -533,8 +533,8 @@ Vì canonical ID không còn là số tăng dần, CLI nên hỗ trợ nhập **
 
 Ví dụ:
 
-- lưu canonical `T-25F-7K9M`
-- cho phép `pulse-work show T-25F`
+- lưu canonical `T-0V9K4H`
+- cho phép `pulse-work show T-0V9K4H`
 - nếu prefix match nhiều item thì CLI bắt buộc user gõ dài hơn
 
 ---
@@ -575,7 +575,7 @@ Hoàn thành và đã đóng.
 Một item vẫn có thể là `OPEN` nhưng:
 
 - `ready = false`
-- `blocked_by_dependencies = [T-25F-7K9M, T-25F-Q2N4]`
+- `blocked_by_dependencies = [T-0V9K4H, T-0V9K4K]`
 
 Tức là:
 
@@ -586,26 +586,29 @@ Tức là:
 
 ## ID strategy được chốt
 
-Canonical IDs sẽ là **short distributed-safe IDs theo kind**, không encode full hierarchy và không dựa vào global counter.
+Canonical IDs sẽ là **short timestamp-derived IDs theo kind**, không encode full hierarchy và không dựa vào global counter.
 
 ### Format canonical ID
 
 ```text
-<KIND>-<TIMEBUCKET>-<RANDOM>
+<KIND>-<TIMESECOND>[-<SEQ>]
 ```
 
 Ví dụ:
 
-- `E-25F-H2X9`
-- `S-25F-K3W8`
-- `T-25F-7K9M`
-- `B-25F-M8R2`
+- `E-0V9K4F`
+- `S-0V9K4G`
+- `T-0V9K4H`
+- `T-0V9K4H-1` nếu có collision cùng kind/cùng second
+- `B-0V9K4J`
 
 Trong đó:
 
 - `<KIND>` là prefix theo loại item: `E`, `S`, `T`, `B`
-- `<TIMEBUCKET>` là short creation bucket để tăng readability và hỗ trợ eyeballing order gần đúng
-- `<RANDOM>` là suffix random ngắn, dùng alphabet tránh ký tự mơ hồ để giảm conflict khi nhiều người tạo item trên các branch khác nhau
+- `<TIMESECOND>` là UTC Unix timestamp ở second granularity, encode compact bằng Base32 alphabet tránh ký tự dễ nhầm
+- `<SEQ>` là sequence suffix chỉ xuất hiện khi collision trong cùng kind/cùng second
+
+Second-level timebucket đủ ngắn và dễ sort gần đúng theo thời gian, đồng thời giảm nhu cầu random suffix trong v1.
 
 ### Quy tắc chốt
 
@@ -613,6 +616,12 @@ Trong đó:
 - không có `display_id` tuần tự kiểu `T233`
 - không có shared counter file như `_id.json` hay `ids.json`
 - ID phải immutable sau khi tạo
+- timebucket dùng compact UTC second encode bằng Base32 tránh ký tự dễ nhầm
+- không dùng random suffix trong v1
+- `pulse-work create` phải check collision trong `items.jsonl` trước khi ghi
+- nếu collision cùng kind/cùng second xảy ra, CLI append sequence suffix `-1`, `-2`, ... và chọn sequence đầu tiên chưa tồn tại
+- sequence suffix chỉ là collision resolver, không phải display counter hoặc global counter
+- input ID từ CLI có thể normalize case khi resolve, nhưng persisted canonical ID vẫn uppercase
 
 ### Không dùng các dạng sau
 
@@ -631,10 +640,14 @@ Trong đó:
 
 ### Hệ quả tích cực
 
-- tạo item offline hoặc trên branch riêng vẫn an toàn hơn
+- tạo item offline hoặc trên branch riêng vẫn an toàn hơn counter dùng chung
 - merge nhiều luồng công việc song song không cần coordinator trung tâm chỉ để cấp ID
 - user vẫn có ID ngắn, có kind prefix, và đủ dễ đọc để dùng trong chat/CLI/review
-- schema vẫn đủ chỗ để gắn runtime assignment qua `assignee` mà không phải overload identity
+- runtime ownership không phải overload identity; nếu cần tránh double-work thì dùng reservation trong `.pulse/runtime/`
+
+### Collision note
+
+Trong cùng một checkout, `pulse-work create` đi qua runtime queue + lock file nên có thể check collision và chọn sequence suffix an toàn trước khi ghi. Across branches vẫn có khả năng cực thấp hai nhánh tạo cùng kind đúng cùng second; khi merge, `pulse-work doctor` phải detect duplicate ID và yêu cầu regenerate một bên trước khi graph được coi là healthy.
 
 ---
 
@@ -663,8 +676,13 @@ Mỗi dòng là một entity record.
 - `items.jsonl` là canonical writable source
 - `.pulse/workgraph/schema.json` là required ngay từ v1 để validate records
 - `active/closed/ready/graph` chỉ là generated materialized views
+- generated views trong `.pulse/workgraph/views/` là local generated data và phải được gitignored
+- Pulse onboarding/doctor safe-fix phải auto-ensure `.pulse/workgraph/views/` có trong `.gitignore`
 - không dùng hai file writable như `active.jsonl` và `closed.jsonl` làm dual source of truth
 - không tạo event-sourced log riêng ngoài `items.jsonl` trong v1
+- mọi mutation phải đi qua `pulse-work` runtime queue để serialize write vào `items.jsonl`
+- runtime queue là process-local/in-memory queue được bảo vệ bằng lock file; không persist pending queue như canonical state
+- write vào `items.jsonl` phải dùng atomic write; không partial-write trực tiếp vào canonical file
 
 ### Lý do
 
@@ -676,6 +694,8 @@ Nếu có hai canonical writable files (`active` + `closed`), sẽ phát sinh c�
 - race conditions
 - audit khó sạch
 
+Runtime queue giải quyết coordination khi nhiều agent/CLI process muốn mutate graph trên cùng checkout, nhưng không biến mutation history thành source of truth mới. Queue không được persist như durable pending log; nếu process chết giữa chừng, mutation chưa apply phải được retry từ command/user intent thay vì replay từ canonical log. Sau khi transaction được apply, `items.jsonl` vẫn là snapshot canonical duy nhất.
+
 ---
 
 ## Schema v1 được chốt cho `items.jsonl`
@@ -684,22 +704,21 @@ Ví dụ record:
 
 ```json
 {
-  "id": "T-25F-7K9M",
+  "id": "T-0V9K4H",
   "kind": "TASK",
   "title": "Implement session store",
   "slug": "session-store",
   "status": "OPEN",
-  "parent_id": "S-25F-K3W8",
-  "epic_id": "E-25F-H2X9",
+  "parent_id": "S-0V9K4G",
+  "epic_id": "E-0V9K4F",
   "depends_on": [],
   "priority": 2,
   "owner": null,
-  "assignee": "agent-executor-1",
   "labels": ["auth", "session"],
   "risk_flags": ["AUTH", "EXISTING_BEHAVIOR"],
   "blocked_reason": null,
-  "content_path": "works/epics/E-25F-H2X9-authentication/S-25F-K3W8-oauth-login/tasks/T-25F-7K9M-session-store/README.md",
-  "verification_path": "works/epics/E-25F-H2X9-authentication/S-25F-K3W8-oauth-login/tasks/T-25F-7K9M-session-store/verification.md",
+  "content_path": "works/epics/E-0V9K4F-authentication/S-0V9K4G-oauth-login/tasks/T-0V9K4H-session-store/README.md",
+  "verification_path": "works/epics/E-0V9K4F-authentication/S-0V9K4G-oauth-login/tasks/T-0V9K4H-session-store/verification.md",
   "created_at": "2026-05-14T10:00:00Z",
   "updated_at": "2026-05-14T10:00:00Z",
   "closed_at": null
@@ -724,24 +743,85 @@ Ví dụ record:
 
 - `priority`
 - `owner`
-- `assignee`
 - `labels`
 - `risk_flags`
 - `verification_path`
 - `blocked_reason`
 - `closed_at`
 
-### Semantics cho assignment
+## Validation rules v1
 
-- `assignee` = agent name hoặc actor name đang được assign trực tiếp để thực hiện item
-- `owner` = người hoặc role chịu trách nhiệm tổng thể cho item, có thể khác với assignee
+Schema v1 phải strict ngay từ đầu.
+
+### Enum / shape
+
+- `kind` enum: `EPIC`, `STORY`, `TASK`, `BUG`
+- `status` enum: `OPEN`, `IN_PROGRESS`, `BLOCKED`, `CLOSED`
+- `priority` dùng convention P0 highest: số nhỏ hơn là ưu tiên cao hơn; `0` là cao nhất
+- `labels` là free-form string array
+- `risk_flags` là enum strict để phục vụ validation/review routing
+- `risk_flags` enum v1: `AUTH`, `DATA`, `SECURITY`, `MIGRATION`, `EXISTING_BEHAVIOR`, `EXTERNAL_API`, `PERFORMANCE`, `UX`, `CI`, `UNKNOWN`
+- timestamp fields dùng ISO 8601 UTC string
+- `depends_on` là array ID canonical, không cho duplicate
+
+### Nullability / conditional fields
+
+- `parent_id = null` chỉ hợp lệ với `EPIC`
+- `epic_id` bắt buộc cho mọi item; với `EPIC`, `epic_id` phải bằng chính `id`
+- `blocked_reason` bắt buộc khi `status = BLOCKED`, và phải null khi không blocked
+- `closed_at` bắt buộc khi `status = CLOSED`, và phải null khi chưa closed
+- `verification_path` bắt buộc để close `TASK` hoặc `BUG`
+- `owner` có thể null
+
+### Hierarchy consistency
+
+- `STORY.parent_id` phải trỏ tới `EPIC`
+- `TASK.parent_id` có thể trỏ tới `STORY` hoặc `EPIC`
+- `BUG.parent_id` có thể trỏ tới `STORY` hoặc `EPIC`
+- `epic_id` phải consistent với ancestor epic của item
+
+### Dependency consistency
+
+- dependency có thể cross-epic
+- dependency ID phải tồn tại trong `items.jsonl`
+- item không được depend vào chính nó
+- dependency graph không được có cycle
+- `pulse-work` phải chặn mutation tạo cycle ngay khi write
+- `pulse-work doctor` vẫn phải detect cycle nếu file bị sửa tay
+
+### Status transitions
+
+State machine v1:
+
+```text
+OPEN        -> IN_PROGRESS | BLOCKED | CLOSED
+IN_PROGRESS -> BLOCKED | CLOSED | OPEN
+BLOCKED     -> OPEN | IN_PROGRESS | CLOSED
+CLOSED      -> OPEN   # chỉ qua reopen
+```
+
+`CLOSED` không được chuyển trực tiếp bằng `update status`; phải dùng `pulse-work reopen` để reset `closed_at` và đưa item về `OPEN`.
+
+### Close rules
+
+- không cho close parent nếu còn child chưa `CLOSED`
+- `TASK` và `BUG` chỉ được close khi `verification_path` tồn tại và có verification evidence tối thiểu
+- close phải set `closed_at`
+- reopen phải clear `closed_at`
+
+### Semantics cho ownership / reservation
+
+- `owner` = người hoặc role chịu trách nhiệm tổng thể cho item; có thể null
+- Pulse v2 không có `assignee` field trong `items.jsonl` v1
+- actor/agent đang thực hiện item ở thời điểm hiện tại được track bằng runtime reservation trong `.pulse/runtime/`, không phải metadata bền vững
+- reservation là lease ngắn hạn để tránh double-work giữa nhiều agent/process
 
 Ví dụ:
 
 - `owner = "quan"`
-- `assignee = "agent-executor-1"`
+- runtime reservation có thể ghi nhận `reserved_by = "agent-executor-1"` cho `T-0V9K4H` trong một TTL ngắn
 
-Nếu repo không cần tách hai khái niệm này ở v1, có thể tạm để `owner = null` và chỉ dùng `assignee` cho runtime work assignment.
+Nếu repo không cần owner bền vững, có thể để `owner = null` và chỉ dùng reservation cho runtime coordination.
 
 ---
 
@@ -752,6 +832,10 @@ Nếu repo không cần tách hai khái niệm này ở v1, có thể tạm đ�
 Graph metadata ở `.pulse/workgraph/`.
 
 Human-facing content ở `works/`.
+
+Markdown content là pure human-facing nội dung, không phải metadata source. Mọi metadata liên quan đến item như status, deps, owner, priority, blocked reason, timestamps chỉ có `items.jsonl` là source of truth.
+
+`pulse-work create` và `pulse-work update` được phép tạo và cập nhật markdown content trong `works/` khi cần, nhưng không được biến markdown thành mirror metadata thứ hai.
 
 ### Path strategy
 
@@ -768,10 +852,10 @@ Ví dụ:
 ```text
 works/
 `-- epics/
-    `-- E-25F-H2X9-authentication/
-        `-- S-25F-K3W8-oauth-login/
+    `-- E-0V9K4F-authentication/
+        `-- S-0V9K4G-oauth-login/
             `-- tasks/
-                `-- T-25F-7K9M-session-store/
+                `-- T-0V9K4H-session-store/
 ```
 
 ### Lý do
@@ -780,17 +864,37 @@ works/
 - slug chỉ giúp readability
 - rename slug không phá identity
 
+### Path safety
+
+- slug do CLI sinh phải là lowercase kebab-case ASCII
+- CLI phải strip unsafe characters hoặc reject title/slug không thể sanitize an toàn
+- reject path traversal (`..`, absolute path, encoded traversal)
+- reject ghi ra ngoài `works/`
+- không follow symlink để overwrite file ngoài vùng cho phép
+- không overwrite file/folder đã tồn tại trừ khi đó là update hợp lệ cho đúng item ID
+- move/rename content path nên đi qua `pulse-work update --slug` hoặc command tương đương; manual move khiến `content_path` broken phải được `doctor` báo lỗi
+
 ---
 
 ## Canonical markdown naming
 
 Mỗi entity directory sẽ có **`README.md` làm canonical living file**.
 
+Markdown entry files có thể có frontmatter tối thiểu chỉ để trace identity:
+
+```yaml
+---
+id: T-0V9K4H
+---
+```
+
+Frontmatter không được chứa status, deps, owner, priority, blocked reason, hoặc lifecycle timestamps. Các field đó chỉ thuộc `items.jsonl`.
+
 ### Ví dụ
 
-- `works/epics/E-25F-H2X9-authentication/README.md`
-- `works/epics/E-25F-H2X9-authentication/S-25F-K3W8-oauth-login/README.md`
-- `works/epics/E-25F-H2X9-authentication/S-25F-K3W8-oauth-login/tasks/T-25F-7K9M-session-store/README.md`
+- `works/epics/E-0V9K4F-authentication/README.md`
+- `works/epics/E-0V9K4F-authentication/S-0V9K4G-oauth-login/README.md`
+- `works/epics/E-0V9K4F-authentication/S-0V9K4G-oauth-login/tasks/T-0V9K4H-session-store/README.md`
 
 ### Không dùng các tên entry file khác nhau kiểu
 
@@ -839,6 +943,8 @@ Nếu bắt buộc quá nhiều file cho mọi item, Pulse v2 sẽ tái tạo fi
 
 Dùng làm entry backlog đơn giản cho application/product work chưa được slice thành EPIC/STORY/TASK/BUG.
 
+Một backlog entry nên được promote thành work item trong `items.jsonl` khi nó đã actionable: có scope/action đủ rõ và cần tracking status, dependency, hoặc owner.
+
 ### Không ưu tiên
 
 - `works/backlogs/` với nhiều tầng trừ khi thật sự phát sinh nhu cầu
@@ -857,7 +963,7 @@ Ví dụ:
 ```text
 works/
 `-- epics/
-    `-- E-25F-H2X9-authentication/
+    `-- E-0V9K4F-authentication/
         `-- README.md
 ```
 
@@ -877,8 +983,8 @@ Ví dụ:
 ```text
 works/
 `-- epics/
-    `-- E-25F-H2X9-authentication/
-        `-- S-25F-K3W8-oauth-login/
+    `-- E-0V9K4F-authentication/
+        `-- S-0V9K4G-oauth-login/
             |-- README.md
             |-- approach.md      # optional
             |-- execplan.md      # optional
@@ -891,7 +997,6 @@ works/
 ### Story `README.md` nên chứa
 
 - title
-- status
 - short request summary
 - scope / non-goals
 - acceptance criteria
@@ -899,6 +1004,8 @@ works/
 - related decisions
 - link tới `lifecycle-summary.md` nếu có
 - link tới task/bug verification evidence quan trọng
+
+Story `README.md` không chứa status/deps/owner/priority như metadata; các field đó derive từ `items.jsonl`.
 
 ---
 
@@ -909,10 +1016,10 @@ Ví dụ:
 ```text
 works/
 `-- epics/
-    `-- E-25F-H2X9-authentication/
-        `-- S-25F-K3W8-oauth-login/
+    `-- E-0V9K4F-authentication/
+        `-- S-0V9K4G-oauth-login/
             `-- tasks/
-                `-- T-25F-7K9M-session-store/
+                `-- T-0V9K4H-session-store/
                     |-- README.md
                     `-- verification.md
 ```
@@ -932,6 +1039,8 @@ works/
 - execution attempts nếu có retry hoặc failure trước khi pass
 - links tới generated proof artifacts, screenshots, logs, hoặc findings files
 - unresolved gaps
+
+`TASK` và `BUG` muốn close phải có `verification.md` tồn tại và có evidence tối thiểu. Nếu verification còn gap, gap phải được ghi rõ thay vì đóng im lặng.
 
 ### Quy tắc
 
@@ -976,10 +1085,10 @@ Top-level `history/` sẽ **không còn là source of truth chính**. Đồng th
 Thay vào đó:
 
 ```text
-S-25F-K3W8-oauth-login/
+S-0V9K4G-oauth-login/
 |-- lifecycle-summary.md      # optional durable closeout summary ở story level
 `-- tasks/
-    `-- T-25F-7K9M-session-store/
+    `-- T-0V9K4H-session-store/
         `-- verification.md   # execution attempts, commands, outputs, evidence, gaps
 ```
 
@@ -1017,6 +1126,19 @@ pulse-work
 
 ## Hành vi quan trọng nhất
 
+### Output format
+
+- mặc định output human-readable
+- mọi command cần automation phải hỗ trợ `--json`
+- JSON output phải ổn định hơn human output để agent/tooling parse
+
+### `create` / `update`
+
+- `pulse-work create` tạo record trong `items.jsonl` và có thể tạo folder/file content tương ứng trong `works/`
+- `pulse-work update` có thể cập nhật metadata và content path/slug/content liên quan khi cần
+- mọi metadata item phải ghi vào `items.jsonl`, không ghi metadata vào markdown ngoài frontmatter `id`
+- input ID nên hỗ trợ unique prefix; nếu prefix ambiguous thì CLI bắt buộc user gõ dài hơn
+
 ### `ready`
 Phải trả ra các item:
 
@@ -1024,7 +1146,38 @@ Phải trả ra các item:
 - không bị dependency blocking
 - không có external blocker
 
+Dependency chỉ được coi là satisfied khi dependency item đã `CLOSED`.
+
+Ready list sort theo:
+
+1. `priority` tăng dần, vì P0 là cao nhất
+2. `created_at` tăng dần
+3. `id` tăng dần để ổn định output
+
 Đây là phần quan trọng nhất cần giữ lại từ beads/Flywheel.
+
+### `doctor`
+
+`pulse-work doctor` v1 phải detect:
+
+- schema violation
+- duplicate item ID
+- missing dependency ID
+- dependency cycle
+- invalid hierarchy / inconsistent `epic_id`
+- broken `content_path` hoặc `verification_path`
+- stale hoặc missing generated views
+- `.pulse/workgraph/views/` chưa được gitignore
+- manual move/rename làm content path lệch khỏi `items.jsonl`
+
+`doctor` được phép safe-fix:
+
+- rebuild generated views
+- auto-ensure `.pulse/workgraph/views/` trong `.gitignore`
+- normalize deterministic ordering/output formatting
+- tạo missing directories/templates nếu không overwrite file hiện có
+
+`doctor` không được tự ý đổi metadata lifecycle, close/reopen item, hoặc overwrite human-authored markdown content.
 
 ---
 
@@ -1035,6 +1188,17 @@ Các nội dung từng deferred nay được chốt cho v1 như sau:
 - giữ `docs/GLOSSARY.md` mặc định
 - tạo repo-level tactical `works/test-matrix.md` ngay từ đầu
 - tạo `.pulse/workgraph/schema.json` ngay từ đầu
+- schema v1 strict ngay từ đầu
+- ID dùng compact UTC second + optional sequence suffix khi collision
+- generated views là local generated data và phải gitignored
+- onboarding/doctor safe-fix auto-ensure `.pulse/workgraph/views/` trong `.gitignore`
+- mutations đi qua process-local runtime queue + lock file nhưng queue không phải canonical audit log
+- CLI output mặc định human-readable, có `--json` cho automation
+- `priority` dùng P0 highest convention
+- `TASK`/`BUG` close bắt buộc có verification evidence
+- markdown content chỉ chứa nội dung human-facing; chỉ cho frontmatter `id`, không chứa metadata item
+- không có `assignee` field trong `items.jsonl` v1; actor/agent đang làm item chỉ được track bằng runtime reservation ngắn hạn
+- dependency cross-epic được phép, nhưng cycle bị chặn ngay khi write
 - không tạo event-sourced log riêng ngoài `items.jsonl` trong v1
 - defer `.pulse/cache/` sau v1
 
@@ -1107,24 +1271,41 @@ Lý do:
 
 Không làm cùng lúc cả 3 migration lớn.
 
-### Phase 1 — thay engine
+### Phase 1 — thay engine và route gate artifacts sớm
 
 - build `pulse-work`
 - build `.pulse/workgraph/`
-- giữ gate semantics cũ tạm thời
+- build strict `.pulse/workgraph/schema.json`
+- build process-local runtime queue + lock file để serialize mutations vào `items.jsonl`
+- build generated views và auto-ensure `.pulse/workgraph/views/` được gitignore
 - thay logic phụ thuộc `br` / `bv`
+- giữ gate semantics cũ về mặt human approval, nhưng route artifacts sớm sang `works/` thay vì tiếp tục coi `history/` là surface chính
 
-### Phase 2 — thay folder layout
+### Phase 2 — hoàn tất folder layout và skill routing
 
-- introduce `works/`
+- introduce đầy đủ `works/`
 - deprecate `history/` hiện tại
 - route work content sang `works/`
+- cập nhật skill contracts để đọc/write `works/` và `.pulse/workgraph/` theo source hierarchy mới
 
 ### Phase 3 — giảm artifact complexity
 
 - xác lập `README.md` làm canonical entry file
 - chỉ giữ optional satellite files khi cần
 - simplify skill read/write assumptions
+
+### Migration blueprint
+
+Migration từ beads/history sang Pulse v2 nên bắt đầu bằng manual blueprint, không one-shot script tự động ngay từ đầu.
+
+Blueprint cần mô tả:
+
+- cách map `.beads/` item cũ sang `.pulse/workgraph/items.jsonl`
+- cách map `history/<feature>/...` sang `works/epics/**`
+- cách preserve verification evidence vào task/bug `verification.md`
+- cách preserve story closeout vào `lifecycle-summary.md` khi cần
+- cách backup brownfield docs vào `.pulse/migrations/docs-backups/<timestamp-or-migration-id>/`
+- tiêu chí khi nào có thể bỏ hẳn `br` / `bv` khỏi workflow contracts
 
 ### Lý do cần chia phase
 
@@ -1158,10 +1339,20 @@ Pulse v2 sẽ đi theo hướng:
 14. **Giữ `docs/GLOSSARY.md` mặc định**
 15. **Tạo `works/test-matrix.md` ngay từ đầu cho tactical verification matrix**
 16. **Tạo `.pulse/workgraph/schema.json` ngay từ đầu**
-17. **Không tạo event-sourced log riêng ngoài `items.jsonl` trong v1**
-18. **Defer `.pulse/cache/` sau v1**
-19. **Hấp thụ `HARNESS.md` thành `.pulse/harness/HARNESS.md` làm durable operating harness contract**
-20. **Không giữ `docs/HARNESS_BACKLOG.md` hoặc trộn harness backlog vào `works/backlog.md`; harness improvement proposals đi vào `.pulse/harness/backlog.md`**
+17. **Schema v1 strict ngay từ đầu: enum/status transitions/hierarchy/dependency/close rules đều được validate**
+18. **ID dùng compact UTC second + optional sequence suffix khi collision, collision check trước khi ghi**
+19. **Generated views trong `.pulse/workgraph/views/` là local generated data và phải gitignored; onboarding/doctor safe-fix auto-ensure `.gitignore`**
+20. **Mọi mutation đi qua process-local runtime queue + lock file, nhưng queue không phải event-sourced canonical log**
+21. **Không tạo event-sourced log riêng ngoài `items.jsonl` trong v1**
+22. **Defer `.pulse/cache/` sau v1**
+23. **`pulse-work` mặc định output human-readable và hỗ trợ `--json` cho automation**
+24. **Ready list sort theo priority P0-highest, rồi `created_at`, rồi `id`**
+25. **TASK/BUG close bắt buộc có verification evidence**
+26. **Markdown trong `works/` là pure human-facing content, chỉ cho frontmatter `id`; metadata item chỉ thuộc `items.jsonl`**
+27. **Không có `assignee` field trong `items.jsonl` v1; `.pulse/runtime` reservation là runtime lease ngắn hạn cho actor/agent đang giữ item**
+28. **Dependency cross-epic được phép, nhưng cycle bị chặn khi write**
+29. **Hấp thụ `HARNESS.md` thành `.pulse/harness/HARNESS.md` làm durable operating harness contract**
+30. **Không giữ `docs/HARNESS_BACKLOG.md` hoặc trộn harness backlog vào `works/backlog.md`; harness improvement proposals đi vào `.pulse/harness/backlog.md`**
 
 ---
 
@@ -1169,12 +1360,13 @@ Pulse v2 sẽ đi theo hướng:
 
 Thứ tự nên làm tiếp:
 
-1. viết chi tiết `workgraph schema v1` và `.pulse/workgraph/schema.json`
-2. chốt `pulse-work CLI command spec`
-3. chốt `.pulse/harness/HARNESS.md` và `.pulse/harness/backlog.md` contract, gồm cách migrate từ harness-experimental
-4. chốt `works/` markdown contract (`README.md`, `approach.md`, `execplan.md`, `validation.md`, `verification.md`, `test-matrix.md`, `backlog.md`)
-5. lập migration blueprint từ Pulse hiện tại sang Pulse v2
-6. sửa dần skill contracts theo phase
+1. viết `.pulse/workgraph/schema.json` theo strict validation rules đã chốt
+2. viết `pulse-work CLI command spec` chi tiết cho create/update/list/ready/close/reopen/dep/doctor
+3. thiết kế process-local runtime queue + lock file để serialize mutations nhưng không tạo canonical event log
+4. chốt `.pulse/harness/HARNESS.md` và `.pulse/harness/backlog.md` contract, gồm cách migrate từ harness-experimental
+5. chốt template markdown cho `works/` với frontmatter `id` only
+6. lập manual migration blueprint từ Pulse hiện tại sang Pulse v2
+7. sửa dần skill contracts theo phase, bắt đầu bằng route gate artifacts sớm sang `works/`
 
 ---
 
