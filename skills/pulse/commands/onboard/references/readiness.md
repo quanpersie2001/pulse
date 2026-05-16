@@ -48,8 +48,8 @@ A useful readiness brief should include at least:
 - legacy migration warnings
 - recommended next command
 
-## Phase 1 note
+## Implementation note
 
-During Phase 1, `scripts/onboard_pulse.mjs` is a thin wrapper over the legacy onboarding script.
-That is implementation detail, not the long-term contract.
-The long-term contract is still this v2 readiness model.
+`/pulse onboard` is the operational authority for readiness and runtime maintenance.
+Repo-local helper scripts may re-export packaged implementations, but that is packaging detail, not the contract.
+The long-term contract is this v2 readiness model under `.pulse/runtime/`.

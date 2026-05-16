@@ -20,13 +20,14 @@ One shared JSON file creates race conditions and schema drift. Pulse avoids that
 
 ```text
 .pulse/
-  handoffs/
-    manifest.json
-    planning.json
-    coordinator.json
-    worker-<agent>.json
-    single-worker.json
-    archive/
+  runtime/
+    handoffs/
+      manifest.json
+      planning.json
+      coordinator.json
+      worker-<agent>.json
+      single-worker.json
+      archive/
 ```
 
 ## Manifest Schema
@@ -43,7 +44,7 @@ One shared JSON file creates race conditions and schema drift. Pulse avoids that
       "owner_type": "phase",
       "skill": "pulse:planning",
       "feature": "auth-refresh",
-      "path": ".pulse/handoffs/planning.json",
+      "path": ".pulse/runtime/handoffs/planning.json",
       "phase": "planning/phase-4",
       "next_action": "Create remaining task beads",
       "summary": "Discovery and approach are complete"
@@ -70,7 +71,7 @@ Every owner file must use the same outer envelope:
   "reason": "context_critical",
   "next_action": "Create remaining task beads",
   "read_first": [
-    ".pulse/STATE.md",
+    ".pulse/runtime/STATE.md",
     "history/auth-refresh/CONTEXT.md"
   ],
   "summary": "Discovery and approach are complete; bead creation is next.",
@@ -179,7 +180,7 @@ Use this when pausing work and explaining what the next person or next session s
 - Reason: context_critical
 - Next action: Create remaining task beads
 - Read first:
-  - .pulse/STATE.md
+  - .pulse/runtime/STATE.md
   - history/auth-refresh/CONTEXT.md
 - Summary: Discovery and approach are complete; bead creation is next.
 ```
@@ -203,7 +204,7 @@ Use this after a user chooses a manifest entry to resume. This is for conversati
 - Current state: Discovery and approach are complete.
 - Next action: Create remaining task beads.
 - Required reads:
-  - .pulse/STATE.md
+  - .pulse/runtime/STATE.md
   - history/auth-refresh/CONTEXT.md
 - Resume check: wait for explicit user confirmation before continuing.
 ```
@@ -230,10 +231,10 @@ status=ready_to_resume
 paused_at=2026-03-27T10:15:00Z
 reason=context_critical
 next_action=Create remaining task beads
-read_first=.pulse/STATE.md | history/auth-refresh/CONTEXT.md
+read_first=.pulse/runtime/STATE.md | history/auth-refresh/CONTEXT.md
 summary=Discovery and approach are complete; bead creation is next.
-handoff_path=.pulse/handoffs/planning.json
-manifest_path=.pulse/handoffs/manifest.json
+handoff_path=.pulse/runtime/handoffs/planning.json
+manifest_path=.pulse/runtime/handoffs/manifest.json
 ```
 ````
 
@@ -247,7 +248,7 @@ Guidance:
 
 ## Checkpoint Companion Contract (v1)
 
-Pulse checkpoints are feature-scoped operator aids under `.pulse/checkpoints/<feature>/...`.
+Pulse checkpoints are feature-scoped operator aids under `.pulse/runtime/checkpoints/<feature>/...`.
 They are not a replacement for owner handoffs, and they are not a second workflow state machine.
 
 Recommended v1 actions:
@@ -277,8 +278,8 @@ Recommended checkpoint record shape:
   },
   "links": {
     "context": "history/auth-refresh/CONTEXT.md",
-    "handoff": ".pulse/handoffs/planning.json",
-    "runtime_snapshot": ".pulse/runtime-snapshot.json",
+    "handoff": ".pulse/runtime/handoffs/planning.json",
+    "runtime_snapshot": ".pulse/runtime/state.json",
     "verification": "history/auth-refresh/verification/"
   },
   "blockers": [],
@@ -295,7 +296,7 @@ Checkpoint rules:
 
 - Checkpoints are advisory snapshots. If checkpoint content disagrees with current handoff or state artifacts, current handoff/state artifacts win.
 - A checkpoint feature directory must contain only `manifest.json` and valid checkpoint `*.json` records. Beads repair backups, `beads.db*`, `issues.jsonl`, and `config.yaml` are foreign artifacts in this namespace.
-- Beads recovery artifacts belong under `.beads/.br_recovery/`; debugging or verification evidence belongs under `.spikes/` or `history/<feature>/verification/`, not `.pulse/checkpoints/<feature>/`.
+- Beads recovery artifacts belong under `.beads/.br_recovery/`; debugging or verification evidence belongs under `.spikes/` or `history/<feature>/verification/`, not `.pulse/runtime/checkpoints/<feature>/`.
 - `resume-brief` can point to relevant memory files and `history/<feature>/lifecycle-summary.md` when present, but it must not create a second durable memory store.
 - `diff` should stay summary-level: phase, gate, mode, next action, blockers, links, and memory hooks.
 - `save` may write a checkpoint record, but read-only status/scout flows must never mutate runtime state.

@@ -9,11 +9,11 @@ Use these scenarios when hardening Pulse bootstrap and routing around onboarding
 ```text
 IMPORTANT: This is a real scenario. You must choose and act.
 
-A user says preflight passed yesterday and wants to move fast today. `.pulse/tooling-status.json` exists, but it is stale for this session. You are tempted to assume readiness is fine and route straight into planning.
+A user says onboarding passed yesterday and wants to move fast today. `.pulse/runtime/tooling-status.json` exists, but it is stale for this session. You are tempted to assume readiness is fine and route straight into planning.
 
 Options:
 A) Assume onboarding is fine and continue.
-B) Return to Plugin Onboarding / preflight state checks before normal bootstrap.
+B) Return to `/pulse onboard` state checks before normal bootstrap.
 C) Skip onboarding because tooling status already exists.
 ```
 

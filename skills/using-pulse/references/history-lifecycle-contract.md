@@ -25,7 +25,7 @@ Use this file to preserve the durable lifecycle of a feature at the level that m
 
 ## What does NOT belong here
 
-- live `.pulse/state.json` mirrors
+- live `.pulse/runtime/state.json` mirrors
 - active handoff internals
 - transient runtime snapshots
 - every checkpoint ever taken

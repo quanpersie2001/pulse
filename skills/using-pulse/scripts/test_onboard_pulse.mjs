@@ -29,20 +29,23 @@ test("applyRepo creates repo-local Pulse helpers under .pulse/scripts", () => {
     assert.ok(fs.existsSync(path.join(root, ".codex", "config.toml")));
     assert.equal(fs.existsSync(path.join(root, ".codex", "hooks.json")), false);
     assert.ok(fs.existsSync(path.join(root, ".pulse", "onboarding.json")));
-    assert.ok(fs.existsSync(path.join(root, ".pulse", "state.json")));
-    assert.ok(fs.existsSync(path.join(root, ".pulse", "current-feature.json")));
-    assert.ok(fs.existsSync(path.join(root, ".pulse", "runtime-snapshot.json")));
+    assert.ok(fs.existsSync(path.join(root, ".pulse", "runtime", "state.json")));
+    assert.ok(fs.existsSync(path.join(root, ".pulse", "runtime")));
+    assert.equal(fs.existsSync(path.join(root, ".pulse", "runtime", "current-feature.json")), false);
+    assert.equal(fs.existsSync(path.join(root, ".pulse", "runtime", "runtime-snapshot.json")), false);
     assert.ok(fs.existsSync(path.join(root, ".pulse", "workgraph", "schema.json")));
     assert.ok(fs.existsSync(path.join(root, ".pulse", "workgraph", "items.jsonl")));
     assert.ok(fs.existsSync(path.join(root, ".pulse", "workgraph", "views", "active.json")));
     assert.ok(fs.existsSync(path.join(root, ".pulse", "workgraph", "views", "closed.json")));
     assert.ok(fs.existsSync(path.join(root, ".pulse", "workgraph", "views", "ready.json")));
     assert.ok(fs.existsSync(path.join(root, ".pulse", "workgraph", "views", "graph.json")));
-    assert.ok(fs.existsSync(path.join(root, ".pulse", "checkpoints")));
+    assert.ok(fs.existsSync(path.join(root, ".pulse", "runtime", "checkpoints")));
     assert.ok(fs.existsSync(path.join(root, ".pulse", "memory", "learnings")));
     assert.ok(fs.existsSync(path.join(root, ".pulse", "memory", "corrections")));
     assert.ok(fs.existsSync(path.join(root, ".pulse", "memory", "ratchet")));
-    assert.ok(fs.existsSync(path.join(root, ".pulse", "reservations.json")));
+    assert.ok(fs.existsSync(path.join(root, ".pulse", "harness", "HARNESS_BACKLOG.md")));
+    assert.equal(fs.existsSync(path.join(root, ".pulse", "harness", "HARNESS.md")), false);
+    assert.ok(fs.existsSync(path.join(root, ".pulse", "runtime", "reservations.json")));
     assert.ok(fs.existsSync(path.join(root, ".pulse", "scripts", "pulse-work")));
     assert.ok(fs.existsSync(path.join(root, ".pulse", "scripts", "pulse_work.mjs")));
     assert.ok(fs.existsSync(path.join(root, ".pulse", "scripts", "workgraph_store.mjs")));
@@ -59,6 +62,186 @@ test("applyRepo creates repo-local Pulse helpers under .pulse/scripts", () => {
     assert.equal(fs.existsSync(path.join(root, ".codex", "pulse_status.mjs")), false);
     assert.equal(fs.existsSync(path.join(root, ".codex", "pulse_dependencies.mjs")), false);
     assert.equal(fs.existsSync(path.join(root, ".codex", "pulse_reservations.mjs")), false);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("applyRepo migrates legacy runtime files into canonical runtime layout", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "pulse-onboard-"));
+
+  try {
+    fs.mkdirSync(path.join(root, ".pulse", "handoffs"), { recursive: true });
+    fs.mkdirSync(path.join(root, ".pulse", "checkpoints", "legacy-feature"), { recursive: true });
+    fs.writeFileSync(
+      path.join(root, ".pulse", "state.json"),
+      `${JSON.stringify({
+        active_feature: "legacy-feature",
+        active_skill: "pulse:planning",
+        phase: "planning",
+        gate: "GATE 2",
+        gate_status: "approved",
+        handoff_manifest: ".pulse/handoffs/manifest.json",
+      }, null, 2)}\n`,
+      "utf8",
+    );
+    fs.writeFileSync(
+      path.join(root, ".pulse", "STATE.md"),
+      [
+        "Focus: legacy-feature",
+        "Phase: planning",
+        "Gate: GATE 2",
+        "Gate status: approved",
+      ].join("\n") + "\n",
+      "utf8",
+    );
+    fs.writeFileSync(
+      path.join(root, ".pulse", "tooling-status.json"),
+      `${JSON.stringify({
+        status: "PASS",
+        requested_mode: "swarm",
+        recommended_mode: "swarm",
+      }, null, 2)}\n`,
+      "utf8",
+    );
+    fs.writeFileSync(
+      path.join(root, ".pulse", "reservations.json"),
+      `${JSON.stringify({
+        schema_version: "1.0",
+        updated_at: "2026-04-16T10:00:00.000Z",
+        reservations: [
+          {
+            id: "legacy-reservation",
+            agent: "worker-blue-lake",
+            bead_id: "BEAD-014",
+            paths: ["skills/swarming/SKILL.md"],
+            created_at: "2026-04-16T10:00:00.000Z",
+            updated_at: "2026-04-16T10:00:00.000Z",
+            ttl_seconds: null,
+            expires_at: null,
+            status: "active",
+            released_at: null,
+            note: "legacy reservation",
+          },
+        ],
+      }, null, 2)}\n`,
+      "utf8",
+    );
+    fs.writeFileSync(
+      path.join(root, ".pulse", "handoffs", "manifest.json"),
+      `${JSON.stringify({
+        schema_version: "1.0",
+        updated_at: "2026-04-16T10:06:00.000Z",
+        active: [
+          {
+            owner_id: "planning",
+            owner_type: "phase",
+            skill: "pulse:planning",
+            feature: "legacy-feature",
+            path: ".pulse/handoffs/planning.json",
+            phase: "planning/phase-1",
+            next_action: "Resume planning",
+            summary: "Legacy planning handoff",
+            status: "ready_to_resume",
+            paused_at: "2026-04-16T10:06:00.000Z",
+            reason: "context_critical",
+            read_first: [".pulse/STATE.md", "history/legacy-feature/CONTEXT.md"],
+          },
+        ],
+      }, null, 2)}\n`,
+      "utf8",
+    );
+    fs.writeFileSync(
+      path.join(root, ".pulse", "handoffs", "planning.json"),
+      `${JSON.stringify({
+        schema_version: "2.0",
+        handoff_id: "planning-2026-04-16T10:06:00Z",
+        owner_type: "phase",
+        owner_id: "planning",
+        skill: "pulse:planning",
+        feature: "legacy-feature",
+        phase: "planning/phase-1",
+        status: "ready_to_resume",
+        paused_at: "2026-04-16T10:06:00.000Z",
+        reason: "context_critical",
+        next_action: "Resume planning",
+        read_first: [".pulse/STATE.md", "history/legacy-feature/CONTEXT.md"],
+        summary: "Legacy planning handoff",
+        payload: {},
+      }, null, 2)}\n`,
+      "utf8",
+    );
+    fs.writeFileSync(
+      path.join(root, ".pulse", "checkpoints", "legacy-feature", "manifest.json"),
+      `${JSON.stringify({
+        schema_version: "1.0",
+        updated_at: "2026-04-16T10:07:00.000Z",
+        checkpoints: [
+          {
+            checkpoint_id: "legacy-1",
+            path: "legacy-1.json",
+          },
+        ],
+      }, null, 2)}\n`,
+      "utf8",
+    );
+    fs.writeFileSync(
+      path.join(root, ".pulse", "checkpoints", "legacy-feature", "legacy-1.json"),
+      `${JSON.stringify({
+        schema_version: "1.0",
+        checkpoint_id: "legacy-1",
+        feature: "legacy-feature",
+        created_at: "2026-04-16T10:07:00.000Z",
+        summary: "Legacy checkpoint",
+        next_action: "Resume planning",
+        captured: {
+          phase: "planning/phase-1",
+          gate: "GATE 2",
+          mode: "standard_feature",
+          story: "",
+          bead: "",
+        },
+        links: {
+          handoff: ".pulse/handoffs/planning.json",
+          runtime_snapshot: ".pulse/state.json",
+        },
+        blockers: [],
+        memory_hooks: {},
+      }, null, 2)}\n`,
+      "utf8",
+    );
+
+    const checked = checkRepo(root);
+    assert.equal(checked.status, "needs_onboarding");
+    assert.ok(checked.actions.includes("migrate_legacy_runtime_artifacts"));
+
+    const applied = applyRepo(root, false);
+    const migratedState = JSON.parse(fs.readFileSync(path.join(root, ".pulse", "runtime", "state.json"), "utf8"));
+    const migratedManifest = JSON.parse(
+      fs.readFileSync(path.join(root, ".pulse", "runtime", "handoffs", "manifest.json"), "utf8"),
+    );
+    const migratedHandoff = JSON.parse(
+      fs.readFileSync(path.join(root, ".pulse", "runtime", "handoffs", "planning.json"), "utf8"),
+    );
+    const migratedCheckpoint = JSON.parse(
+      fs.readFileSync(path.join(root, ".pulse", "runtime", "checkpoints", "legacy-feature", "legacy-1.json"), "utf8"),
+    );
+
+    assert.equal(applied.status, "up_to_date");
+    assert.ok(applied.result.managed_assets.migration_summary.migrated.length > 0);
+    assert.equal(migratedState.active_feature, "legacy-feature");
+    assert.equal(migratedState.handoff_manifest, ".pulse/runtime/handoffs/manifest.json");
+    assert.equal(migratedManifest.active[0].path, ".pulse/runtime/handoffs/planning.json");
+    assert.equal(migratedManifest.active[0].read_first[0], ".pulse/runtime/STATE.md");
+    assert.equal(migratedHandoff.read_first[0], ".pulse/runtime/STATE.md");
+    assert.equal(migratedCheckpoint.links.handoff, ".pulse/runtime/handoffs/planning.json");
+    assert.equal(migratedCheckpoint.links.runtime_snapshot, ".pulse/runtime/state.json");
+    assert.equal(fs.existsSync(path.join(root, ".pulse", "state.json")), false);
+    assert.equal(fs.existsSync(path.join(root, ".pulse", "STATE.md")), false);
+    assert.equal(fs.existsSync(path.join(root, ".pulse", "tooling-status.json")), false);
+    assert.equal(fs.existsSync(path.join(root, ".pulse", "reservations.json")), false);
+    assert.equal(fs.existsSync(path.join(root, ".pulse", "handoffs")), false);
+    assert.equal(fs.existsSync(path.join(root, ".pulse", "checkpoints")), false);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
@@ -293,7 +476,7 @@ test("packaged Codex hook commands execute packaged hook scripts", () => {
     assert.equal(sessionStart.hookSpecificOutput?.hookEventName, "SessionStart");
     assert.match(sessionStart.hookSpecificOutput?.additionalContext || "", /Pulse repo notes:/);
     assert.equal(preToolUse.continue, true);
-    assert.match(preToolUse.systemMessage || "", /Pulse expects `bv` only with `--robot-\*` flags/);
+    assert.match(preToolUse.systemMessage || "", /(migration warning|deprecated|pulse-work)/i);
     assert.equal(stop.continue, true);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
@@ -371,10 +554,9 @@ test("packaged Claude SessionStart hook falls back to using-pulse bootstrap befo
 
     assert.equal(payload.hookSpecificOutput?.hookEventName, "SessionStart");
     assert.match(additionalContext, /You have Pulse\./);
-    assert.match(additionalContext, /# using-pulse/);
-    assert.match(additionalContext, /pulse:preflight/);
+    assert.match(additionalContext, /\/pulse onboard/);
     assert.match(additionalContext, /Pulse repo notes:/);
-    assert.match(additionalContext, /Preflight readiness has not been established for this repo\./);
+    assert.match(additionalContext, /Onboarding readiness has not been established for this repo\./);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
@@ -599,8 +781,8 @@ test("pulse status scout renders json for an onboarded repo", async () => {
 
   try {
     applyRepo(root, false);
-    fs.rmSync(path.join(root, ".pulse", "current-feature.json"), { force: true });
-    fs.rmSync(path.join(root, ".pulse", "runtime-snapshot.json"), { force: true });
+    fs.rmSync(path.join(root, ".pulse", "runtime", "current-feature.json"), { force: true });
+    fs.rmSync(path.join(root, ".pulse", "runtime", "runtime-snapshot.json"), { force: true });
 
     const stdout = execFileSync("node", [path.join(root, ".pulse", "scripts", "pulse_status.mjs"), "--json"], {
       cwd: root,
@@ -612,17 +794,20 @@ test("pulse status scout renders json for an onboarded repo", async () => {
     const normalizedPayloadRoot = fs.realpathSync.native(payload.repo_root);
     assert.equal(normalizedPayloadRoot, normalizedRoot);
     assert.equal(payload.state_json.exists, true);
-    assert.equal(payload.current_feature.exists, false);
+    assert.equal(payload.current_feature.exists, true);
     assert.equal(payload.current_feature.feature_key, "");
-    assert.equal(payload.current_feature.phase, "");
-    assert.equal(payload.current_feature.status, "");
-    assert.equal(payload.runtime_snapshot.exists, false);
+    assert.equal(payload.current_feature.phase, "idle");
+    assert.equal(payload.current_feature.status, "idle");
+    assert.equal(payload.runtime_snapshot.exists, true);
     assert.equal(payload.runtime_snapshot.active_feature, "");
-    assert.equal(payload.runtime_snapshot.phase, "");
-    assert.equal(payload.runtime_snapshot.active_skill, "");
-    assert.equal(fs.existsSync(path.join(root, ".pulse", "current-feature.json")), false);
-    assert.equal(fs.existsSync(path.join(root, ".pulse", "runtime-snapshot.json")), false);
-    assert.equal(fs.existsSync(path.join(root, ".pulse", "checkpoints")), true);
+    assert.equal(payload.runtime_snapshot.phase, "idle");
+    assert.equal(payload.runtime_snapshot.active_skill, "pulse");
+    assert.equal(payload.runtime_snapshot.source.state_json, ".pulse/runtime/state.json");
+    assert.equal(payload.runtime_snapshot.source.state_markdown, ".pulse/runtime/STATE.md");
+    assert.equal(payload.runtime_snapshot.source.current_feature, "");
+    assert.equal(fs.existsSync(path.join(root, ".pulse", "runtime", "current-feature.json")), false);
+    assert.equal(fs.existsSync(path.join(root, ".pulse", "runtime", "runtime-snapshot.json")), false);
+    assert.equal(fs.existsSync(path.join(root, ".pulse", "runtime", "checkpoints")), true);
     assert.equal(fs.existsSync(path.join(root, ".pulse", "memory", "learnings")), true);
     assert.equal(fs.existsSync(path.join(root, ".pulse", "memory", "corrections")), true);
     assert.equal(fs.existsSync(path.join(root, ".pulse", "memory", "ratchet")), true);
@@ -639,13 +824,13 @@ test("pulse status scout renders json for an onboarded repo", async () => {
   }
 });
 
-test("syncPulseRuntimeArtifacts initializes and refreshes persisted control-plane mirrors", () => {
+test("syncPulseRuntimeArtifacts computes runtime state without persisting deprecated top-level mirrors", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "pulse-onboard-"));
 
   try {
     applyRepo(root, false);
     fs.writeFileSync(
-      path.join(root, ".pulse", "state.json"),
+      path.join(root, ".pulse", "runtime", "state.json"),
       `${JSON.stringify({
         active_feature: "sync-feature",
         active_skill: "pulse:planning",
@@ -658,37 +843,24 @@ test("syncPulseRuntimeArtifacts initializes and refreshes persisted control-plan
       "utf8",
     );
     fs.writeFileSync(
-      path.join(root, ".pulse", "STATE.md"),
+      path.join(root, ".pulse", "runtime", "STATE.md"),
       "Focus: markdown-feature\nPhase: execution\nGate: GATE 3\nGate status: approved\nNext action: manual_invoke\nNext skill recommended: pulse:executing\n",
       "utf8",
     );
 
     const synced = syncPulseRuntimeArtifacts(root);
-    const currentFeature = JSON.parse(
-      fs.readFileSync(path.join(root, ".pulse", "current-feature.json"), "utf8"),
-    );
-    const runtimeSnapshot = JSON.parse(
-      fs.readFileSync(path.join(root, ".pulse", "runtime-snapshot.json"), "utf8"),
-    );
 
     assert.equal(synced.current_feature.feature_key, "sync-feature");
-    assert.equal(currentFeature.feature_key, "sync-feature");
-    assert.equal(currentFeature.phase, "planning");
-    assert.equal(currentFeature.gate, "GATE 3");
-    assert.equal(currentFeature.gate_status, "approved");
-    assert.equal(currentFeature.status, "active");
-    assert.equal(currentFeature.next_action, "manual_invoke");
-    assert.equal(currentFeature.next_skill_recommended, "pulse:executing");
-    assert.equal(runtimeSnapshot.active_feature, "sync-feature");
-    assert.equal(runtimeSnapshot.active_skill, "pulse:planning");
-    assert.equal(runtimeSnapshot.phase, "planning");
-    assert.equal(runtimeSnapshot.gate, "GATE 3");
-    assert.equal(runtimeSnapshot.gate_status, "approved");
-    assert.equal(runtimeSnapshot.requested_mode, "swarm");
-    assert.equal(runtimeSnapshot.recommended_mode, "single-worker");
-    assert.equal(runtimeSnapshot.next_action, "manual_invoke");
-    assert.equal(runtimeSnapshot.next_skill_recommended, "pulse:executing");
-    assert.equal(runtimeSnapshot.source.current_feature, ".pulse/current-feature.json");
+    assert.equal(synced.current_feature.phase, "planning");
+    assert.equal(synced.current_feature.gate, "GATE 3");
+    assert.equal(synced.current_feature.gate_status, "approved");
+    assert.equal(synced.current_feature.next_action, "manual_invoke");
+    assert.equal(synced.runtime_snapshot.active_feature, "sync-feature");
+    assert.equal(synced.runtime_snapshot.active_skill, "pulse:planning");
+    assert.equal(synced.runtime_snapshot.phase, "planning");
+    assert.equal(synced.runtime_snapshot.requested_mode, "swarm");
+    assert.equal(fs.existsSync(path.join(root, ".pulse", "runtime", "current-feature.json")), false);
+    assert.equal(fs.existsSync(path.join(root, ".pulse", "runtime", "runtime-snapshot.json")), false);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
@@ -700,24 +872,18 @@ test("syncPulseRuntimeArtifacts treats '(none)' feature placeholders as empty po
   try {
     applyRepo(root, false);
     fs.writeFileSync(
-      path.join(root, ".pulse", "STATE.md"),
+      path.join(root, ".pulse", "runtime", "STATE.md"),
       "Focus: (none)\nPhase: preflight\n",
       "utf8",
     );
 
     const synced = syncPulseRuntimeArtifacts(root);
-    const currentFeature = JSON.parse(
-      fs.readFileSync(path.join(root, ".pulse", "current-feature.json"), "utf8"),
-    );
-    const runtimeSnapshot = JSON.parse(
-      fs.readFileSync(path.join(root, ".pulse", "runtime-snapshot.json"), "utf8"),
-    );
 
     assert.equal(synced.current_feature.feature_key, "");
     assert.equal(synced.current_feature.status, "idle");
-    assert.equal(currentFeature.feature_key, "");
-    assert.equal(currentFeature.status, "idle");
-    assert.equal(runtimeSnapshot.active_feature, "");
+    assert.equal(synced.runtime_snapshot.active_feature, "");
+    assert.equal(fs.existsSync(path.join(root, ".pulse", "runtime", "current-feature.json")), false);
+    assert.equal(fs.existsSync(path.join(root, ".pulse", "runtime", "runtime-snapshot.json")), false);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
@@ -729,7 +895,7 @@ test("pulse status scout recommends manual invocation after an approved gate by 
   try {
     applyRepo(root, false);
     fs.writeFileSync(
-      path.join(root, ".pulse", "state.json"),
+      path.join(root, ".pulse", "runtime", "state.json"),
       `${JSON.stringify({
         active_feature: "manual-gate-feature",
         active_skill: "pulse:validating",
@@ -744,7 +910,7 @@ test("pulse status scout recommends manual invocation after an approved gate by 
       "utf8",
     );
     fs.writeFileSync(
-      path.join(root, ".pulse", "STATE.md"),
+      path.join(root, ".pulse", "runtime", "STATE.md"),
       [
         "Focus: manual-gate-feature",
         "Phase: go-mode/gate-3",
@@ -794,36 +960,34 @@ test("pulse status scout surfaces current-feature, runtime snapshot, canonical h
     applyRepo(root, false);
 
     fs.writeFileSync(
-      path.join(root, ".pulse", "current-feature.json"),
+      path.join(root, ".pulse", "runtime", "state.json"),
       `${JSON.stringify({
-        feature_key: "operator-surface-foundation",
+        active_feature: "operator-surface-foundation",
+        active_skill: "pulse:planning",
         phase: "planning",
         gate: "GATE 2",
-        status: "active",
-        updated_at: "2026-04-16T10:00:00.000Z",
-      }, null, 2)}\n`,
-      "utf8",
-    );
-    fs.writeFileSync(
-      path.join(root, ".pulse", "runtime-snapshot.json"),
-      `${JSON.stringify({
-        schema_version: "1.0",
-        active_feature: "snapshot-feature",
-        active_skill: "pulse:planning",
-        phase: "validating",
+        gate_status: "approved",
         requested_mode: "swarm",
         recommended_mode: "swarm",
-        updated_at: "2026-04-16T10:05:00.000Z",
-        source: {
-          state_json: ".pulse/state.json",
-          state_markdown: ".pulse/STATE.md",
-          current_feature: ".pulse/current-feature.json",
-        },
+        next_action: "manual_invoke",
+        next_skill_recommended: "pulse:validating",
       }, null, 2)}\n`,
       "utf8",
     );
     fs.writeFileSync(
-      path.join(root, ".pulse", "reservations.json"),
+      path.join(root, ".pulse", "runtime", "STATE.md"),
+      [
+        "Focus: operator-surface-foundation",
+        "Phase: planning",
+        "Gate: GATE 2",
+        "Gate status: approved",
+        "Next action: manual_invoke",
+        "Next skill recommended: pulse:validating",
+      ].join("\n") + "\n",
+      "utf8",
+    );
+    fs.writeFileSync(
+      path.join(root, ".pulse", "runtime", "reservations.json"),
       `${JSON.stringify({
         schema_version: "1.0",
         updated_at: "2026-04-16T10:05:30.000Z",
@@ -947,11 +1111,11 @@ test("pulse status scout surfaces current-feature, runtime snapshot, canonical h
       ].join("\n"),
       "utf8",
     );
-    fs.mkdirSync(path.join(root, ".pulse", "checkpoints", "operator-surface-foundation"), {
+    fs.mkdirSync(path.join(root, ".pulse", "runtime", "checkpoints", "operator-surface-foundation"), {
       recursive: true,
     });
     fs.writeFileSync(
-      path.join(root, ".pulse", "checkpoints", "operator-surface-foundation", "manifest.json"),
+      path.join(root, ".pulse", "runtime", "checkpoints", "operator-surface-foundation", "manifest.json"),
       `${JSON.stringify({
         schema_version: "1.0",
         updated_at: "2026-04-16T10:07:00.000Z",
@@ -965,7 +1129,7 @@ test("pulse status scout surfaces current-feature, runtime snapshot, canonical h
       "utf8",
     );
     fs.writeFileSync(
-      path.join(root, ".pulse", "checkpoints", "operator-surface-foundation", "2026-04-16T10-07-00Z-planning.json"),
+      path.join(root, ".pulse", "runtime", "checkpoints", "operator-surface-foundation", "2026-04-16T10-07-00Z-planning.json"),
       `${JSON.stringify({
         schema_version: "1.0",
         checkpoint_id: "2026-04-16T10-07-00Z-planning",
@@ -982,8 +1146,8 @@ test("pulse status scout surfaces current-feature, runtime snapshot, canonical h
         },
         links: {
           context: "history/operator-surface-foundation/CONTEXT.md",
-          handoff: ".pulse/handoffs/planning.json",
-          runtime_snapshot: ".pulse/runtime-snapshot.json",
+          handoff: ".pulse/runtime/handoffs/planning.json",
+          runtime_snapshot: ".pulse/runtime/state.json",
           verification: ".pulse/runs/operator-surface-foundation/verification/",
         },
         blockers: ["Awaiting validation approval"],
@@ -996,9 +1160,9 @@ test("pulse status scout surfaces current-feature, runtime snapshot, canonical h
       }, null, 2)}\n`,
       "utf8",
     );
-    fs.mkdirSync(path.join(root, ".pulse", "handoffs"), { recursive: true });
+    fs.mkdirSync(path.join(root, ".pulse", "runtime", "handoffs"), { recursive: true });
     fs.writeFileSync(
-      path.join(root, ".pulse", "handoffs", "manifest.json"),
+      path.join(root, ".pulse", "runtime", "handoffs", "manifest.json"),
       `${JSON.stringify({
         schema_version: "1.0",
         updated_at: "2026-04-16T10:06:00.000Z",
@@ -1008,28 +1172,28 @@ test("pulse status scout surfaces current-feature, runtime snapshot, canonical h
             owner_type: "phase",
             skill: "pulse:planning",
             feature: "operator-surface-foundation",
-            path: ".pulse/handoffs/planning.json",
+            path: ".pulse/runtime/handoffs/planning.json",
             phase: "planning/phase-4",
             next_action: "Create remaining task beads",
             summary: "Discovery and approach are complete",
             status: "ready_to_resume",
             paused_at: "2026-04-16T10:06:00.000Z",
             reason: "context_critical",
-            read_first: [".pulse/STATE.md", "history/operator-surface-foundation/CONTEXT.md"],
+            read_first: [".pulse/runtime/STATE.md", "history/operator-surface-foundation/CONTEXT.md"],
           },
           {
             owner_id: "worker-blue-lake",
             owner_type: "worker",
             skill: "pulse:executing",
             feature: "operator-surface-foundation",
-            path: ".pulse/handoffs/worker-blue-lake.json",
+            path: ".pulse/runtime/handoffs/worker-blue-lake.json",
             phase: "execution/phase-4",
             next_action: "Resume bead implementation",
             summary: "Verification is pending after the code change",
             status: "ready_to_resume",
             paused_at: "2026-04-16T10:06:30.000Z",
             reason: "context_critical",
-            read_first: ["AGENTS.md", ".pulse/STATE.md", "history/operator-surface-foundation/CONTEXT.md"],
+            read_first: ["AGENTS.md", ".pulse/runtime/STATE.md", "history/operator-surface-foundation/CONTEXT.md"],
           },
         ],
       }, null, 2)}\n`,
@@ -1105,9 +1269,9 @@ test("pulse status scout surfaces current-feature, runtime snapshot, canonical h
     assert.equal(payload.current_feature.phase, "planning");
     assert.equal(payload.current_feature.gate, "GATE 2");
     assert.equal(payload.runtime_snapshot.exists, true);
-    assert.equal(payload.runtime_snapshot.active_feature, "snapshot-feature");
-    assert.equal(payload.runtime_snapshot.source.current_feature, ".pulse/current-feature.json");
-    assert.equal(payload.state_json.active_feature, "");
+    assert.equal(payload.runtime_snapshot.active_feature, "operator-surface-foundation");
+    assert.equal(payload.runtime_snapshot.source.current_feature, "");
+    assert.equal(payload.state_json.active_feature, "operator-surface-foundation");
     assert.equal(payload.handoff_manifest.active_count, 2);
     assert.equal(payload.handoff_manifest.active.length, 2);
     assert.equal(payload.handoff_manifest.active[0].owner_id, "planning");
@@ -1123,11 +1287,11 @@ test("pulse status scout surfaces current-feature, runtime snapshot, canonical h
     assert.deepEqual(payload.reservations.active_agents, ["worker-blue-lake"]);
     assert.equal(
       payload.handoff_manifest.active[0].operator_summary,
-      "planning | via pulse:planning | feature=operator-surface-foundation | phase=planning/phase-4 | next=Create remaining task beads | summary=Discovery and approach are complete | path=.pulse/handoffs/planning.json",
+      "planning | via pulse:planning | feature=operator-surface-foundation | phase=planning/phase-4 | next=Create remaining task beads | summary=Discovery and approach are complete | path=.pulse/runtime/handoffs/planning.json",
     );
     assert.equal(
       payload.handoff_manifest.active[1].operator_summary,
-      "worker-blue-lake | via pulse:executing | feature=operator-surface-foundation | phase=execution/phase-4 | next=Resume bead implementation | summary=Verification is pending after the code change | path=.pulse/handoffs/worker-blue-lake.json",
+      "worker-blue-lake | via pulse:executing | feature=operator-surface-foundation | phase=execution/phase-4 | next=Resume bead implementation | summary=Verification is pending after the code change | path=.pulse/runtime/handoffs/worker-blue-lake.json",
     );
     assert.equal(payload.checkpoints.root_exists, true);
     assert.equal(payload.checkpoints.feature, "operator-surface-foundation");
@@ -1135,7 +1299,7 @@ test("pulse status scout surfaces current-feature, runtime snapshot, canonical h
     assert.equal(payload.checkpoints.latest.checkpoint_id, "2026-04-16T10-07-00Z-planning");
     assert.equal(
       payload.checkpoints.latest.operator_summary,
-      "2026-04-16T10-07-00Z-planning | phase=planning/phase-4 | gate=GATE 2 | next=Run pulse:validating for the current phase | summary=Planning is complete and validating is next | path=.pulse/checkpoints/operator-surface-foundation/2026-04-16T10-07-00Z-planning.json",
+      "2026-04-16T10-07-00Z-planning | phase=planning/phase-4 | gate=GATE 2 | next=Run pulse:validating for the current phase | summary=Planning is complete and validating is next | path=.pulse/runtime/checkpoints/operator-surface-foundation/2026-04-16T10-07-00Z-planning.json",
     );
     assert.equal(payload.memory_recall.critical_patterns, ".pulse/memory/critical-patterns.md");
     assert.deepEqual(payload.memory_recall.learnings, [
@@ -1190,11 +1354,11 @@ test("pulse status scout surfaces current-feature, runtime snapshot, canonical h
     assert.ok(payload.memory_recall.hygiene.warnings.includes(
       "Possible duplicate corrections: planning-gate.",
     ));
-    assert.ok(payload.next_reads.includes(".pulse/handoffs/manifest.json"));
+    assert.ok(payload.next_reads.includes(".pulse/runtime/handoffs/manifest.json"));
     assert.ok(payload.next_reads.includes(".pulse/project-docs.json"));
     assert.ok(payload.next_reads.includes("CONTEXT.md"));
     assert.ok(payload.next_reads.includes("docs/adr"));
-    assert.ok(payload.next_reads.includes(".pulse/handoffs/planning.json"));
+    assert.ok(payload.next_reads.includes(".pulse/runtime/handoffs/planning.json"));
     assert.ok(payload.next_reads.includes("history/operator-surface-foundation/CONTEXT.md"));
     assert.ok(payload.next_reads.includes("history/operator-surface-foundation/approach.md"));
     assert.ok(payload.next_reads.includes("history/operator-surface-foundation/phase-plan.md"));
@@ -1203,7 +1367,7 @@ test("pulse status scout surfaces current-feature, runtime snapshot, canonical h
     assert.ok(payload.next_reads.includes("history/operator-surface-foundation/lifecycle-summary.md"));
     assert.ok(
       payload.next_reads.includes(
-        ".pulse/checkpoints/operator-surface-foundation/2026-04-16T10-07-00Z-planning.json",
+        ".pulse/runtime/checkpoints/operator-surface-foundation/2026-04-16T10-07-00Z-planning.json",
       ),
     );
     assert.ok(payload.next_reads.includes(".pulse/memory/critical-patterns.md"));
@@ -1250,7 +1414,7 @@ test("pulse status scout surfaces current-feature, runtime snapshot, canonical h
     assert.match(textStdout, /Status: mapped/);
     assert.match(textStdout, /Current feature snapshot: present/);
     assert.match(textStdout, /Runtime snapshot: present/);
-    assert.match(textStdout, /active_feature: snapshot-feature/);
+    assert.match(textStdout, /active_feature: operator-surface-foundation/);
     assert.match(textStdout, /Active reservations: 1/);
     assert.match(textStdout, /active_agents: worker-blue-lake/);
     assert.match(textStdout, /Checkpoint root: present/);
@@ -1268,15 +1432,15 @@ test("pulse status scout surfaces current-feature, runtime snapshot, canonical h
     assert.match(textStdout, /Active handoffs: 2/);
     assert.match(
       textStdout,
-      /planning \| via pulse:planning \| feature=operator-surface-foundation \| phase=planning\/phase-4 \| next=Create remaining task beads \| summary=Discovery and approach are complete \| path=.pulse\/handoffs\/planning.json/,
+      /planning \| via pulse:planning \| feature=operator-surface-foundation \| phase=planning\/phase-4 \| next=Create remaining task beads \| summary=Discovery and approach are complete \| path=.pulse\/runtime\/handoffs\/planning.json/,
     );
     assert.match(
       textStdout,
-      /2026-04-16T10-07-00Z-planning \| phase=planning\/phase-4 \| gate=GATE 2 \| next=Run pulse:validating for the current phase \| summary=Planning is complete and validating is next \| path=.pulse\/checkpoints\/operator-surface-foundation\/2026-04-16T10-07-00Z-planning.json/,
+      /2026-04-16T10-07-00Z-planning \| phase=planning\/phase-4 \| gate=GATE 2 \| next=Run pulse:validating for the current phase \| summary=Planning is complete and validating is next \| path=.pulse\/runtime\/checkpoints\/operator-surface-foundation\/2026-04-16T10-07-00Z-planning.json/,
     );
     assert.match(
       textStdout,
-      /worker-blue-lake \| via pulse:executing \| feature=operator-surface-foundation \| phase=execution\/phase-4 \| next=Resume bead implementation \| summary=Verification is pending after the code change \| path=.pulse\/handoffs\/worker-blue-lake.json/,
+      /worker-blue-lake \| via pulse:executing \| feature=operator-surface-foundation \| phase=execution\/phase-4 \| next=Resume bead implementation \| summary=Verification is pending after the code change \| path=.pulse\/runtime\/handoffs\/worker-blue-lake.json/,
     );
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
@@ -1313,32 +1477,35 @@ test("checkpoint commands save, list, show, diff, and resume-brief through insta
     fs.writeFileSync(path.join(root, "history", "checkpoint-ops", "verification", "final-review.md"), "# Final Review\n", "utf8");
     fs.mkdirSync(path.join(root, ".pulse", "runs", "checkpoint-ops", "verification"), { recursive: true });
     fs.writeFileSync(
-      path.join(root, ".pulse", "current-feature.json"),
+      path.join(root, ".pulse", "runtime", "state.json"),
       `${JSON.stringify({
-        feature_key: "checkpoint-ops",
-        phase: "validating",
-        gate: "GATE 3",
-        status: "active",
-        updated_at: "2026-04-16T11:00:00.000Z",
-      }, null, 2)}\n`,
-      "utf8",
-    );
-    fs.writeFileSync(
-      path.join(root, ".pulse", "runtime-snapshot.json"),
-      `${JSON.stringify({
-        schema_version: "1.0",
         active_feature: "checkpoint-ops",
         active_skill: "pulse:validating",
         phase: "validating",
+        gate: "GATE 3",
+        gate_status: "approved",
         requested_mode: "swarm",
         recommended_mode: "swarm",
-        updated_at: "2026-04-16T11:00:00.000Z",
+        next_action: "manual_invoke",
+        next_skill_recommended: "pulse:executing",
       }, null, 2)}\n`,
       "utf8",
     );
-    fs.mkdirSync(path.join(root, ".pulse", "handoffs"), { recursive: true });
     fs.writeFileSync(
-      path.join(root, ".pulse", "handoffs", "manifest.json"),
+      path.join(root, ".pulse", "runtime", "STATE.md"),
+      [
+        "Focus: checkpoint-ops",
+        "Phase: validating",
+        "Gate: GATE 3",
+        "Gate status: approved",
+        "Next action: manual_invoke",
+        "Next skill recommended: pulse:executing",
+      ].join("\n") + "\n",
+      "utf8",
+    );
+    fs.mkdirSync(path.join(root, ".pulse", "runtime", "handoffs"), { recursive: true });
+    fs.writeFileSync(
+      path.join(root, ".pulse", "runtime", "handoffs", "manifest.json"),
       `${JSON.stringify({
         schema_version: "1.0",
         updated_at: "2026-04-16T11:01:00.000Z",
@@ -1348,14 +1515,14 @@ test("checkpoint commands save, list, show, diff, and resume-brief through insta
             owner_type: "phase",
             skill: "pulse:planning",
             feature: "checkpoint-ops",
-            path: ".pulse/handoffs/planning.json",
+            path: ".pulse/runtime/handoffs/planning.json",
             phase: "planning/phase-5",
             next_action: "Review the current phase contract",
             summary: "Planning is complete and validation is queued",
             status: "ready_to_resume",
             paused_at: "2026-04-16T11:01:00.000Z",
             reason: "context_critical",
-            read_first: [".pulse/STATE.md", "history/checkpoint-ops/CONTEXT.md"],
+            read_first: [".pulse/runtime/STATE.md", "history/checkpoint-ops/CONTEXT.md"],
           },
         ],
       }, null, 2)}\n`,
@@ -1460,8 +1627,8 @@ test("checkpoint commands save, list, show, diff, and resume-brief through insta
     assert.equal(saveOne.ok, true);
     assert.equal(saveOne.feature, "checkpoint-ops");
     assert.equal(saveOne.checkpoint.links.context, "history/checkpoint-ops/CONTEXT.md");
-    assert.equal(saveOne.checkpoint.links.handoff, ".pulse/handoffs/planning.json");
-    assert.equal(saveOne.checkpoint.links.runtime_snapshot, ".pulse/runtime-snapshot.json");
+    assert.equal(saveOne.checkpoint.links.handoff, ".pulse/runtime/handoffs/planning.json");
+    assert.equal(saveOne.checkpoint.links.runtime_snapshot, ".pulse/runtime/state.json");
     assert.equal(saveOne.checkpoint.links.verification, "history/checkpoint-ops/verification/");
     assert.equal(saveOne.checkpoint.links.lifecycle_summary, "history/checkpoint-ops/lifecycle-summary.md");
     assert.equal(saveOne.checkpoint.memory_hooks.critical_patterns, ".pulse/memory/critical-patterns.md");
@@ -1506,13 +1673,13 @@ test("checkpoint commands prefer canonical history verification paths and fall b
     fs.writeFileSync(path.join(root, "history", "canonical-verification", "lifecycle-summary.md"), "# Lifecycle Summary\n", "utf8");
     fs.mkdirSync(path.join(root, ".pulse", "runs", "canonical-verification", "verification"), { recursive: true });
     fs.writeFileSync(
-      path.join(root, ".pulse", "current-feature.json"),
+      path.join(root, ".pulse", "runtime", "state.json"),
       `${JSON.stringify({
-        feature_key: "canonical-verification",
+        active_feature: "canonical-verification",
+        active_skill: "pulse:reviewing",
         phase: "reviewing",
         gate: "GATE 4",
-        status: "active",
-        updated_at: "2026-04-16T12:00:00.000Z",
+        gate_status: "approved",
       }, null, 2)}\n`,
       "utf8",
     );
@@ -1594,7 +1761,7 @@ test("checkpoint commands fail soft for malformed entries, missing selectors, an
 
   try {
     applyRepo(root, false);
-    const featureDir = path.join(root, ".pulse", "checkpoints", "soft-fail-feature");
+    const featureDir = path.join(root, ".pulse", "runtime", "checkpoints", "soft-fail-feature");
     fs.mkdirSync(featureDir, { recursive: true });
     fs.mkdirSync(path.join(featureDir, "beads-pre-rebuild-20260424T185318Z"), { recursive: true });
     fs.writeFileSync(path.join(featureDir, "beads.db"), "sqlite-cache\n", "utf8");
@@ -1603,18 +1770,17 @@ test("checkpoint commands fail soft for malformed entries, missing selectors, an
     fs.writeFileSync(path.join(featureDir, "issues.jsonl"), "{}\n", "utf8");
     fs.writeFileSync(path.join(featureDir, "config.yaml"), "path: beads\n", "utf8");
     fs.writeFileSync(
-      path.join(root, ".pulse", "current-feature.json"),
+      path.join(root, ".pulse", "runtime", "state.json"),
       `${JSON.stringify({
-        feature_key: "soft-fail-feature",
+        active_feature: "soft-fail-feature",
+        active_skill: "pulse:planning",
         phase: "planning",
         gate: "GATE 2",
-        status: "active",
-        updated_at: "2026-04-16T12:00:00.000Z",
       }, null, 2)}\n`,
       "utf8",
     );
     fs.writeFileSync(
-      path.join(root, ".pulse", "checkpoints", "soft-fail-feature", "manifest.json"),
+      path.join(root, ".pulse", "runtime", "checkpoints", "soft-fail-feature", "manifest.json"),
       `${JSON.stringify({
         schema_version: "1.0",
         updated_at: "2026-04-16T12:00:00.000Z",
@@ -1738,19 +1904,19 @@ test("checkpoint commands fail soft for malformed entries, missing selectors, an
     assert.equal(listPayload.checkpoints.count, 1);
     assert.equal(listPayload.checkpoints.latest.checkpoint_id, "valid");
     assert.deepEqual(listPayload.checkpoints.invalid_checkpoint_files, [
-      ".pulse/checkpoints/soft-fail-feature/broken.json",
+      ".pulse/runtime/checkpoints/soft-fail-feature/broken.json",
     ]);
     assert.deepEqual(listPayload.checkpoints.manifest_reference_issues, [
-      ".pulse/checkpoints/soft-fail-feature/broken.json",
-      ".pulse/checkpoints/soft-fail-feature/missing.json",
+      ".pulse/runtime/checkpoints/soft-fail-feature/broken.json",
+      ".pulse/runtime/checkpoints/soft-fail-feature/missing.json",
     ]);
     assert.deepEqual(listPayload.checkpoints.foreign_artifacts, [
-      ".pulse/checkpoints/soft-fail-feature/beads-pre-rebuild-20260424T185318Z/",
-      ".pulse/checkpoints/soft-fail-feature/beads.db",
-      ".pulse/checkpoints/soft-fail-feature/beads.db-shm",
-      ".pulse/checkpoints/soft-fail-feature/beads.db-wal",
-      ".pulse/checkpoints/soft-fail-feature/config.yaml",
-      ".pulse/checkpoints/soft-fail-feature/issues.jsonl",
+      ".pulse/runtime/checkpoints/soft-fail-feature/beads-pre-rebuild-20260424T185318Z/",
+      ".pulse/runtime/checkpoints/soft-fail-feature/beads.db",
+      ".pulse/runtime/checkpoints/soft-fail-feature/beads.db-shm",
+      ".pulse/runtime/checkpoints/soft-fail-feature/beads.db-wal",
+      ".pulse/runtime/checkpoints/soft-fail-feature/config.yaml",
+      ".pulse/runtime/checkpoints/soft-fail-feature/issues.jsonl",
     ]);
     assert.match(listText, /Checkpoint warnings:/);
     assert.match(listText, /Foreign artifacts:/);
@@ -1912,6 +2078,33 @@ test("checkRepo reports dependency health summary without blocking onboarding st
   }
 });
 
+test("installed pulse_status falls back to packaged dependency inventory in onboarded repos", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "pulse-onboard-"));
+
+  try {
+    applyRepo(root, false);
+
+    assert.equal(
+      fs.existsSync(path.join(root, ".pulse", "scripts", "pulse_dependency_inventory.json")),
+      true,
+    );
+    assert.equal(fs.existsSync(path.join(root, "skills")), false);
+
+    const payload = JSON.parse(
+      execFileSync("node", [path.join(root, ".pulse", "scripts", "pulse_status.mjs"), "--json"], {
+        cwd: root,
+        encoding: "utf8",
+      }),
+    );
+
+    assert.ok(payload.dependency_health.summary.skills_total > 0);
+    assert.ok(payload.dependency_health.summary.skills_covered > 0);
+    assert.ok(payload.dependency_health.skills.some((skill) => skill.skill_name === "using-pulse"));
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("checkRepo promotes missing dependency data into an operator-facing warning summary", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "pulse-onboard-"));
 
@@ -2052,15 +2245,12 @@ test("packaged swarm contracts use native runtime adapters instead of Agent Mail
   assert.match(runtimeAppendix, /latest coordinator updates/);
 });
 
-test("using-pulse stays a router/scout and defers onboarding authority to preflight", () => {
+test("using-pulse messaging references /pulse onboard instead of legacy preflight wording", () => {
   const skillText = fs.readFileSync(LOCAL_USING_PULSE_SKILL_PATH, "utf8");
 
   assert.match(skillText, /pure router \+ scout/i);
-  assert.match(skillText, /`pulse:preflight` is the sole readiness authority/i);
-  assert.match(skillText, /Do not run `onboard_pulse\.mjs --apply` from this skill\./);
-  assert.match(skillText, /Any onboarding or remediation change belongs to `pulse:preflight`\./);
-  assert.match(skillText, /- If preflight readiness is missing or stale in `?\.pulse\/tooling-status\.json`?, invoke `pulse:preflight`\./);
-  assert.match(skillText, /- If `?\.pulse\/tooling-status\.json`? is missing, invoke `pulse:preflight`\./);
+  assert.match(skillText, /\/pulse onboard/i);
+  assert.doesNotMatch(skillText, /pulse:preflight/i);
   assert.doesNotMatch(skillText, /run onboard_pulse\.mjs --apply/i);
 });
 

@@ -6,7 +6,7 @@
   "plugins": [
     {
       "name": "pulse",
-      "description": "Pulse: validate-first agentic development ecosystem for planning, validation, swarming, and execution",
+      "description": "Pulse: single `/pulse` workflow router with the `pulse-work` runtime CLI for planned, validated, reviewable software delivery",
       "version": "3.5.3",
       "source": {
         "source": "url",

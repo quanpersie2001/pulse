@@ -6,13 +6,13 @@
 
 ## Overview
 
-Go mode is the full Pulse pipeline from raw feature request to merged, compounded learnings. It always starts with preflight and always has exactly 4 human gates. The pipeline now separates a whole-feature work shape from the current work slice so each gate protects the next irreversible commitment.
+Go mode is the full Pulse pipeline from raw feature request to merged, compounded learnings. It always starts with `/pulse onboard` and always has exactly 4 human gates. The pipeline now separates a whole-feature work shape from the current work slice so each gate protects the next irreversible commitment.
 
 ```text
 User: "/go <feature>"
        |
        v
-[BOOTSTRAP] preflight -> using-pulse -> check state, read critical-patterns.md
+[BOOTSTRAP] /pulse onboard -> check runtime state, read critical-patterns.md
        |
        v
 [STEP 1] exploring
@@ -68,7 +68,7 @@ DONE
 
 ## Runtime Branch
 
-Read `.pulse/tooling-status.json` after preflight:
+Read `.pulse/runtime/tooling-status.json` after `/pulse onboard`: 
 
 - `recommended_mode=swarm` -> use `pulse:swarming`, then worker `pulse:executing`
 - `recommended_mode=single-worker` -> skip `pulse:swarming`, invoke `pulse:executing` directly
@@ -77,25 +77,25 @@ Read `.pulse/tooling-status.json` after preflight:
 
 ---
 
-## Step 0: Preflight + Bootstrap
+## Step 0: Onboard + Bootstrap
 
-Run `pulse:preflight`.
+Run `/pulse onboard`.
 
 Outputs:
 
-- `.pulse/tooling-status.json`
-- `.pulse/STATE.md`
-- optional resume notice via `.pulse/handoffs/manifest.json`
+- `.pulse/runtime/tooling-status.json`
+- `.pulse/runtime/STATE.md`
+- optional resume notice via `.pulse/runtime/handoffs/manifest.json`
 
-Do not enter the rest of Go mode until preflight returns `PASS` or `DEGRADED`.
+Do not enter the rest of Go mode until onboard reports `PASS` or `DEGRADED` readiness.
 
-After preflight passes, bootstrap the pipeline:
+After onboard passes, bootstrap the pipeline:
 
-1. Run State Bootstrap from `pulse:using-pulse` (check `.pulse/`, read `critical-patterns.md`).
+1. Confirm runtime bootstrap artifacts under `.pulse/runtime/` and read `critical-patterns.md`.
 2. Determine feature slug from the user's description (lowercase-hyphenated, e.g. `agent-email-inbox`).
-3. If `.pulse/checkpoints/<feature>/...` already exists, use it only as an advisory resume aid; do not let it override active handoffs or state mirrors.
+3. If `.pulse/runtime/checkpoints/<feature>/...` already exists, use it only as an advisory resume aid; do not let it override active handoffs or state mirrors.
 4. Create `history/<feature>/` if it does not exist.
-5. Write `.pulse/STATE.md`:
+5. Write `.pulse/runtime/STATE.md`:
    ```text
    focus: <feature>
    phase: go-mode/exploring
@@ -153,7 +153,7 @@ If the user selects `Revise decisions`, or gives equivalent explicit revision fe
 If the user selects `Show CONTEXT.md`, show the artifact and remain at this gate.
 
 If the user selects `Approve only`, or gives equivalent explicit approval without asking to continue immediately:
-- update `.pulse/state.json` and `.pulse/STATE.md`
+- update `.pulse/runtime/state.json` and `.pulse/runtime/STATE.md`
 - record `gate: GATE 1`, `gate_status: approved`, `next_skill_recommended: pulse:planning`, and `next_action: manual_invoke`
 - stop there; do not auto-load planning
 
@@ -217,7 +217,7 @@ If the user selects `Revise shape artifact`, or gives equivalent explicit revisi
 If the user selects `Show selected shape artifact`, show the artifact and remain at this gate.
 
 If the user selects `Approve only`, or gives equivalent explicit approval without asking to continue immediately:
-- update `.pulse/state.json` and `.pulse/STATE.md`
+- update `.pulse/runtime/state.json` and `.pulse/runtime/STATE.md`
 - record `gate: GATE 2`, `gate_status: approved`, `next_skill_recommended: pulse:planning`, and `next_action: manual_invoke`
 - stop there; do not auto-enter current-work preparation
 
@@ -295,7 +295,7 @@ Present:
 
    Any unresolved concerns: [list or 'none']
 
-   Execution mode: [swarm / single-worker] (from .pulse/tooling-status.json)"
+   Execution mode: [swarm / single-worker] (from .pulse/runtime/tooling-status.json)"
 ```
 
 If the active harness provides `AskUserQuestion`, `AskMeTool`, or another structured question tool, use it with focused options:
@@ -310,8 +310,8 @@ Only fall back to plain text when no structured question tool exists:
 If the user selects `Revise plan`, or gives equivalent explicit revision feedback, return to planning or validating.
 If the user selects `Review beads`, stay at this gate and inspect bead details before asking again.
 If the user selects `Approve only`, or gives equivalent explicit approval without asking to continue immediately:
-- update `.pulse/state.json` and `.pulse/STATE.md`
-- record `gate: GATE 3`, `gate_status: approved`, `next_skill_recommended` from `.pulse/tooling-status.json`, and `next_action: manual_invoke`
+- update `.pulse/runtime/state.json` and `.pulse/runtime/STATE.md`
+- record `gate: GATE 3`, `gate_status: approved`, `next_skill_recommended` from `.pulse/runtime/tooling-status.json`, and `next_action: manual_invoke`
 - stop there; do not auto-start swarming or execution
 If the user selects `Approve and continue now`, or gives equivalent explicit approval to stay in the current context/model:
 - update the same runtime fields, but set `next_action: continue_now`
@@ -321,7 +321,7 @@ If the user selects `Approve and continue now`, or gives equivalent explicit app
 
 ## Step 5: Swarming + Executing (Current Work Slice)
 
-Use `pulse:swarming` if preflight recommends `swarm`, otherwise invoke `pulse:executing` directly.
+Use `pulse:swarming` if `/pulse onboard` recommends `swarm`, otherwise invoke `pulse:executing` directly.
 
 **The pulse:swarming skill will:**
 
@@ -337,7 +337,7 @@ After current-work execution completes:
 - if approved shape artifact (`work-shape.md` | `phase-plan.md` | `epic-map.md`) shows later work slices still pending -> return to Step 3 for the next work slice
 - if the current work slice was the final approved work slice -> proceed to Step 6
 - do not use an empty epic subtree alone as proof the whole feature is complete; later work slices may not be materialized yet
-- when in doubt, approved shape artifact + `.pulse/STATE.md` decide whether reviewing is allowed
+- when in doubt, approved shape artifact + `.pulse/runtime/STATE.md` decide whether reviewing is allowed
 
 **Update STATE.md:** either `phase: go-mode/planning-next-work` or `phase: go-mode/reviewing`
 
@@ -345,7 +345,7 @@ After current-work execution completes:
 
 ## Step 6: Reviewing
 
-**Invoke:** Load `pulse:reviewing` skill only after the final current-work execution completes and the approved shape artifact plus `.pulse/STATE.md` agree that no later work remains.
+**Invoke:** Load `pulse:reviewing` skill only after the final current-work execution completes and the approved shape artifact plus `.pulse/runtime/STATE.md` agree that no later work remains.
 
 **The pulse:reviewing skill will:**
 
@@ -394,7 +394,7 @@ If P1 = 0 plain-text fallback:
 - `No blocking findings. Approve review closeout? (approve only / approve and continue now / show P2s first / not yet)`
 
 If P1 = 0 and the user selects `Approve only`, or gives equivalent explicit approval without asking to continue immediately:
-- update `.pulse/state.json` and `.pulse/STATE.md`
+- update `.pulse/runtime/state.json` and `.pulse/runtime/STATE.md`
 - record `gate: GATE 4`, `gate_status: approved`, `next_skill_recommended: pulse:compounding`, and `next_action: manual_invoke`
 - stop there; do not auto-load compounding and never auto-merge
 
@@ -475,7 +475,7 @@ Output:
 ### If orchestrator context hits 65% mid-swarm
 
 ```text
--> Write handoff via .pulse/handoffs/coordinator.json and update manifest
+-> Write handoff via .pulse/runtime/handoffs/coordinator.json and update manifest
 -> Present: "Context budget reached. Current work-slice swarm paused.
             [X] beads complete, [Y] in flight.
             Resume in a new session."
@@ -498,17 +498,16 @@ Output:
 
 All pause flows use the handoff contract:
 
-- `.pulse/handoffs/manifest.json`
+- `.pulse/runtime/handoffs/manifest.json`
 - owner-scoped handoff files
 
 Do not write or read the retired global handoff file.
 
 When resuming:
 
-1. run preflight if tooling may have changed
-2. load `pulse:using-pulse`
-3. read the manifest
-4. resume the selected owner
+1. run `/pulse onboard` if tooling or runtime state may have changed
+2. read the manifest
+3. resume the selected owner
 
 ---
 
@@ -542,8 +541,8 @@ Absent = enabled. Only set to disable.
 For small fixes (<=3 files, LOW risk, no gray areas):
 
 ```text
-preflight
-  -> verify tooling, write STATE.md
+/pulse onboard
+  -> verify tooling, write runtime STATE.md
   |
 planning (lightweight)
   -> one-slice shape plan

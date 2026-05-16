@@ -1,6 +1,6 @@
 ---
 name: using-pulse
-description: Use when bootstrapping or resuming work in a Pulse project after pulse:preflight, or when a request needs Pulse work-shape/current-work routing and mode-aware skill selection.
+description: Use when bootstrapping or resuming work in a Pulse project after /pulse onboard, or when a request needs Pulse work-shape/current-work routing and mode-aware skill selection.
 metadata:
   version: '2.2'
   ecosystem: pulse
@@ -24,7 +24,7 @@ metadata:
 
 # using-pulse
 
-Bootstrap meta-skill. Load this after `pulse:preflight` to route into the correct next Pulse skill and resume safely inside a preflight-ready Pulse environment.
+Bootstrap meta-skill. Load this after `/pulse onboard` to route into the correct next Pulse skill and resume safely inside a preflight-ready Pulse environment.
 
 Use this 3-plane model:
 - **Operator plane** — user goal, approvals, active mode, and next gate.
@@ -35,10 +35,10 @@ This skill is a pure router + scout brief inside a preflight-ready Pulse runtime
 
 ## Preflight Contract
 
-`pulse:preflight` is the sole readiness authority for a Pulse session.
+`/pulse onboard` is the sole readiness authority for a Pulse session.
 
-- If preflight readiness is missing or stale in `.pulse/tooling-status.json`, invoke `pulse:preflight`.
-- If `.pulse/tooling-status.json` is missing, invoke `pulse:preflight`.
+- If preflight readiness is missing or stale in `.pulse/runtime/tooling-status.json`, invoke `/pulse onboard`.
+- If `.pulse/runtime/tooling-status.json` is missing, invoke `/pulse onboard`.
 - If preflight reported `FAIL` or `blocked`, stop and present that result instead of re-checking tooling here.
 - Missing `br`/`bv` is a preflight blocker for Pulse execution-capable routing; this skill must not treat missing bead tooling as a local workaround case.
 - If preflight reported `DEGRADED`, route within the approved downgrade and do not rerun onboarding or tool-health checks.
@@ -46,13 +46,13 @@ This skill is a pure router + scout brief inside a preflight-ready Pulse runtime
   - `Missing commands: ...`
   - `Missing MCP server configuration: ...`
 
-Do not run `onboard_pulse.mjs --apply` from this skill. Any onboarding or remediation change belongs to `pulse:preflight`.
+Do not run `onboard_pulse.mjs --apply` from this skill. Any onboarding or remediation change belongs to `/pulse onboard`.
 
 ## Before Anything Else
 
-1. Read `.pulse/tooling-status.json`.
+1. Read `.pulse/runtime/tooling-status.json`.
 2. If `.pulse/scripts/pulse_status.mjs` exists, run `node .pulse/scripts/pulse_status.mjs --json`.
-3. If the scout script is missing, or preflight readiness artifacts are missing/stale/blocked, run `pulse:preflight` first.
+3. If the scout script is missing, or preflight readiness artifacts are missing/stale/blocked, run `/pulse onboard` first.
 4. Respect `recommended_mode` from preflight:
    - `swarm` → `pulse:swarming` allowed
    - `single-worker` → skip swarming, use `pulse:executing`
@@ -78,12 +78,12 @@ Project docs are part of the scout contract:
 
 ### Checkpoint and State Posture
 
-Checkpoint files under `.pulse/checkpoints/<feature>/...` are **advisory snapshots only**.
+Checkpoint files under `.pulse/runtime/checkpoints/<feature>/...` are **advisory snapshots only**.
 
 Authoritative sources remain:
-1. active entries in `.pulse/handoffs/manifest.json`
+1. active entries in `.pulse/runtime/handoffs/manifest.json`
 2. owner handoff file selected from the active manifest
-3. current state mirrors (`.pulse/state.json`, `.pulse/STATE.md`)
+3. current state mirrors (`.pulse/runtime/state.json`, `.pulse/runtime/STATE.md`)
 
 Use checkpoints for quick comparison, recall hooks, and resume briefing acceleration. Never treat checkpoints as a second state machine.
 
@@ -122,7 +122,7 @@ Use this routing cookbook to route into the next specialist skill. It is a maint
 
 | # | Skill | Load when... |
 |---|---|---|
-| 0 | `pulse:preflight` | Starting, resuming, or before execution-capable flow |
+| 0 | `/pulse onboard` | Starting, resuming, or before execution-capable flow |
 | 1 | `pulse:using-pulse` | After preflight on any Pulse session |
 | 1b | `pulse:brainstorming` | Intent is vague and design is not locked |
 | 2 | `pulse:exploring` | Feature intent exists but implementation decisions are fuzzy |
@@ -185,7 +185,7 @@ Do not route directly to `pulse:planning` unless an approved `history/<feature>/
 ## Gate and State Ownership
 
 Entry-layer ownership is explicit:
-- `pulse:preflight` owns readiness artifacts (`.pulse/tooling-status.json`, `.pulse/state.json`, preflight status in `.pulse/STATE.md`).
+- `/pulse onboard` owns readiness artifacts (`.pulse/runtime/tooling-status.json`, `.pulse/runtime/state.json`, preflight status in `.pulse/runtime/STATE.md`).
 - `pulse:using-pulse` owns routing guidance only; it must not rewrite gate outcomes from later phases.
 - `pulse:exploring` owns writing `history/<feature>/CONTEXT.md` and handoff-ready state hints.
 - Gate 1 approval is a human decision on `history/<feature>/CONTEXT.md`; after approval, runtime state should carry `gate_status: approved`, `next_skill_recommended: pulse:planning`, and `next_action: manual_invoke` by default.
@@ -196,7 +196,7 @@ Do not mark Gate 1 approved before explicit user approval.
 
 Resume handling stays in the scout plane.
 
-1. Read `.pulse/handoffs/manifest.json`.
+1. Read `.pulse/runtime/handoffs/manifest.json`.
 2. Present active handoffs by owner, skill, feature, active work slice, summary, and next action.
 3. If multiple active entries exist, ask user which one to resume.
 4. Open only the selected owner file and resume from `summary`, `next_action`, `read_first`, and `payload.transfer`.
@@ -252,12 +252,12 @@ Pause and surface immediately when:
 ## File Quick Reference
 
 ```text
-.pulse/tooling-status.json            <- preflight output
-.pulse/state.json                     <- machine-readable routing/status mirror
-.pulse/STATE.md                       <- shared project state
+.pulse/runtime/tooling-status.json            <- preflight output
+.pulse/runtime/state.json                     <- machine-readable routing/status mirror
+.pulse/runtime/STATE.md                       <- shared project state
 .pulse/project-docs.json              <- project-doc routing map
-.pulse/handoffs/manifest.json         <- active handoff index (authoritative)
-.pulse/checkpoints/<feature>/...      <- advisory checkpoint snapshots
+.pulse/runtime/handoffs/manifest.json         <- active handoff index (authoritative)
+.pulse/runtime/checkpoints/<feature>/...      <- advisory checkpoint snapshots
 history/<feature>/CONTEXT.md          <- locked decisions from exploring
 history/<feature>/work-shape.md       <- approved shape for direct/spike/small work
 history/<feature>/phase-plan.md       <- approved shape for milestone/phase-shaped work

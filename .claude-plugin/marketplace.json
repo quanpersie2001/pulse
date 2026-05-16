@@ -1,6 +1,6 @@
 {
   "name": "pulse-dev",
-  "description": "Development marketplace for Pulse validate-first skills ecosystem",
+  "description": "Development marketplace for the Pulse `/pulse` router and `pulse-work` runtime",
   "owner": {
     "name": "quanpersie2001",
     "url": "https://github.com/quanpersie2001"
@@ -8,8 +8,8 @@
   "plugins": [
     {
       "name": "pulse",
-      "description": "Pulse: validate-first agentic development ecosystem for planning, validation, swarming, and execution",
-      "version": "3.5.1",
+      "description": "Pulse: single `/pulse` workflow router with the `pulse-work` runtime CLI for planned, validated, reviewable software delivery",
+      "version": "3.5.3",
       "source": "./",
       "author": {
         "name": "quanpersie2001",

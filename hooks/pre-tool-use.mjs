@@ -22,7 +22,7 @@ export async function main() {
   let message = null;
   if (BARE_BV.test(command) && !command.includes("--robot-")) {
     message =
-      "Pulse expects `bv` only with `--robot-*` flags in agent sessions. Bare `bv` launches the interactive TUI.";
+      "Migration warning: `bv` is legacy interactive tooling in Pulse v2; prefer `pulse-work` in agent sessions. If you intentionally need Beads automation, use `bv --robot-*` instead of bare `bv`.";
   }
 
   const output = { continue: true };

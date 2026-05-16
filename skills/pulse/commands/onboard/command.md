@@ -1,6 +1,6 @@
 # `/pulse onboard`
 
-Maps from legacy `preflight` + `using-pulse`.
+Canonical readiness authority replacing legacy `preflight` + `using-pulse` entry flow.
 
 ## Intent
 
@@ -32,13 +32,13 @@ Typical outputs are:
 - migration warnings for legacy assumptions or artifacts
 - a next-command recommendation
 
-Phase 1 also provides a thin onboarding entrypoint at `scripts/onboard_pulse.mjs`.
+The command owns onboarding posture directly; local helpers are implementation detail and not the contract surface.
 
 ## Interaction model
 
 `onboard` may inspect repo state, read runtime artifacts, and call bootstrap helpers.
 
-In Phase 1, the local script is intentionally a thin wrapper around the existing onboarding logic so the new command surface exists before runtime relocation happens.
+The command is not a thin wrapper. It is the operational authority that reads and maintains the canonical runtime contract under `.pulse/runtime/`.
 
 ## Approval expectations
 

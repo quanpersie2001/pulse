@@ -1,7 +1,7 @@
 {
   "name": "pulse",
   "version": "3.5.3",
-  "description": "Pulse: validate-first agentic development ecosystem for planning, validation, swarming, and execution",
+  "description": "Pulse: single `/pulse` workflow router with the `pulse-work` runtime CLI for planned, validated, reviewable software delivery",
   "author": {
     "name": "quanpersie2001",
     "url": "https://github.com/quanpersie2001"
@@ -21,8 +21,8 @@
   "mcpServers": "./.mcp.json",
   "interface": {
     "displayName": "Pulse",
-    "shortDescription": "Validate-first skills for agentic software delivery",
-    "longDescription": "Bundles the Pulse workflow skills and standalone utilities for planning, validation, swarming, review, and learning capture.",
+    "shortDescription": "Single `/pulse` router with `pulse-work` runtime",
+    "longDescription": "Packages one user-facing `/pulse` router for onboarding, planning, validation, execution, review, and follow-up, while `pulse-work` manages the local workgraph and runtime state.",
     "developerName": "quanpersie2001",
     "category": "Productivity",
     "capabilities": [
@@ -32,9 +32,9 @@
     ],
     "websiteURL": "https://github.com/quanpersie2001/pulse",
     "defaultPrompt": [
-      "Onboard this repository for Pulse and start with using-pulse.",
-      "Plan and validate a feature before we write code.",
-      "Run a review and compounding pass on completed work."
+      "Run `/pulse onboard` for this repository.",
+      "Use `/pulse plan` and `/pulse validate` before execution.",
+      "Use `/pulse review` after execution is complete."
     ],
     "brandColor": "#0F766E",
     "composerIcon": "./assets/logo-icon.svg",
