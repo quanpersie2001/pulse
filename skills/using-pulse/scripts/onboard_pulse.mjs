@@ -14,10 +14,18 @@ import {
   readDependencyHealthSafe,
   buildDependencyWarningSummary,
 } from "./pulse_dependencies.mjs";
+import {
+  ensureWorkgraphFilesystem,
+  getWorkgraphPaths,
+  loadItems,
+  writeViews,
+} from "../../pulse/scripts/runtime/workgraph_store.mjs";
 
 const SCRIPT_PATH = fileURLToPath(import.meta.url);
 const USING_PULSE_DIR = path.dirname(path.dirname(SCRIPT_PATH));
 const REPO_ROOT = path.resolve(USING_PULSE_DIR, "..", "..");
+const PULSE_RUNTIME_DIR = path.join(REPO_ROOT, "skills", "pulse", "scripts", "runtime");
+const PULSE_WORK_TEMPLATES_DIR = path.join(REPO_ROOT, "skills", "pulse", "templates", "works");
 const PLUGIN_MANIFEST_PATH = path.join(REPO_ROOT, ".codex-plugin", "plugin.json");
 const AGENTS_TEMPLATE_PATH = path.join(REPO_ROOT, "AGENTS.template.md");
 const ONBOARDING_SCHEMA_VERSION = "1.0";
@@ -30,11 +38,27 @@ const LEGACY_HOOK_SCRIPT_FILENAMES = [
   "pulse_stop.py",
 ];
 const MANAGED_SUPPORT_FILES = {
+  "pulse-work": path.join(PULSE_RUNTIME_DIR, "pulse-work"),
+  "pulse_work.mjs": path.join(PULSE_RUNTIME_DIR, "pulse_work.mjs"),
+  "workgraph_model.mjs": path.join(PULSE_RUNTIME_DIR, "workgraph_model.mjs"),
+  "workgraph_ids.mjs": path.join(PULSE_RUNTIME_DIR, "workgraph_ids.mjs"),
+  "workgraph_paths.mjs": path.join(PULSE_RUNTIME_DIR, "workgraph_paths.mjs"),
+  "workgraph_views.mjs": path.join(PULSE_RUNTIME_DIR, "workgraph_views.mjs"),
+  "workgraph_lock.mjs": path.join(PULSE_RUNTIME_DIR, "workgraph_lock.mjs"),
+  "workgraph_validate.mjs": path.join(PULSE_RUNTIME_DIR, "workgraph_validate.mjs"),
+  "workgraph_store.mjs": path.join(PULSE_RUNTIME_DIR, "workgraph_store.mjs"),
+  "workgraph_templates.mjs": path.join(PULSE_RUNTIME_DIR, "workgraph_templates.mjs"),
   "pulse_status.mjs": path.join(USING_PULSE_DIR, "scripts", "pulse_status.mjs"),
   "pulse_state.mjs": path.join(USING_PULSE_DIR, "scripts", "pulse_state.mjs"),
   "pulse_dependencies.mjs": path.join(USING_PULSE_DIR, "scripts", "pulse_dependencies.mjs"),
   "pulse_reservations.mjs": path.join(USING_PULSE_DIR, "scripts", "pulse_reservations.mjs"),
   "pulse_session_context.mjs": path.join(USING_PULSE_DIR, "scripts", "pulse_session_context.mjs"),
+};
+const MANAGED_SUPPORT_TEMPLATE_FILES = {
+  "epic-README.md": path.join(PULSE_WORK_TEMPLATES_DIR, "epic-README.md"),
+  "story-README.md": path.join(PULSE_WORK_TEMPLATES_DIR, "story-README.md"),
+  "task-README.md": path.join(PULSE_WORK_TEMPLATES_DIR, "task-README.md"),
+  "verification.md": path.join(PULSE_WORK_TEMPLATES_DIR, "verification.md"),
 };
 export function getNodeRuntimeStatus(version = process.versions.node) {
   const major = Number.parseInt(String(version).split(".")[0] || "0", 10);
@@ -424,11 +448,24 @@ function getManagedSupportScriptsDir(repoRoot) {
   return path.join(repoRoot, ".pulse", "scripts");
 }
 
+function getManagedSupportTemplatesDir(repoRoot) {
+  return path.join(getManagedSupportScriptsDir(repoRoot), "templates", "works");
+}
+
 function supportScriptsNeedUpdate(repoRoot) {
   const supportDir = getManagedSupportScriptsDir(repoRoot);
+  const templatesDir = getManagedSupportTemplatesDir(repoRoot);
 
   for (const [name, sourcePath] of Object.entries(MANAGED_SUPPORT_FILES)) {
     const targetPath = path.join(supportDir, name);
+    const source = fs.readFileSync(sourcePath, "utf8");
+    if (!fs.existsSync(targetPath) || fs.readFileSync(targetPath, "utf8") !== source) {
+      return true;
+    }
+  }
+
+  for (const [name, sourcePath] of Object.entries(MANAGED_SUPPORT_TEMPLATE_FILES)) {
+    const targetPath = path.join(templatesDir, name);
     const source = fs.readFileSync(sourcePath, "utf8");
     if (!fs.existsSync(targetPath) || fs.readFileSync(targetPath, "utf8") !== source) {
       return true;
@@ -482,7 +519,9 @@ function cleanupLegacySupportScripts(repoRoot) {
 
 function writeSupportScripts(repoRoot) {
   const supportDir = getManagedSupportScriptsDir(repoRoot);
+  const templatesDir = getManagedSupportTemplatesDir(repoRoot);
   fs.mkdirSync(supportDir, { recursive: true });
+  fs.mkdirSync(templatesDir, { recursive: true });
 
   const written = [];
   for (const [name, sourcePath] of Object.entries(MANAGED_SUPPORT_FILES)) {
@@ -491,7 +530,19 @@ function writeSupportScripts(repoRoot) {
     fs.chmodSync(target, 0o755);
     written.push(path.relative(repoRoot, target));
   }
+  for (const [name, sourcePath] of Object.entries(MANAGED_SUPPORT_TEMPLATE_FILES)) {
+    const target = path.join(templatesDir, name);
+    fs.copyFileSync(sourcePath, target);
+    fs.chmodSync(target, 0o644);
+    written.push(path.relative(repoRoot, target));
+  }
   return written;
+}
+
+function initializeWorkgraphFilesystem(repoRoot) {
+  ensureWorkgraphFilesystem(repoRoot, { syncSchema: true });
+  writeViews(repoRoot, loadItems(repoRoot));
+  return getWorkgraphPaths(repoRoot);
 }
 
 function buildRuntimeBlockedPayload(repoRoot, action) {
@@ -524,6 +575,7 @@ export function checkRepo(repoRoot) {
   const hooksPath = path.join(repoRoot, ".codex", "hooks.json");
   const onboardingPath = path.join(repoRoot, ".pulse", "onboarding.json");
   const statePath = path.join(repoRoot, ".pulse", "state.json");
+  const workgraphPaths = getWorkgraphPaths(repoRoot);
 
   const agentsText = readTextIfExists(agentsPath);
   const agentsExists = agentsText.trim() !== "";
@@ -585,6 +637,16 @@ export function checkRepo(repoRoot) {
     actions.push("sync_pulse_support_scripts");
   }
 
+  if (!fs.existsSync(workgraphPaths.schemaPath)) {
+    actions.push("write_.pulse/workgraph/schema.json");
+  }
+  if (!fs.existsSync(workgraphPaths.itemsPath)) {
+    actions.push("write_.pulse/workgraph/items.jsonl");
+  }
+  if (Object.values(workgraphPaths.viewPaths).some((filePath) => !fs.existsSync(filePath))) {
+    actions.push("sync_.pulse/workgraph/views");
+  }
+
   const state = readJsonIfExists(statePath);
   const normalizedState = normalizePulseState(state);
   const stateNeedsWrite =
@@ -615,6 +677,13 @@ export function checkRepo(repoRoot) {
       compact_prompt_conflict: compactPromptConflict,
       onboarding_state: Object.keys(onboarding).length > 0 ? onboarding : null,
       state_exists: fs.existsSync(statePath),
+      workgraph: {
+        schema_exists: fs.existsSync(workgraphPaths.schemaPath),
+        items_exists: fs.existsSync(workgraphPaths.itemsPath),
+        views: Object.fromEntries(
+          Object.entries(workgraphPaths.viewPaths).map(([name, filePath]) => [name, fs.existsSync(filePath)]),
+        ),
+      },
       runtime,
       dependency_health: dependencyHealth,
       dependency_warning: dependencyWarning,
@@ -673,6 +742,7 @@ export function applyRepo(repoRoot, allowCompactPromptReplace) {
   });
   fs.writeFileSync(statePath, `${JSON.stringify(nextState, null, 2)}\n`, "utf8");
   syncPulseRuntimeArtifacts(repoRoot);
+  const workgraphPaths = initializeWorkgraphFilesystem(repoRoot);
 
   const legacyHookScripts = cleanupLegacyHookScripts(repoRoot);
   const legacySupportScripts = cleanupLegacySupportScripts(repoRoot);
@@ -700,6 +770,13 @@ export function applyRepo(repoRoot, allowCompactPromptReplace) {
       legacy_hook_scripts_removed: legacyHookScripts,
       legacy_support_scripts_removed: legacySupportScripts,
       support_scripts: supportScripts,
+      workgraph: {
+        schema: path.relative(repoRoot, workgraphPaths.schemaPath),
+        items: path.relative(repoRoot, workgraphPaths.itemsPath),
+        views: Object.fromEntries(
+          Object.entries(workgraphPaths.viewPaths).map(([name, filePath]) => [name, path.relative(repoRoot, filePath)]),
+        ),
+      },
       state_file: path.relative(repoRoot, statePath),
       checkpoints_root: path.relative(repoRoot, checkpointsRootPath),
       memory_root: path.relative(repoRoot, memoryRootPath),

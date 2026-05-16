@@ -32,11 +32,23 @@ test("applyRepo creates repo-local Pulse helpers under .pulse/scripts", () => {
     assert.ok(fs.existsSync(path.join(root, ".pulse", "state.json")));
     assert.ok(fs.existsSync(path.join(root, ".pulse", "current-feature.json")));
     assert.ok(fs.existsSync(path.join(root, ".pulse", "runtime-snapshot.json")));
+    assert.ok(fs.existsSync(path.join(root, ".pulse", "workgraph", "schema.json")));
+    assert.ok(fs.existsSync(path.join(root, ".pulse", "workgraph", "items.jsonl")));
+    assert.ok(fs.existsSync(path.join(root, ".pulse", "workgraph", "views", "active.json")));
+    assert.ok(fs.existsSync(path.join(root, ".pulse", "workgraph", "views", "closed.json")));
+    assert.ok(fs.existsSync(path.join(root, ".pulse", "workgraph", "views", "ready.json")));
+    assert.ok(fs.existsSync(path.join(root, ".pulse", "workgraph", "views", "graph.json")));
     assert.ok(fs.existsSync(path.join(root, ".pulse", "checkpoints")));
     assert.ok(fs.existsSync(path.join(root, ".pulse", "memory", "learnings")));
     assert.ok(fs.existsSync(path.join(root, ".pulse", "memory", "corrections")));
     assert.ok(fs.existsSync(path.join(root, ".pulse", "memory", "ratchet")));
     assert.ok(fs.existsSync(path.join(root, ".pulse", "reservations.json")));
+    assert.ok(fs.existsSync(path.join(root, ".pulse", "scripts", "pulse-work")));
+    assert.ok(fs.existsSync(path.join(root, ".pulse", "scripts", "pulse_work.mjs")));
+    assert.ok(fs.existsSync(path.join(root, ".pulse", "scripts", "workgraph_store.mjs")));
+    assert.ok(fs.existsSync(path.join(root, ".pulse", "scripts", "workgraph_templates.mjs")));
+    assert.ok(fs.existsSync(path.join(root, ".pulse", "scripts", "templates", "works", "epic-README.md")));
+    assert.ok(fs.existsSync(path.join(root, ".pulse", "scripts", "templates", "works", "verification.md")));
     assert.ok(fs.existsSync(path.join(root, ".pulse", "scripts", "pulse_session_context.mjs")));
     assert.ok(fs.existsSync(path.join(root, ".pulse", "scripts", "pulse_state.mjs")));
     assert.ok(fs.existsSync(path.join(root, ".pulse", "scripts", "pulse_status.mjs")));
@@ -47,6 +59,170 @@ test("applyRepo creates repo-local Pulse helpers under .pulse/scripts", () => {
     assert.equal(fs.existsSync(path.join(root, ".codex", "pulse_status.mjs")), false);
     assert.equal(fs.existsSync(path.join(root, ".codex", "pulse_dependencies.mjs")), false);
     assert.equal(fs.existsSync(path.join(root, ".codex", "pulse_reservations.mjs")), false);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("installed pulse-work wrapper manages workgraph state in an onboarded repo", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "pulse-workgraph-"));
+
+  try {
+    applyRepo(root, false);
+    const helperPath = path.join(root, ".pulse", "scripts", "pulse-work");
+    const run = (...args) =>
+      JSON.parse(execFileSync(helperPath, [...args, "--json"], { cwd: root, encoding: "utf8" }));
+
+    const epic = run("create", "--kind", "EPIC", "--title", "Operator Surface");
+    const story = run("create", "--kind", "STORY", "--title", "Plan Runtime Delivery", "--parent", epic.item.id);
+    const taskOne = run("create", "--kind", "TASK", "--title", "Implement CLI", "--parent", story.item.id);
+    const taskTwo = run("create", "--kind", "TASK", "--title", "Ship wrapper", "--parent", story.item.id);
+
+    const children = run("children", story.item.id);
+    const updatedTaskTwo = run(
+      "update",
+      taskTwo.item.id,
+      "--owner",
+      "dev-a",
+      "--priority",
+      "1",
+      "--add-label",
+      "runtime",
+      "--add-risk",
+      "data",
+    );
+    const listedTasks = run("list", "--kind", "TASK", "--owner", "dev-a", "--label", "runtime");
+    const dependencyAdded = run("dep", "add", taskTwo.item.id, taskOne.item.id);
+    const blockedTask = run("show", taskTwo.item.id);
+    const readyBeforeClose = run("ready");
+
+    const verificationPath = path.join(root, ...taskOne.item.verification_path.split("/"));
+    fs.writeFileSync(verificationPath, "", "utf8");
+
+    let closeFailure = null;
+    try {
+      run("close", taskOne.item.id);
+    } catch (error) {
+      closeFailure = JSON.parse(error.stdout);
+    }
+
+    fs.writeFileSync(
+      verificationPath,
+      [
+        "---",
+        `id: ${taskOne.item.id}`,
+        "status: IN_PROGRESS",
+        "---",
+        "",
+        "# Verification",
+        "",
+        "## Evidence Summary",
+        "Closed after smoke coverage.",
+        "",
+        "## Commands Run",
+        "- pulse-work ready --json",
+        "",
+        "## Observed Outputs",
+        "- task became ready once its dependency cleared",
+        "",
+        "## Attempts",
+        "- None.",
+        "",
+        "## Artifacts",
+        "- None.",
+        "",
+        "## Unresolved Gaps",
+        "None.",
+      ].join("\n") + "\n",
+      "utf8",
+    );
+
+    let closeLeakFailure = null;
+    try {
+      run("close", taskOne.item.id);
+    } catch (error) {
+      closeLeakFailure = JSON.parse(error.stdout);
+    }
+
+    fs.writeFileSync(
+      verificationPath,
+      [
+        "---",
+        `id: ${taskOne.item.id}`,
+        "---",
+        "",
+        "# Verification",
+        "",
+        "## Evidence Summary",
+        "Closed after smoke coverage.",
+        "",
+        "## Commands Run",
+        "- pulse-work ready --json",
+        "",
+        "## Observed Outputs",
+        "- task became ready once its dependency cleared",
+        "",
+        "## Attempts",
+        "- None.",
+        "",
+        "## Artifacts",
+        "- None.",
+        "",
+        "## Unresolved Gaps",
+        "None.",
+      ].join("\n") + "\n",
+      "utf8",
+    );
+
+    const closedTaskOne = run("close", taskOne.item.id);
+    const readyAfterClose = run("ready");
+    const unblockedTask = run("show", taskTwo.item.id);
+    const reopenedTaskOne = run("reopen", taskOne.item.id);
+    const dependencyRemoved = run("dep", "rm", taskTwo.item.id, taskOne.item.id);
+    const graph = run("graph");
+    const doctor = run("doctor");
+
+    assert.deepEqual(children.items.map((item) => item.id).sort(), [taskOne.item.id, taskTwo.item.id].sort());
+    assert.equal(updatedTaskTwo.item.owner, "dev-a");
+    assert.equal(updatedTaskTwo.item.priority, 1);
+    assert.deepEqual(updatedTaskTwo.item.labels, ["runtime"]);
+    assert.deepEqual(updatedTaskTwo.item.risk_flags, ["DATA"]);
+    assert.deepEqual(listedTasks.items.map((item) => item.id), [taskTwo.item.id]);
+    assert.equal(dependencyAdded.dependency_id, taskOne.item.id);
+    assert.deepEqual(blockedTask.item.blocked_by_dependencies, [taskOne.item.id]);
+    assert.equal(blockedTask.item.ready, false);
+    assert.ok(readyBeforeClose.items.some((item) => item.id === taskOne.item.id));
+    assert.ok(readyBeforeClose.items.every((item) => item.id !== taskTwo.item.id));
+    assert.equal(closeFailure?.ok, false);
+    assert.match(closeFailure?.error || "", /verification\.md/i);
+    assert.equal(closeLeakFailure?.ok, false);
+    assert.match(closeLeakFailure?.error || "", /leaks metadata keys: status/i);
+    assert.equal(closedTaskOne.item.status, "CLOSED");
+    assert.ok(readyAfterClose.items.some((item) => item.id === taskTwo.item.id));
+    assert.deepEqual(unblockedTask.item.blocked_by_dependencies, []);
+    assert.equal(unblockedTask.item.ready, true);
+    assert.equal(reopenedTaskOne.item.status, "OPEN");
+    assert.equal(dependencyRemoved.dependency_id, taskOne.item.id);
+    assert.equal(graph.graph.nodes.length, 4);
+    assert.equal(graph.graph.edges.hierarchy.length, 3);
+    assert.equal(graph.graph.edges.dependencies.length, 0);
+    assert.equal(doctor.ok, true);
+
+    const taskOneReadmePath = path.join(root, ...taskOne.item.content_path.split("/"));
+    const readmeText = fs.readFileSync(taskOneReadmePath, "utf8");
+    fs.writeFileSync(
+      taskOneReadmePath,
+      readmeText.replace(`id: ${taskOne.item.id}`, "id: TASK-99999"),
+      "utf8",
+    );
+    let doctorWithMismatchedId = null;
+    try {
+      run("doctor");
+    } catch (error) {
+      doctorWithMismatchedId = JSON.parse(error.stdout);
+    }
+    assert.equal(doctorWithMismatchedId?.ok, false);
+    assert.match(JSON.stringify(doctorWithMismatchedId?.issues || []), /frontmatter_id_mismatch/);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
