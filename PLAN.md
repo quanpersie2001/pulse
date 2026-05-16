@@ -312,6 +312,7 @@ pulse/
 |       |   `-- works/
 |       |       |-- epic-README.md
 |       |       |-- story-README.md
+|       |       |-- story-SPEC.md
 |       |       |-- task-README.md
 |       |       `-- verification.md
 |       |-- scripts/
@@ -355,6 +356,8 @@ pulse/
 - `HARNESS.md` là **reference source**
 - `HARNESS_BACKLOG.md` là **template source**
 - `.pulse/harness/` chỉ materialize runtime backlog, tránh duplicate `HARNESS.md`
+- brainstorm là story-scoped; output của nó là `SPEC.md` nằm trong story directory dưới `works/`, còn `README.md` của story vẫn là story description riêng
+- epic chỉ là cha của story; task/bug không nằm trực tiếp dưới epic trong target contract
 - không còn `skill-catalog.json`
 - các utility maintainer-only như `bootstrap-project-context`, `prompt-leverage`, `refresh-project-docs`, `writing-pulse-skills`, và `gitnexus` không thuộc public workflow contract; nếu còn được giữ lại thì phase 4 phải di dời hoặc loại chúng khỏi packaged public discovery
 
@@ -604,14 +607,16 @@ Tạo public surface mới trước khi dẹp surface cũ.
    - `verification-contract.md`
    - `swarm-execution-rules.md`
    - `handoff-and-resume.md`
-7. tạo `command-metadata.json` làm metadata source duy nhất cho subcommands
-8. bỏ dependency kiến trúc vào `skill-catalog.json`
+7. thêm `story-SPEC.md` template và chốt rule rằng `/pulse brainstorm` chỉ viết story-level `SPEC.md`, không ghi đè story `README.md`
+8. tạo `command-metadata.json` làm metadata source duy nhất cho subcommands
+9. bỏ dependency kiến trúc vào `skill-catalog.json`
 
 ### Done khi
 
 - `/pulse` có thể đóng vai trò router public duy nhất
 - command surface mới được mô tả đầy đủ trong một nơi duy nhất
 - command-specific references/scripts có chỗ ở rõ ràng thay vì bị flatten
+- brainstorm được chốt là story-scoped và ghi output vào `works/**/SPEC.md`, không phải story `README.md`
 - `HARNESS.md` và `HARNESS_BACKLOG.md` đã được đặt đúng lớp kiến trúc
 
 ---
@@ -857,6 +862,7 @@ Khóa lại migration bằng tài liệu rõ ràng và cleanup repo-wide.
 - `skills/pulse/SKILL.md`
 - `skills/pulse/references/HARNESS.md`
 - `skills/pulse/templates/HARNESS_BACKLOG.md`
+- `skills/pulse/templates/works/story-SPEC.md`
 - `skills/pulse/scripts/command-metadata.json`
 - `skills/pulse/scripts/runtime/pulse_work.mjs`
 - `skills/pulse/commands/onboard/scripts/onboard_pulse.mjs`
@@ -938,8 +944,9 @@ Cần test cho:
 
 1. bootstrap repo bằng `/pulse onboard`
 2. onboarding tạo đúng layout `.pulse/runtime/*`, `.pulse/workgraph/*`, `.pulse/harness/HARNESS_BACKLOG.md`
-3. `pulse-work create` cho epic/story/task/bug
-4. `pulse-work dep add` / `dep rm`
+3. `pulse-work create` cho epic/story/task/bug, với task/bug chỉ được tạo dưới story
+4. `/pulse brainstorm` ghi output vào `works/**/SPEC.md` thay vì story `README.md`
+5. `pulse-work dep add` / `dep rm`
 5. `pulse-work ready --json`
 6. `pulse-work close` fail nếu thiếu verification
 7. `pulse-work reopen`
@@ -1022,6 +1029,8 @@ Plan này được coi là đạt mục tiêu khi repo có thể chứng minh đ
 - không còn `skill-catalog.json`
 - `HARNESS.md` nằm đúng ở `skills/pulse/references/HARNESS.md`
 - `HARNESS_BACKLOG.md` nằm đúng ở `skills/pulse/templates/HARNESS_BACKLOG.md` và materialize vào `.pulse/harness/HARNESS_BACKLOG.md`
+- brainstorm output của story nằm ở `works/**/SPEC.md`, còn story `README.md` vẫn là description artifact riêng
+- epic chỉ chứa story, và task / bug chỉ sống dưới story directories
 - workgraph metadata, runtime state, và command router cùng phản ánh một contract v2 thống nhất
 
 ---

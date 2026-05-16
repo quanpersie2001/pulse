@@ -292,6 +292,7 @@ pulse/
 |       |   `-- works/
 |       |       |-- epic-README.md
 |       |       |-- story-README.md
+|       |       |-- story-SPEC.md
 |       |       |-- task-README.md
 |       |       `-- verification.md
 |       |-- scripts/
@@ -345,12 +346,9 @@ project/
 |   `-- epics/
 |       `-- E-<id>-<slug>/
 |           |-- README.md
-|           |-- tasks/
-|           |   `-- T-.../ or B-.../
-|           |       |-- README.md
-|           |       `-- verification.md
 |           `-- S-<id>-<slug>/
 |               |-- README.md
+|               |-- SPEC.md                # brainstorm output
 |               |-- approach.md            # optional
 |               |-- execplan.md            # optional
 |               |-- validation.md          # optional
@@ -685,8 +683,8 @@ Allowed parents:
 
 - `EPIC.parent_id = null`
 - `STORY.parent_id -> EPIC`
-- `TASK.parent_id -> STORY or EPIC`
-- `BUG.parent_id -> STORY or EPIC`
+- `TASK.parent_id -> STORY`
+- `BUG.parent_id -> STORY`
 
 Additional rules:
 
@@ -809,18 +807,19 @@ works/epics/<epic-id>-<epic-slug>/README.md
 works/epics/<epic-id>-<epic-slug>/<story-id>-<story-slug>/README.md
 ```
 
+The story directory may also contain:
+
+```text
+works/epics/<epic-id>-<epic-slug>/<story-id>-<story-slug>/SPEC.md
+```
+
+`SPEC.md` is the story-level brainstorming artifact. It is not the canonical `content_path` for the story item; `README.md` remains the story description entry file.
+
 #### `TASK` or `BUG` under a `STORY`
 
 ```text
 works/epics/<epic-id>-<epic-slug>/<story-id>-<story-slug>/tasks/<item-id>-<item-slug>/README.md
 works/epics/<epic-id>-<epic-slug>/<story-id>-<story-slug>/tasks/<item-id>-<item-slug>/verification.md
-```
-
-#### `TASK` or `BUG` under an `EPIC`
-
-```text
-works/epics/<epic-id>-<epic-slug>/tasks/<item-id>-<item-slug>/README.md
-works/epics/<epic-id>-<epic-slug>/tasks/<item-id>-<item-slug>/verification.md
 ```
 
 ### 11.3 Path safety rules
@@ -854,6 +853,8 @@ Required behavior:
 Every item directory uses `README.md` as the canonical entry file.
 
 Do not use kind-specific filenames such as `story.md` or `task.md`.
+
+A story directory may additionally contain `SPEC.md` as the brainstorming artifact, but that file does not replace the canonical story entry file.
 
 ### 12.2 Allowed frontmatter
 
@@ -902,6 +903,22 @@ Must include sections for:
 - related product docs
 - related decisions
 - important task / bug evidence links when relevant
+
+`README.md` is the durable story description. It is not the brainstorming output artifact.
+
+#### Story `SPEC.md`
+
+`SPEC.md` is the required output of `/pulse brainstorm` for a story-scoped design pass.
+
+Must include sections for:
+
+- problem statement and goals
+- approved direction summary
+- key components and behavior
+- data or control-flow expectations when relevant
+- error handling and fallback posture
+- testing or verification intent
+- out-of-scope and deferred items
 
 #### Task / Bug `README.md`
 
@@ -1580,7 +1597,7 @@ Required integration tests:
 - bootstrap repo with `/pulse onboard`
 - onboarding creates `.pulse/runtime/*`, `.pulse/workgraph/*`, and `.pulse/harness/HARNESS_BACKLOG.md`
 - create epic / story / task / bug
-- direct task / bug under epic
+- task / bug creation only under a story
 - dependency add / remove
 - ready list sorting and filtering
 - close blocked by open child
@@ -1643,6 +1660,8 @@ Pulse v2 v1 is acceptable only when all of the following are true.
 ### 22.3 Content routing
 
 - human-facing work content is created under `works/`
+- story `README.md` remains the story description, while story `SPEC.md` is the brainstorming output artifact
+- epics contain stories, and tasks / bugs live only under story directories
 - markdown contains only `id` frontmatter for identity
 - `TASK` and `BUG` close is impossible without valid verification evidence
 
@@ -1712,6 +1731,8 @@ This spec locks these implementation decisions for Pulse v2 v1:
 - `owner` is durable metadata and reservations track the active execution lease
 - no `assignee` field exists in canonical v1 item metadata
 - `README.md` is the canonical item entry file
+- story directories may also contain `SPEC.md` as the brainstorming output, while story `README.md` remains the story description
+- tasks and bugs live only under story directories, never directly under an epic
 - task / bug close requires verification evidence
 - runtime state moves under `.pulse/runtime/`
 - `current-feature.json` and `runtime-snapshot.json` are removed as persisted artifacts
