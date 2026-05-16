@@ -63,27 +63,39 @@ if not skills_root.is_dir():
 name_pattern = re.compile(r"^name:\s*(.+?)\s*$")
 skills: list[tuple[str, Path]] = []
 
-skill_md = skills_root / "pulse" / "SKILL.md"
-if not skill_md.is_file():
-    raise SystemExit(f"Missing canonical pulse skill file: {skill_md}")
+packaged_skill_dirs = [
+    "workflow",
+    "architecture-rescue",
+    "systematic-debug-fix",
+    "dev-note",
+    "dev-note-distil",
+    "bootstrap-project-context",
+    "prompt-leverage",
+    "gitnexus",
+]
 
-lines = skill_md.read_text(encoding="utf8").splitlines()
-if not lines or lines[0].strip() != "---":
-    raise SystemExit(f"Missing YAML frontmatter in {skill_md}")
+for skill_dir_name in packaged_skill_dirs:
+    skill_md = skills_root / skill_dir_name / "SKILL.md"
+    if not skill_md.is_file():
+        raise SystemExit(f"Missing packaged skill file: {skill_md}")
 
-public_name: str | None = None
-for line in lines[1:]:
-    if line.strip() == "---":
-        break
-    match = name_pattern.match(line)
-    if match:
-        public_name = match.group(1).strip().strip("'\"")
-        break
+    lines = skill_md.read_text(encoding="utf8").splitlines()
+    if not lines or lines[0].strip() != "---":
+        raise SystemExit(f"Missing YAML frontmatter in {skill_md}")
 
-if not public_name:
-    raise SystemExit(f"Missing frontmatter name in {skill_md}")
+    public_name: str | None = None
+    for line in lines[1:]:
+        if line.strip() == "---":
+            break
+        match = name_pattern.match(line)
+        if match:
+            public_name = match.group(1).strip().strip("'\"")
+            break
 
-skills.append((public_name, skill_md.parent))
+    if not public_name:
+        raise SystemExit(f"Missing frontmatter name in {skill_md}")
+
+    skills.append((public_name, skill_md.parent))
 
 target_roots: list[tuple[str, Path]] = []
 if targets in {"agents", "all"}:

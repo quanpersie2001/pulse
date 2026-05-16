@@ -1,4 +1,0 @@
-interface:
-  display_name: "Refresh Project Docs"
-  short_description: "Sync docs to the current repo state"
-  default_prompt: "Inspect the repo first, then update the README and any related documentation so they reflect the current commands, options, workflows, features, and setup in evergreen present-state language with no changelog phrasing."

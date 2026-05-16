@@ -1,6 +1,6 @@
 {
   "name": "pulse",
-  "description": "Pulse: single `/pulse` workflow router with the `pulse-work` runtime CLI for planned, validated, reviewable software delivery",
+  "description": "Pulse: one `pulse:workflow` workflow router plus standalone utility skills, with the `pulse-work` runtime CLI for planned, validated, reviewable software delivery",
   "version": "3.5.3",
   "author": {
     "name": "quanpersie2001",
@@ -16,6 +16,15 @@
     "planning",
     "multi-agent"
   ],
-  "skills": "./skills/pulse",
+  "skills": [
+    "./skills/workflow",
+    "./skills/architecture-rescue",
+    "./skills/systematic-debug-fix",
+    "./skills/dev-note",
+    "./skills/dev-note-distil",
+    "./skills/bootstrap-project-context",
+    "./skills/prompt-leverage",
+    "./skills/gitnexus"
+  ],
   "mcpServers": "./.mcp.json"
 }

@@ -11,8 +11,8 @@
     <img alt="Version" src="https://img.shields.io/badge/version-3.5.3-0F766E?style=flat-square" />
   </a>
   <img alt="License" src="https://img.shields.io/badge/license-MIT-blue?style=flat-square" />
-  <a href="skills/pulse">
-    <img alt="Router" src="https://img.shields.io/badge/router-%2Fpulse-8B5CF6?style=flat-square" />
+  <a href="skills/workflow">
+    <img alt="Router" src="https://img.shields.io/badge/router-pulse%3Aworkflow-8B5CF6?style=flat-square" />
   </a>
 </p>
 
@@ -24,19 +24,21 @@
 
 ## What is Pulse?
 
-Pulse ships as a single public skill router: **`/pulse`**.
+Pulse ships one public workflow router skill, **`pulse:workflow`**, plus packaged standalone utility skills outside that router.
 
-Subcommands cover the full workflow: onboard, explore, brainstorm, plan, validate, swarm, execute, review, compound, rescue, systematic-debug, note, and note-distill. Runtime mutations are handled by the separate CLI **`pulse-work`**, with canonical state in **`.pulse/runtime/`** and canonical metadata in **`.pulse/workgraph/items.jsonl`**.
+Workflow subcommands are: onboard, explore, brainstorm, plan, validate, swarm, execute, review, and compound. Runtime mutations are handled by the separate CLI **`pulse-work`**, with canonical state in **`.pulse/runtime/`** and canonical metadata in **`.pulse/workgraph/items.jsonl`**.
+
+Standalone utility skills remain packaged separately for focused non-router tasks: `architecture-rescue`, `systematic-debug-fix`, `dev-note`, `dev-note-distil`, `bootstrap-project-context`, `prompt-leverage`, and `gitnexus`.
 
 ## The Delivery Chain
 
-1. `/pulse onboard` prepares runtime and readiness.
-2. `/pulse explore` locks decisions in feature context artifacts.
-3. `/pulse plan` selects shape and execution contract.
-4. `/pulse validate` proves feasibility before implementation.
-5. `/pulse swarm` or `/pulse execute` delivers approved work.
-6. `/pulse review` enforces merge quality gates.
-7. `/pulse compound` captures reusable learnings.
+1. `pulse:workflow onboard` prepares runtime and readiness.
+2. `pulse:workflow explore` locks decisions in feature context artifacts.
+3. `pulse:workflow plan` selects shape and execution contract.
+4. `pulse:workflow validate` proves feasibility before implementation.
+5. `pulse:workflow swarm` or `pulse:workflow execute` delivers approved work.
+6. `pulse:workflow review` enforces merge quality gates.
+7. `pulse:workflow compound` captures reusable learnings.
 
 ### The 4 Human Gates
 
@@ -75,7 +77,7 @@ Codex reads the marketplace name from [`.agents/plugins/marketplace.json`](.agen
 
 ### After Install
 
-Start with **`/pulse onboard`** in the target repo to initialize `.pulse/runtime`, `.pulse/workgraph`, and runtime helpers under `.pulse/scripts/`.
+Start with **`pulse:workflow onboard`** in the target repo to initialize `.pulse/runtime`, `.pulse/workgraph`, and runtime helpers under `.pulse/scripts/`.
 
 ## Project Docs
 
@@ -87,7 +89,7 @@ Start with **`/pulse onboard`** in the target repo to initialize `.pulse/runtime
 
 ## Maintainer Notes
 
-When public docs or `/pulse` router metadata change:
+When public docs or `pulse:workflow` router metadata change:
 
 ```bash
 bash scripts/check-markdown-links.sh

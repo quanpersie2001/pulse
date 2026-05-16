@@ -4,7 +4,7 @@ Read this file at every session start. Re-read after context compaction.
 
 ## What is Pulse?
 
-Pulse is a validate-first, docs-first workflow system with a single public skill router: **`/pulse`**. Runtime metadata and workgraph mutations are handled by **`pulse-work`**.
+Pulse is a validate-first, docs-first workflow system with a single public skill router: **`pulse:workflow`**. Runtime metadata and workgraph mutations are handled by **`pulse-work`**.
 
 ## What Pulse Is / Is Not
 
@@ -33,24 +33,20 @@ Pulse is not:
 
 | Command | Purpose |
 |---|---|
-| `/pulse onboard` | Bootstrap runtime/readiness |
-| `/pulse explore` | Discover and lock decisions |
-| `/pulse brainstorm` | Expand and compare approaches |
-| `/pulse plan` | Select shape and execution contract |
-| `/pulse validate` | Prove feasibility/readiness |
-| `/pulse swarm` | Coordinate parallel execution |
-| `/pulse execute` | Implement approved work |
-| `/pulse review` | Enforce quality gates |
-| `/pulse compound` | Capture durable learnings |
-| `/pulse rescue` | Recover from wrong-shape/stuck work |
-| `/pulse systematic-debug` | Root-cause-first debugging |
-| `/pulse note` | Capture tactical notes |
-| `/pulse note-distill` | Synthesize note clusters |
+| `pulse:workflow onboard` | Bootstrap runtime/readiness |
+| `pulse:workflow explore` | Discover and lock decisions |
+| `pulse:workflow brainstorm` | Expand and compare approaches |
+| `pulse:workflow plan` | Select shape and execution contract |
+| `pulse:workflow validate` | Prove feasibility/readiness |
+| `pulse:workflow swarm` | Coordinate parallel execution |
+| `pulse:workflow execute` | Implement approved work |
+| `pulse:workflow review` | Enforce quality gates |
+| `pulse:workflow compound` | Capture durable learnings |
 
 ## Chain
 
 ```
-/pulse onboard → /pulse explore → /pulse plan → /pulse validate → /pulse swarm or /pulse execute → /pulse review → /pulse compound
+pulse:workflow onboard → pulse:workflow explore → pulse:workflow plan → pulse:workflow validate → pulse:workflow swarm or pulse:workflow execute → pulse:workflow review → pulse:workflow compound
 ```
 
 ## Go Mode Gates
@@ -62,12 +58,21 @@ Pulse is not:
 
 ## Core Runtime Tools
 
-- `/pulse` — user-facing router
+- `pulse:workflow` — user-facing workflow router
 - `pulse-work` — runtime CLI for workgraph metadata operations
 - `node .pulse/scripts/pulse_status.mjs --json` — scout orientation
 - `.pulse/scripts/pulse_reservations.mjs` — local reservation coordination
 - native swarm adapters — Claude teammates/Codex subagents
-- `gitnexus` — optional graph-backed code intelligence
+
+## Packaged Standalone Utility Skills
+
+- `architecture-rescue`
+- `systematic-debug-fix`
+- `dev-note`
+- `dev-note-distil`
+- `bootstrap-project-context`
+- `prompt-leverage`
+- `gitnexus`
 
 ## 3-Plane Model
 
@@ -103,7 +108,7 @@ works/
 
 ### Start a fresh run
 
-1. Run `/pulse onboard`.
+1. Run `pulse:workflow onboard`.
 2. Run `node .pulse/scripts/pulse_status.mjs --json`.
 3. Open only the artifacts scout points to.
 

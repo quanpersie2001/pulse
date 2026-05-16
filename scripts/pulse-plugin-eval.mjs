@@ -651,92 +651,6 @@ function findSkillCountClaims(raw) {
   return claims;
 }
 
-function findMissingMarkers(raw, markers) {
-  return markers.filter(({ pattern }) => !pattern.test(raw)).map(({ label }) => label);
-}
-
-function runMemorySkillBoundaryChecks(results, skillsRoot) {
-  const contracts = [
-    {
-      name: "dev-note",
-      filePath: path.join(skillsRoot, "dev-note", "SKILL.md"),
-      markers: [
-        { label: "explicit user request boundary", pattern: /explicit user request/i },
-        { label: "never auto-capture rule", pattern: /never auto-capture/i },
-        { label: "current conversation scope", pattern: /current conversation/i },
-      ],
-    },
-    {
-      name: "dev-note-distil",
-      filePath: path.join(skillsRoot, "dev-note-distil", "SKILL.md"),
-      markers: [
-        { label: "reader-facing scope", pattern: /reader-facing/i },
-        { label: "runtime-memory exclusion", pattern: /not for runtime memory consolidation/i },
-        { label: "compounding exclusion", pattern: /not for post-cycle compounding/i },
-      ],
-    },
-    {
-      name: "dream",
-      filePath: path.join(skillsRoot, "dream", "SKILL.md"),
-      markers: [
-        { label: "machine-readable scope", pattern: /machine-readable/i },
-        { label: "runtime artifact scope", pattern: /runtime artifacts/i },
-        { label: "reader-facing exclusion", pattern: /not for reader-facing dev-note synthesis/i },
-        { label: "compounding contrast", pattern: /does not replace compounding after completed Pulse work/i },
-      ],
-    },
-    {
-      name: "compounding",
-      filePath: path.join(skillsRoot, "compounding", "SKILL.md"),
-      markers: [
-        { label: "post-cycle scope", pattern: /post-cycle/i },
-        { label: "machine-readable scope", pattern: /machine-readable/i },
-        { label: "completed Pulse work scope", pattern: /completed Pulse work/i },
-        { label: "dream contrast", pattern: /Use `pulse:dream` for runtime-artifact consolidation outside that post-cycle moment\./i },
-      ],
-    },
-  ];
-
-  const issues = [];
-
-  for (const contract of contracts) {
-    if (!exists(contract.filePath)) {
-      issues.push(`${contract.name} missing file`);
-      continue;
-    }
-
-    const raw = fs.readFileSync(contract.filePath, "utf8");
-    const missing = findMissingMarkers(raw, contract.markers);
-    if (missing.length > 0) {
-      issues.push(`${contract.name} missing ${missing.join(", ")}`);
-    }
-  }
-
-  const usingPulsePath = path.join(skillsRoot, "using-pulse", "SKILL.md");
-  if (!exists(usingPulsePath)) {
-    issues.push("using-pulse missing file");
-  } else {
-    const usingPulseRaw = fs.readFileSync(usingPulsePath, "utf8");
-    const routingMissing = findMissingMarkers(usingPulseRaw, [
-      { label: "dev-note route", pattern: /Note this learning from this conversation/i },
-      { label: "dev-note-distil route", pattern: /Distill accumulated dev notes for reading/i },
-      { label: "dream route", pattern: /Consolidate runtime artifacts into machine memory/i },
-      { label: "compounding route", pattern: /Capture post-cycle machine learnings/i },
-    ]);
-    if (routingMissing.length > 0) {
-      issues.push(`using-pulse missing ${routingMissing.join(", ")}`);
-    }
-  }
-
-  addResult(
-    results,
-    "static",
-    "memory-skill-boundary-contract",
-    issues.length === 0 ? "PASS" : "WARN",
-    issues.length === 0 ? "memory skill boundaries are explicit" : issues.join("; "),
-  );
-}
-
 function runStaticChecks(results) {
   const pluginManifestPath = path.join(repoRoot, ".codex-plugin/plugin.json");
   const claudePluginPath = path.join(repoRoot, ".claude-plugin/plugin.json");
@@ -836,12 +750,27 @@ function runStaticChecks(results) {
       : "WARN",
     `SessionStart=${codexSessionStartHook?.command ?? "n/a"}, PreToolUse=${codexPreToolUseHook?.command ?? "n/a"}, Stop=${codexStopHook?.command ?? "n/a"}`,
   );
+  const expectedPackagedSkills = [
+    "./skills/workflow",
+    "./skills/architecture-rescue",
+    "./skills/systematic-debug-fix",
+    "./skills/dev-note",
+    "./skills/dev-note-distil",
+    "./skills/bootstrap-project-context",
+    "./skills/prompt-leverage",
+    "./skills/gitnexus",
+  ];
+  const declaredSkills = Array.isArray(claudePlugin?.skills) ? claudePlugin.skills : [];
+  const packagedSkillsMatch =
+    declaredSkills.length === expectedPackagedSkills.length
+    && expectedPackagedSkills.every((skillPath) => declaredSkills.includes(skillPath));
+
   addResult(
     results,
     "static",
     "claude-plugin-path-contract",
-    claudePlugin?.skills === "./skills/" && claudePlugin?.mcpServers === "./.mcp.json" ? "PASS" : "WARN",
-    `skills=${claudePlugin?.skills ?? "n/a"}, mcpServers=${claudePlugin?.mcpServers ?? "n/a"}`,
+    packagedSkillsMatch && claudePlugin?.mcpServers === "./.mcp.json" ? "PASS" : "WARN",
+    `skills=${JSON.stringify(claudePlugin?.skills ?? "n/a")}, mcpServers=${claudePlugin?.mcpServers ?? "n/a"}`,
   );
   const claudeSessionStartEntries = Array.isArray(claudeHooks?.hooks?.SessionStart)
     ? claudeHooks.hooks.SessionStart
@@ -924,23 +853,12 @@ function runStaticChecks(results) {
     missingSkillFiles.length === 0 ? "PASS" : "FAIL",
     missingSkillFiles.length === 0 ? "all skill dirs include SKILL.md" : missingSkillFiles.map(relativeToRepo).join(", "),
   );
-  runMemorySkillBoundaryChecks(results, skillsRoot);
-
-  const catalogCheck = runCommand(process.execPath, [path.join(repoRoot, "scripts/build-skill-catalog.mjs"), "--check"]);
-  addResult(
-    results,
-    "static",
-    "skill-catalog-generated",
-    catalogCheck.status === 0 ? "PASS" : "FAIL",
-    [catalogCheck.stdout, catalogCheck.stderr].filter(Boolean).join("\n").trim() || "(no output)",
-  );
-
   const mcpServers = Object.keys(mcp || {});
   addResult(results, "static", "mcp-servers-parse", mcpServers.length > 0 ? "PASS" : "WARN", `servers=${mcpServers.join(", ") || "none"}`);
 }
 
 function runRuntimeChecks(results, runCmd) {
-  for (const command of ["git", "br", "bv"]) {
+  for (const command of ["git", "pulse-work"]) {
     addResult(results, "runtime", `command:${command}`, commandOnPath(command) ? "PASS" : "WARN", "");
   }
 

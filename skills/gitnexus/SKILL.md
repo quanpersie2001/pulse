@@ -171,7 +171,7 @@ Do not jump to `cypher` as the first move just because it is more expressive.
 
 ## Pulse Workflow Fit
 
-Use this skill mainly during `pulse:planning` discovery work.
+Use this skill mainly during `pulse:workflow plan` discovery work.
 
 - `query` feeds the architecture snapshot.
 - `context` plus direct file reads feed the existing-pattern evidence.
@@ -215,5 +215,5 @@ If planning is writing discovery/context output, note the fallback plainly in th
 ## Handoff
 
 ```text
-Codebase intelligence gathered. Record the durable findings in discovery artifacts and continue with pulse:planning or the calling skill.
+Codebase intelligence gathered. Record the durable findings in discovery artifacts and continue with pulse:workflow plan or the calling skill.
 ```

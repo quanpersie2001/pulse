@@ -5,7 +5,6 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 const SCRIPT_PATH = fileURLToPath(import.meta.url);
-const SCRIPT_DIR = path.dirname(SCRIPT_PATH);
 
 function findRepoRoot(start) {
   let candidate = path.resolve(start || ".");
@@ -34,29 +33,15 @@ async function readHookPayload(stream = process.stdin) {
 }
 
 async function loadSessionContext(repoRoot) {
-  const sessionContextCandidates = [
-    {
-      includeBootstrapSkill: false,
-      modulePath: path.join(repoRoot, ".pulse", "scripts", "pulse_session_context.mjs"),
-    },
-    {
-      includeBootstrapSkill: true,
-      modulePath: path.join(SCRIPT_DIR, "..", "skills", "using-pulse", "scripts", "pulse_session_context.mjs"),
-    },
-  ];
-
-  for (const candidate of sessionContextCandidates) {
-    if (!fs.existsSync(candidate.modulePath)) {
-      continue;
-    }
-
-    return {
-      includeBootstrapSkill: candidate.includeBootstrapSkill,
-      module: await import(pathToFileURL(candidate.modulePath).href),
-    };
+  const modulePath = path.join(repoRoot, ".pulse", "scripts", "pulse_session_context.mjs");
+  if (!fs.existsSync(modulePath)) {
+    throw new Error("Pulse session context helper not found.");
   }
 
-  throw new Error("Pulse session context helper not found.");
+  return {
+    includeBootstrapSkill: false,
+    module: await import(pathToFileURL(modulePath).href),
+  };
 }
 
 export async function main() {

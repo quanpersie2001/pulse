@@ -1,20 +1,20 @@
 # Contributing
 
-This repo packages one plugin, `pulse`, with a single public workflow surface: `/pulse`.
+This repo packages one plugin, `pulse`, with a single public workflow surface: `pulse:workflow`.
 Use this guide when editing router commands, runtime scripts, manifests, or public docs.
 
 ## Repository Truth
 
 These paths matter most:
 
-- [`skills/pulse/`](skills/pulse) is the canonical source of public workflow behavior
-- [`skills/pulse/commands/`](skills/pulse/commands) owns command-level behavior
-- [`skills/pulse/scripts/runtime/`](skills/pulse/scripts/runtime) owns canonical runtime CLI logic
+- [`skills/workflow/`](skills/workflow) is the canonical source of public workflow behavior
+- [`skills/workflow/commands/`](skills/workflow/commands) owns command-level behavior
+- [`skills/workflow/scripts/runtime/`](skills/workflow/scripts/runtime) owns canonical runtime CLI logic
 - [`.codex-plugin/plugin.json`](.codex-plugin/plugin.json) is the Codex package manifest
 - [`.claude-plugin/plugin.json`](.claude-plugin/plugin.json) is the Claude plugin manifest
 - [`.mcp.json`](.mcp.json) is the packaged MCP manifest for shared runtime servers
 - [`.agents/plugins/marketplace.json`](.agents/plugins/marketplace.json) exposes the packaged plugin to Codex
-- [`scripts/sync-skills.sh`](scripts/sync-skills.sh) mirrors the canonical `skills/pulse/` router surface for other runtimes
+- [`scripts/sync-skills.sh`](scripts/sync-skills.sh) mirrors the canonical `skills/workflow/` workflow-router surface and packaged standalone utility skills for other runtimes
 - [`AGENTS.md`](AGENTS.md), [`README.md`](README.md), and this file are contract docs and must stay consistent
 
 ## Plugin Packaging Overview
@@ -26,14 +26,14 @@ This repository is a root-scoped packaged plugin repo.
 - Shared packaged hook sources: [`hooks/`](hooks/)
 - Marketplace metadata: [`.agents/plugins/marketplace.json`](.agents/plugins/marketplace.json)
 
-Packaged public-surface discovery is rooted at `skills/pulse/` as declared in manifests.
+Packaged public-surface discovery is rooted at `skills/workflow/` as declared in manifests.
 
 ## Where Workflow Behavior Lives
 
-Public workflow behavior is routed through `skills/pulse/`:
+Public workflow behavior is routed through `skills/workflow/`:
 
 ```text
-skills/pulse/
+skills/workflow/
 ├── SKILL.md
 ├── commands/
 ├── references/
@@ -78,19 +78,26 @@ Operational instructions.
 
 Pulse is documented and operated as one router with subcommands:
 
-- `/pulse onboard`
-- `/pulse explore`
-- `/pulse brainstorm`
-- `/pulse plan`
-- `/pulse validate`
-- `/pulse swarm`
-- `/pulse execute`
-- `/pulse review`
-- `/pulse compound`
-- `/pulse rescue`
-- `/pulse systematic-debug`
-- `/pulse note`
-- `/pulse note-distill`
+- `pulse:workflow onboard`
+- `pulse:workflow explore`
+- `pulse:workflow brainstorm`
+- `pulse:workflow plan`
+- `pulse:workflow validate`
+- `pulse:workflow swarm`
+- `pulse:workflow execute`
+- `pulse:workflow review`
+- `pulse:workflow compound`
+
+
+### Standalone utility skills (packaged outside `pulse:workflow`)
+
+- `architecture-rescue`
+- `systematic-debug-fix`
+- `dev-note`
+- `dev-note-distil`
+- `bootstrap-project-context`
+- `prompt-leverage`
+- `gitnexus`
 
 ### Runtime CLI
 
@@ -104,9 +111,9 @@ pulse-work create --kind TASK --title "..." --parent <ID>
 
 ## Adding or Changing Router Commands
 
-1. Update `skills/pulse/SKILL.md` if routing/help tables change.
-2. Update `skills/pulse/commands/<command>/command.md`.
-3. Keep shared contracts under `skills/pulse/references/shared/`.
+1. Update `skills/workflow/SKILL.md` if routing/help tables change.
+2. Update `skills/workflow/commands/<command>/command.md`.
+3. Keep shared contracts under `skills/workflow/references/shared/`.
 4. Update public docs when contract language changes:
    - [`README.md`](README.md)
    - [`CONTRIBUTING.md`](CONTRIBUTING.md)
@@ -125,7 +132,7 @@ Minimum verification:
 
 For runtime changes, verify:
 
-- `/pulse onboard` initializes expected `.pulse/runtime` and `.pulse/workgraph` layout.
+- `pulse:workflow onboard` initializes expected `.pulse/runtime` and `.pulse/workgraph` layout.
 - `node .pulse/scripts/pulse_status.mjs --json` returns valid scout state.
 - `pulse-work` commands produce expected JSON/human outputs.
 

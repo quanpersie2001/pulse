@@ -155,7 +155,7 @@ Pulse v2 v1 must:
 4. ship a minimal built-in workgraph owned by Pulse
 5. make `.pulse/workgraph/items.jsonl` the only canonical writable metadata source
 6. move canonical runtime state under `.pulse/runtime/`
-7. keep canonical runtime source under `runtime/pulse-work/`
+7. keep canonical runtime source under `skills/workflow/scripts/runtime/`
 8. make the plugin source tree and the installed runtime layout explicit and non-conflicting
 9. reduce runtime duplication and top-level `.pulse/` file sprawl
 10. support self-hosting and brownfield migration without silent dual sources of truth
@@ -261,25 +261,11 @@ pulse/
 |-- pulse-eval-workspace/
 |-- references/
 |   `-- impeccable/
-|-- runtime/
-|   `-- pulse-work/
-|       |-- pulse_work.mjs
-|       |-- pulse_state.mjs
-|       |-- pulse_status.mjs
-|       |-- pulse_session_context.mjs
-|       |-- pulse_reservations.mjs
-|       |-- workgraph_store.mjs
-|       |-- workgraph_validate.mjs
-|       |-- workgraph_ids.mjs
-|       |-- workgraph_paths.mjs
-|       |-- workgraph_views.mjs
-|       |-- workgraph_lock.mjs
-|       `-- workgraph_templates.mjs
 |-- scripts/
 |   |-- pulse-plugin-eval.mjs
 |   `-- sync-skills.sh
 |-- skills/
-|   |-- workflow/
+|   |-- pulse/
 |   |   |-- SKILL.md
 |   |   |-- references/
 |   |   |   |-- HARNESS.md
@@ -334,6 +320,19 @@ pulse/
 |   |   |       `-- verification.md
 |   |   `-- scripts/
 |   |       |-- command-metadata.json
+|   |       |-- runtime/
+|   |       |   |-- pulse_work.mjs
+|   |       |   |-- workgraph_store.mjs
+|   |       |   |-- workgraph_validate.mjs
+|   |       |   |-- workgraph_ids.mjs
+|   |       |   |-- workgraph_paths.mjs
+|   |       |   |-- workgraph_views.mjs
+|   |       |   |-- workgraph_lock.mjs
+|   |       |   |-- workgraph_templates.mjs
+|   |       |   |-- pulse_state.mjs
+|   |       |   |-- pulse_status.mjs
+|   |       |   |-- pulse_session_context.mjs
+|   |       |   `-- pulse_reservations.mjs
 |   |       `-- lib/
 |   |           |-- resolve-command.mjs
 |   |           |-- render-help.mjs
@@ -346,7 +345,7 @@ pulse/
 |   |-- prompt-leverage/
 |   `-- systematic-debug-fix/
 |-- tests/
-|   |-- workflow/
+|   |-- pulse/
 |   |-- runtime/
 |   `-- integration/
 |-- AGENTS.md
@@ -1091,8 +1090,8 @@ If a lock exists:
 
 Implementation form in the plugin repo:
 
-- canonical runtime source scripts live in `runtime/pulse-work/`
-- `runtime/pulse-work/pulse_work.mjs` is the source entrypoint for the CLI
+- canonical runtime source scripts live in `skills/workflow/scripts/runtime/`
+- `skills/workflow/scripts/runtime/pulse_work.mjs` is the source entrypoint for the CLI
 - workflow command-local scripts live under `skills/workflow/commands/<command>/scripts/`
 - standalone utility scripts remain under their own skill directories as needed
 - onboarding installs or syncs a repo-local executable surface under `.pulse/scripts/`
@@ -1395,7 +1394,7 @@ Because this repo is both the Pulse source repo and a self-hosted testbed, scrip
 
 Rules:
 
-- `runtime/pulse-work/` is the canonical source for runtime and workgraph scripts
+- `skills/workflow/scripts/runtime/` is the canonical source for runtime and workgraph scripts
 - `skills/workflow/scripts/lib/` is the canonical source for shared workflow router helpers
 - `skills/workflow/commands/<command>/scripts/` is the canonical source for workflow-command-specific helpers and assets
 - standalone public utility scripts stay under their own skill directories unless the runtime must invoke them directly
@@ -1513,7 +1512,7 @@ Deliver:
 - plugin manifests aligned with workflow-router + standalone-utility architecture
 - explicit removal of `skill-catalog.json` from the target design
 - explicit classification of workflow router, standalone public utilities, and removed legacy utilities
-- explicit lock that runtime source lives under `runtime/pulse-work/`
+- explicit lock that runtime source lives under `skills/workflow/scripts/runtime/`
 
 ### Phase 1 — workflow router `pulse:workflow`
 
@@ -1530,7 +1529,7 @@ Deliver:
 
 Deliver:
 
-- `pulse-work` CLI implementation under `runtime/pulse-work/`
+- `pulse-work` CLI implementation under `skills/workflow/scripts/runtime/`
 - `.pulse/workgraph/items.jsonl`
 - `.pulse/workgraph/schema.json`
 - lock handling
@@ -1544,7 +1543,7 @@ Deliver:
 
 - `.pulse/runtime/*` canonical paths
 - onboarding changes under `skills/workflow/commands/onboard/scripts/onboard_pulse.mjs`
-- `pulse_state`, `pulse_status`, `pulse_session_context`, and `pulse_reservations` moved under `runtime/pulse-work/`
+- `pulse_state`, `pulse_status`, `pulse_session_context`, and `pulse_reservations` moved under `skills/workflow/scripts/runtime/`
 - removal of `current-feature.json` and `runtime-snapshot.json`
 - `pulse:workflow onboard` replacing the old bootstrap authority
 
@@ -1751,7 +1750,7 @@ Pulse v2 v1 is acceptable only when all of the following are true.
 
 ### 22.8 Repo self-hosting
 
-- canonical runtime source scripts live in `runtime/pulse-work/`
+- canonical runtime source scripts live in `skills/workflow/scripts/runtime/`
 - workflow command-specific helper scripts live in `skills/workflow/commands/<command>/scripts/`
 - installed runtime scripts under `.pulse/scripts/` have a defined source-of-truth relationship to the canonical runtime source
 - onboarding tests cover the self-hosted v2 installed layout
@@ -1764,7 +1763,7 @@ Recommended implementation order:
 
 1. update `SPEC.md` and manifests for the workflow-router + standalone-utility architecture, and clarify plugin-repo vs target-repo scope
 2. create `skills/workflow/SKILL.md`, workflow command module directories, shared references, and `command-metadata.json`
-3. implement `pulse-work` core create / show / list / ready / update / close / reopen / dep / doctor flow under `runtime/pulse-work/`
+3. implement `pulse-work` core create / show / list / ready / update / close / reopen / dep / doctor flow under `skills/workflow/scripts/runtime/`
 4. implement lock handling, atomic writes, and view rebuilds
 5. implement `works/` scaffolding and markdown templates
 6. move runtime state to `.pulse/runtime/` and collapse duplicated runtime mirrors
@@ -1786,7 +1785,7 @@ This spec locks these implementation decisions for Pulse v2 v1:
 - `skills/workflow/SKILL.md` is the workflow router source of truth
 - workflow-command behavior lives under `skills/workflow/commands/<command>/`
 - `skills/workflow/scripts/command-metadata.json` is the structured workflow command metadata source of truth
-- canonical runtime source scripts live under `runtime/pulse-work/`
+- canonical runtime source scripts live under `skills/workflow/scripts/runtime/`
 - `items.jsonl` is the only canonical writable metadata source
 - generated views are derived and local-only; in this plugin repo they remain under ignored `.pulse/` state
 - `work item` is the human-facing generic noun

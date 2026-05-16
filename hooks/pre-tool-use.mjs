@@ -3,7 +3,6 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-const BARE_BV = /(^|\s)bv(\s|$)/;
 
 async function readPayload() {
   const chunks = [];
@@ -15,22 +14,8 @@ async function readPayload() {
 }
 
 export async function main() {
-  const payload = await readPayload();
-  const toolInput = payload.tool_input || {};
-  const command = toolInput.command || "";
-
-  let message = null;
-  if (BARE_BV.test(command) && !command.includes("--robot-")) {
-    message =
-      "Migration warning: `bv` is legacy interactive tooling in Pulse v2; prefer `pulse-work` in agent sessions. If you intentionally need Beads automation, use `bv --robot-*` instead of bare `bv`.";
-  }
-
-  const output = { continue: true };
-  if (message) {
-    output.systemMessage = message;
-  }
-
-  process.stdout.write(JSON.stringify(output));
+  await readPayload();
+  process.stdout.write(JSON.stringify({ continue: true }));
   return 0;
 }
 

@@ -1,7 +1,7 @@
 {
   "name": "pulse",
   "version": "3.5.3",
-  "description": "Pulse: single `/pulse` workflow router with the `pulse-work` runtime CLI for planned, validated, reviewable software delivery",
+  "description": "Pulse: one `pulse:workflow` workflow router plus standalone utility skills, with the `pulse-work` runtime CLI for planned, validated, reviewable software delivery",
   "author": {
     "name": "quanpersie2001",
     "url": "https://github.com/quanpersie2001"
@@ -16,13 +16,22 @@
     "planning",
     "multi-agent"
   ],
-  "skills": "./skills/pulse",
+  "skills": [
+    "./skills/workflow",
+    "./skills/architecture-rescue",
+    "./skills/systematic-debug-fix",
+    "./skills/dev-note",
+    "./skills/dev-note-distil",
+    "./skills/bootstrap-project-context",
+    "./skills/prompt-leverage",
+    "./skills/gitnexus"
+  ],
   "hooks": "./hooks/codex-hooks.json",
   "mcpServers": "./.mcp.json",
   "interface": {
     "displayName": "Pulse",
-    "shortDescription": "Single `/pulse` router with `pulse-work` runtime",
-    "longDescription": "Packages one user-facing `/pulse` router for onboarding, planning, validation, execution, review, and follow-up, while `pulse-work` manages the local workgraph and runtime state.",
+    "shortDescription": "One `pulse:workflow` router plus standalone utility skills",
+    "longDescription": "Packages one user-facing `pulse:workflow` router for onboarding, planning, validation, execution, review, and follow-up, plus standalone utility skills outside that router, while `pulse-work` manages the local workgraph and runtime state.",
     "developerName": "quanpersie2001",
     "category": "Productivity",
     "capabilities": [
@@ -32,9 +41,9 @@
     ],
     "websiteURL": "https://github.com/quanpersie2001/pulse",
     "defaultPrompt": [
-      "Run `/pulse onboard` for this repository.",
-      "Use `/pulse plan` and `/pulse validate` before execution.",
-      "Use `/pulse review` after execution is complete."
+      "Run `pulse:workflow onboard` for this repository.",
+      "Use `pulse:workflow plan` and `pulse:workflow validate` before execution.",
+      "Use `pulse:workflow review` after execution is complete."
     ],
     "brandColor": "#0F766E",
     "composerIcon": "./assets/logo-icon.svg",

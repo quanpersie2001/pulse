@@ -4,11 +4,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What This Repo Is
 
-Pulse is a packaged skill plugin for Claude Code and Codex. Its public workflow surface is a single router skill: `/pulse`. Runtime operations are handled by the `pulse-work` CLI and repo-local Node helpers.
+Pulse is a packaged skill plugin for Claude Code and Codex. Its public workflow surface is a single router skill: `pulse:workflow`. Runtime operations are handled by the `pulse-work` CLI and repo-local Node helpers.
 
 ## Repository Layout
 
-- `skills/pulse/` — canonical source for the Pulse router skill and subcommands
+- `skills/workflow/` — canonical source for the Pulse router skill and subcommands
 - `.codex-plugin/plugin.json` — Codex plugin manifest
 - `.claude-plugin/plugin.json` — Claude plugin manifest
 - `.mcp.json` — packaged MCP manifest for shared runtime servers
@@ -21,7 +21,7 @@ Pulse is a packaged skill plugin for Claude Code and Codex. Its public workflow 
 
 | Tool | CLI | Purpose |
 |------|-----|---------|
-| Pulse Router | `/pulse` | User-facing workflow entrypoint |
+| Pulse Router | `pulse:workflow` | User-facing workflow entrypoint |
 | Pulse Runtime CLI | `pulse-work` | Workgraph/runtime metadata mutations |
 | Scout | `node .pulse/scripts/pulse_status.mjs --json` | Read-only runtime orientation |
 | Git | `git` | Version control |
@@ -33,7 +33,7 @@ Pulse is a packaged skill plugin for Claude Code and Codex. Its public workflow 
 The core workflow is a gated, linear pipeline:
 
 ```
-/pulse onboard → /pulse explore → /pulse plan → /pulse validate → /pulse swarm or /pulse execute → /pulse review → /pulse compound
+pulse:workflow onboard → pulse:workflow explore → pulse:workflow plan → pulse:workflow validate → pulse:workflow swarm or pulse:workflow execute → pulse:workflow review → pulse:workflow compound
 ```
 
 Four human gates control progression:
@@ -60,17 +60,17 @@ works/                                  ← work content artifacts
 
 ## Editing Skills
 
-The public workflow skill lives at `skills/pulse/SKILL.md`.
+The public workflow skill lives at `skills/workflow/SKILL.md`.
 
 When adding or modifying command behavior:
 
-1. Update router contract in `skills/pulse/SKILL.md` as needed.
-2. Update the command module under `skills/pulse/commands/<command>/command.md`.
-3. Keep shared rules in `skills/pulse/references/shared/`.
+1. Update router contract in `skills/workflow/SKILL.md` as needed.
+2. Update the command module under `skills/workflow/commands/<command>/command.md`.
+3. Keep shared rules in `skills/workflow/references/shared/`.
 
 ## Testing
 
-Pulse has automated coverage for onboarding/runtime control-plane behavior in `skills/pulse/tests/`. The `references/superpowers/tests/brainstorm-server/` suite is reference material and not part of the shipping plugin.
+Pulse has automated coverage for onboarding/runtime control-plane behavior in `skills/workflow/tests/`. The `references/superpowers/tests/brainstorm-server/` suite is reference material and not part of the shipping plugin.
 
 ## Session Protocol
 
