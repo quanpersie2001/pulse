@@ -1,95 +1,123 @@
-# PLAN — Tái kiến trúc Pulse v2 thành single-skill workgraph plugin
+# PLAN — Tái kiến trúc Pulse v2 thành workflow router + standalone utility skills
 
 ## 1. Bối cảnh cập nhật
 
-Plan này đã được cập nhật theo các quyết định mới đã chốt trong cuộc trao đổi:
+Plan này được cập nhật theo các quyết định mới đã chốt:
 
-- **Không giữ mô hình nhiều skill public** như hiện tại nữa.
-- Pulse sẽ có **một user-facing skill duy nhất là `/pulse`**.
-- Các phase/capability sẽ đi qua **subcommands** của `/pulse`, thay vì mỗi phase là một skill độc lập.
-- **`pulse-work`** là **runtime CLI** riêng để thao tác workgraph, không phải command surface nói chuyện trực tiếp với user.
-- **`preflight` bị loại bỏ**; bootstrap/readiness được hấp thụ vào `/pulse onboard`.
-- **`dream` bị loại bỏ** khỏi packaged surface.
-- **`skill-catalog.json` bị loại bỏ**; không giữ thêm một lớp catalog trung gian.
-- **`HARNESS.md` là canonical reference của skill**, nên nằm trong `skills/pulse/references/`.
-- **`HARNESS_BACKLOG.md` là template/seed artifact**, nên nằm trong `skills/pulse/templates/` và được materialize vào `.pulse/harness/`.
-- Plugin repo vẫn có thể **self-host / dogfood** Pulse v2 qua `.pulse/`, nhưng project structure trong plan này phải mô tả **repo plugin**, không phải repo downstream sau khi cài Pulse.
+- Pulse **không còn đi theo mô hình single public skill** cho toàn bộ capability.
+- Pulse sẽ có **một workflow router skill duy nhất là `pulse:workflow`**.
+- Workflow router chỉ chứa các phase của happy-path pipeline:
+  - `onboard`
+  - `explore`
+  - `brainstorm`
+  - `plan`
+  - `validate`
+  - `execute`
+  - `swarm`
+  - `review`
+  - `compound`
+- Các standalone public skills sẽ **đứng ngoài workflow router**:
+  - `pulse:architecture-rescue`
+  - `pulse:systematic-debug-fix`
+  - `pulse:dev-note`
+  - `pulse:dev-note-distil`
+  - `pulse:bootstrap-project-context`
+  - `pulse:prompt-leverage`
+  - `pulse:gitnexus`
+- `pulse-work` là **runtime CLI** riêng cho workgraph/runtime state, không phải public conversational surface.
+- `preflight` bị loại bỏ; bootstrap/readiness được hấp thụ vào `pulse:workflow onboard`.
+- `dream` bị loại bỏ khỏi packaged public surface.
+- `skill-catalog.json` bị loại bỏ; không giữ thêm một lớp catalog trung gian.
+- `HARNESS.md` là canonical reference của workflow router, nên nằm trong `skills/workflow/references/`.
+- `HARNESS_BACKLOG.md` là template/seed artifact, nên nằm trong `skills/workflow/templates/` và được materialize vào `.pulse/harness/`.
+- Plugin repo vẫn có thể self-host / dogfood Pulse v2 qua `.pulse/`, nhưng runtime source canonical không nên bị neo vào workflow skill tree; nó nên nằm ở `runtime/pulse-work/`.
 
-Điểm thay đổi lớn nhất so với bản plan trước là:
+Điểm thay đổi lớn nhất so với bản trước:
 
-- Không còn tư duy “migrate nhiều skill public sang workgraph”.
-- Thay vào đó, đây là một đợt **collapse public skill surface** về một router `/pulse`, rồi mới migrate runtime phía dưới sang workgraph v2.
+- Không còn tư duy “mọi capability phải đi qua một router duy nhất”.
+- Thay vào đó, đây là một đợt **thu gọn workflow surface** về `pulse:workflow`, trong khi vẫn giữ các utility skills độc lập cho những tác vụ không phải workflow phase.
 
 ---
 
 ## 2. Quyết định kiến trúc đã chốt
 
-### 2.1 Một skill public duy nhất: `/pulse`
+### 2.1 Một workflow router public duy nhất: `pulse:workflow`
 
-Pulse nên có đúng một entrypoint public:
+Workflow chính của Pulse đi qua đúng một entrypoint:
 
-- `/pulse onboard`
-- `/pulse explore`
-- `/pulse brainstorm`
-- `/pulse plan`
-- `/pulse validate`
-- `/pulse swarm`
-- `/pulse execute`
-- `/pulse review`
-- `/pulse compound`
-- `/pulse rescue`
-- `/pulse systematic-debug`
-- `/pulse note`
-- `/pulse note-distill`
+- `pulse:workflow onboard`
+- `pulse:workflow explore`
+- `pulse:workflow brainstorm`
+- `pulse:workflow plan`
+- `pulse:workflow validate`
+- `pulse:workflow execute`
+- `pulse:workflow swarm`
+- `pulse:workflow review`
+- `pulse:workflow compound`
 
-Có thể bổ sung command runtime-facing như `status` sau, nhưng **không quay lại mô hình mỗi capability = một skill public riêng**.
+Có thể bổ sung workflow commands sau này, nhưng **không quay lại mô hình mỗi workflow phase = một skill public riêng**.
 
-### 2.2 Tách rõ hai lớp: router skill và runtime CLI
+### 2.2 Standalone public skills ở ngoài workflow router
 
-Cần giữ ranh giới thật rõ:
+Các skill sau vẫn là public surface, nhưng **không thuộc workflow pipeline**:
 
-- **`/pulse ...`** = user-facing workflow router
+- `pulse:architecture-rescue`
+- `pulse:systematic-debug-fix`
+- `pulse:dev-note`
+- `pulse:dev-note-distil`
+- `pulse:bootstrap-project-context`
+- `pulse:prompt-leverage`
+- `pulse:gitnexus`
+
+Lý do:
+
+- chúng không phải các bước bắt buộc của happy-path flow
+- chúng phục vụ mental model khác với workflow pipeline
+- nhét chúng vào router sẽ làm router bị hiểu thành “menu mọi thứ” thay vì “pipeline chuẩn”
+
+### 2.3 Tách rõ ba lớp: workflow router, standalone skills, runtime CLI
+
+Cần giữ ranh giới rõ giữa:
+
+- **`pulse:workflow ...`** = user-facing workflow router
+- **`pulse:<standalone-skill>`** = user-facing utility skill độc lập
 - **`pulse-work ...`** = runtime CLI thao tác workgraph/state
 
 Ví dụ:
 
-- user dùng `/pulse plan` để yêu cầu agent chạy planning flow
-- agent dùng `pulse-work create`, `pulse-work ready`, `pulse-work close` để thao tác canonical workgraph
+- user dùng `pulse:workflow plan` để vào planning flow
+- user dùng `pulse:architecture-rescue` khi cần cứu hộ kiến trúc ngoài happy-path flow
+- agent/harness dùng `pulse-work create`, `pulse-work ready`, `pulse-work close` để thao tác canonical workgraph
 
-Hai lớp này phải được mô tả, test, và tổ chức file riêng rẽ.
+### 2.4 `HARNESS.md` là reference, không phải template
 
-### 2.3 `HARNESS.md` là reference, không phải template
+`HARNESS.md` là tài liệu mô tả hợp đồng vận hành của workflow router, nên canonical source phải nằm ở:
 
-`HARNESS.md` không phải file để seed runtime state. Nó là tài liệu canonical mô tả cách hoạt động của Pulse harness.
+- `skills/workflow/references/HARNESS.md`
 
-Vì vậy nó phải nằm ở:
+không phải dưới runtime plane.
 
-- `skills/pulse/references/HARNESS.md`
-
-không phải:
-
-- `skills/pulse/templates/HARNESS.md`
-
-### 2.4 `HARNESS_BACKLOG.md` là template/seed artifact
+### 2.5 `HARNESS_BACKLOG.md` là template/seed artifact
 
 `HARNESS_BACKLOG.md` là file backlog vận hành của harness trong mỗi repo dùng Pulse, nên source canonical nên nằm ở:
 
-- `skills/pulse/templates/HARNESS_BACKLOG.md`
+- `skills/workflow/templates/HARNESS_BACKLOG.md`
 
 và runtime materialization nằm ở:
 
 - `.pulse/harness/HARNESS_BACKLOG.md`
 
-### 2.5 Không giữ `skill-catalog.json`
+### 2.6 Không giữ `skill-catalog.json`
 
-Với single-skill architecture, `skill-catalog.json` trở thành một lớp metadata dư thừa và dễ drift.
+Với kiến trúc mới:
 
-Source of truth mới nên là:
+- workflow router metadata sống trong `skills/workflow/SKILL.md`
+- workflow command metadata sống trong `skills/workflow/scripts/command-metadata.json`
+- standalone skills tự mang contract của chúng trong `skills/<skill>/SKILL.md`
 
-- `skills/pulse/SKILL.md` — router + command table
-- `skills/pulse/scripts/command-metadata.json` — description / hint / category metadata cho subcommands
+`skill-catalog.json` trở thành một lớp metadata dư thừa và dễ drift.
 
-### 2.6 Legacy concepts chỉ còn là migration language
+### 2.7 Legacy concepts chỉ còn là migration language
 
 Các khái niệm sau không còn là active runtime contract:
 
@@ -112,21 +140,23 @@ Nếu còn nhắc tới, chúng chỉ nên xuất hiện trong:
 
 Sau migration, repo này cần đạt các trạng thái sau:
 
-1. Pulse v2 chạy bằng **`pulse-work`** thay cho `br` / `bv` / `.beads/`
-2. Public command surface collapse về **một skill duy nhất là `/pulse`**
-3. Runtime state canonical của repo tự host nằm ở `.pulse/runtime/`
-4. Metadata workgraph canonical của repo tự host nằm ở `.pulse/workgraph/items.jsonl`
-5. `HARNESS.md` được giữ như **reference source** trong `skills/pulse/references/`
-6. `HARNESS_BACKLOG.md` được giữ như **template source** trong `skills/pulse/templates/`
-7. `preflight`, `dream`, và `skill-catalog.json` không còn tồn tại trong target architecture
-8. Các capability như brainstorm, rescue, systematic-debug, note vẫn được giữ lại, nhưng nằm dưới router `/pulse`
-9. Repo này tự dogfood được contract v2 mới mà không làm lẫn lộn structure của plugin repo với downstream repo
+1. workflow pipeline đi qua đúng một router là `pulse:workflow`
+2. các utility/rescue/note capabilities và các standalone support skills cần giữ vẫn tồn tại như standalone public skills, không bị ép thành workflow phases
+3. Pulse v2 chạy bằng `pulse-work` thay cho `br` / `bv` / `.beads/`
+4. runtime state canonical của repo tự host nằm ở `.pulse/runtime/`
+5. metadata workgraph canonical của repo tự host nằm ở `.pulse/workgraph/items.jsonl`
+6. runtime source canonical nằm ở `runtime/pulse-work/`
+7. `HARNESS.md` được giữ như reference source trong `skills/workflow/references/`
+8. `HARNESS_BACKLOG.md` được giữ như template source trong `skills/workflow/templates/`
+9. `preflight`, `dream`, `skill-catalog.json`, `refresh-project-docs`, và `writing-pulse-skills` không còn tồn tại trong target architecture
+10. public skill inventory được phân loại rõ giữa workflow router, standalone public utilities, và removed legacy surfaces
+11. repo này tự dogfood được contract v2 mới mà không làm lẫn lộn structure của plugin repo với downstream repo
 
 ---
 
 ## 4. ASCII project structure
 
-## 4.1 Structure hiện tại của chính plugin repo
+### 4.1 Structure hiện tại của plugin repo
 
 ```text
 pulse/
@@ -189,15 +219,15 @@ pulse/
 
 Vấn đề của trạng thái hiện tại:
 
-- public surface bị phân mảnh thành quá nhiều skill
+- workflow surface bị phân mảnh thành quá nhiều skill
+- router/public UX chưa tách rõ giữa workflow phases và utility skills
 - bootstrap bị chia đôi giữa `preflight` và `using-pulse`
 - runtime state của repo tự host bị mirror ở quá nhiều file top-level trong `.pulse/`
-- `pulse-work` chưa có vị trí rõ ràng trong source tree architecture
+- runtime source hiện neo vào skill tree cũ thay vì có một runtime root rõ ràng
 - `skill-catalog.json` tạo thêm một lớp routing metadata dễ drift
-- các capability cứu hộ/ghi chú mạnh nhưng đang bị phơi thành các skill rời, làm mental model nặng hơn cần thiết
-- các utility như `bootstrap-project-context`, `prompt-leverage`, `refresh-project-docs`, `writing-pulse-skills`, và `gitnexus` vẫn đang nằm dưới `skills/`, nên nếu không được phân loại sớm chúng có thể tiếp tục bị ship như public surface ngoài ý muốn
+- inventory skill hiện tại vẫn trộn lẫn standalone public skills cần giữ với legacy utilities cần loại bỏ, nên target surface phải được phân loại tường minh
 
-## 4.2 Target structure của plugin repo sau migration
+### 4.2 Target structure của plugin repo sau migration
 
 ```text
 pulse/
@@ -235,12 +265,12 @@ pulse/
 |   |   `-- HARNESS_BACKLOG.md
 |   |-- memory/
 |   `-- scripts/
-|   |   |-- pulse-work
-|   |   |-- pulse_work.mjs
-|   |   |-- pulse_state.mjs
-|   |   |-- pulse_status.mjs
-|   |   |-- pulse_session_context.mjs
-|   |   `-- pulse_reservations.mjs
+|       |-- pulse-work
+|       |-- pulse_work.mjs
+|       |-- pulse_state.mjs
+|       |-- pulse_status.mjs
+|       |-- pulse_session_context.mjs
+|       `-- pulse_reservations.mjs
 |-- assets/
 |-- docs/
 |   |-- ARCHITECTURE.md
@@ -250,95 +280,94 @@ pulse/
 |-- pulse-eval-workspace/
 |-- references/
 |   `-- impeccable/
+|-- runtime/
+|   `-- pulse-work/
+|       |-- pulse_work.mjs
+|       |-- pulse_state.mjs
+|       |-- pulse_status.mjs
+|       |-- pulse_session_context.mjs
+|       |-- pulse_reservations.mjs
+|       |-- workgraph_store.mjs
+|       |-- workgraph_validate.mjs
+|       |-- workgraph_ids.mjs
+|       |-- workgraph_paths.mjs
+|       |-- workgraph_views.mjs
+|       |-- workgraph_lock.mjs
+|       `-- workgraph_templates.mjs
 |-- scripts/
 |   |-- pulse-plugin-eval.mjs
 |   `-- sync-skills.sh
 |-- skills/
-|   `-- pulse/
-|       |-- SKILL.md
-|       |-- references/
-|       |   |-- HARNESS.md
-|       |   `-- shared/
-|       |       |-- workflow-contract.md
-|       |       |-- planes-and-artifacts.md
-|       |       |-- workgraph-model.md
-|       |       |-- approval-gates.md
-|       |       |-- verification-contract.md
-|       |       |-- swarm-execution-rules.md
-|       |       `-- handoff-and-resume.md
-|       |-- commands/
-|       |   |-- onboard/
-|       |   |   |-- command.md
-|       |   |   |-- references/
-|       |   |   |   |-- readiness.md
-|       |   |   |   `-- migration-warnings.md
-|       |   |   `-- scripts/
-|       |   |       `-- onboard_pulse.mjs
-|       |   |-- explore/
-|       |   |   `-- command.md
-|       |   |-- brainstorm/
-|       |   |   |-- command.md
-|       |   |   |-- references/
-|       |   |   |   |-- spec-reviewer-prompt.md
-|       |   |   |   `-- visual-support-guidance.md
-|       |   |   `-- scripts/
-|       |   |       |-- start-visual-server.sh
-|       |   |       |-- stop-visual-server.sh
-|       |   |       |-- visual-frame-template.html
-|       |   |       |-- visual-helper.js
-|       |   |       `-- visual-server.cjs
-|       |   |-- plan/
-|       |   |   `-- command.md
-|       |   |-- validate/
-|       |   |   `-- command.md
-|       |   |-- swarm/
-|       |   |   `-- command.md
-|       |   |-- execute/
-|       |   |   `-- command.md
-|       |   |-- review/
-|       |   |   `-- command.md
-|       |   |-- compound/
-|       |   |   `-- command.md
-|       |   |-- rescue/
-|       |   |   `-- command.md
-|       |   |-- systematic-debug/
-|       |   |   `-- command.md
-|       |   |-- note/
-|       |   |   `-- command.md
-|       |   `-- note-distill/
-|       |       `-- command.md
-|       |-- templates/
-|       |   |-- HARNESS_BACKLOG.md
-|       |   `-- works/
-|       |       |-- epic-README.md
-|       |       |-- story-README.md
-|       |       |-- story-SPEC.md
-|       |       |-- task-README.md
-|       |       `-- verification.md
-|       |-- scripts/
-|       |   |-- command-metadata.json
-|       |   |-- runtime/
-|       |   |   |-- pulse_work.mjs
-|       |   |   |-- workgraph_store.mjs
-|       |   |   |-- workgraph_validate.mjs
-|       |   |   |-- workgraph_ids.mjs
-|       |   |   |-- workgraph_paths.mjs
-|       |   |   |-- workgraph_views.mjs
-|       |   |   |-- workgraph_lock.mjs
-|       |   |   |-- workgraph_templates.mjs
-|       |   |   |-- pulse_state.mjs
-|       |   |   |-- pulse_status.mjs
-|       |   |   |-- pulse_session_context.mjs
-|       |   |   `-- pulse_reservations.mjs
-|       |   `-- lib/
-|       |       |-- resolve-command.mjs
-|       |       |-- render-help.mjs
-|       |       `-- paths.mjs
-|       `-- tests/
-|           |-- router/
-|           |-- runtime/
-|           |-- integration/
-|           `-- fixtures/
+|   |-- workflow/
+|   |   |-- SKILL.md
+|   |   |-- references/
+|   |   |   |-- HARNESS.md
+|   |   |   `-- shared/
+|   |   |       |-- workflow-contract.md
+|   |   |       |-- planes-and-artifacts.md
+|   |   |       |-- workgraph-model.md
+|   |   |       |-- approval-gates.md
+|   |   |       |-- verification-contract.md
+|   |   |       |-- swarm-execution-rules.md
+|   |   |       `-- handoff-and-resume.md
+|   |   |-- commands/
+|   |   |   |-- onboard/
+|   |   |   |   |-- command.md
+|   |   |   |   |-- references/
+|   |   |   |   |   |-- readiness.md
+|   |   |   |   |   `-- migration-warnings.md
+|   |   |   |   `-- scripts/
+|   |   |   |       `-- onboard_pulse.mjs
+|   |   |   |-- explore/
+|   |   |   |   `-- command.md
+|   |   |   |-- brainstorm/
+|   |   |   |   |-- command.md
+|   |   |   |   |-- references/
+|   |   |   |   |   |-- spec-reviewer-prompt.md
+|   |   |   |   |   `-- visual-support-guidance.md
+|   |   |   |   `-- scripts/
+|   |   |   |       |-- start-visual-server.sh
+|   |   |   |       |-- stop-visual-server.sh
+|   |   |   |       |-- visual-frame-template.html
+|   |   |   |       |-- visual-helper.js
+|   |   |   |       `-- visual-server.cjs
+|   |   |   |-- plan/
+|   |   |   |   `-- command.md
+|   |   |   |-- validate/
+|   |   |   |   `-- command.md
+|   |   |   |-- swarm/
+|   |   |   |   `-- command.md
+|   |   |   |-- execute/
+|   |   |   |   `-- command.md
+|   |   |   |-- review/
+|   |   |   |   `-- command.md
+|   |   |   `-- compound/
+|   |   |       `-- command.md
+|   |   |-- templates/
+|   |   |   |-- HARNESS_BACKLOG.md
+|   |   |   `-- works/
+|   |   |       |-- epic-README.md
+|   |   |       |-- story-README.md
+|   |   |       |-- story-SPEC.md
+|   |   |       |-- task-README.md
+|   |   |       `-- verification.md
+|   |   `-- scripts/
+|   |       |-- command-metadata.json
+|   |       `-- lib/
+|   |           |-- resolve-command.mjs
+|   |           |-- render-help.mjs
+|   |           `-- paths.mjs
+|   |-- architecture-rescue/
+|   |-- bootstrap-project-context/
+|   |-- dev-note/
+|   |-- dev-note-distil/
+|   |-- gitnexus/
+|   |-- prompt-leverage/
+|   `-- systematic-debug-fix/
+|-- tests/
+|   |-- workflow/
+|   |-- runtime/
+|   `-- integration/
 |-- AGENTS.md
 |-- CLAUDE.md
 |-- CONTRIBUTING.md
@@ -349,19 +378,16 @@ pulse/
 
 Điểm cốt lõi của target structure:
 
-- chỉ còn **một skill source tree** ở `skills/pulse/`
-- command behavior không bị flatten, mà đi theo **command modules** ở `skills/pulse/commands/<command>/`
-- `pulse-work` có vị trí rõ ràng ở `skills/pulse/scripts/runtime/pulse_work.mjs`
-- `.pulse/scripts/` chỉ là installed mirror cho runtime-facing scripts, không phải mirror bắt buộc của mọi command asset
-- `HARNESS.md` là **reference source**
-- `HARNESS_BACKLOG.md` là **template source**
-- `.pulse/harness/` chỉ materialize runtime backlog, tránh duplicate `HARNESS.md`
-- brainstorm là story-scoped; output của nó là `SPEC.md` nằm trong story directory dưới `works/`, còn `README.md` của story vẫn là story description riêng
-- epic chỉ là cha của story; task/bug không nằm trực tiếp dưới epic trong target contract
-- không còn `skill-catalog.json`
-- các utility maintainer-only như `bootstrap-project-context`, `prompt-leverage`, `refresh-project-docs`, `writing-pulse-skills`, và `gitnexus` không thuộc public workflow contract; nếu còn được giữ lại thì phase 4 phải di dời hoặc loại chúng khỏi packaged public discovery
+- workflow router có source tree riêng ở `skills/workflow/`
+- workflow commands đi theo command modules ở `skills/workflow/commands/<command>/`
+- runtime source canonical tách khỏi skill tree và sống ở `runtime/pulse-work/`
+- `.pulse/scripts/` chỉ là installed mirror cho runtime-facing scripts
+- standalone public skills vẫn tồn tại ở `skills/architecture-rescue/`, `skills/systematic-debug-fix/`, `skills/dev-note/`, `skills/dev-note-distil/`, `skills/bootstrap-project-context/`, `skills/prompt-leverage/`, và `skills/gitnexus/`
+- `refresh-project-docs` và `writing-pulse-skills` bị loại khỏi target packaged surface thay vì được giữ như một lớp utility riêng
+- `HARNESS.md` là reference source, còn `HARNESS_BACKLOG.md` là template source
+- brainstorm là story-scoped; output của nó là `SPEC.md` dưới `works/`, còn story `README.md` vẫn là description artifact riêng
 
-## 4.3 Những gì phải biến mất khỏi target state
+### 4.3 Những gì phải biến mất khỏi target state
 
 ```text
 REMOVE
@@ -376,17 +402,13 @@ REMOVE
 |-- skills/compounding/
 |-- skills/brainstorming/
 |-- skills/dream/
-|-- skills/architecture-rescue/
-|-- skills/systematic-debug-fix/
-|-- skills/dev-note/
-|-- skills/dev-note-distil/
 |-- skill-catalog.json
 |-- .pulse/current-feature.json
 |-- .pulse/runtime-snapshot.json
 `-- top-level .pulse/reservations.json
 ```
 
-Và ở mức contract/docs cũng phải bỏ vai trò active-source của các khái niệm cũ:
+Ở mức contract/docs cũng phải bỏ vai trò active-source của:
 
 ```text
 STOP TREATING AS ACTIVE RUNTIME CONTRACT
@@ -394,34 +416,70 @@ STOP TREATING AS ACTIVE RUNTIME CONTRACT
 `-- .beads/
 ```
 
+### 4.4 Classification của public skills và removed legacy utilities
+
+Public workflow surface:
+
+- `pulse:workflow`
+
+Public standalone utility surface:
+
+- `pulse:architecture-rescue`
+- `pulse:systematic-debug-fix`
+- `pulse:dev-note`
+- `pulse:dev-note-distil`
+- `pulse:bootstrap-project-context`
+- `pulse:prompt-leverage`
+- `pulse:gitnexus`
+
+Removed legacy utility surface:
+
+- `refresh-project-docs`
+- `writing-pulse-skills`
+
+### 4.5 Scope của `.gitignore`
+
+Ở chính plugin repo này, `.gitignore` **không thay đổi** trong đợt migration này. `.pulse/` ở repo này vẫn là local dogfood/runtime state.
+
+Nếu cần mô tả policy track/ignore cho downstream repo, điều đó phải được viết như contract của repo cài Pulse, không phải như thay đổi bắt buộc với plugin repo này.
+
 ---
 
-## 5. Mapping từ skill cũ sang command mới
+## 5. Mapping từ surface cũ sang surface mới
 
-Mapping public surface nên được chốt như sau:
+Workflow mapping:
 
-- `using-pulse` + `preflight` → `/pulse onboard`
-- `exploring` → `/pulse explore`
-- `brainstorming` → `/pulse brainstorm`
-- `planning` → `/pulse plan`
-- `validating` → `/pulse validate`
-- `swarming` → `/pulse swarm`
-- `executing` → `/pulse execute`
-- `reviewing` → `/pulse review`
-- `compounding` → `/pulse compound`
-- `architecture-rescue` → `/pulse rescue`
-- `systematic-debug-fix` → `/pulse systematic-debug`
-- `dev-note` → `/pulse note`
-- `dev-note-distil` → `/pulse note-distill`
+- `using-pulse` + `preflight` → `pulse:workflow onboard`
+- `exploring` → `pulse:workflow explore`
+- `brainstorming` → `pulse:workflow brainstorm`
+- `planning` → `pulse:workflow plan`
+- `validating` → `pulse:workflow validate`
+- `swarming` → `pulse:workflow swarm`
+- `executing` → `pulse:workflow execute`
+- `reviewing` → `pulse:workflow review`
+- `compounding` → `pulse:workflow compound`
+
+Standalone utility mapping:
+
+- `architecture-rescue` → `pulse:architecture-rescue`
+- `systematic-debug-fix` → `pulse:systematic-debug-fix`
+- `dev-note` → `pulse:dev-note`
+- `dev-note-distil` → `pulse:dev-note-distil`
+- `bootstrap-project-context` → `pulse:bootstrap-project-context`
+- `prompt-leverage` → `pulse:prompt-leverage`
+- `gitnexus` → `pulse:gitnexus`
+
+Removed:
+
 - `dream` → remove
-
-Điều này cho phép giữ lại toàn bộ capability quan trọng, nhưng thu gọn mental model về một router duy nhất.
+- `refresh-project-docs` → remove
+- `writing-pulse-skills` → remove
 
 ---
 
 ## 6. Phát hiện chính sau khi explore repo
 
-## 6.1 Runtime/onboarding hiện đang neo mạnh vào `skills/using-pulse/scripts/`
+### 6.1 Runtime/onboarding hiện đang neo mạnh vào `skills/using-pulse/scripts/`
 
 Các file lõi hiện tại tập trung ở:
 
@@ -435,78 +493,64 @@ Các file lõi hiện tại tập trung ở:
 Kết luận:
 
 - runtime brain hiện tại đã tồn tại, nhưng neo vào source tree cũ
-- migration đúng không phải viết lại từ số 0, mà là **dời và tái tổ chức** chúng về `skills/pulse/scripts/runtime/` và `skills/pulse/commands/onboard/scripts/`
+- migration đúng không phải viết lại từ số 0, mà là **dời và tái tổ chức** chúng về `runtime/pulse-work/` và `skills/workflow/commands/onboard/scripts/`
 
-## 6.2 `preflight` là behavioral dependency, không chỉ là một folder
+### 6.2 `preflight` là behavioral dependency, không chỉ là một folder
 
-`preflight` đang bị encode trong:
-
-- `README.md`
-- `AGENTS.md`
-- `AGENTS.template.md`
-- `CLAUDE.md`
-- `docs/ARCHITECTURE.md`
-- `docs/examples/golden-path.md`
-- `skills/using-pulse/SKILL.md`
-- `skills/planning/SKILL.md`
-- `skills/validating/SKILL.md`
-- `skills/executing/SKILL.md`
-- `skills/swarming/SKILL.md`
-- `skills/reviewing/SKILL.md`
-- `skills/compounding/SKILL.md`
-- `skills/exploring/SKILL.md`
-- `skills/using-pulse/scripts/test_onboard_pulse.mjs`
-- `pulse-eval-workspace/evals.json`
-- `scripts/pulse-plugin-eval.mjs`
-- `CONTRIBUTING.md`
+`preflight` đang bị encode trong docs, tests, hooks, evals, và onboarding language.
 
 Kết luận:
 
 - bỏ `preflight` là **repo-wide contract rewrite**
-- command `/pulse onboard` phải thay được vai trò cũ trước khi xóa sạch references
+- `pulse:workflow onboard` phải thay được vai trò cũ trước khi xóa sạch references
 
-## 6.3 `dream` không nên được migrate 1:1
+### 6.3 `dream` không nên được migrate 1:1
 
-`dream` có blast radius trong docs/eval/tests, nhưng user không dùng nó.
+`dream` có blast radius trong docs/eval/tests, nhưng không phải một workflow contract cần giữ.
 
 Kết luận:
 
-- hướng đúng là **delete**, không phải rename thành subcommand mới
-- nếu có một capability nào đó từ `dream` thực sự cần giữ, nó chỉ nên được hấp thụ một phần vào `compound`, không giữ public route riêng
+- hướng đúng là **delete**, không phải rename thành surface mới
+- nếu có hành vi nào của `dream` đáng giữ thì phải được hấp thụ có chủ đích, không giữ skill public riêng
 
-## 6.4 `skill-catalog.json` là di sản của multi-skill era
+### 6.4 `skill-catalog.json` là di sản của multi-skill era
 
-Khi repo đi theo một skill router duy nhất:
+Với cấu trúc mới:
 
-- `skill-catalog.json` không còn vai trò kiến trúc hợp lý
-- command menu phải đến từ `skills/pulse/SKILL.md`
-- command behavior nên đi qua `skills/pulse/commands/<command>/command.md`
-- command metadata phải đến từ `skills/pulse/scripts/command-metadata.json`
+- workflow menu đến từ `skills/workflow/SKILL.md`
+- workflow command behavior đi qua `skills/workflow/commands/<command>/command.md`
+- workflow command metadata đến từ `skills/workflow/scripts/command-metadata.json`
+- standalone skills tự mang contract của chúng trong từng thư mục skill
 
-## 6.5 Làm rõ scope của `.gitignore`
+### 6.5 Utility skills không nên bị ép vào workflow router
 
-Ở chính plugin repo này, `.gitignore` **không thay đổi** trong đợt migration này. `.pulse/` ở repo này vẫn là local dogfood/runtime state.
+`architecture-rescue`, `systematic-debug-fix`, `dev-note`, `dev-note-distil` có mental model khác happy-path pipeline.
 
-Nếu cần mô tả policy track/ignore cho repo downstream hoặc self-hosted target repo, điều đó phải được viết như contract của repo cài Pulse, không phải như thay đổi bắt buộc đối với `.gitignore` của plugin repo này.
+Kết luận:
 
-## 6.6 Classification của residual skills và packaging constraint
+- chúng nên được giữ thành **standalone public skills**
+- workflow router phải chỉ đại diện cho pipeline chuẩn
+- naming, docs, manifests, và tests phải phản ánh ranh giới này
 
-Ngoài workflow surface đang collapse vào `/pulse`, repo hiện còn các skill không nằm trong mapping public chính:
+### 6.6 Residual skill inventory phải được tách rõ giữa keep và remove
+
+Các skill ngoài workflow router không nên bị gom chung vào một nhóm mơ hồ.
+
+Keep như standalone public skills:
 
 - `bootstrap-project-context`
 - `prompt-leverage`
-- `refresh-project-docs`
-- `writing-pulse-skills`
 - `gitnexus`
 
-Quyết định phase 0 được khóa như sau:
+Remove khỏi target packaged surface:
 
-- các skill trên là **maintainer/developer-only utilities**, không phải public Pulse workflow contract
-- `dream` là **obsolete legacy skill** và bị xóa ở phase 4, không migrate thành subcommand mới
-- `skill-catalog.json` từ thời điểm này chỉ còn là **legacy artifact** chờ xóa ở phase 4; nó không còn là source of truth cho docs, manifest, hay router design
-- nếu auto-discovery vẫn khiến các utility này bị ship như packaged public skills, phase 4 hoặc một cleanup phụ phải di dời chúng ra khỏi `skills/` hoặc loại khỏi packaging surface
+- `refresh-project-docs`
+- `writing-pulse-skills`
 
-Constraint này là dependency bắt buộc của phase 4; không được để các utility tồn tại như public surface by accident.
+Kết luận:
+
+- `bootstrap-project-context`, `prompt-leverage`, và `gitnexus` phải ở lại dưới `skills/` như standalone public skills
+- `refresh-project-docs` và `writing-pulse-skills` phải bị loại khỏi packaged surface
 
 ---
 
@@ -514,12 +558,12 @@ Constraint này là dependency bắt buộc của phase 4; không được để
 
 Tôi khuyến nghị chia thành **6 phase chính**:
 
-1. chốt single-skill architecture và sửa structure/docs nền
-2. dựng router `/pulse`
+1. chốt workflow-router architecture và sửa structure/docs nền
+2. dựng workflow router `pulse:workflow`
 3. dựng `pulse-work` engine v1
-4. migrate runtime/onboarding về source tree mới
-5. collapse skill cũ + rewrite docs/eval/tests
-6. cleanup migration và audit cuối
+4. migrate runtime/onboarding về runtime root mới
+5. collapse workflow skills cũ + chốt keep/remove cho residual standalone skills
+6. rewrite docs/hooks/eval/tests và audit cuối
 
 ---
 
@@ -539,84 +583,65 @@ Khóa lại target architecture mới để các phase sau không drift.
 
 ### Việc cần làm
 
-1. cập nhật `SPEC.md` cho khớp single-skill architecture
-2. làm rõ ranh giới giữa plugin repo này và downstream/self-hosted target repo
-   - không mô tả việc sửa `.gitignore` của plugin repo này như một hạng mục migration
-   - mọi guidance về track/ignore `.pulse` phải được gắn đúng vào contract của target repo nếu cần
-3. xác nhận `skill-catalog.json` bị loại bỏ khỏi target design và chỉ còn là legacy artifact chờ cleanup
-4. đồng bộ manifest/docs mô tả plugin theo single-skill model
-5. phân loại rõ residual skills còn nằm dưới `skills/` và ghi chúng thành packaging constraint cho phase 4
+1. cập nhật `SPEC.md` cho khớp mô hình `pulse:workflow` + standalone skills
+2. làm rõ ranh giới giữa workflow router, standalone utilities, và runtime CLI
+3. làm rõ ranh giới giữa plugin repo này và downstream/self-hosted target repo
+4. xác nhận `skill-catalog.json` bị loại bỏ khỏi target design
+5. đồng bộ manifest/docs mô tả plugin theo public surface mới
+6. phân loại rõ public workflow skill, public standalone skills cần giữ, và removed legacy utilities
 
 ### Done khi
 
-- `SPEC.md` không còn giả định multi-skill public surface
-- plan/spec/docs không còn gán nhầm việc sửa `.gitignore` của plugin repo này thành hạng mục bắt buộc
+- `SPEC.md` không còn giả định mọi capability đều đi qua một router duy nhất
 - plan/spec/docs không còn mâu thuẫn về vị trí của HARNESS/HARNESS_BACKLOG
-- residual skills không còn ở trạng thái “chưa rõ số phận” trước khi phase 4 bắt đầu
+- runtime source path được chốt là `runtime/pulse-work/`
+- residual skills không còn ở trạng thái “chưa rõ số phận” giữa keep và remove
 
 ---
 
-## Phase 1 — Dựng router skill `/pulse`
+## Phase 1 — Dựng workflow router `pulse:workflow`
 
 ### Mục tiêu
 
-Tạo public surface mới trước khi dẹp surface cũ.
+Tạo workflow surface mới trước khi dẹp workflow surface cũ.
 
 ### File chính
 
-- `skills/pulse/SKILL.md`
-- `skills/pulse/references/HARNESS.md`
-- `skills/pulse/commands/<command>/command.md`
-- `skills/pulse/commands/<command>/references/*`
-- `skills/pulse/commands/<command>/scripts/*`
-- `skills/pulse/references/shared/workflow-contract.md`
-- `skills/pulse/references/shared/planes-and-artifacts.md`
-- `skills/pulse/references/shared/workgraph-model.md`
-- `skills/pulse/references/shared/approval-gates.md`
-- `skills/pulse/references/shared/verification-contract.md`
-- `skills/pulse/references/shared/swarm-execution-rules.md`
-- `skills/pulse/references/shared/handoff-and-resume.md`
-- `skills/pulse/templates/HARNESS_BACKLOG.md`
-- `skills/pulse/scripts/command-metadata.json`
+- `skills/workflow/SKILL.md`
+- `skills/workflow/references/HARNESS.md`
+- `skills/workflow/commands/<command>/command.md`
+- `skills/workflow/commands/<command>/references/*`
+- `skills/workflow/commands/<command>/scripts/*`
+- `skills/workflow/references/shared/*`
+- `skills/workflow/templates/HARNESS_BACKLOG.md`
+- `skills/workflow/scripts/command-metadata.json`
 
 ### Việc cần làm
 
-1. tạo `skills/pulse/SKILL.md` làm router duy nhất
+1. tạo `skills/workflow/SKILL.md` làm workflow router duy nhất
 2. định nghĩa command table cho:
    - onboard
    - explore
    - brainstorm
    - plan
    - validate
-   - swarm
    - execute
+   - swarm
    - review
    - compound
-   - rescue
-   - systematic-debug
-   - note
-   - note-distill
 3. tạo command modules riêng cho các command có assets nặng như `onboard` và `brainstorm`
-4. chuyển `HARNESS.md` thành canonical reference ở `skills/pulse/references/HARNESS.md`
-5. tạo `HARNESS_BACKLOG.md` seed template ở `skills/pulse/templates/`
-6. tạo nhóm shared references dùng chung cho nhiều command:
-   - `workflow-contract.md`
-   - `planes-and-artifacts.md`
-   - `workgraph-model.md`
-   - `approval-gates.md`
-   - `verification-contract.md`
-   - `swarm-execution-rules.md`
-   - `handoff-and-resume.md`
-7. thêm `story-SPEC.md` template và chốt rule rằng `/pulse brainstorm` chỉ viết story-level `SPEC.md`, không ghi đè story `README.md`
-8. tạo `command-metadata.json` làm metadata source duy nhất cho subcommands
+4. chuyển `HARNESS.md` thành canonical reference ở `skills/workflow/references/HARNESS.md`
+5. tạo `HARNESS_BACKLOG.md` seed template ở `skills/workflow/templates/`
+6. tạo shared references dùng chung cho nhiều workflow command
+7. thêm `story-SPEC.md` template và chốt rule rằng `pulse:workflow brainstorm` chỉ viết story-level `SPEC.md`, không ghi đè story `README.md`
+8. tạo `command-metadata.json` làm metadata source duy nhất cho workflow subcommands
 9. bỏ dependency kiến trúc vào `skill-catalog.json`
 
 ### Done khi
 
-- `/pulse` có thể đóng vai trò router public duy nhất
-- command surface mới được mô tả đầy đủ trong một nơi duy nhất
-- command-specific references/scripts có chỗ ở rõ ràng thay vì bị flatten
-- brainstorm được chốt là story-scoped và ghi output vào `works/**/SPEC.md`, không phải story `README.md`
+- `pulse:workflow` có thể đóng vai trò workflow router public duy nhất
+- workflow command surface mới được mô tả đầy đủ trong một nơi duy nhất
+- brainstorm được chốt là story-scoped và ghi output vào `works/**/SPEC.md`
 - `HARNESS.md` và `HARNESS_BACKLOG.md` đã được đặt đúng lớp kiến trúc
 
 ---
@@ -625,25 +650,25 @@ Tạo public surface mới trước khi dẹp surface cũ.
 
 ### Mục tiêu
 
-Có workgraph engine thật để router và runtime bám vào.
+Có workgraph engine thật để workflow router và runtime bám vào.
 
 ### File chính
 
-- `skills/pulse/scripts/runtime/pulse_work.mjs`
-- `skills/pulse/scripts/runtime/workgraph_store.mjs`
-- `skills/pulse/scripts/runtime/workgraph_validate.mjs`
-- `skills/pulse/scripts/runtime/workgraph_ids.mjs`
-- `skills/pulse/scripts/runtime/workgraph_paths.mjs`
-- `skills/pulse/scripts/runtime/workgraph_views.mjs`
-- `skills/pulse/scripts/runtime/workgraph_lock.mjs`
-- `skills/pulse/scripts/runtime/workgraph_templates.mjs`
+- `runtime/pulse-work/pulse_work.mjs`
+- `runtime/pulse-work/workgraph_store.mjs`
+- `runtime/pulse-work/workgraph_validate.mjs`
+- `runtime/pulse-work/workgraph_ids.mjs`
+- `runtime/pulse-work/workgraph_paths.mjs`
+- `runtime/pulse-work/workgraph_views.mjs`
+- `runtime/pulse-work/workgraph_lock.mjs`
+- `runtime/pulse-work/workgraph_templates.mjs`
 
 ### Việc cần làm
 
 1. parse/save `.pulse/workgraph/items.jsonl`
 2. validate schema strict theo `SPEC.md`
 3. generate IDs theo `<KIND>-<TIMESECOND>[-<SEQ>]`
-4. build self-host workgraph and work-surface scaffolding nếu repo tiếp tục dogfood full flow
+4. build workgraph and works-surface scaffolding
 5. implement write lock + atomic writes
 6. build generated views
 7. implement command tối thiểu:
@@ -663,8 +688,8 @@ Có workgraph engine thật để router và runtime bám vào.
 ### Done khi
 
 - `pulse-work` có thể thao tác canonical workgraph
-- source tree đã có vị trí rõ ràng cho runtime CLI
-- `.pulse/scripts/pulse_work.mjs` có thể được materialize từ source scripts
+- runtime source tree có vị trí rõ ràng ngoài workflow skill tree
+- `.pulse/scripts/*` có thể được materialize từ `runtime/pulse-work/`
 
 ---
 
@@ -672,20 +697,20 @@ Có workgraph engine thật để router và runtime bám vào.
 
 ### Mục tiêu
 
-Bỏ mô hình `preflight -> using-pulse`, thay bằng `/pulse onboard` + runtime mới.
+Bỏ mô hình `preflight -> using-pulse`, thay bằng `pulse:workflow onboard` + runtime mới.
 
 ### File chính
 
-- `skills/pulse/commands/onboard/scripts/onboard_pulse.mjs`
-- `skills/pulse/scripts/runtime/pulse_state.mjs`
-- `skills/pulse/scripts/runtime/pulse_status.mjs`
-- `skills/pulse/scripts/runtime/pulse_session_context.mjs`
-- `skills/pulse/scripts/runtime/pulse_reservations.mjs`
+- `skills/workflow/commands/onboard/scripts/onboard_pulse.mjs`
+- `runtime/pulse-work/pulse_state.mjs`
+- `runtime/pulse-work/pulse_status.mjs`
+- `runtime/pulse-work/pulse_session_context.mjs`
+- `runtime/pulse-work/pulse_reservations.mjs`
 - `.pulse/scripts/*`
 
 ### Việc cần làm
 
-1. port logic từ `skills/using-pulse/scripts/*` sang `skills/pulse/scripts/runtime/*` và `skills/pulse/commands/onboard/scripts/*`
+1. port logic từ `skills/using-pulse/scripts/*` sang `runtime/pulse-work/*` và `skills/workflow/commands/onboard/scripts/*`
 2. chuyển canonical runtime paths sang `.pulse/runtime/*`
 3. bỏ persistence của:
    - `.pulse/current-feature.json`
@@ -693,21 +718,21 @@ Bỏ mô hình `preflight -> using-pulse`, thay bằng `/pulse onboard` + runtim
 4. dời reservations sang `.pulse/runtime/reservations.json`
 5. materialize `.pulse/harness/HARNESS_BACKLOG.md` từ template source
 6. giữ `pulse_status` như scout tool bám vào runtime mới
-7. để `/pulse onboard` thay authority cũ của `preflight` + `using-pulse`
+7. để `pulse:workflow onboard` thay authority cũ của `preflight` + `using-pulse`
 
 ### Done khi
 
-- repo có thể bootstrap từ `/pulse onboard`
+- repo có thể bootstrap từ `pulse:workflow onboard`
 - runtime state canonical nằm dưới `.pulse/runtime/`
 - `.pulse/harness/HARNESS_BACKLOG.md` được tạo đúng từ template source
 
 ---
 
-## Phase 4 — Collapse skill cũ vào router mới và xóa surface dư
+## Phase 4 — Collapse workflow skills cũ và phân loại lại public surface
 
 ### Mục tiêu
 
-Thay multi-skill public surface bằng router `/pulse` thật sự.
+Thu gọn workflow surface về `pulse:workflow` trong khi giữ các standalone utilities ở ngoài router.
 
 ### File chính
 
@@ -721,11 +746,44 @@ Thay multi-skill public surface bằng router `/pulse` thật sự.
 - `skills/reviewing/**`
 - `skills/compounding/**`
 - `skills/brainstorming/**`
+- `skills/dream/**`
 - `skills/architecture-rescue/**`
-- `skills/systematic-debug-fix/**`
+- `skills/bootstrap-project-context/**`
 - `skills/dev-note/**`
 - `skills/dev-note-distil/**`
-- `skills/dream/**`
+- `skills/gitnexus/**`
+- `skills/prompt-leverage/**`
+- `skills/systematic-debug-fix/**`
+- `skills/refresh-project-docs/**`
+- `skills/writing-pulse-skills/**`
+
+### Việc cần làm
+
+1. migrate nội dung workflow skills cũ sang `skills/workflow/commands/`
+2. giữ `architecture-rescue`, `systematic-debug-fix`, `dev-note`, `dev-note-distil`, `bootstrap-project-context`, `prompt-leverage`, và `gitnexus` thành standalone public skills
+3. update các standalone skills để docs của chúng không giả định chúng là workflow phases
+4. xóa các workflow skill public cũ sau khi router mới đã usable
+5. xóa hẳn `dream`
+6. xóa hẳn `skill-catalog.json`
+7. xóa `refresh-project-docs` và `writing-pulse-skills` khỏi packaged public surface
+
+### Done khi
+
+- workflow public surface chỉ còn `pulse:workflow`
+- rescue/debug/note và các standalone support skills đã chốt tồn tại riêng như standalone public skills
+- `refresh-project-docs` và `writing-pulse-skills` không còn bị ship như public skills
+- `dream` và `skill-catalog.json` không còn tồn tại
+
+---
+
+## Phase 5 — Sửa docs, hooks, eval, benchmark, và tests
+
+### Mục tiêu
+
+Đồng bộ toàn repo theo public surface mới.
+
+### File chính
+
 - `README.md`
 - `AGENTS.md`
 - `AGENTS.template.md`
@@ -733,78 +791,38 @@ Thay multi-skill public surface bằng router `/pulse` thật sự.
 - `docs/ARCHITECTURE.md`
 - `docs/examples/golden-path.md`
 - `CONTRIBUTING.md`
-
-### Việc cần làm
-
-1. migrate nội dung phase skills cũ sang `skills/pulse/commands/`
-2. migrate brainstorming flow sang `skills/pulse/commands/brainstorm/`
-3. migrate architecture rescue / debug / note flows sang:
-   - `skills/pulse/commands/rescue/`
-   - `skills/pulse/commands/systematic-debug/`
-   - `skills/pulse/commands/note/`
-   - `skills/pulse/commands/note-distill/`
-4. xóa các thư mục skill public cũ sau khi router mới đã usable
-5. xóa hẳn `dream`
-6. xóa hẳn `skill-catalog.json`
-7. đổi public docs từ “nhiều skill” sang “một `/pulse` với subcommands”
-
-### Ghi chú quan trọng
-
-Đây là phase có blast radius lớn nhất vì nó đụng tới:
-
-- command surface
-- docs product
-- onboarding language
-- tests/eval corpus
-- plugin metadata
-
-### Done khi
-
-- public surface chỉ còn `/pulse`
-- không còn packaged skill public cũ
-- `dream` và `skill-catalog.json` không còn tồn tại
-
----
-
-## Phase 5 — Sửa hooks, eval, benchmark, và tests
-
-### Mục tiêu
-
-Bỏ mọi enforcement và test corpus đang kéo repo quay lại contract cũ.
-
-### File chính
-
-- `hooks/pre-tool-use.mjs`
-- `.codex/hooks/pulse_pre_tool_use.mjs`
-- `hooks/session-start.mjs`
-- `.codex/hooks/pulse_session_start.mjs`
+- `hooks/*`
+- `.codex/hooks/*`
 - `scripts/pulse-plugin-eval.mjs`
 - `.plugin-eval/benchmark.json`
 - `pulse-eval-workspace/evals.json`
-- `docs/evaluation/pulse-plugin-eval.md`
-- test files cho onboarding/runtime/router
+- `tests/**`
 
 ### Việc cần làm
 
-1. bỏ `bv`-specific hook guard
-2. update session-start bootstrap language sang `/pulse onboard`
-3. update eval corpus sang `/pulse <command>`
-4. update tests cho:
-   - router `/pulse`
+1. rewrite docs từ “một router cho mọi capability” sang “workflow router + standalone utilities + runtime CLI”
+2. update session-start/bootstrap language sang `pulse:workflow onboard`
+3. update eval corpus sang `pulse:workflow <command>` cho workflow path
+4. update docs/tests cho standalone skills:
+   - `pulse:architecture-rescue`
+   - `pulse:systematic-debug-fix`
+   - `pulse:dev-note`
+   - `pulse:dev-note-distil`
+   - `pulse:bootstrap-project-context`
+   - `pulse:prompt-leverage`
+   - `pulse:gitnexus`
+5. bỏ `bv`-specific hook guard
+6. update tests cho:
+   - workflow router
    - runtime layout `.pulse/runtime/*`
    - workgraph layout `.pulse/workgraph/*`
    - harness backlog materialization
-5. bỏ mọi assumption về:
-   - `preflight`
-   - `dream`
-   - `skill-catalog.json`
-   - `br`
-   - `bv`
+7. bỏ mọi assumption về `preflight`, `dream`, `skill-catalog.json`, `br`, `bv`
 
 ### Done khi
 
-- hooks, tests, và eval cùng phản ánh single-skill architecture mới
-- repo không còn rule nào kéo user quay về surface cũ
+- docs, hooks, tests, và eval cùng phản ánh public surface mới
+- repo không còn rule nào kéo user quay về legacy workflow skills
 
 ---
 
@@ -814,24 +832,18 @@ Bỏ mọi enforcement và test corpus đang kéo repo quay lại contract cũ.
 
 Khóa lại migration bằng tài liệu rõ ràng và cleanup repo-wide.
 
-### File nên tạo/cập nhật
-
-- `README.md`
-- `docs/ARCHITECTURE.md`
-- `docs/examples/golden-path.md`
-- migration blueprint docs
-- nếu cần, `SPEC.md`
-
 ### Nội dung bắt buộc
 
-1. mô tả rõ `/pulse` là command router duy nhất
-2. mô tả rõ `pulse-work` là runtime CLI riêng
-3. mô tả rõ vị trí của:
-   - `skills/pulse/references/HARNESS.md`
-   - `skills/pulse/templates/HARNESS_BACKLOG.md`
+1. mô tả rõ `pulse:workflow` là workflow router duy nhất
+2. mô tả rõ các standalone public skills là utilities ngoài workflow pipeline
+3. mô tả rõ `pulse-work` là runtime CLI riêng
+4. mô tả rõ vị trí của:
+   - `skills/workflow/references/HARNESS.md`
+   - `skills/workflow/templates/HARNESS_BACKLOG.md`
    - `.pulse/harness/HARNESS_BACKLOG.md`
-4. map legacy concepts sang contract mới
-5. backup brownfield docs nếu cần trước các đợt restructure lớn
+   - `runtime/pulse-work/`
+5. map legacy concepts sang contract mới
+6. backup brownfield docs nếu cần trước các đợt restructure lớn
 
 ### Audit cuối cần grep lại
 
@@ -856,22 +868,22 @@ Khóa lại migration bằng tài liệu rõ ràng và cleanup repo-wide.
 
 ## 8. File inventory ưu tiên cao
 
-## P0 — phải chạm sớm
+### P0 — phải chạm sớm
 
 - `SPEC.md`
-- `skills/pulse/SKILL.md`
-- `skills/pulse/references/HARNESS.md`
-- `skills/pulse/templates/HARNESS_BACKLOG.md`
-- `skills/pulse/templates/works/story-SPEC.md`
-- `skills/pulse/scripts/command-metadata.json`
-- `skills/pulse/scripts/runtime/pulse_work.mjs`
-- `skills/pulse/commands/onboard/scripts/onboard_pulse.mjs`
-- `skills/pulse/scripts/runtime/pulse_state.mjs`
-- `skills/pulse/scripts/runtime/pulse_status.mjs`
-- `skills/pulse/scripts/runtime/pulse_session_context.mjs`
-- `skills/pulse/scripts/runtime/pulse_reservations.mjs`
+- `skills/workflow/SKILL.md`
+- `skills/workflow/references/HARNESS.md`
+- `skills/workflow/templates/HARNESS_BACKLOG.md`
+- `skills/workflow/templates/works/story-SPEC.md`
+- `skills/workflow/scripts/command-metadata.json`
+- `runtime/pulse-work/pulse_work.mjs`
+- `skills/workflow/commands/onboard/scripts/onboard_pulse.mjs`
+- `runtime/pulse-work/pulse_state.mjs`
+- `runtime/pulse-work/pulse_status.mjs`
+- `runtime/pulse-work/pulse_session_context.mjs`
+- `runtime/pulse-work/pulse_reservations.mjs`
 
-## P1 — rewrite / migrate ngay sau khi P0 ổn
+### P1 — migrate ngay sau khi P0 ổn
 
 - `skills/using-pulse/**`
 - `skills/exploring/**`
@@ -882,12 +894,12 @@ Khóa lại migration bằng tài liệu rõ ràng và cleanup repo-wide.
 - `skills/reviewing/**`
 - `skills/compounding/**`
 - `skills/brainstorming/**`
+- `skills/preflight/**`
+- `skills/dream/**`
 - `skills/architecture-rescue/**`
 - `skills/systematic-debug-fix/**`
 - `skills/dev-note/**`
 - `skills/dev-note-distil/**`
-- `skills/preflight/**`
-- `skills/dream/**`
 - `README.md`
 - `AGENTS.md`
 - `AGENTS.template.md`
@@ -896,7 +908,7 @@ Khóa lại migration bằng tài liệu rõ ràng và cleanup repo-wide.
 - `docs/examples/golden-path.md`
 - `CONTRIBUTING.md`
 
-## P2 — khóa release cuối
+### P2 — khóa release cuối
 
 - `hooks/pre-tool-use.mjs`
 - `hooks/session-start.mjs`
@@ -910,22 +922,36 @@ Khóa lại migration bằng tài liệu rõ ràng và cleanup repo-wide.
 
 ## 9. Kiểm thử và verification plan
 
-## 9.1 Router / command-surface tests
+### 9.1 Workflow router tests
 
 Cần test cho:
 
-- `/pulse` không args → render command menu đúng
-- `/pulse onboard` → load đúng command reference
-- `/pulse brainstorm` → route đúng
-- `/pulse plan` → route đúng
-- `/pulse swarm` → route đúng
-- `/pulse rescue` → route đúng
-- `/pulse systematic-debug` → route đúng
-- `/pulse note` → route đúng
-- `/pulse note-distill` → route đúng
+- `pulse:workflow` không args → render command menu đúng
+- `pulse:workflow onboard` → load đúng command reference
+- `pulse:workflow explore` → route đúng
+- `pulse:workflow brainstorm` → route đúng
+- `pulse:workflow plan` → route đúng
+- `pulse:workflow validate` → route đúng
+- `pulse:workflow execute` → route đúng
+- `pulse:workflow swarm` → route đúng
+- `pulse:workflow review` → route đúng
+- `pulse:workflow compound` → route đúng
 - first word không match command → fallback behavior hợp lệ
 
-## 9.2 Runtime / workgraph tests
+### 9.2 Standalone skill checks
+
+Cần bảo đảm ít nhất:
+
+- `pulse:architecture-rescue` vẫn là standalone public skill hợp lệ
+- `pulse:systematic-debug-fix` vẫn là standalone public skill hợp lệ
+- `pulse:dev-note` vẫn là standalone public skill hợp lệ
+- `pulse:dev-note-distil` vẫn là standalone public skill hợp lệ
+- `pulse:bootstrap-project-context` vẫn là standalone public skill hợp lệ
+- `pulse:prompt-leverage` vẫn là standalone public skill hợp lệ
+- `pulse:gitnexus` vẫn là standalone public skill hợp lệ
+- docs/help/manifests không mô tả các skill này như workflow phases
+
+### 9.3 Runtime / workgraph tests
 
 Cần test cho:
 
@@ -940,27 +966,28 @@ Cần test cho:
 - unique prefix resolution
 - workgraph view generation
 
-## 9.3 Integration / smoke tests
+### 9.4 Integration / smoke tests
 
-1. bootstrap repo bằng `/pulse onboard`
+1. bootstrap repo bằng `pulse:workflow onboard`
 2. onboarding tạo đúng layout `.pulse/runtime/*`, `.pulse/workgraph/*`, `.pulse/harness/HARNESS_BACKLOG.md`
 3. `pulse-work create` cho epic/story/task/bug, với task/bug chỉ được tạo dưới story
-4. `/pulse brainstorm` ghi output vào `works/**/SPEC.md` thay vì story `README.md`
+4. `pulse:workflow brainstorm` ghi output vào `works/**/SPEC.md` thay vì story `README.md`
 5. `pulse-work dep add` / `dep rm`
-5. `pulse-work ready --json`
-6. `pulse-work close` fail nếu thiếu verification
-7. `pulse-work reopen`
-8. `pulse-work doctor --json`
-9. `node .pulse/scripts/pulse_status.mjs --json`
-10. `node scripts/pulse-plugin-eval.mjs analyze`
+6. `pulse-work ready --json`
+7. `pulse-work close` fail nếu thiếu verification
+8. `pulse-work reopen`
+9. `pulse-work doctor --json`
+10. `node .pulse/scripts/pulse_status.mjs --json`
 11. verify repo không còn expose `pulse:preflight`, `pulse:using-pulse`, `pulse:dream`
 
-## 9.4 Repo audit checks
+### 9.5 Repo audit checks
 
 Sau khi gần xong, chạy repo-wide audit để bảo đảm:
 
 - không còn hard requirement `br` / `bv`
-- không còn public route multi-skill cũ
+- workflow surface public chỉ còn `pulse:workflow`
+- standalone rescue/debug/note/support skills không bị mô tả sai như workflow phases
+- `refresh-project-docs` và `writing-pulse-skills` không còn ở packaged public surface
 - không còn `skill-catalog.json`
 - không còn `history/` là active work source trong runtime/contracts
 - không còn top-level runtime state files cũ là canonical surfaces
@@ -973,20 +1000,22 @@ Sau khi gần xong, chạy repo-wide audit để bảo đảm:
 
 - cập nhật `PLAN.md`
 - cập nhật `SPEC.md`
-- làm rõ ranh giới plugin repo vs downstream/self-hosted target repo
-- đồng bộ plugin manifests nếu cần
+- chốt `pulse:workflow` là workflow router
+- chốt standalone public skills
+- chốt runtime source ở `runtime/pulse-work/`
+- chốt các standalone public skills được giữ lại và các legacy utilities bị loại bỏ
 
-### Changeset B — Router `/pulse`
+### Changeset B — Workflow router
 
-- tạo `skills/pulse/SKILL.md`
-- tạo command modules dưới `skills/pulse/commands/`
+- tạo `skills/workflow/SKILL.md`
+- tạo command modules dưới `skills/workflow/commands/`
 - tạo `references/HARNESS.md`
 - tạo `templates/HARNESS_BACKLOG.md`
 - tạo `command-metadata.json`
 
 ### Changeset C — `pulse-work` engine
 
-- dựng workgraph modules dưới `skills/pulse/scripts/runtime/`
+- dựng workgraph modules dưới `runtime/pulse-work/`
 - schema
 - doctor
 - views
@@ -994,18 +1023,19 @@ Sau khi gần xong, chạy repo-wide audit để bảo đảm:
 
 ### Changeset D — Runtime / onboard migration
 
-- port scripts từ `skills/using-pulse/scripts/` sang `skills/pulse/scripts/runtime/` và `skills/pulse/commands/onboard/scripts/`
+- port scripts từ `skills/using-pulse/scripts/` sang `runtime/pulse-work/` và `skills/workflow/commands/onboard/scripts/`
 - runtime paths sang `.pulse/runtime/*`
 - materialize `.pulse/harness/HARNESS_BACKLOG.md`
-- thay bootstrap bằng `/pulse onboard`
+- thay bootstrap bằng `pulse:workflow onboard`
 
-### Changeset E — Collapse skill cũ
+### Changeset E — Collapse workflow skills + classify surfaces
 
-- migrate nội dung skill cũ vào `skills/pulse/commands/` và shared refs
+- migrate nội dung workflow skills cũ vào `skills/workflow/commands/`
+- giữ rescue/debug/note/support skills đã chốt là standalone public surface
 - xóa `preflight`
 - xóa `dream`
 - xóa `skill-catalog.json`
-- xóa public skill directories cũ
+- xóa `refresh-project-docs` và `writing-pulse-skills`
 
 ### Changeset F — Docs / hooks / eval / audit cuối
 
@@ -1021,27 +1051,28 @@ Sau khi gần xong, chạy repo-wide audit để bảo đảm:
 
 Plan này được coi là đạt mục tiêu khi repo có thể chứng minh đồng thời:
 
-- user chỉ cần một entrypoint public là `/pulse`
-- command behavior được tổ chức rõ theo `skills/pulse/commands/<command>/`
-- `pulse-work` tồn tại như runtime CLI riêng, có vị trí rõ ràng trong source tree ở `skills/pulse/scripts/runtime/`
-- bootstrap bằng `/pulse onboard`, không cần `pulse:preflight` hay `pulse:using-pulse`
-- không còn packaged skill `dream`
-- không còn `skill-catalog.json`
-- `HARNESS.md` nằm đúng ở `skills/pulse/references/HARNESS.md`
-- `HARNESS_BACKLOG.md` nằm đúng ở `skills/pulse/templates/HARNESS_BACKLOG.md` và materialize vào `.pulse/harness/HARNESS_BACKLOG.md`
+- user có đúng một workflow entrypoint public là `pulse:workflow`
+- workflow command behavior được tổ chức rõ theo `skills/workflow/commands/<command>/`
+- `pulse-work` tồn tại như runtime CLI riêng, có vị trí rõ ràng ở `runtime/pulse-work/`
+- bootstrap bằng `pulse:workflow onboard`, không cần `pulse:preflight` hay `pulse:using-pulse`
+- `architecture-rescue`, `systematic-debug-fix`, `dev-note`, `dev-note-distil`, `bootstrap-project-context`, `prompt-leverage`, và `gitnexus` vẫn tồn tại như standalone public skills
+- `dream`, `refresh-project-docs`, và `writing-pulse-skills` không còn tồn tại như packaged public skills
+- `skill-catalog.json` không còn tồn tại
+- `HARNESS.md` nằm đúng ở `skills/workflow/references/HARNESS.md`
+- `HARNESS_BACKLOG.md` nằm đúng ở `skills/workflow/templates/HARNESS_BACKLOG.md` và materialize vào `.pulse/harness/HARNESS_BACKLOG.md`
 - brainstorm output của story nằm ở `works/**/SPEC.md`, còn story `README.md` vẫn là description artifact riêng
-- epic chỉ chứa story, và task / bug chỉ sống dưới story directories
-- workgraph metadata, runtime state, và command router cùng phản ánh một contract v2 thống nhất
+- workgraph metadata, runtime state, workflow router, và standalone surfaces cùng phản ánh một contract v2 thống nhất
 
 ---
 
 ## 12. Kết luận ngắn
 
-Hướng mới của Pulse không còn là “nâng cấp một bộ nhiều skill public”, mà là:
+Hướng mới của Pulse không còn là “một router cho mọi capability”, mà là:
 
-- **collapse về một skill router duy nhất là `/pulse`**
-- **dời runtime thật sang `pulse-work` + `.pulse/workgraph` + `.pulse/runtime`**
-- **giữ các capability mạnh như brainstorm, rescue, systematic-debug, note dưới router đó**
+- **một workflow router duy nhất là `pulse:workflow`**
+- **một nhóm standalone public skills cho rescue/debug/note/support utilities**
+- **runtime thật tách ra thành `pulse-work` + `.pulse/workgraph` + `.pulse/runtime`**
 - **loại bỏ các lớp dư thừa như `preflight`, `dream`, `skill-catalog.json`**
+- **giữ `bootstrap-project-context`, `prompt-leverage`, `gitnexus` như standalone public skills và loại `refresh-project-docs`, `writing-pulse-skills` khỏi packaged surface**
 
-Đây là hướng product hóa sạch hơn, dễ dạy hơn, và hợp bản chất workflow system của Pulse hơn so với mô hình hiện tại.
+Đây là hướng sạch hơn về mental model: workflow là workflow, utility là utility, runtime là runtime.

@@ -1,54 +1,183 @@
 # `/pulse validate`
 
-Maps from legacy `validating`.
+Operational feasibility and execution-approval manual for proving current work is real-world executable before any implementation begins.
 
-## Intent
+This phase enforces Gate 3 discipline and prevents starting work on assumptions.
 
-Use this command to prove that the planned work is feasible, safe enough, and ready for execution.
+## Mission
 
-## Inputs expected
+Determine whether approved current work is executable under real repository constraints, return a precise readiness decision, and block execution until explicit approval.
 
-Bring:
+## Entry criteria
 
-- the selected shape artifact
-- the current scope or active work slice
-- known risks, dependencies, and open questions
-- any existing proof, prototype output, or verification expectations
+Run `/pulse validate` when:
 
-Useful shared references:
+- Gate 2 shape is explicitly approved
+- current-work contract exists
+- execution has not started for this slice
 
-- `../../references/shared/approval-gates.md`
-- `../../references/shared/verification-contract.md`
-- `../../references/shared/workgraph-model.md`
+Do not run when:
 
-## Primary outputs/artifacts
+- shape approval is pending or ambiguous
+- planning artifacts and runtime mirrors disagree on active slice
+- onboarding/readiness is stale or blocked
 
-Typical outputs are:
+## Required inputs
 
-- risk surface
-- blockers
-- evidence summary
-- execution-readiness call
-- recommended execution mode
+- approved story-scoped context/spec artifacts under `works/epics/<epic-id>-<epic-slug>/<story-id>-<story-slug>/` (`CONTEXT.md`, `SPEC.md`)
+- canonical planning artifacts in that same story directory (`DISCOVERY.md`, `APPROACH.md`)
+- approved shape artifact in that same story directory: `work-shape.md` | `phase-plan.md` | `epic-map.md`
+- current-work artifacts (shape-dependent) in that same story directory
+- `.pulse/runtime/STATE.md` and `.pulse/runtime/state.json`
+- existing current-slice workgraph items if already created (`.pulse/workgraph/items.jsonl`)
 
-## Interaction model
+## Phase model (mandatory order)
 
-`validate` is proof-seeking work.
-It may inspect code, run targeted checks, or gather feasibility evidence, but it should not quietly become execution.
+### Phase 0 — Orientation (every run, including resumes)
 
-## Approval expectations
+Confirm and present:
 
-This command prepares Gate 3.
-Execution should not start until the user explicitly approves the validated work slice.
+- active mode
+- approved shape artifact and status
+- current slice objective
+- mirror sync status (in-sync / out-of-sync / missing)
 
-## Next command recommendations
+Hard stop: if shape is not approved or mirrors conflict with artifact truth, route back to planning/state sync.
 
-- `swarm` when the validated work should be executed in parallel
-- `execute` when a single executor is the right mode
-- `plan` or `brainstorm` when validation exposes shape problems
+### Phase 1 — Reality gate (fail fast)
 
-## Failure / escalation behavior
+Test whether planned work still fits current repo conditions:
 
-- if proof is missing, say exactly what evidence is still required
-- if the plan is unsound, send the work back to `plan`
-- if the product shape itself is wrong, send the work back to `brainstorm`
+- mode still appropriate
+- assumptions still valid
+- dependency and boundary conditions still true
+- no safer smaller path being ignored without reason
+
+If reality fails, stop and route to `/pulse plan` with exact repair targets.
+
+### Phase 2 — Feasibility matrix
+
+Build assumption-by-assumption matrix:
+
+- assumption statement
+- evidence required
+- probe method
+- pass/fail threshold
+- consequence if disproven
+
+High-impact, unproven assumptions require decisive probes (YES/NO outcomes), not fuzzy confidence notes.
+
+Timebox policy for probes:
+
+- bounded attempt window
+- if inconclusive, escalate with explicit options (extend, replan, or constrain)
+- never silently continue
+
+### Phase 3 — Work-item schema gate (if items exist)
+
+For each current-slice execution item, verify required contract quality:
+
+- dependency correctness
+- file/module scope boundedness
+- verification commands are concrete
+- evidence path is explicit
+- testing mode is coherent with risk
+- decision references map back to locked context
+
+If schema defects are local and obvious, repair.
+If defects imply shape/contract change, route to planning.
+
+### Phase 4 — Structural coherence pass
+
+Validate end-to-end consistency across these dimensions:
+
+1. mode-shape coherence
+2. current-slice coverage and ordering
+3. dependency graph sanity
+4. scope isolation
+5. verification completeness
+6. integration and exit-state credibility
+
+Iteration cap: max 3 correction loops. If still failing, escalate and stop.
+
+### Phase 5 — Readiness decision
+
+Return one of:
+
+- `ready`
+- `ready-with-constraints`
+- `not-ready`
+
+Decision must include:
+
+- concrete rationale
+- blockers (if any)
+- exact reroute target and required repairs
+- recommended execution mode: `swarm` or `single-worker`
+
+### Phase 6 — Gate 3 approval hard stop
+
+Execution cannot proceed without explicit user approval.
+
+On approval:
+
+- record Gate 3 approved state in `.pulse/runtime/STATE.md` and `.pulse/runtime/state.json`
+- recommend next command by mode:
+  - `/pulse swarm` for parallel-safe execution
+  - `/pulse execute` for single-worker execution
+- default `next_action`: manual invoke unless user requests continue-now
+
+On rejection:
+
+- capture rejection reason category
+- route to exact upstream artifact owner
+
+## Gate posture
+
+`/pulse validate` enforces Gate 3.
+
+Gate 3 is a strict human approval checkpoint; no implied approvals from confidence language, prior momentum, or “looks ready” wording.
+
+## Role boundaries
+
+Validate owns:
+
+- feasibility truth testing
+- execution safety decision
+- reroute precision
+
+Validate does not own:
+
+- implementation
+- final product quality signoff
+- changing approved shape without planning loop
+
+## Pause/resume posture
+
+If paused near context limits:
+
+- write a validating-owned handoff snapshot under `.pulse/runtime/handoffs/`
+- include completed phase, open blockers, and next probe/action
+- resume from orientation, then continue at next incomplete phase
+
+## Red flags
+
+- validating with unapproved shape
+- treating mirrors as truth when artifacts disagree
+- approving with unresolved high-impact assumptions
+- running structural checks before feasibility clarity
+- allowing execution before explicit Gate 3 approval
+- vague `not-ready` without actionable repair path
+
+## Exit contract
+
+Successful exit requires:
+
+- explicit readiness decision
+- explicit mode recommendation
+- Gate 3 approval outcome recorded
+- precise next command recommendation (`/pulse swarm` or `/pulse execute`, or `/pulse plan` for repairs)
+
+## References
+
+- `references/runtime-appendix.md` — orientation, gate templates, schema checklist, and Gate 3 prompt

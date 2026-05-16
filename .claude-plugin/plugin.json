@@ -16,6 +16,6 @@
     "planning",
     "multi-agent"
   ],
-  "skills": "./skills/",
+  "skills": "./skills/pulse",
   "mcpServers": "./.mcp.json"
 }

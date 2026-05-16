@@ -53,7 +53,7 @@ function summarizeConfiguredGitNexusSources(mcpSources) {
 
 function buildGitNexusRecommendedAction(configured, matchedSources) {
   if (configured) {
-    return `GitNexus is configured in ${matchedSources.join(", ")} — prefer pulse:gitnexus for discovery, then confirm results with direct file reads.`;
+    return `GitNexus is configured in ${matchedSources.join(", ")} — use graph-backed discovery as supporting context, then confirm results with direct file reads.`;
   }
 
   return "GitNexus is not configured in known MCP sources — use grep/file inspection fallback, or add the gitnexus MCP server before graph-backed discovery.";
@@ -310,6 +310,56 @@ function normalizeFeaturePointer(value) {
   return normalized === "(none)" ? "" : normalized;
 }
 
+function normalizeNextCommandSurface(value) {
+  const normalized = firstNonEmptyString(value);
+  if (!normalized) {
+    return "";
+  }
+
+  const legacyMap = {
+    "pulse:planning": "/pulse plan",
+    "pulse:validating": "/pulse validate",
+    "pulse:swarming": "/pulse swarm",
+    "pulse:executing": "/pulse execute",
+    "pulse:reviewing": "/pulse review",
+    "pulse:compounding": "/pulse compound",
+    "pulse:exploring": "/pulse explore",
+    "pulse:brainstorming": "/pulse brainstorm",
+    "pulse:using-pulse": "/pulse onboard",
+    "pulse:preflight": "/pulse onboard",
+  };
+
+  if (legacyMap[normalized]) {
+    return legacyMap[normalized];
+  }
+
+  if (normalized.startsWith("/pulse ")) {
+    return normalized;
+  }
+
+  const validCommands = new Set([
+    "onboard",
+    "explore",
+    "brainstorm",
+    "plan",
+    "validate",
+    "swarm",
+    "execute",
+    "review",
+    "compound",
+    "rescue",
+    "systematic-debug",
+    "note",
+    "note-distill",
+  ]);
+
+  if (validCommands.has(normalized)) {
+    return `/pulse ${normalized}`;
+  }
+
+  return normalized;
+}
+
 function inferWorkShapeNextSkillRecommended(status) {
   const workShapeStatus = firstNonEmptyString(
     status.state_markdown?.work_shape_status,
@@ -337,7 +387,7 @@ function inferWorkShapeNextSkillRecommended(status) {
   ).toLowerCase();
 
   if (reviewStatus === "approved") {
-    return "pulse:compounding";
+    return "/pulse compound";
   }
 
   if (feasibilityStatus === "approved" || feasibilityStatus === "ready") {
@@ -347,20 +397,20 @@ function inferWorkShapeNextSkillRecommended(status) {
       status.state_json?.recommended_mode,
     );
     if (executionMode === "swarm") {
-      return "pulse:swarming";
+      return "/pulse swarm";
     }
     if (executionMode === "single-worker" || executionMode === "execution-only") {
-      return "pulse:executing";
+      return "/pulse execute";
     }
     return "";
   }
 
   if (workShapeStatus === "approved" && ["prepared", "ready", "validated"].includes(currentWorkStatus)) {
-    return "pulse:validating";
+    return "/pulse validate";
   }
 
   if (workShapeStatus === "approved") {
-    return "pulse:planning";
+    return "/pulse plan";
   }
 
   return "";
@@ -374,7 +424,7 @@ function inferGateNextSkillRecommended(status, gate, gateStatus) {
     status.runtime_snapshot?.next_skill_recommended,
   );
   if (explicit) {
-    return explicit;
+    return normalizeNextCommandSurface(explicit);
   }
 
   const workShapeNext = inferWorkShapeNextSkillRecommended(status);
@@ -387,7 +437,7 @@ function inferGateNextSkillRecommended(status, gate, gateStatus) {
   }
 
   if (gate === "GATE 1" || gate === "GATE 2") {
-    return "pulse:planning";
+    return "/pulse plan";
   }
   if (gate === "GATE 3") {
     const executionMode = firstNonEmptyString(
@@ -396,15 +446,15 @@ function inferGateNextSkillRecommended(status, gate, gateStatus) {
       status.state_json?.recommended_mode,
     );
     if (executionMode === "swarm") {
-      return "pulse:swarming";
+      return "/pulse swarm";
     }
     if (executionMode === "single-worker") {
-      return "pulse:executing";
+      return "/pulse execute";
     }
     return "";
   }
   if (gate === "GATE 4") {
-    return "pulse:compounding";
+    return "/pulse compound";
   }
   return "";
 }
@@ -1484,12 +1534,12 @@ function inferCheckpointNextAction(status) {
     status.current_feature?.next_action,
     status.state_json?.next_action,
   );
-  const nextSkillRecommended = firstNonEmptyString(
+  const nextSkillRecommended = normalizeNextCommandSurface(firstNonEmptyString(
     status.runtime_snapshot?.next_skill_recommended,
     status.current_feature?.next_skill_recommended,
     status.state_json?.next_skill_recommended,
     status.tooling_status?.next_skill,
-  );
+  ));
   if (nextAction === "manual_invoke" && nextSkillRecommended) {
     return `Manually invoke ${nextSkillRecommended} when ready.`;
   }
@@ -1497,7 +1547,7 @@ function inferCheckpointNextAction(status) {
     return `Continue now with ${nextSkillRecommended} in the current context.`;
   }
   if (status.tooling_status?.next_skill) {
-    return `Open ${status.tooling_status.next_skill}`;
+    return `Open ${normalizeNextCommandSurface(status.tooling_status.next_skill)}`;
   }
   if (Array.isArray(status.recommended_actions) && status.recommended_actions[0]) {
     return status.recommended_actions[0];
@@ -1839,9 +1889,9 @@ function buildRecommendedActions(status) {
     if (status.project_docs?.status === "mapped") {
       actions.push("When repo terminology or ownership boundaries matter, read the mapped project docs before going deeper into feature history.");
     } else if (status.project_docs?.status === "detected") {
-      actions.push("Repo-level project docs were detected but are not mapped yet; consider pulse:bootstrap-project-context before deeper planning.");
+      actions.push("Repo-level project docs were detected but are not mapped yet; map .pulse/project-docs.json before deeper planning.");
     } else {
-      actions.push("If repo-wide terminology keeps drifting, consider pulse:bootstrap-project-context to propose lazy project-doc scaffolding.");
+      actions.push("If repo-wide terminology keeps drifting, propose a lightweight project-doc scaffold before deeper planning.");
     }
 
     if (status.history_lifecycle?.exists) {
@@ -1875,11 +1925,11 @@ function buildRecommendedActions(status) {
     status.current_feature?.next_action,
     status.state_json?.next_action,
   );
-  const nextSkillRecommended = firstNonEmptyString(
+  const nextSkillRecommended = normalizeNextCommandSurface(firstNonEmptyString(
     status.runtime_snapshot?.next_skill_recommended,
     status.current_feature?.next_skill_recommended,
     status.state_json?.next_skill_recommended,
-  );
+  ));
 
   if (nextAction === "manual_invoke" && nextSkillRecommended) {
     const actions = [`Gate cleared. Manually invoke ${nextSkillRecommended} when ready.`];
@@ -1887,9 +1937,9 @@ function buildRecommendedActions(status) {
     if (status.project_docs?.status === "mapped") {
       actions.push("Read the mapped project docs when repo-level terminology, boundaries, or ADR context may affect the next decision.");
     } else if (status.project_docs?.status === "detected") {
-      actions.push("Repo-level project docs were detected but .pulse/project-docs.json is missing; use pulse:bootstrap-project-context to record the mapping before deeper planning.");
+      actions.push("Repo-level project docs were detected but .pulse/project-docs.json is missing; record the mapping before deeper planning.");
     } else {
-      actions.push("If durable repo-level terminology or architecture context is missing, pulse:bootstrap-project-context can propose a lazy project-doc scaffold.");
+      actions.push("If durable repo-level terminology or architecture context is missing, propose a lightweight project-doc scaffold before deeper planning.");
     }
     if (status.checkpoints?.latest?.path) {
       actions.push("If you are re-entering an active feature, compare the latest checkpoint against the current runtime snapshot before planning or execution.");
@@ -1910,13 +1960,13 @@ function buildRecommendedActions(status) {
   }
 
   if (status.tooling_status.next_skill) {
-    const actions = [`Next skill suggestion: ${status.tooling_status.next_skill}.`];
+    const actions = [`Next command suggestion: ${normalizeNextCommandSurface(status.tooling_status.next_skill)}.`];
     if (status.project_docs?.status === "mapped") {
       actions.push("Read the mapped project docs when repo-level terminology, boundaries, or ADR context may affect the next decision.");
     } else if (status.project_docs?.status === "detected") {
-      actions.push("Repo-level project docs were detected but .pulse/project-docs.json is missing; use pulse:bootstrap-project-context to record the mapping before deeper planning.");
+      actions.push("Repo-level project docs were detected but .pulse/project-docs.json is missing; record the mapping before deeper planning.");
     } else {
-      actions.push("If durable repo-level terminology or architecture context is missing, pulse:bootstrap-project-context can propose a lazy project-doc scaffold.");
+      actions.push("If durable repo-level terminology or architecture context is missing, propose a lightweight project-doc scaffold before deeper planning.");
     }
     if (status.checkpoints?.latest?.path) {
       actions.push("If you are re-entering an active feature, compare the latest checkpoint against the current runtime snapshot before planning or execution.");
@@ -1943,9 +1993,9 @@ function buildRecommendedActions(status) {
   if (status.project_docs?.status === "mapped") {
     actions.push("Read the mapped project docs when repo-level terminology, boundaries, or ADR context may affect the next decision.");
   } else if (status.project_docs?.status === "detected") {
-    actions.push("Repo-level project docs were detected but .pulse/project-docs.json is missing; use pulse:bootstrap-project-context to record the mapping before deeper planning.");
+    actions.push("Repo-level project docs were detected but .pulse/project-docs.json is missing; record the mapping before deeper planning.");
   } else {
-    actions.push("If durable repo-level terminology or architecture context is missing, pulse:bootstrap-project-context can propose a lazy project-doc scaffold.");
+    actions.push("If durable repo-level terminology or architecture context is missing, propose a lightweight project-doc scaffold before deeper planning.");
   }
 
   if (status.history_lifecycle?.exists) {

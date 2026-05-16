@@ -15,8 +15,8 @@ This document describes the Pulse workflow pipeline in router language.
 
 ```text
 /pulse onboard
+  -> /pulse brainstorm     (optional when feature shape is still vague)
   -> /pulse explore
-  -> /pulse brainstorm     (optional when shape is still vague)
   -> /pulse plan
   -> /pulse validate
   -> /pulse swarm | /pulse execute
@@ -36,8 +36,8 @@ Intervention commands may be entered when needed:
 | Command | Primary responsibility |
 | --- | --- |
 | `onboard` | bootstrap the repo, report readiness, and surface migration posture |
-| `explore` | understand the codebase, current state, and decision context |
-| `brainstorm` | shape vague intent into candidate approaches before planning |
+| `explore` | understand the codebase, current state, and implementation-relevant decision context |
+| `brainstorm` | shape vague intent into candidate approaches and an approved design before exploration |
 | `plan` | turn context into a concrete implementation shape |
 | `validate` | prove the shape is executable and expose risk before work starts |
 | `swarm` | orchestrate validated multi-agent execution |

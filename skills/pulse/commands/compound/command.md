@@ -1,49 +1,43 @@
 # `/pulse compound`
 
-Maps from legacy `compounding` and absorbs any remaining reusable value that used to sit near `dream`.
+If onboarding/readiness is missing, stale, or blocked (check `.pulse/runtime/tooling-status.json`), stop and invoke `/pulse onboard` before continuing.
 
-## Intent
+Compounding turns completed Pulse work into reusable memory for future planning and execution.
 
-Use this command after a workflow cycle to capture reusable learning, sharpen the harness, and improve future execution quality.
+Compounding is the canonical post-cycle, machine-readable learning pass for completed Pulse work. Use `note` or `note-distill` for in-flight capture; use `compound` after outcomes are known. Do not turn `compound` into a generic runtime-consolidation route just because the legacy surface was collapsed into `/pulse`.
 
-## Inputs expected
+## When to Use
 
-Bring:
+- after `/pulse review` completes and the outcome is known
+- after execution, rescue, or systematic-debug work reveals non-obvious reusable lessons
+- after abandoned or constrained work that still produced durable learning
 
-- completed work and review outcomes
-- verification evidence and unresolved gaps
-- notes, patterns, or workflow friction worth preserving
-- any repeated mistakes or surprising wins from the cycle
+Skip only when no durable or reusable learning emerged.
 
-Useful shared references:
+## Runtime Contract
 
-- `../../references/shared/verification-contract.md`
-- `../../references/HARNESS.md`
+All operational rules live in `references/runtime-appendix.md`. Treat that file as canonical for:
 
-## Primary outputs/artifacts
+- context sources across `works/`, `.pulse/runtime/*`, `.pulse/workgraph/*`, and verification artifacts
+- 3-stream analysis (`pattern`, `decision`, `failure`)
+- synthesis quality bar (`applicable-when` must stay specific)
+- propagation taxonomy and routing destinations
+- promotion rules for `.pulse/memory/critical-patterns.md`
+- durable memory capture behavior in `.pulse/memory/*`
+- state updates and handoff outputs
 
-Typical outputs are:
+## Minimum Flow
 
-- reusable learnings
-- guidance for future cycles
-- harness improvement ideas
-- distilled follow-up recommendations
+1. Gather context from work artifacts, verification evidence, runtime state, and workgraph state.
+2. Run three analysis streams and collect outputs.
+3. Synthesize one learnings file at `.pulse/memory/learnings/YYYYMMDD-<slug>.md`.
+4. Classify each learning by propagation type and route to destination.
+5. Promote only truly global-critical learnings.
+6. Update `.pulse/runtime/STATE.md` and `.pulse/runtime/state.json`.
 
-## Interaction model
+## References
 
-`compound` is synthesis work.
-It may write learnings or backlog follow-ups, but it should not re-open execution silently.
-
-## Approval expectations
-
-No fixed human gate is required, but ask before changing shared contracts or publishing durable guidance beyond the current cycle.
-
-## Next command recommendations
-
-- `note-distill` when raw notes still need consolidation
-- `plan` when the learning immediately informs the next work slice
-
-## Failure / escalation behavior
-
-- if the work is not actually complete yet, route back to `review` or `execute`
-- if the learning is too raw, capture it with `note` first instead of forcing premature synthesis
+- `references/runtime-appendix.md` — canonical runtime contract
+- `references/learnings-template.md` — learnings file structure
+- `references/analysis-prompts.md` — prompts for pattern/decision/failure analysis
+- `references/corrections-and-ratchets.md` — correction and ratchet file structures

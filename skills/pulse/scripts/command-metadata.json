@@ -18,21 +18,21 @@
     },
     {
       "name": "explore",
-      "summary": "Investigate the codebase and current context before shaping work.",
-      "hint": "Use when the problem exists but the implementation context is still fuzzy.",
+      "summary": "Investigate the repo and lock implementation-relevant decisions against the chosen direction.",
+      "hint": "Use after a direction is chosen when the implementation context still needs evidence and decision locking.",
       "category": "discovery",
       "maps_from": ["exploring"],
       "produces": ["exploration findings", "context synthesis", "decision summary"],
-      "next_commands": ["brainstorm", "plan"]
+      "next_commands": ["plan"]
     },
     {
       "name": "brainstorm",
-      "summary": "Turn vague intent into candidate approaches and a chosen direction.",
-      "hint": "Use before planning when feature shape is still open.",
+      "summary": "Turn vague intent into candidate approaches and an approved design spec.",
+      "hint": "Use before explore when feature shape is still open.",
       "category": "design",
       "maps_from": ["brainstorming"],
-      "produces": ["approach options", "trade-off summary", "approved design brief"],
-      "next_commands": ["plan"]
+      "produces": ["approach options", "trade-off summary", "approved design spec"],
+      "next_commands": ["explore"]
     },
     {
       "name": "plan",

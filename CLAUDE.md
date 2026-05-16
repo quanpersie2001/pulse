@@ -4,90 +4,84 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What This Repo Is
 
-Pulse is a packaged skill plugin for Claude Code and Codex. Its workflow contract lives primarily in `SKILL.md` files, while repo-local Node scripts handle onboarding, state sync, dependency checks, and other control-plane behavior. The repo ships 20 skills that chain together to move from vague requirements to shipped, reviewed, compounded code.
+Pulse is a packaged skill plugin for Claude Code and Codex. Its public workflow surface is a single router skill: `/pulse`. Runtime operations are handled by the `pulse-work` CLI and repo-local Node helpers.
 
 ## Repository Layout
 
-- `skills/` — canonical source for all skill definitions (each skill is a `SKILL.md` file in its own directory)
+- `skills/pulse/` — canonical source for the Pulse router skill and subcommands
 - `.codex-plugin/plugin.json` — Codex plugin manifest
 - `.claude-plugin/plugin.json` — Claude plugin manifest
 - `.mcp.json` — packaged MCP manifest for shared runtime servers
 - `.agents/plugins/marketplace.json` — Codex marketplace metadata
 - `scripts/sync-skills.sh` — raw skill mirror helper for agents/Claude compatibility
-- `AGENTS.md` — workflow rules and bead integration (re-read after context compaction)
-- `references/` — upstream/pedagogical material (Superpowers, AI Multimodal, Khuym lineage docs); not part of the shipping plugin
+- `AGENTS.md` — operator workflow rules
+- `references/` — upstream/pedagogical material; not part of the shipped plugin contract
 
 ## Key Tools
 
 | Tool | CLI | Purpose |
 |------|-----|---------|
-| Beads CLI | **`br`** (not `bd`) | Create, update, close, sync work items |
-| Beads viewer | `bv` | TUI and graph inspection |
+| Pulse Router | `/pulse` | User-facing workflow entrypoint |
+| Pulse Runtime CLI | `pulse-work` | Workgraph/runtime metadata mutations |
+| Scout | `node .pulse/scripts/pulse_status.mjs --json` | Read-only runtime orientation |
 | Git | `git` | Version control |
-| Native swarm adapters | — | Claude Code teammates or Codex subagents in swarm mode |
+| Native swarm adapters | — | Claude Code teammates or Codex subagents |
 | GitNexus | `gitnexus` | Optional graph-backed codebase intelligence |
-
-**Important:** The beads CLI binary is `br`. Use `br` in Pulse workflows and examples.
 
 ## Delivery Chain
 
 The core workflow is a gated, linear pipeline:
 
 ```
-pulse:preflight → pulse:using-pulse → pulse:exploring → pulse:planning → pulse:validating → pulse:swarming → pulse:executing(×N) → pulse:reviewing → pulse:compounding
+/pulse onboard → /pulse explore → /pulse plan → /pulse validate → /pulse swarm or /pulse execute → /pulse review → /pulse compound
 ```
 
 Four human gates control progression:
-- **GATE 1** (after exploring): Approve `CONTEXT.md`
-- **GATE 2** (after planning): Approve selected shape artifact (`work-shape.md` | `phase-plan.md` | `epic-map.md`)
-- **GATE 3** (after validating): Approve feasibility-validated current work execution — never skip this
-- **GATE 4** (after reviewing): P1 findings must be fixed before merge approval
+- **GATE 1** (after explore): Approve locked decision context.
+- **GATE 2** (after plan): Approve selected shape artifact.
+- **GATE 3** (after validate): Approve feasibility-validated current work before execution.
+- **GATE 4** (after review): P1 findings must be fixed before merge approval.
 
 ## Artifact Locations
 
 ```
-.pulse/tooling-status.json           ← preflight writes this
-.pulse/state.json                    ← machine-readable routing mirror
-.pulse/STATE.md                      ← shared state across phases
-.pulse/project-docs.json             ← routing map for repo-owned project docs consumed by Pulse
-.pulse/handoffs/manifest.json        ← owner-scoped pause/resume index
-history/<feature>/verification/      ← canonical verification evidence
-history/<feature>/CONTEXT.md         ← exploring output (source of truth for decisions)
-history/<feature>/approach.md        ← planning synthesis
-history/<feature>/work-shape.md      ← canonical shape artifact for direct/spike/small
-history/<feature>/phase-plan.md      ← canonical shape artifact for milestone-shaped work
-history/<feature>/epic-map.md        ← canonical shape artifact for capability/risk-shaped work
-history/<feature>/current-story-pack.md ← current-work artifact when using epic-map path
-history/<feature>/phase-<n>-contract.md ← current-work contract when using phase-plan path
-history/<feature>/phase-<n>-story-map.md ← bead map for the active current-work contract
-history/<feature>/lifecycle-summary.md ← durable audit summary for gates/outcomes/follow-up debt
-                                       ← contract: using-pulse/references/history-lifecycle-contract.md
-.beads/                              ← bead files (planning may create for direct/small; validate-first paths may create after readiness)
-.spikes/                             ← spike verification results
-.pulse/memory/                      ← shared reusable memory output
+.pulse/runtime/tooling-status.json      ← onboarding/readiness status
+.pulse/runtime/state.json               ← machine-readable routing/runtime mirror
+.pulse/runtime/STATE.md                 ← shared human-readable state
+.pulse/runtime/handoffs/manifest.json   ← owner-scoped pause/resume index
+.pulse/runtime/reservations.json        ← runtime reservations
+.pulse/workgraph/items.jsonl            ← canonical workgraph metadata source
+.pulse/workgraph/schema.json            ← workgraph schema contract
+.pulse/workgraph/views/                 ← derived runtime views
+.pulse/harness/HARNESS_BACKLOG.md       ← materialized harness backlog template
+works/                                  ← work content artifacts
+.pulse/memory/                          ← shared reusable memory output
 ```
 
 ## Editing Skills
 
-Each skill lives at `skills/<name>/SKILL.md`. When adding or modifying a skill:
+The public workflow skill lives at `skills/pulse/SKILL.md`.
 
-1. The SKILL.md is the entire skill definition — there's no separate code to compile.
-2. Skills are auto-discovered — no per-skill registration needed in manifests.
-3. Use `pulse:writing-pulse-skills` for TDD-style skill development.
+When adding or modifying command behavior:
+
+1. Update router contract in `skills/pulse/SKILL.md` as needed.
+2. Update the command module under `skills/pulse/commands/<command>/command.md`.
+3. Keep shared rules in `skills/pulse/references/shared/`.
 
 ## Testing
 
-Pulse has automated coverage for onboarding/runtime control-plane behavior in `skills/using-pulse/scripts/test_onboard_pulse.mjs`. The `references/superpowers/tests/brainstorm-server/` suite is separate reference material and not part of the shipping plugin.
+Pulse has automated coverage for onboarding/runtime control-plane behavior in `skills/pulse/tests/`. The `references/superpowers/tests/brainstorm-server/` suite is reference material and not part of the shipping plugin.
 
 ## Session Protocol
 
 ```bash
-git status              # Check what changed
-git add <files>         # Stage code changes
-br sync --flush-only   # Flush bead changes to disk
-git commit -m "..."     # Commit code
-br sync --flush-only   # Flush any new bead changes to disk
-git push                # Push to remote
+git status
+# edit files
+node .pulse/scripts/pulse_status.mjs --json
+pulse-work ready --json
+git add <files>
+git commit -m "..."
+git push
 ```
 
 <!-- gitnexus:start -->
@@ -102,15 +96,15 @@ This project is indexed by GitNexus as **pulse** (4092 symbols, 6052 relationshi
 - **MUST run impact analysis before editing any symbol.** Before modifying a function, class, or method, run `gitnexus_impact({target: "symbolName", direction: "upstream"})` and report the blast radius (direct callers, affected processes, risk level) to the user.
 - **MUST run `gitnexus_detect_changes()` before committing** to verify your changes only affect expected symbols and execution flows.
 - **MUST warn the user** if impact analysis returns HIGH or CRITICAL risk before proceeding with edits.
-- When exploring unfamiliar code, use `gitnexus_query({query: "concept"})` to find execution flows instead of grepping. It returns process-grouped results ranked by relevance.
-- When you need full context on a specific symbol — callers, callees, which execution flows it participates in — use `gitnexus_context({name: "symbolName"})`.
+- When exploring unfamiliar code, use `gitnexus_query({query: "concept"})` to find execution flows instead of grepping.
+- When you need full context on a specific symbol, use `gitnexus_context({name: "symbolName"})`.
 
 ## Never Do
 
 - NEVER edit a function, class, or method without first running `gitnexus_impact` on it.
 - NEVER ignore HIGH or CRITICAL risk warnings from impact analysis.
-- NEVER rename symbols with find-and-replace — use `gitnexus_rename` which understands the call graph.
-- NEVER commit changes without running `gitnexus_detect_changes()` to check affected scope.
+- NEVER rename symbols with find-and-replace.
+- NEVER commit changes without running `gitnexus_detect_changes()`.
 
 ## Resources
 

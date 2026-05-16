@@ -2,7 +2,7 @@
 
 Use this when dispatching a spec self-review after brainstorming has produced a written design artifact.
 
-**Purpose:** Verify the design is complete, internally consistent, and ready for `/pulse plan` or any remaining repo-context clarification.
+**Purpose:** Verify the design is complete, internally consistent, and ready for `/pulse explore` to lock repo-grounded decisions without guesswork.
 
 **Dispatch after:** the brainstorming output has been written and the team wants an independent consistency pass.
 

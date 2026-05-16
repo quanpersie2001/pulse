@@ -1,6 +1,6 @@
 # Golden Path: One Pulse Feature Run
 
-This is the shortest concrete example of what a normal Pulse run is supposed to feel like.
+This is the shortest concrete example of a standard Pulse v2 run.
 
 ## Example Request
 
@@ -8,43 +8,34 @@ This is the shortest concrete example of what a normal Pulse run is supposed to 
 
 ## The Flow
 
-1. `pulse:preflight`
-   - checks onboarding, tooling readiness, and recommended mode
-   - confirms whether the repo can run swarm, single-worker, planning-only, or is blocked
+1. `/pulse onboard`
+   - checks runtime readiness and bootstraps `.pulse/runtime` and `.pulse/workgraph`
+   - confirms whether the repo can run swarm, single-worker, planning-only, or blocked
 
-2. `pulse:using-pulse`
-   - reads the preflight result
-   - runs the scout step
-   - chooses `standard_feature` mode
+2. `/pulse explore`
+   - asks missing product and boundary questions
+   - locks decisions in feature context artifacts
 
-3. `pulse:exploring`
-   - asks the missing product questions
-   - locks decisions in `history/inbound-email/CONTEXT.md`
+3. `/pulse plan`
+   - routes mode to shape (`work-shape.md`, `phase-plan.md`, or `epic-map.md`)
+   - prepares current-work artifacts
 
-4. `pulse:planning`
-   - reads `CONTEXT.md`
-   - routes mode → shape (`work-shape.md`, `phase-plan.md`, or `epic-map.md`)
-   - prepares current work artifacts (`current-story-pack.md` or `phase-<n>-contract.md` + `phase-<n>-story-map.md`) and bead timing
-
-5. `pulse:validating`
-   - verifies feasibility/readiness for the selected current work
+4. `/pulse validate`
+   - verifies feasibility/readiness for selected current work
    - runs spikes for risky items
-   - may route back once to planning for current-work bead creation
-   - stops until execution is explicitly approved
+   - stops until execution is explicitly approved (Gate 3)
 
-6. `pulse:swarming` / `pulse:executing`
-   - starts only after Gate 3 approval of feasibility-validated current work
-   - launches workers (or runs single-worker if preflight recommends it)
-   - workers self-route from the live bead graph
-   - work is implemented with file reservations and explicit verification
+5. `/pulse swarm` or `/pulse execute`
+   - starts only after Gate 3 approval
+   - implements approved work with reservations and explicit verification
 
-7. `pulse:reviewing`
+6. `/pulse review`
    - runs specialist review
    - records P1/P2/P3 findings
-   - blocks merge if P1 findings exist
+   - blocks merge while P1 findings remain
 
-8. `pulse:compounding`
-   - writes the durable learnings for future work
+7. `/pulse compound`
+   - records durable learnings for future runs
 
 ## Quick Scout
 
@@ -54,8 +45,18 @@ Before resuming or planning deeper work on an onboarded repo:
 node .pulse/scripts/pulse_status.mjs --json
 ```
 
-Use the scout output to decide which deeper artifacts to open next.
+Use the scout output to decide which artifacts to open next.
+
+## Runtime Workgraph Commands
+
+Use `pulse-work` for runtime metadata operations:
+
+```bash
+pulse-work ready --json
+pulse-work show <ID> --json
+pulse-work create --kind TASK --title "..." --parent <ID>
+```
 
 ## Core Promise
 
-Pulse is useful when the cost of getting the plan wrong is high. It is intentionally more structured than a normal coding chat so the system can carry decisions, gates, and coordination cleanly from request to shipped work.
+Pulse adds deliberate structure so decisions, approvals, implementation, and verification remain consistent from request to merge.

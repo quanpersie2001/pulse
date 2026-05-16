@@ -1,73 +1,74 @@
 # Swarm Execution Rules
 
-Use this contract when `/pulse swarm` is the right execution mode.
+Use this contract when `/pulse swarm` is selected after Gate 3 approval.
 
-## Swarm prerequisites
+## Preconditions
 
-Swarm execution requires all of the following:
+- validated current slice with explicit Gate 3 approval
+- safe decomposition boundaries
+- clear worker ownership and verification boundaries
+- reservation mechanism available for shared file coordination
 
-- the work has passed Gate 3
-- the work slice can be decomposed into clear parallel boundaries
-- worker ownership and handoff rules are explicit
-- verification boundaries are explicit
-- the runtime can coordinate reservations safely
+If these are not true, prefer `execute` or return to `plan`.
 
-If any prerequisite is missing, prefer `execute` or route back to `plan`.
+## Role boundaries
 
-## Coordinator responsibilities
+### Coordinator
 
-The coordinator owns:
+Coordinator owns orchestration only:
 
-- decomposition into worker-sized slices
-- assignment of ownership boundaries
-- file or item reservation policy
-- conflict resolution
-- handoff routing
-- commit queue discipline when multiple workers share one branch
+- launch and scope workers
+- enforce reservation/ownership boundaries
+- resolve conflicts and blockers
+- maintain progress visibility
+- serialize shared-branch commits through one commit queue
 
-The coordinator does not skip review on behalf of workers.
+Coordinator should not implement worker code changes.
 
-## Worker responsibilities
+### Worker
 
-Each worker should:
+Each worker must:
 
-- stay inside its assigned boundary
-- read the active contract before editing
-- claim the required reservation before mutating shared scope
-- report blockers quickly
-- produce verification evidence for its slice
-- hand off cleanly when context or ownership changes
+- follow assigned scope
+- claim reservations before editing shared files
+- report blockers immediately
+- provide verification evidence for completed slice
+- release/transfer reservations cleanly
 
-## Ownership and reservation rules
+## Coordination loop
 
-- durable `owner` describes responsibility
-- runtime reservation describes the active lease
-- a worker must not edit around a reservation conflict
-- reservations should be released or handed off explicitly
+While swarm is active, repeat:
 
-## Shared-branch rule
+1. ingest worker updates
+2. update active worker state
+3. resolve blockers/conflicts
+4. refresh ready-work view
+5. issue next coordination actions
 
-When the swarm shares one branch, commit-producing steps must be serialized through a single commit queue.
+If the runtime has no autonomous wakeup and no actionable signals remain, persist pause/handoff state instead of falsely reporting completion.
 
-Do not let multiple workers race commits on the same branch.
+## Commit queue rule
 
-## Review boundary
+On a shared branch, only one worker holds commit slot at a time.
 
-Execution and review stay separate.
+- worker reports `READY_TO_COMMIT`
+- coordinator grants `COMMIT_SLOT_GRANTED`
+- worker commits declared scoped files
+- worker reports completion and releases slot
 
-- workers execute
-- reviewers evaluate
-- a completed worker slice still passes through `review`
+## Completion and handoff
 
-## Failure behavior
+Swarm completion requires both:
 
-If a swarm run becomes unsafe or too entangled:
+- current slice execution complete
+- approved shape/state artifacts agree that review is the next step
 
-- stop launching more workers
-- collapse back to a narrower plan or single-worker execution
-- use `rescue` when the decomposition itself is the problem
+If later slices remain, hand off to `plan`; if final slice is complete, hand off to `review`.
 
-## Router implications
+## Failure posture
 
-`swarm` is not a standalone product surface.
-It is an execution mode inside the `/pulse` workflow pipeline.
+When decomposition becomes unsafe:
+
+- stop launching new workers
+- collapse to narrower execution or reroute to `rescue`
+- keep blockers explicit with concrete next decisions

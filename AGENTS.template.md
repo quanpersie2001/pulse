@@ -1,117 +1,101 @@
 <!-- PULSE:START -->
 # Pulse Workflow
 
-Use `pulse:using-pulse` first in this repo unless you are resuming an already approved Pulse handoff.
+Use `/pulse onboard` first in this repo unless you are resuming an approved handoff.
 
 ## What Pulse Is / Is Not
 
-Pulse is a validate-first, docs-first skill workflow for Claude Code and Codex.
-Pulse is not a license to skip `CONTEXT.md`, validating, review gates, or human approval.
+Pulse is a validate-first, docs-first workflow router for Claude Code and Codex.
+Pulse is not a license to skip decision locking, validation, review gates, or human approval.
 
 ## One-Line Glossary
 
-- `CONTEXT.md` — locked decisions downstream work must honor.
-- `phase-plan.md` — the whole-feature slice plan.
-- phase contract — the current phase's proof and exit conditions.
-- story map — the reason beads are sequenced the way they are.
-- bead — one worker-sized unit of work with exact files and checks.
-- handoff — the pause/resume contract for the next actor.
-- `pulse_status` — the read-only scout for current workflow state.
+- context artifact — locked decisions downstream work must honor.
+- shape artifact — approved execution shape (`work-shape.md`, `phase-plan.md`, or `epic-map.md`).
+- current-work artifact — execution-ready slice contract.
+- handoff — pause/resume contract for the next actor.
+- `pulse_status` — read-only scout for current workflow state.
+- work item — one unit in the canonical workgraph.
 
 ## Startup
 
-1. Read this file at session start and again after any context compaction.
-2. If `.pulse/onboarding.json` is missing or outdated, stop and run `pulse:using-pulse` before continuing.
-3. If `.pulse/scripts/pulse_status.mjs` exists, use `node .pulse/scripts/pulse_status.mjs --json` for a fast read-only status snapshot.
-4. If `.pulse/handoffs/manifest.json` exists, do not auto-resume. Surface the saved state and wait for user confirmation.
-5. If `.pulse/memory/critical-patterns.md` exists, read it before planning or execution work.
+1. Read this file at session start and again after context compaction.
+2. If runtime readiness is missing/stale in `.pulse/runtime/tooling-status.json`, run `/pulse onboard`.
+3. If `.pulse/scripts/pulse_status.mjs` exists, run `node .pulse/scripts/pulse_status.mjs --json` for scout state.
+4. If `.pulse/runtime/handoffs/manifest.json` exists, surface it and wait for explicit resume confirmation.
+5. If `.pulse/memory/critical-patterns.md` exists, read it before planning or execution.
 
 ## Chain
 
 ```
-pulse:preflight
-  → pulse:using-pulse
-  → pulse:exploring
-  → pulse:planning
-  → pulse:validating
-  → pulse:swarming
-  → pulse:executing
-  → pulse:reviewing
-  → pulse:compounding
+/pulse onboard
+  → /pulse explore
+  → /pulse plan
+  → /pulse validate
+  → /pulse swarm or /pulse execute
+  → /pulse review
+  → /pulse compound
 ```
 
 ## Critical Rules
 
-1. Never execute without validating.
-2. `CONTEXT.md` is the source of truth for locked decisions.
-3. If context usage passes roughly 65%, write `.pulse/handoffs/manifest.json` and pause cleanly.
-4. Treat `.pulse/state.json` as the routing mirror and `.pulse/STATE.md` as the human-readable narrative; keep them aligned.
-5. After compaction, re-read `AGENTS.md`, run `node .pulse/scripts/pulse_status.mjs --json` if present, then re-open `.pulse/handoffs/manifest.json`, `.pulse/state.json`, `.pulse/STATE.md`, and the active feature context before more work.
+1. Never execute without validate approval.
+2. Locked context decisions are source-of-truth for downstream work.
+3. If context usage passes roughly 65%, write a handoff and pause cleanly.
+4. Treat `.pulse/runtime/state.json` as the machine mirror and `.pulse/runtime/STATE.md` as the human narrative; keep them aligned.
+5. After compaction, re-run scout and re-open handoff + runtime state before continuing.
 6. P1 review findings block merge.
 
-## 3-Plane Model
+## Runtime Planes
 
-1. **Control plane — `.pulse/`**: live workflow state, routing mirrors, handoffs, and operator surfaces.
-2. **Memory plane — `.pulse/memory/`**: shared root for reusable cross-feature memory, including critical patterns, learnings, corrections, and ratchet artifacts.
-3. **Feature record plane — `history/`**: feature-specific decisions, plans, contracts, story maps, and durable narrative.
+1. **Control plane — `.pulse/runtime/`**: state, handoffs, reservations.
+2. **Workgraph plane — `.pulse/workgraph/`**: canonical metadata and views.
+3. **Work content plane — `works/`**: implementation artifacts and verification evidence.
 
 ## Working Files
 
 ```
-.pulse/
-  onboarding.json     ← onboarding state for the Pulse plugin
-  state.json          ← machine-readable routing/status mirror
-  STATE.md            ← current phase and focus
-  handoffs/
-    manifest.json     ← pause/resume artifact
-  memory/             ← shared reusable memory root
-    critical-patterns.md ← globally promoted patterns
-    learnings/          ← durable cross-feature learning entries
-    corrections/        ← durable corrections to prior guidance
-    ratchet/            ← durable quality bars and non-regression rules
+.pulse/runtime/
+  tooling-status.json
+  state.json
+  STATE.md
+  handoffs/manifest.json
+  reservations.json
 
-history/<feature>/
-  CONTEXT.md          ← locked decisions
-  discovery.md        ← research findings
-  approach.md         ← approach + risk map
+.pulse/workgraph/
+  items.jsonl
+  schema.json
+  views/
 
-.beads/               ← bead/task files when beads are in use
-.spikes/              ← spike outputs when validation requires them
+works/
+  epics/
 ```
 
 ## Operator Cookbook
 
 ### Startup scout
 
-1. Run `pulse:using-pulse` if onboarding is missing or stale.
-2. Run `node .pulse/scripts/pulse_status.mjs --json` when available.
-3. Use the scout to choose the next artifact instead of opening everything at once.
+1. Run `/pulse onboard` when runtime readiness is missing/stale.
+2. Run `node .pulse/scripts/pulse_status.mjs --json`.
+3. Open only artifacts indicated by the scout.
 
 ### Resume scout
 
-- If `.pulse/handoffs/manifest.json` exists, surface it and wait for explicit confirmation.
-- Re-open the handoff plus `.pulse/state.json` and `.pulse/STATE.md` before continuing.
-- If current state and a handoff disagree, surface the mismatch instead of guessing.
+- Surface `.pulse/runtime/handoffs/manifest.json` if present.
+- Re-open handoff + `.pulse/runtime/state.json` + `.pulse/runtime/STATE.md`.
+- If state sources disagree, surface mismatch instead of guessing.
 
 ### Swarm vs single-worker
 
-- Use swarm when the current phase has enough parallelizable beads to justify coordination overhead.
-- Use single-worker when Pulse discipline is still needed but parallelism is not.
-- Gate 3 still blocks both modes until validating approves execution.
-
-## Codex Guardrails
-
-- Repo-local `.codex/` files installed by Pulse are workflow guardrails, not optional decoration.
-- Use `node .pulse/scripts/pulse_status.mjs --json` as the preferred quick scout step when it is available.
-- Treat `compact_prompt` recovery instructions as mandatory.
-- Use `bv` only with `--robot-*` flags. Bare `bv` launches the TUI and should be avoided in agent sessions.
-- If the repo is only partially onboarded, stay in bootstrap/planning mode and surface what is missing before implementation.
+- Use swarm when current approved work has enough parallelizable items.
+- Use single-worker when coordination overhead is unnecessary.
+- Gate 3 approval is required for both.
 
 ## Session Finish
 
-Before ending a substantial Pulse work chunk:
+Before ending a substantial work chunk:
 
-1. Update or close the active bead/task if one exists.
-2. Leave `.pulse/state.json`, `.pulse/STATE.md`, and `.pulse/handoffs/` consistent with the current pause/resume state.
-3. Mention any remaining blockers, open questions, or next actions in the final response.
+1. Update/close the active work item.
+2. Leave runtime state and handoff files consistent.
+3. Surface remaining blockers and next actions.
 <!-- PULSE:END -->

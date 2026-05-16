@@ -1,68 +1,66 @@
 # Handoff and Resume
 
-Pulse uses handoffs to survive context limits, ownership changes, and paused execution.
+Handoffs preserve execution continuity across pauses, context limits, and ownership transitions.
 
-## Canonical runtime posture
-
-The target runtime plane for handoff and resume is:
-
-```text
-.pulse/runtime/
-```
-
-Important locations:
+## Canonical runtime paths
 
 - `.pulse/runtime/state.json`
 - `.pulse/runtime/STATE.md`
 - `.pulse/runtime/handoffs/manifest.json`
-- `.pulse/runtime/checkpoints/`
+- `.pulse/runtime/checkpoints/` (advisory)
 - `.pulse/runtime/reservations.json`
 
-## Handoff principles
+## Principles
 
 - handoffs are owner-scoped
-- the manifest is the authoritative index of active handoffs
-- checkpoints are advisory snapshots, not the source of truth
-- resume should start from the selected owner handoff plus current runtime state
+- manifest is authoritative for active handoff selection
+- checkpoints are optional snapshots, not source of truth
+- resume must verify previous state is still current before acting
 
-## A good handoff should capture
+## Required handoff payload
 
-- current command
-- active work item or slice
-- what was completed
-- what remains
-- blockers or open questions
-- files or reservations in play
-- what to read first on resume
-- the recommended next command or action
+A handoff should capture:
+
+- active command and current work slice/item
+- completed work and remaining work
+- blockers/open questions
+- reservation/conflict state when relevant
+- read-first artifacts for fast restore
+- recommended next action/command
+
+## When to write handoffs
+
+Write or refresh handoffs when:
+
+- context budget approaches limit
+- ownership changes
+- execution pauses mid-slice
+- blockers require asynchronous follow-up
+- swarm worker or coordinator yields control
 
 ## Resume flow
 
-1. inspect the current runtime state
-2. inspect the handoff manifest
-3. choose the relevant owner handoff
-4. read the referenced artifact set
-5. confirm whether the previous state is still current
-6. continue in the same command or route to a repair command
+1. read runtime state (`state.json`, `STATE.md`)
+2. inspect handoff manifest
+3. select owner handoff explicitly
+4. read referenced artifacts
+5. validate state freshness
+6. continue same command or reroute to repair command
 
-## When to write a handoff
+## Ownership transfer
 
-Write or refresh a handoff when:
+Normal path: same owner resumes own handoff.
 
-- context budget is getting tight
-- ownership is changing
-- execution pauses mid-slice
-- a blocker needs another agent or a later session
-- a swarm worker must yield safely
+Cross-owner transfer requires explicit coordinator decision and manifest update recording:
 
-## Relationship to the router
+- previous owner
+- new owner
+- transfer reason
+- approval timestamp/identity
 
-- `onboard` can surface whether the runtime looks resumable
-- `explore`, `plan`, and `validate` may leave decision-state handoffs
-- `swarm` and `execute` commonly leave operational handoffs
-- `review` and `compound` may leave follow-up handoffs
+## Router implications
 
-## Phase 1 note
-
-Phase 1 creates the router contract for handoff and resume.
-Later phases relocate the underlying runtime artifacts fully under `.pulse/runtime/`.
+- `onboard` surfaces readiness and resumability
+- `explore`/`plan`/`validate` may emit decision-state handoffs
+- `swarm`/`execute` commonly emit operational handoffs
+- `review`/`compound` may emit follow-up handoffs

@@ -1,80 +1,63 @@
 # Verification Contract
 
-Verification is how Pulse proves a proposed or completed move is real, not assumed.
+Verification proves readiness and completion with observable evidence.
 
-## Verification by command
+## Cross-command rules
 
-| Command | Verification focus |
-| --- | --- |
-| `validate` | feasibility, risk, missing proof, execution readiness |
-| `execute` | implementation evidence for the active work item |
-| `review` | correctness, regressions, severity, merge readiness |
-| work-item close | minimum mechanical evidence required to mark work complete |
+- No execution without Gate 3 approval.
+- No work-item close without fresh, scoped evidence.
+- No merge/ship recommendation while P1 findings are open.
+- Validation, execution, and review are separate responsibilities.
 
-## `validate`
+## `validate` evidence contract
 
-`validate` should answer:
+`validate` must produce:
 
-- can this shape be executed safely?
-- what proof already exists?
-- what proof is still missing?
-- what blockers or risks remain?
-- what execution mode is justified?
+- readiness call (`ready`, `ready-with-constraints`, `not-ready`)
+- blocker list with concrete remediation path
+- risk surface tied to current slice boundaries
+- explicit missing-proof list
+- execution mode recommendation (`swarm` or `single-worker`)
 
-Expected output:
+When assumptions are unresolved and high-impact, require targeted probes/spikes before readiness approval.
 
-- execution-readiness call
-- risk surface
-- blockers
-- concrete evidence or validation gaps
-- next-command recommendation
+## `execute` evidence contract
 
-If validation is weak or contradictory, route back to `plan` or `brainstorm`.
+Each completed item should include an evidence record containing:
 
-## `execute`
-
-`execute` should leave behind evidence that the change actually works.
-
-Examples of evidence:
-
-- commands run
-- tests added or updated
+- commands/tests run
 - observed outputs
-- generated artifacts
-- unresolved gaps called out explicitly
+- artifacts produced
+- unresolved gaps (explicitly `None.` when none remain)
 
-Execution without evidence is incomplete work.
+Evidence must be from the current run, not copied from prior sessions.
 
-## `review`
+## `review` evidence contract
 
-`review` is a distinct evaluation pass.
+`review` must evaluate:
 
-It should classify findings clearly and call out:
+- correctness against approved boundaries
+- regression risk and missing coverage
+- contract/policy violations
+- severity-classified findings
 
-- correctness issues
-- regression risk
-- missing tests or weak evidence
-- policy or contract violations
-- whether P1 findings remain
+P1 findings block Gate 4 approval until resolved.
 
-P1 findings block approval.
+## Minimum mechanical close standard (`TASK`/`BUG`)
 
-## Work-item close posture
+Close should require a non-empty verification artifact with at least:
 
-In the target runtime model, `TASK` and `BUG` close should require a valid verification artifact.
+- `## Evidence Summary`
+- `## Commands Run`
+- `## Observed Outputs`
+- `## Attempts`
+- `## Artifacts`
+- `## Unresolved Gaps`
 
-At minimum, that artifact should show:
+`## Unresolved Gaps` must explicitly state remaining gaps or `None.`.
 
-- evidence summary
-- commands run
-- observed outputs
-- attempts
-- artifacts
-- unresolved gaps
+## Routing implications
 
-## Router implications
-
-- `plan` may propose verification work, but it does not satisfy verification.
-- `validate` proves the path into execution.
-- `execute` produces first-party evidence.
-- `review` decides whether that evidence is sufficient.
+- If validation proof is insufficient, route back to `plan`.
+- If execution fails without clear cause, route to `systematic-debug`.
+- If review finds structural mismatch, route to `rescue` or `plan` depending on blast radius.

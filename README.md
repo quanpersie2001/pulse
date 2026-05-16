@@ -4,19 +4,19 @@
 
 # Pulse
 
-<p><strong>A gated delivery workflow for Claude Code and Codex</strong></p>
+<p><strong>A gated delivery router for Claude Code and Codex</strong></p>
 
 <p>
   <a href=".codex-plugin/plugin.json">
     <img alt="Version" src="https://img.shields.io/badge/version-3.5.3-0F766E?style=flat-square" />
   </a>
   <img alt="License" src="https://img.shields.io/badge/license-MIT-blue?style=flat-square" />
-  <a href="skills">
-    <img alt="Skills" src="https://img.shields.io/badge/skills-20-8B5CF6?style=flat-square" />
+  <a href="skills/pulse">
+    <img alt="Router" src="https://img.shields.io/badge/router-%2Fpulse-8B5CF6?style=flat-square" />
   </a>
 </p>
 
-<p><em>Stop agents from hallucinating requirements, skipping verification, and producing unauditable work.</em></p>
+<p><em>Keep agents aligned to approved scope, verified execution, and auditable outcomes.</em></p>
 
 </div>
 
@@ -24,54 +24,37 @@
 
 ## What is Pulse?
 
-Pulse wraps AI agents in a **gated delivery chain**. Every decision is locked before planning starts. Every plan is approved before code is written. Every bead of work is verified before it's closed. Every feature is reviewed before it merges.
+Pulse ships as a single public skill router: **`/pulse`**.
 
-Without this structure, agents skip steps. With it, they can't.
-
-Pulse ships as a **skills package**. Each skill is a `SKILL.md` file loaded into context at invocation. The workflow contract lives in those skill files, while repo-local Node helpers handle onboarding, state sync, dependency checks, and local coordination. There is no separate orchestration service to deploy. Pulse is a docs-first skill plugin that uses the tools you already have.
+Subcommands cover the full workflow: onboard, explore, brainstorm, plan, validate, swarm, execute, review, compound, rescue, systematic-debug, note, and note-distill. Runtime mutations are handled by the separate CLI **`pulse-work`**, with canonical state in **`.pulse/runtime/`** and canonical metadata in **`.pulse/workgraph/items.jsonl`**.
 
 ## The Delivery Chain
 
-<p align="center">
-  <img src="assets/delivery-chain.png" alt="Pulse delivery chain showing preflight, using-pulse, brainstorming, exploring, planning, validating, swarming, executing, reviewing, and compounding with Gates 1-4 approvals." width="1100" />
-</p>
-
-Pulse turns a vague request into a reviewed delivery trail:
-
-1. `pulse:exploring` locks decisions into `CONTEXT.md`
-2. `pulse:planning` selects work shape (`work-shape.md`, `phase-plan.md`, or `epic-map.md`) and prepares current work artifacts
-3. `pulse:validating` verifies feasibility and readiness for the selected current work
-4. `pulse:swarming` or `pulse:executing` implements the approved current work
-5. `pulse:reviewing` blocks weak merges
-6. `pulse:compounding` captures durable learnings for future work
+1. `/pulse onboard` prepares runtime and readiness.
+2. `/pulse explore` locks decisions in feature context artifacts.
+3. `/pulse plan` selects shape and execution contract.
+4. `/pulse validate` proves feasibility before implementation.
+5. `/pulse swarm` or `/pulse execute` delivers approved work.
+6. `/pulse review` enforces merge quality gates.
+7. `/pulse compound` captures reusable learnings.
 
 ### The 4 Human Gates
 
 | Gate | What it blocks |
 | --- | --- |
 | **Gate 1** | Planning before decisions are locked |
-| **Gate 2** | Work-shape execution prep before the selected shape artifact is approved |
-| **Gate 3** | Execution before feasibility-validated current work is explicitly approved |
-| **Gate 4** | Merge before review is complete |
+| **Gate 2** | Execution prep before shape approval |
+| **Gate 3** | Execution before validated current work approval |
+| **Gate 4** | Merge before review completion |
 
-## Why use pulse
+## Why use Pulse
 
 | Problem | Pulse response |
 | --- | --- |
-| Requirements drift inside chat | Lock decisions in `CONTEXT.md` |
-| Plans look plausible but are brittle | Validate before execution starts |
-| Parallel agents step on each other | Coordinate through beads, `bv`, and reservations |
-| Work is hard to audit later | Keep artifacts, evidence, and review trail in the repo |
-
-## Lineage
-
-Pulse is downstream of everal strong agentic-development systems and distills the parts that fit this repo owner's actual workflow:
-
-- **[Khuym](https://github.com/hoangnb24/skills/tree/main)**, which provides most of the validate-first chain and Flywheel-style bead workflow
-- **[Superpowers](https://github.com/obra/superpowers)**, which contributes the strongest behavioral discipline around brainstorming, verification, debugging, and skill design
-- **[Flywheel](https://agent-flywheel.com/complete-guide)** contributes the operational backbone: beads, `bv`, swarm execution, and the habit of turning plans into live work graphs instead of loose TODO lists.
-- **[Compound Engineering](https://github.com/EveryInc/compound-engineering-plugin)** contributes parallel review, severity-based findings, and the compound-learning loop that feeds future work.
-- **[GSD](https://github.com/gsd-build/get-shit-done)** contributes the philosophy: discuss first, research second, plan third, and do not execute until the plan has been verified.
+| Requirements drift in chat | Lock decisions in context artifacts |
+| Plans are plausible but brittle | Validate before execution |
+| Parallel workers collide | Coordinate through `pulse-work` + reservations |
+| Work is hard to audit later | Preserve artifacts, evidence, and review trail |
 
 ## Installation
 
@@ -88,17 +71,11 @@ Pulse is downstream of everal strong agentic-development systems and distills th
 codex plugin marketplace add quanpersie2001/pulse
 ```
 
-Codex reads the marketplace name from [`.agents/plugins/marketplace.json`](.agents/plugins/marketplace.json), so the installed plugin key is `pulse@pulse-dev`. In the desktop app, enable or install `pulse` from the `pulse-dev` marketplace if it is not already active after the marketplace add step.
-
-If you previously added an older Pulse marketplace named `pulse`, remove it before reinstalling:
-
-```bash
-codex plugin marketplace remove pulse
-```
+Codex reads the marketplace name from [`.agents/plugins/marketplace.json`](.agents/plugins/marketplace.json), so the installed plugin key is `pulse@pulse-dev`.
 
 ### After Install
 
-Installing the plugin makes the packaged skills, hooks, and MCP metadata available to the runtime. To use Pulse inside a target repository, start with `pulse:preflight` so Pulse can verify or install the repo-local onboarding assets it needs under `.pulse/`.
+Start with **`/pulse onboard`** in the target repo to initialize `.pulse/runtime`, `.pulse/workgraph`, and runtime helpers under `.pulse/scripts/`.
 
 ## Project Docs
 
@@ -110,7 +87,7 @@ Installing the plugin makes the packaged skills, hooks, and MCP metadata availab
 
 ## Maintainer Notes
 
-When public docs or skill metadata change:
+When public docs or `/pulse` router metadata change:
 
 ```bash
 bash scripts/check-markdown-links.sh
@@ -122,12 +99,6 @@ Run evaluations through the canonical entrypoint:
 ```bash
 node scripts/pulse-plugin-eval.mjs run
 ```
-
-More evaluation material:
-
-- [docs/evaluation/pulse-plugin-eval.md](docs/evaluation/pulse-plugin-eval.md)
-- [docs/evaluation/pulse-swarming-hardening.md](docs/evaluation/pulse-swarming-hardening.md)
-- [docs/evaluation/how-to-read-results.md](docs/evaluation/how-to-read-results.md)
 
 ## Contributing
 

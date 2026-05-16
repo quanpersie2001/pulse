@@ -1,52 +1,141 @@
 # `/pulse rescue`
 
-Maps from legacy `architecture-rescue`.
+Structural intervention command for work that is failing because the approved shape no longer matches reality.
 
-## Intent
+Default mode is diagnosis and recovery shaping, not immediate execution.
 
-Use this command when implementation is stuck because the current shape is wrong, the architecture drifted, or the team is pushing deeper into a dead end.
+## When to run
 
-## Inputs expected
+Run `/pulse rescue` when one or more of these hold:
 
-Bring:
+- repeated execution attempts fail without reducing uncertainty
+- approved shape assumptions no longer fit constraints/repo reality
+- fixes are cascading across boundaries (scope/seam/ownership/sequence)
+- ownership drift makes continued execution unsafe
 
-- the failing work slice or stuck execution path
-- current architecture constraints
-- observed symptoms of drift or dead-end work
-- the last plan, validation, or review artifacts that led here
+If failure is primarily defect diagnosis, route to `systematic-debug`.
 
-Useful shared references:
+## Default mode
 
-- `../../references/shared/workflow-contract.md`
-- `../../references/shared/handoff-and-resume.md`
-- `../../references/shared/approval-gates.md`
+Default to **rescue-report-only** unless the user explicitly asks to continue into replanning or execution.
 
-## Primary outputs/artifacts
+In rescue-report-only mode:
 
-Typical outputs are:
+- do not restart execution
+- do not mutate workgraph status solely to make progress appear unblocked
+- do not broaden scope implicitly
 
-- recovery framing
-- reset or re-scope options
-- recommended safer path
-- explicit statement of what should stop immediately
+## Required reads
 
-## Interaction model
+For the target rescue slice, read:
 
-`rescue` is intervention design.
-It diagnoses why the current path is wrong and proposes a better path without pretending the existing execution can simply be pushed harder.
+1. current work item metadata in `.pulse/workgraph/items.jsonl`
+2. runtime gate context in `.pulse/runtime/state.json` and `.pulse/runtime/STATE.md`
+3. latest approved shape artifacts under `works/epics/**/<story>/` (`README.md`, `SPEC.md`, and story `validation.md` when present)
+4. execution evidence for affected task/bug items under `works/epics/**/<story>/tasks/**/verification.md` when present
+5. command appendices:
+   - `skills/pulse/commands/rescue/references/LANGUAGE.md`
+   - `skills/pulse/commands/rescue/references/DEEPENING.md`
+   - `skills/pulse/commands/rescue/references/INTERFACE-DESIGN.md`
 
-## Approval expectations
+## Inputs
 
-If the recovery changes architecture, scope, or ownership meaningfully, get explicit sign-off before switching paths.
+- failing work slice and failure pattern timeline
+- latest approved shape artifacts + story validation and task/bug verification evidence
+- current constraint conflicts (scope/runtime/ownership/dependencies)
+- known invariants that should remain stable
 
-## Next command recommendations
+## Phase order (rescue protocol)
 
-- `plan` when the work needs a different shape
-- `validate` when the new path is defined but still needs proof
-- `execute` only when the fix is already obvious and newly bounded
+### Phase 1 — Stabilize and stop-the-bleed
 
-## Failure / escalation behavior
+Immediately halt unsafe churn:
 
-- if the issue is actually a live bug investigation, route to `systematic-debug`
-- if there is not enough evidence to diagnose the drift, gather it before recommending a reset
-- if the current work is unsafe, say so plainly and stop execution first
+- stop speculative patch cascades
+- preserve current evidence/state for diagnosis
+- mark what cannot safely proceed under current shape
+
+### Phase 2 — Diagnose at shape level
+
+Classify root mismatch source:
+
+- scope error
+- seam/interface mismatch
+- ownership ambiguity/drift
+- sequencing/dependency violation
+- assumption drift since prior approval
+
+Explicitly separate structural mismatch from ordinary bug-fix work.
+
+### Phase 3 — Generate bounded recovery options
+
+Produce 2-3 credible rescue paths. For each path, include:
+
+- blast radius
+- coordination and timeline cost
+- reversibility
+- invariants preserved vs boundaries changed
+- residual risk if chosen
+
+### Phase 4 — Require explicit boundary approval
+
+Any architecture/scope boundary change requires explicit user sign-off.
+
+Before re-entry, lock:
+
+- new in-scope/out-of-scope boundaries
+- stop/go criteria
+- required feasibility checks
+
+### Phase 5 — Route to correct downstream command
+
+- `plan` when contracts/boundaries need reshaping
+- `validate` when feasibility proof is required before execution
+- `execute` only when rescued path is bounded, approved, and execution-ready
+
+## Output contract
+
+- structural diagnosis + failure classification
+- approved recovery direction and rejected alternatives
+- explicit boundary updates (in/out-of-scope)
+- re-entry command with readiness conditions
+
+## Stopping rules
+
+Stop and escalate when:
+
+- no bounded credible recovery path exists
+- required approval for boundary change is missing
+- risk surface appears systemic beyond current slice
+
+Do not restart execution from an unapproved rescue proposal.
+
+## Guardrails
+
+- Never continue a known-bad path for momentum.
+- Never relabel architecture drift as a minor bug.
+- Never skip boundary re-approval before re-entry.
+- Never hide rescue trade-offs behind vague “cleanup” framing.
+
+## Anti-patterns
+
+- “One more patch” loops after repeated failures
+- Recovery plans with no reversibility analysis
+- Implicitly expanding scope to absorb structural issues
+- Returning to execution without updated contracts
+
+## Escalation posture
+
+Escalation output must include:
+
+- what failed structurally
+- decisions that now require operator approval
+- smallest safe recovery path
+- explicit consequences of non-decision (continue blocked vs downgraded)
+
+## Next command guidance
+
+- `plan` for new shape synthesis
+- `validate` for feasibility confirmation
+- `systematic-debug` for root-cause defect tracks
+- `execute` only after rescue boundary acceptance

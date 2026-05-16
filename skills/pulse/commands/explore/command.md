@@ -1,38 +1,48 @@
 # `/pulse explore`
 
-Operational decision-extraction manual for producing an approved, execution-safe `CONTEXT.md` from the canonical story `SPEC.md` artifact under `works/`.
+Operational decision-extraction manual for turning approved story intent into an execution-safe `CONTEXT.md` grounded in `works/` and current runtime state.
 
-This command is not a lightweight intake summary. It is a gated exploration phase that removes planning-time guesswork by locking behaviorally meaningful decisions.
+This is a gated exploration phase, not a lightweight summary.
 
 ## Mission
 
-Produce a context artifact that downstream planning can execute against without inventing product behavior, terminology, boundaries, or hidden assumptions.
+Remove planning-time guesswork by locking implementation-relevant decisions with stable IDs and producing a context artifact downstream phases can execute without inventing behavior.
 
 ## Entry criteria
 
-Run `/pulse explore` when all of the following are true:
+Run `/pulse explore` when:
 
-- the user has an implementation intent (new behavior, changed behavior, or scoped correction)
-- decisions that change implementation are still ambiguous
-- Gate 1 has not yet been explicitly approved for this feature
+- implementation intent exists
+- behavior/constraints are still ambiguous enough to force planner assumptions
+- Gate 1 is not yet approved for this active story slice
 
 Do not run when:
 
-- a stable, approved `CONTEXT.md` already exists for the active slice and no decision drift is present
-- the task is pure implementation against Gate 3-approved current work
-- runtime readiness is stale or blocked (route to `/pulse onboard`)
+- approved context already exists for the exact active story and no decision drift exists
+- work is pure implementation under Gate 3-approved current work
+- `/pulse onboard` readiness is stale or blocked
 
 ## Required reads before questioning
 
 Read in this order (if present):
 
-1. `.pulse/project-docs.json` and the smallest relevant listed docs
-2. `works/epics/<epic-id>-<epic-slug>/<story-id>-<story-slug>/SPEC.md` for the approved story
-3. existing `history/<feature>/CONTEXT.md` (if present)
-4. `.pulse/runtime/STATE.md`
-5. minimal code scout targets needed to resolve terminology or behavior contradictions
+1. `.pulse/project-docs.json` and smallest relevant listed docs
+2. active story spec: `works/epics/<epic-id>-<epic-slug>/<story-id>-<story-slug>/SPEC.md`
+3. existing story context: `works/epics/<epic-id>-<epic-slug>/<story-id>-<story-slug>/CONTEXT.md`
+4. `.pulse/runtime/STATE.md` and `.pulse/runtime/state.json`
+5. minimal quick code scout targets required to resolve terminology/behavior contradictions
 
-Rule: answer from repo evidence first; ask the user only for decisions evidence cannot settle.
+Quick scout boundary: keep this shallow (targeted grep + 2–3 file reads). Deep codebase analysis belongs to `/pulse plan`.
+
+Active story context is `works/**/CONTEXT.md`; do not route exploration truth through legacy history paths.
+
+Rule: answer from repo evidence first; ask users only for decisions evidence cannot settle.
+
+## Command-local references
+
+- `references/gray-area-probes.md` — canonical SEE/CALL/RUN/READ/ORGANIZE probe bank
+- `references/context-template.md` — required structure for `works/**/CONTEXT.md`
+- `references/context-reviewer-prompt.md` — optional Phase 4.2 reviewer loop prompt
 
 ## Phase model (mandatory order)
 
@@ -41,28 +51,35 @@ Rule: answer from repo evidence first; ask the user only for decisions evidence 
 1. Classify scope: `quick`, `standard`, or `deep`.
 2. If unclear, ask one disambiguation question.
 3. Detect multi-system requests; split into one foundational system per exploration pass.
-4. Optional single step-back framing (one pass only):
-   - restate outcome
+4. Optional one-time step-back framing:
+   - restate desired outcome
    - list 2–4 decision axes
-   - state what is out of scope for exploration
+   - state what is out of exploration scope
 
-Stop condition: if the feature cannot be described as one decision surface, do not continue to probing; first narrow scope with the user.
+Stop condition: if work cannot be framed as one decision surface, narrow scope before probing.
 
 ### Phase 1 — Domain classification
 
-Classify affected behavior domains (may be multiple): UI/SEE, API/CALL, runtime/RUN, data/READ, workflow/ORGANIZE.
+Classify affected behavior domains (can be multiple):
+
+- SEE (UI/presentation)
+- CALL (API/integration)
+- RUN (runtime/operations)
+- READ (data/state)
+- ORGANIZE (workflow/ownership)
 
 Purpose: ensure probes target ambiguity that changes implementation behavior.
 
 ### Phase 2 — Gray-area extraction
 
 Generate 2–4 gray areas that would force planning assumptions if unresolved.
+Use domain-specific probes from `references/gray-area-probes.md`; select only those genuinely undecided for the active story.
 
 A valid gray area must:
 
-- influence implementation choices or acceptance behavior
-- be absent or contradictory in source inputs
-- materially alter scope, verification, or boundary decisions
+- influence implementation behavior, boundaries, or acceptance criteria
+- be absent, contradictory, or overloaded in available sources
+- materially alter scope, verification, or dependency decisions
 
 Filter out:
 
@@ -75,80 +92,95 @@ Filter out:
 Non-negotiable protocol:
 
 - ask exactly one question per turn
-- wait for user response before next question
+- wait for response before next question
 - prefer single-select options with a recommended default when credible
-- use concrete scenario probes for boundary decisions
-- resolve terminology conflicts before locking decisions
+- use concrete scenario probes for boundaries/edge cases
+- resolve terminology conflicts before locking
 
 Locking protocol:
 
 - assign stable IDs: `D1`, `D2`, `D3`...
-- after each resolved area, post: `Locking decision Dn: <exact decision>. Confirmed?`
-- never renumber previously assigned IDs
+- after each resolved area: `Locking decision Dn: <exact decision>. Confirmed?`
+- never renumber prior IDs
+- after 3–4 questions in one gray area, checkpoint before continuing: `More questions on this area, or move to the next unresolved area?`
 
-Stop conditions (hard):
+Scope discipline during loop:
 
-- if two questions are bundled, reset and re-ask one
-- if contradiction remains unresolved, do not continue to artifact writing
-- do not proceed until all blocking gray areas are either locked or explicitly deferred
+- if user introduces a new capability outside current boundary, capture it under deferred ideas and return to the active gray area
+- if wording conflicts with project docs or code evidence, resolve the contradiction before locking
+
+Stop conditions:
+
+- if multiple questions were bundled, reset and re-ask one
+- if contradiction remains unresolved, do not proceed to artifact writing
+- do not proceed until every blocking gray area is locked or explicitly deferred
 
 ### Phase 4 — Context assembly
 
-Write `history/<feature>/CONTEXT.md` as the single feature source of truth for downstream phases.
+Write canonical story context:
 
-Minimum required sections:
+- `works/epics/<epic-id>-<epic-slug>/<story-id>-<story-slug>/CONTEXT.md`
 
-- problem outcome and scope boundary
+Populate from `references/context-template.md`.
+
+Required sections:
+
+- intended outcome and explicit scope boundary
 - locked decisions with IDs (`D1...Dn`)
 - code/context evidence with concrete paths
 - constraints and non-goals
 - open questions split into:
   - resolve before planning
   - deferred to planning
-- project-doc alignment note (reused terms, corrected terms, missing glossary)
+- project-doc terminology alignment (reused, corrected, missing)
 
-If repeated ambiguity is clearly project-level, add a `Project Docs Follow-up` proposal, but do not modify broader docs unless explicitly requested.
+If repeated ambiguity is clearly project-level, add `Project Docs Follow-up` as a proposal only.
 
-### Phase 5 — Quality check + Gate 1 handoff
+Optional Phase 4.2 reviewer loop:
+
+- run a fresh reviewer pass using `references/context-reviewer-prompt.md`
+- if issues are found, fix and re-run
+- after two failed reviewer iterations, ask for direct human review instead of churning
+
+### Phase 5 — Quality check and Gate 1 handoff
 
 Before handoff, verify:
 
 - every implementation-relevant choice is explicit or explicitly deferred
-- no locked decision is vague or aesthetic-only
-- decision IDs are stable and complete
-- no hidden contradictions remain
+- locked decisions are behaviorally concrete
+- decision IDs are complete and stable
+- no unresolved contradictions remain
 
-Then update runtime mirrors truthfully (if touched) and present Gate 1 handoff.
+Then, if runtime mirrors are touched, update them truthfully to a pre-approval state and present Gate 1 handoff.
 
 ## Gate posture
 
 `/pulse explore` prepares Gate 1 only.
 
-Gate 1 passes only after explicit user approval of `CONTEXT.md`. Until then, downstream shaping is blocked.
+Gate 1 passes only after explicit user approval of `works/**/CONTEXT.md`. Until approved, shaping/execution commands are blocked.
 
 ## Role boundaries
 
 Explore owns:
 
-- decision extraction
-- ambiguity reduction
+- ambiguity reduction and decision locking
 - context artifact integrity
 
 Explore does not own:
 
-- implementation plans
-- workgraph item creation
-- architecture design or coding
+- implementation planning
+- work item execution
+- architecture/coding
 
-## Pause/resume and handoff posture
+## Pause/resume posture
 
-If context is near critical budget or user pauses:
+If pausing:
 
-- persist exploration progress in `.pulse/runtime/STATE.md` with active gray area and next single question
-- preserve locked decision IDs already confirmed
-- resume from the last unresolved decision, not from scratch
+- persist current exploration posture in `.pulse/runtime/STATE.md` (active gray area + next single question)
+- preserve already confirmed decision IDs
+- resume from the next unresolved decision, not from scratch
 
-Do not mark exploration complete during pause.
+Do not mark exploration complete while paused.
 
 ## Red flags
 
@@ -157,12 +189,14 @@ Do not mark exploration complete during pause.
 - drifting into solution design
 - writing `CONTEXT.md` before decisions are locked
 - mutating runtime/workgraph state as if Gate 1 already passed
+- writing active truth to `history/`, `.beads`, or legacy `pulse:*` skill naming instead of `works/**` + `/pulse` routing
 
 ## Exit contract
 
 Successful exit requires:
 
-- `history/<feature>/CONTEXT.md` written and internally consistent
-- explicit list of locked decisions (`D1...Dn`)
-- Gate 1 approval request
+- `works/**/CONTEXT.md` written and internally consistent
+- explicit locked decision list (`D1...Dn`)
+- explicit Gate 1 approval request
+- no planning/execution actions taken before Gate 1 approval
 - next command recommendation: `/pulse plan` (manual invoke by default)

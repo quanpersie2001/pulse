@@ -16,7 +16,7 @@
     "planning",
     "multi-agent"
   ],
-  "skills": "./skills/",
+  "skills": "./skills/pulse",
   "hooks": "./hooks/codex-hooks.json",
   "mcpServers": "./.mcp.json",
   "interface": {

@@ -1,8 +1,8 @@
-# Pulse v2 Single-Skill Workgraph Implementation Spec
+# Pulse v2 Workflow Router + Workgraph Implementation Spec
 
 ## Status
 
-- Status: implementation baseline for Pulse v2 single-skill workgraph plugin
+- Status: implementation baseline for Pulse v2 workflow-router + standalone-utility plugin
 - Source plan: `PLAN.md`
 - Audience: maintainers implementing Pulse v2 in this plugin repo and validating self-host / dogfood behavior
 
@@ -12,12 +12,12 @@ This document turns the current Pulse v2 migration plan into an implementation-r
 
 It defines:
 
-- the single public command surface for Pulse
-- the boundary between the `/pulse` router and the `pulse-work` runtime CLI
+- the workflow public command surface for Pulse
+- the boundary between the workflow router, standalone public utilities, and the `pulse-work` runtime CLI
 - the canonical source tree for the plugin repo
 - the canonical installed runtime layout under `.pulse/`
 - the v1 workgraph data model and validation rules
-- the onboarding, hook, eval, and docs rewiring required to remove the legacy multi-skill contract
+- the onboarding, hook, eval, and docs rewiring required to remove the legacy workflow-skill contract
 - the migration strategy away from `preflight`, `dream`, `skill-catalog.json`, `br`, `bv`, `.beads/`, and `history/` as active runtime contracts
 
 This spec is intentionally concrete. It is not a second proposal.
@@ -26,56 +26,68 @@ This spec is intentionally concrete. It is not a second proposal.
 
 ## 2. Locked architectural decisions
 
-### 2.1 One public skill: `/pulse`
+### 2.1 One workflow router: `pulse:workflow`
 
-Pulse must expose exactly one packaged user-facing skill:
+Pulse must expose exactly one public workflow router skill:
 
-- `/pulse onboard`
-- `/pulse explore`
-- `/pulse brainstorm`
-- `/pulse plan`
-- `/pulse validate`
-- `/pulse swarm`
-- `/pulse execute`
-- `/pulse review`
-- `/pulse compound`
-- `/pulse rescue`
-- `/pulse systematic-debug`
-- `/pulse note`
-- `/pulse note-distill`
+- `pulse:workflow onboard`
+- `pulse:workflow explore`
+- `pulse:workflow brainstorm`
+- `pulse:workflow plan`
+- `pulse:workflow validate`
+- `pulse:workflow execute`
+- `pulse:workflow swarm`
+- `pulse:workflow review`
+- `pulse:workflow compound`
 
-Future runtime-facing commands such as `status` may be added later, but Pulse must not return to a model where each capability ships as its own public skill.
+Future workflow-facing commands such as `status` may be added later, but Pulse must not return to a model where each workflow phase ships as its own public skill.
 
-### 2.2 Clear separation between router and runtime
+### 2.2 Standalone public utilities remain outside the workflow router
 
-Pulse v2 has two distinct layers:
+The following are public Pulse skills, but they are **not** workflow phases and must not be folded into `pulse:workflow`:
 
-- `/pulse ...` = the user-facing workflow router
-- `pulse-work ...` = the runtime CLI that manipulates workgraph and runtime state
+- `pulse:architecture-rescue`
+- `pulse:systematic-debug-fix`
+- `pulse:dev-note`
+- `pulse:dev-note-distil`
+- `pulse:bootstrap-project-context`
+- `pulse:prompt-leverage`
+- `pulse:gitnexus`
+
+These skills belong to a different mental model than the happy-path workflow pipeline. They must remain directly invokable and must not be documented as required workflow stages.
+
+### 2.3 Clear separation between router, utilities, and runtime
+
+Pulse v2 has three distinct layers:
+
+- `pulse:workflow ...` = user-facing workflow router
+- `pulse:<standalone-skill>` = user-facing utility skill outside the workflow pipeline
+- `pulse-work ...` = runtime CLI that manipulates workgraph and runtime state
 
 Examples:
 
-- a user asks for planning through `/pulse plan`
+- a user asks for planning through `pulse:workflow plan`
+- a user invokes `pulse:architecture-rescue` for an off-pipeline architecture recovery task
 - the agent or harness uses `pulse-work create`, `pulse-work ready`, or `pulse-work close` to manipulate canonical workgraph state
 
-The router layer and the runtime layer must be described, implemented, and tested separately.
+The workflow router layer, the standalone utility layer, and the runtime layer must be described, implemented, and tested separately.
 
-### 2.3 `HARNESS.md` is a reference source, not a runtime template
+### 2.4 `HARNESS.md` is a reference source, not a runtime template
 
 The canonical harness reference must live at:
 
 ```text
-skills/pulse/references/HARNESS.md
+skills/workflow/references/HARNESS.md
 ```
 
-It is documentation for the Pulse skill contract, not a runtime seed file.
+It is documentation for the workflow router contract, not a runtime seed file.
 
-### 2.4 `HARNESS_BACKLOG.md` is a template / seed artifact
+### 2.5 `HARNESS_BACKLOG.md` is a template / seed artifact
 
 The canonical backlog template must live at:
 
 ```text
-skills/pulse/templates/HARNESS_BACKLOG.md
+skills/workflow/templates/HARNESS_BACKLOG.md
 ```
 
 The runtime materialization path is:
@@ -84,25 +96,41 @@ The runtime materialization path is:
 .pulse/harness/HARNESS_BACKLOG.md
 ```
 
-### 2.5 `skill-catalog.json` is removed
+### 2.6 `skill-catalog.json` is removed
 
-With a single router skill, `skill-catalog.json` becomes redundant and drift-prone.
+With a workflow router plus standalone utility skills, `skill-catalog.json` becomes redundant and drift-prone.
 
 The new sources of truth are:
 
-- `skills/pulse/SKILL.md` — router contract and command table
-- `skills/pulse/scripts/command-metadata.json` — command description / hint / category metadata
+- `skills/workflow/SKILL.md` — workflow router contract and command table
+- `skills/workflow/scripts/command-metadata.json` — workflow command description / hint / category metadata
+- `skills/<standalone-skill>/SKILL.md` — standalone utility contracts
 
-Until Phase 4 cleanup removes the file, `skill-catalog.json` is treated only as a legacy artifact and must not be used as an active design or manifest truth source.
+Until cleanup removes the file, `skill-catalog.json` is treated only as a legacy artifact and must not be used as an active design or manifest truth source.
 
-### 2.6 `preflight` and `dream` are removed from the packaged surface
+### 2.7 `preflight` and `dream` are removed from the packaged surface
 
-- `preflight` is absorbed into `/pulse onboard`
+- `preflight` is absorbed into `pulse:workflow onboard`
 - `dream` is removed rather than migrated as a new public route
 
-If any useful behavior from `dream` survives, it must be absorbed into another command such as `compound`, not kept as a standalone packaged surface.
+If any useful behavior from `dream` survives, it must be absorbed deliberately elsewhere rather than kept as a standalone packaged surface.
 
-### 2.7 Legacy concepts are migration-only language
+### 2.8 Residual utility skills must be split into keep vs remove
+
+The following remain public standalone skills outside the workflow router:
+
+- `bootstrap-project-context`
+- `prompt-leverage`
+- `gitnexus`
+
+The following are removed from the target packaged surface:
+
+- `refresh-project-docs`
+- `writing-pulse-skills`
+
+Cleanup must preserve that split directly in the packaged skill surface.
+
+### 2.9 Legacy concepts are migration-only language
 
 The following are not active runtime contracts in Pulse v2:
 
@@ -121,16 +149,17 @@ They may still appear in migration documents, compatibility readers, or audit no
 
 Pulse v2 v1 must:
 
-1. collapse the public skill surface into a single `/pulse` router
-2. replace the runtime dependency on `br` and `bv` with `pulse-work`
-3. ship a minimal built-in workgraph owned by Pulse
-4. make `.pulse/workgraph/items.jsonl` the only canonical writable metadata source
-5. move canonical runtime state under `.pulse/runtime/`
-6. keep capabilities such as brainstorm, rescue, systematic-debug, and note, but route them through `/pulse`
-7. make the plugin source tree and the installed runtime layout explicit and non-conflicting
-8. reduce runtime duplication and top-level `.pulse/` file sprawl
-9. support self-hosting and brownfield migration without silent dual sources of truth
-10. remain repo-local and zero-service: no external daemon, no hosted coordinator
+1. collapse the workflow public surface into a single router skill: `pulse:workflow`
+2. keep rescue/debug/note/support capabilities as standalone public skills outside that router
+3. replace the runtime dependency on `br` and `bv` with `pulse-work`
+4. ship a minimal built-in workgraph owned by Pulse
+5. make `.pulse/workgraph/items.jsonl` the only canonical writable metadata source
+6. move canonical runtime state under `.pulse/runtime/`
+7. keep canonical runtime source under `runtime/pulse-work/`
+8. make the plugin source tree and the installed runtime layout explicit and non-conflicting
+9. reduce runtime duplication and top-level `.pulse/` file sprawl
+10. support self-hosting and brownfield migration without silent dual sources of truth
+11. remain repo-local and zero-service: no external daemon, no hosted coordinator
 
 ---
 
@@ -138,7 +167,8 @@ Pulse v2 v1 must:
 
 Pulse v2 v1 does **not** need to:
 
-- keep multiple packaged public skills
+- keep multiple standalone workflow-phase public skills
+- force rescue/debug/note utilities into the workflow router
 - keep `preflight` or `dream` as packaged routes
 - keep `skill-catalog.json`
 - preserve long-term dual-write compatibility with `history/`, `.beads/`, `br`, or `bv`
@@ -159,17 +189,18 @@ Pulse v2 is an architectural migration, not a folder rename.
 
 The current implementation is tightly coupled to the old model:
 
-- public behavior is spread across many packaged skills instead of one router
+- workflow behavior is spread across many packaged skills instead of one workflow router
+- utility skills and workflow phases are not cleanly separated in the public mental model
 - onboarding and readiness are split between `preflight` and `using-pulse`
 - runtime source scripts currently live under `skills/using-pulse/scripts/`
 - the repo also mirrors installed runtime helpers under `.pulse/scripts/`
 - runtime state is currently spread across top-level `.pulse/state.json`, `.pulse/STATE.md`, `.pulse/current-feature.json`, `.pulse/runtime-snapshot.json`, `.pulse/reservations.json`, and `.pulse/handoffs/manifest.json`
 - `preflight` and `dream` still appear across docs, tests, hooks, manifests, and evals
 - `skill-catalog.json` reflects the old multi-skill era and adds another routing layer
-- the repo still contains top-level skill directories such as `bootstrap-project-context`, `prompt-leverage`, `refresh-project-docs`, `writing-pulse-skills`, and `gitnexus` that are outside the main public workflow mapping and need explicit classification
+- the current skill inventory still mixes standalone public skills that should stay with legacy utilities that should be removed, which creates packaging ambiguity
 - docs currently blur the boundary between this plugin repo and downstream/self-hosted target repos, especially around `.pulse/` and `.gitignore`
 
-Because of this, Pulse v2 implementation must update runtime scripts, router contracts, docs, onboarding, hooks, evals, and tests in coordinated phases.
+Because of this, Pulse v2 implementation must update runtime scripts, router contracts, standalone utility classification, docs, onboarding, hooks, evals, and tests in coordinated phases.
 
 ---
 
@@ -230,95 +261,94 @@ pulse/
 |-- pulse-eval-workspace/
 |-- references/
 |   `-- impeccable/
+|-- runtime/
+|   `-- pulse-work/
+|       |-- pulse_work.mjs
+|       |-- pulse_state.mjs
+|       |-- pulse_status.mjs
+|       |-- pulse_session_context.mjs
+|       |-- pulse_reservations.mjs
+|       |-- workgraph_store.mjs
+|       |-- workgraph_validate.mjs
+|       |-- workgraph_ids.mjs
+|       |-- workgraph_paths.mjs
+|       |-- workgraph_views.mjs
+|       |-- workgraph_lock.mjs
+|       `-- workgraph_templates.mjs
 |-- scripts/
 |   |-- pulse-plugin-eval.mjs
 |   `-- sync-skills.sh
 |-- skills/
-|   `-- pulse/
-|       |-- SKILL.md
-|       |-- references/
-|       |   |-- HARNESS.md
-|       |   `-- shared/
-|       |       |-- workflow-contract.md
-|       |       |-- planes-and-artifacts.md
-|       |       |-- workgraph-model.md
-|       |       |-- approval-gates.md
-|       |       |-- verification-contract.md
-|       |       |-- swarm-execution-rules.md
-|       |       `-- handoff-and-resume.md
-|       |-- commands/
-|       |   |-- onboard/
-|       |   |   |-- command.md
-|       |   |   |-- references/
-|       |   |   |   |-- readiness.md
-|       |   |   |   `-- migration-warnings.md
-|       |   |   `-- scripts/
-|       |   |       `-- onboard_pulse.mjs
-|       |   |-- explore/
-|       |   |   `-- command.md
-|       |   |-- brainstorm/
-|       |   |   |-- command.md
-|       |   |   |-- references/
-|       |   |   |   |-- spec-reviewer-prompt.md
-|       |   |   |   `-- visual-support-guidance.md
-|       |   |   `-- scripts/
-|       |   |       |-- start-visual-server.sh
-|       |   |       |-- stop-visual-server.sh
-|       |   |       |-- visual-frame-template.html
-|       |   |       |-- visual-helper.js
-|       |   |       `-- visual-server.cjs
-|       |   |-- plan/
-|       |   |   `-- command.md
-|       |   |-- validate/
-|       |   |   `-- command.md
-|       |   |-- swarm/
-|       |   |   `-- command.md
-|       |   |-- execute/
-|       |   |   `-- command.md
-|       |   |-- review/
-|       |   |   `-- command.md
-|       |   |-- compound/
-|       |   |   `-- command.md
-|       |   |-- rescue/
-|       |   |   `-- command.md
-|       |   |-- systematic-debug/
-|       |   |   `-- command.md
-|       |   |-- note/
-|       |   |   `-- command.md
-|       |   `-- note-distill/
-|       |       `-- command.md
-|       |-- templates/
-|       |   |-- HARNESS_BACKLOG.md
-|       |   `-- works/
-|       |       |-- epic-README.md
-|       |       |-- story-README.md
-|       |       |-- story-SPEC.md
-|       |       |-- task-README.md
-|       |       `-- verification.md
-|       |-- scripts/
-|       |   |-- command-metadata.json
-|       |   |-- runtime/
-|       |   |   |-- pulse_work.mjs
-|       |   |   |-- workgraph_store.mjs
-|       |   |   |-- workgraph_validate.mjs
-|       |   |   |-- workgraph_ids.mjs
-|       |   |   |-- workgraph_paths.mjs
-|       |   |   |-- workgraph_views.mjs
-|       |   |   |-- workgraph_lock.mjs
-|       |   |   |-- workgraph_templates.mjs
-|       |   |   |-- pulse_state.mjs
-|       |   |   |-- pulse_status.mjs
-|       |   |   |-- pulse_session_context.mjs
-|       |   |   `-- pulse_reservations.mjs
-|       |   `-- lib/
-|       |       |-- resolve-command.mjs
-|       |       |-- render-help.mjs
-|       |       `-- paths.mjs
-|       `-- tests/
-|           |-- router/
-|           |-- runtime/
-|           |-- integration/
-|           `-- fixtures/
+|   |-- workflow/
+|   |   |-- SKILL.md
+|   |   |-- references/
+|   |   |   |-- HARNESS.md
+|   |   |   `-- shared/
+|   |   |       |-- workflow-contract.md
+|   |   |       |-- planes-and-artifacts.md
+|   |   |       |-- workgraph-model.md
+|   |   |       |-- approval-gates.md
+|   |   |       |-- verification-contract.md
+|   |   |       |-- swarm-execution-rules.md
+|   |   |       `-- handoff-and-resume.md
+|   |   |-- commands/
+|   |   |   |-- onboard/
+|   |   |   |   |-- command.md
+|   |   |   |   |-- references/
+|   |   |   |   |   |-- readiness.md
+|   |   |   |   |   `-- migration-warnings.md
+|   |   |   |   `-- scripts/
+|   |   |   |       `-- onboard_pulse.mjs
+|   |   |   |-- explore/
+|   |   |   |   `-- command.md
+|   |   |   |-- brainstorm/
+|   |   |   |   |-- command.md
+|   |   |   |   |-- references/
+|   |   |   |   |   |-- spec-reviewer-prompt.md
+|   |   |   |   |   `-- visual-support-guidance.md
+|   |   |   |   `-- scripts/
+|   |   |   |       |-- start-visual-server.sh
+|   |   |   |       |-- stop-visual-server.sh
+|   |   |   |       |-- visual-frame-template.html
+|   |   |   |       |-- visual-helper.js
+|   |   |   |       `-- visual-server.cjs
+|   |   |   |-- plan/
+|   |   |   |   `-- command.md
+|   |   |   |-- validate/
+|   |   |   |   `-- command.md
+|   |   |   |-- swarm/
+|   |   |   |   `-- command.md
+|   |   |   |-- execute/
+|   |   |   |   `-- command.md
+|   |   |   |-- review/
+|   |   |   |   `-- command.md
+|   |   |   `-- compound/
+|   |   |       `-- command.md
+|   |   |-- templates/
+|   |   |   |-- HARNESS_BACKLOG.md
+|   |   |   `-- works/
+|   |   |       |-- epic-README.md
+|   |   |       |-- story-README.md
+|   |   |       |-- story-SPEC.md
+|   |   |       |-- task-README.md
+|   |   |       `-- verification.md
+|   |   `-- scripts/
+|   |       |-- command-metadata.json
+|   |       `-- lib/
+|   |           |-- resolve-command.mjs
+|   |           |-- render-help.mjs
+|   |           `-- paths.mjs
+|   |-- architecture-rescue/
+|   |-- bootstrap-project-context/
+|   |-- dev-note/
+|   |-- dev-note-distil/
+|   |-- gitnexus/
+|   |-- prompt-leverage/
+|   `-- systematic-debug-fix/
+|-- tests/
+|   |-- workflow/
+|   |-- runtime/
+|   `-- integration/
 |-- AGENTS.md
 |-- CLAUDE.md
 |-- CONTRIBUTING.md
@@ -396,10 +426,6 @@ Pulse v2 removes these as active packaged or canonical surfaces:
 - `skills/reviewing/`
 - `skills/compounding/`
 - `skills/brainstorming/`
-- `skills/architecture-rescue/`
-- `skills/systematic-debug-fix/`
-- `skills/dev-note/`
-- `skills/dev-note-distil/`
 - `skills/dream/`
 - `skill-catalog.json`
 - top-level `.pulse/current-feature.json`
@@ -421,43 +447,34 @@ In this repository, `.pulse/` remains local dogfood/runtime state and stays igno
 
 If Pulse v2 later defines a track/ignore policy for downstream or self-hosted target repos, that policy belongs to the installed target repo contract, not to Phase 0 cleanup of this plugin repo.
 
-### 6.5 Residual skill classification and packaging policy
+### 6.5 Skill classification and packaging policy
 
-Current repo reality still includes top-level skill directories that are outside the main workflow-collapse mapping:
+The skill classification is locked as follows:
 
-- `bootstrap-project-context`
-- `prompt-leverage`
-- `refresh-project-docs`
-- `writing-pulse-skills`
-- `gitnexus`
+- the workflow pipeline collapses into `pulse:workflow`
+- `architecture-rescue`, `systematic-debug-fix`, `dev-note`, `dev-note-distil`, `bootstrap-project-context`, `prompt-leverage`, and `gitnexus` remain standalone public utility skills
+- `dream`, `refresh-project-docs`, and `writing-pulse-skills` are removed from the target packaged surface
+- `skill-catalog.json` remains only a legacy artifact until cleanup and is not a source of truth from this phase onward
 
-Phase 0 locks the following classification:
-
-- workflow skills listed in section 7.4 collapse into `/pulse`
-- `dream` is an obsolete legacy skill and is removed in Phase 4 rather than migrated as a new command
-- `bootstrap-project-context`, `prompt-leverage`, `refresh-project-docs`, `writing-pulse-skills`, and `gitnexus` are maintainer/developer-only utilities, not part of the public Pulse workflow contract
-- `skill-catalog.json` remains only a legacy artifact until Phase 4 cleanup and is not a source of truth from this phase onward
-- if skill auto-discovery would still package those maintainer-only utilities as public skills, Phase 4 or a dedicated cleanup step must relocate them out of `skills/` or otherwise exclude them from the packaged public surface
-
-This packaging rule is a required dependency for the legacy-surface collapse; those utilities must not survive as accidental public surface.
+This packaging rule is a required dependency for the legacy-surface collapse.
 
 ---
 
-## 7. Public command surface contract
+## 7. Public surface contract
 
-### 7.1 `/pulse` router behavior
+### 7.1 `pulse:workflow` router behavior
 
-`skills/pulse/SKILL.md` is the only packaged public skill contract.
+`skills/workflow/SKILL.md` is the only packaged workflow router contract.
 
-With no arguments, `/pulse` must render a command menu or help surface for the supported subcommands.
+With no arguments, `pulse:workflow` must render a command menu or help surface for the supported workflow subcommands.
 
-With a recognized first token, `/pulse` must route to the corresponding command reference.
+With a recognized first token, `pulse:workflow` must route to the corresponding command reference.
 
 If the first token does not match a known command, the router must fall back to help / command listing behavior rather than silently dispatching to a legacy skill.
 
-### 7.2 Supported command set
+### 7.2 Supported workflow command set
 
-The command table in `skills/pulse/SKILL.md` must support:
+The command table in `skills/workflow/SKILL.md` must support:
 
 - `onboard`
 - `explore`
@@ -468,42 +485,57 @@ The command table in `skills/pulse/SKILL.md` must support:
 - `execute`
 - `review`
 - `compound`
-- `rescue`
-- `systematic-debug`
-- `note`
-- `note-distill`
 
-### 7.3 Canonical source files for command behavior
+### 7.3 Canonical source files for workflow behavior
 
-The single public surface is composed from these sources:
+The workflow surface is composed from these sources:
 
-- `skills/pulse/SKILL.md` — router entrypoint and command table
-- `skills/pulse/commands/<command>/command.md` — per-command behavior entrypoint
-- `skills/pulse/commands/<command>/references/*` — command-local reference material
-- `skills/pulse/commands/<command>/scripts/*` — command-local helper scripts and assets
-- `skills/pulse/references/shared/*.md` — shared workflow contracts and reference material
-- `skills/pulse/scripts/command-metadata.json` — structured metadata for command descriptions, hints, and categories
+- `skills/workflow/SKILL.md` — router entrypoint and workflow command table
+- `skills/workflow/commands/<command>/command.md` — per-command behavior entrypoint
+- `skills/workflow/commands/<command>/references/*` — command-local reference material
+- `skills/workflow/commands/<command>/scripts/*` — command-local helper scripts and assets
+- `skills/workflow/references/shared/*.md` — shared workflow contracts and reference material
+- `skills/workflow/scripts/command-metadata.json` — structured metadata for workflow command descriptions, hints, and categories
 
 `skill-catalog.json` must not be reintroduced as a second routing metadata layer.
 
-### 7.4 Legacy skill mapping
+### 7.4 Standalone public utility surface
+
+The following remain standalone public skills and are **not** workflow router subcommands:
+
+- `pulse:architecture-rescue`
+- `pulse:systematic-debug-fix`
+- `pulse:dev-note`
+- `pulse:dev-note-distil`
+- `pulse:bootstrap-project-context`
+- `pulse:prompt-leverage`
+- `pulse:gitnexus`
+
+Their source-of-truth behavior lives in their own skill directories, not under `skills/workflow/commands/`.
+
+### 7.5 Legacy skill mapping
 
 The public surface maps from the old model as follows:
 
-- `using-pulse` + `preflight` → `/pulse onboard`
-- `exploring` → `/pulse explore`
-- `brainstorming` → `/pulse brainstorm`
-- `planning` → `/pulse plan`
-- `validating` → `/pulse validate`
-- `swarming` → `/pulse swarm`
-- `executing` → `/pulse execute`
-- `reviewing` → `/pulse review`
-- `compounding` → `/pulse compound`
-- `architecture-rescue` → `/pulse rescue`
-- `systematic-debug-fix` → `/pulse systematic-debug`
-- `dev-note` → `/pulse note`
-- `dev-note-distil` → `/pulse note-distill`
+- `using-pulse` + `preflight` → `pulse:workflow onboard`
+- `exploring` → `pulse:workflow explore`
+- `brainstorming` → `pulse:workflow brainstorm`
+- `planning` → `pulse:workflow plan`
+- `validating` → `pulse:workflow validate`
+- `swarming` → `pulse:workflow swarm`
+- `executing` → `pulse:workflow execute`
+- `reviewing` → `pulse:workflow review`
+- `compounding` → `pulse:workflow compound`
+- `architecture-rescue` → `pulse:architecture-rescue`
+- `systematic-debug-fix` → `pulse:systematic-debug-fix`
+- `dev-note` → `pulse:dev-note`
+- `dev-note-distil` → `pulse:dev-note-distil`
+- `bootstrap-project-context` → `pulse:bootstrap-project-context`
+- `prompt-leverage` → `pulse:prompt-leverage`
+- `gitnexus` → `pulse:gitnexus`
 - `dream` → removed
+- `refresh-project-docs` → removed
+- `writing-pulse-skills` → removed
 
 ---
 
@@ -513,8 +545,9 @@ Use these names consistently.
 
 | Context | Canonical term |
 | --- | --- |
-| packaged public surface | `/pulse` |
-| user-facing subcommand | `command` |
+| packaged workflow router surface | `pulse:workflow` |
+| standalone public utility surface | `pulse:<standalone-skill>` |
+| user-facing workflow subcommand | `workflow command` |
 | runtime CLI | `pulse-work` |
 | generic human-facing noun | `work item` |
 | schema/code short noun | `item` |
@@ -908,7 +941,7 @@ Must include sections for:
 
 #### Story `SPEC.md`
 
-`SPEC.md` is the required output of `/pulse brainstorm` for a story-scoped design pass.
+`SPEC.md` is the required output of `pulse:workflow brainstorm` for a story-scoped design pass.
 
 Must include sections for:
 
@@ -976,7 +1009,7 @@ This is the minimum mechanical proof gate for v1.
 - views are rebuilt after every successful mutation
 - views must be written atomically
 - in this plugin repo they live under ignored local `.pulse/` state
-- onboarding and `pulse-work doctor --fix` must respect repo-local ignore policy and must not assume this plugin repo rewrites its `.gitignore`
+- onboarding and `pulse-work doctor --fix` must respect repo-local ignore policy and must not assume this plugin repo rewrites `.gitignore`
 
 ### 13.4 View content
 
@@ -1058,13 +1091,14 @@ If a lock exists:
 
 Implementation form in the plugin repo:
 
-- canonical runtime source scripts live in `skills/pulse/scripts/runtime/`
-- `skills/pulse/scripts/runtime/pulse_work.mjs` is the source entrypoint for the CLI
-- command-local scripts live under `skills/pulse/commands/<command>/scripts/`
+- canonical runtime source scripts live in `runtime/pulse-work/`
+- `runtime/pulse-work/pulse_work.mjs` is the source entrypoint for the CLI
+- workflow command-local scripts live under `skills/workflow/commands/<command>/scripts/`
+- standalone utility scripts remain under their own skill directories as needed
 - onboarding installs or syncs a repo-local executable surface under `.pulse/scripts/`
 - v1 should ship a thin executable wrapper named `pulse-work` so the human-facing runtime command remains `pulse-work`
 
-`pulse-work` is not the main conversational surface. The primary user-facing surface remains `/pulse`.
+`pulse-work` is not the main conversational surface. The primary workflow surface remains `pulse:workflow`.
 
 ### 15.2 Minimum command set
 
@@ -1279,7 +1313,7 @@ Those may be derived in memory by `pulse_status` when needed.
 
 ### 16.3 `state.json` expectations
 
-`state.json` should preserve the current gating model while replacing the old skill-per-phase assumptions with router / command-aware fields.
+`state.json` should preserve the current gating model while replacing the old workflow-skill assumptions with router-aware fields.
 
 Minimum fields:
 
@@ -1298,7 +1332,7 @@ Minimum fields:
 - `handoff_manifest`
 - `last_updated`
 
-If a transitional adapter still carries an `active_skill` field, it must always resolve to `/pulse` and must not reintroduce multi-skill routing logic.
+If a transitional adapter still carries an `active_skill` field, it must always resolve to `pulse:workflow` for workflow phases and must not reintroduce multi-skill workflow routing logic.
 
 ### 16.4 Reservations
 
@@ -1323,8 +1357,8 @@ Reservation semantics:
 
 The plugin source repo must contain:
 
-- `skills/pulse/references/HARNESS.md`
-- `skills/pulse/templates/HARNESS_BACKLOG.md`
+- `skills/workflow/references/HARNESS.md`
+- `skills/workflow/templates/HARNESS_BACKLOG.md`
 
 ### 17.2 Runtime materialization rule
 
@@ -1334,7 +1368,7 @@ Onboarding must materialize:
 
 Onboarding must **not** create a second canonical `HARNESS.md` inside `.pulse/harness/`.
 
-The harness operating contract belongs to the skill reference tree, while the runtime backlog belongs to the installed runtime plane.
+The harness operating contract belongs to the workflow reference tree, while the runtime backlog belongs to the installed runtime plane.
 
 ### 17.3 Backlog entry shape
 
@@ -1349,34 +1383,35 @@ Minimum backlog entry shape:
 
 ### 17.4 High-level docs relationship
 
-Repo-root docs such as `AGENTS.md` remain the high-level operator entrypoint and should point to the Pulse router contract and harness reference rather than duplicating the full runtime contract.
+Repo-root docs such as `AGENTS.md` remain the high-level operator entrypoint and should point to the workflow router contract and harness reference rather than duplicating the full runtime contract.
 
 ---
 
 ## 18. Onboarding and script-source rules
 
-### 18.1 Canonical script source
+### 18.1 Canonical script sources
 
 Because this repo is both the Pulse source repo and a self-hosted testbed, script duplication must be controlled.
 
-Rule:
+Rules:
 
-- `skills/pulse/scripts/runtime/` is the canonical source for runtime and workgraph scripts
-- `skills/pulse/scripts/lib/` is the canonical source for shared router helpers
-- `skills/pulse/commands/<command>/scripts/` is the canonical source for command-specific helpers and assets
+- `runtime/pulse-work/` is the canonical source for runtime and workgraph scripts
+- `skills/workflow/scripts/lib/` is the canonical source for shared workflow router helpers
+- `skills/workflow/commands/<command>/scripts/` is the canonical source for workflow-command-specific helpers and assets
+- standalone public utility scripts stay under their own skill directories unless the runtime must invoke them directly
 - `.pulse/scripts/` is the installed mirror in a self-hosted or downstream repo for runtime-facing executables and helpers
-- command-local scripts do not need a second mirror under `.pulse/scripts/` unless the repo-local runtime must invoke them directly
-- if this repo keeps a checked-in `.pulse/scripts/` mirror for dogfooding, tests must ensure it stays synced from the canonical source
+- command-local workflow scripts do not need a second mirror under `.pulse/scripts/` unless the repo-local runtime must invoke them directly
+- if this repo keeps a checked-in `.pulse/scripts/` mirror for dogfooding, tests must ensure it stays synced from the canonical runtime source
 
-### 18.2 `/pulse onboard` authority
+### 18.2 `pulse:workflow onboard` authority
 
-`/pulse onboard` replaces the combined authority previously split across `preflight` and `using-pulse`.
+`pulse:workflow onboard` replaces the combined authority previously split across `preflight` and `using-pulse`.
 
 It is responsible for bootstrap, readiness checks, and installing the local Pulse runtime surface.
 
 ### 18.3 Onboarding responsibilities
 
-`skills/pulse/commands/onboard/scripts/onboard_pulse.mjs` must:
+`skills/workflow/commands/onboard/scripts/onboard_pulse.mjs` must:
 
 - create the v2 directory structure under `.pulse/`
 - install `pulse-work` and helper scripts under `.pulse/scripts/`
@@ -1407,7 +1442,7 @@ Pulse v2 implementation must rewire the public and internal contracts that curre
 
 ### 19.1 Required updates
 
-These surfaces must be updated to reference `/pulse`, `pulse-work`, `.pulse/workgraph/`, and `.pulse/runtime/` instead of legacy public skills, `br`, `bv`, and `.beads/`:
+These surfaces must be updated to reference `pulse:workflow`, standalone utility skills, `pulse-work`, `.pulse/workgraph/`, and `.pulse/runtime/` instead of legacy workflow skills, `br`, `bv`, and `.beads/`:
 
 - `AGENTS.md`
 - `AGENTS.template.md`
@@ -1429,20 +1464,20 @@ Current behavior should map as follows:
 
 | Legacy | Pulse v2 replacement |
 | --- | --- |
-| `pulse:preflight` | `/pulse onboard` |
-| `pulse:using-pulse` | `/pulse onboard` |
-| `pulse:exploring` | `/pulse explore` |
-| `pulse:planning` | `/pulse plan` |
-| `pulse:validating` | `/pulse validate` |
-| `pulse:swarming` | `/pulse swarm` |
-| `pulse:executing` | `/pulse execute` |
-| `pulse:reviewing` | `/pulse review` |
-| `pulse:compounding` | `/pulse compound` |
-| `pulse:brainstorming` | `/pulse brainstorm` |
-| `pulse:architecture-rescue` | `/pulse rescue` |
-| `pulse:systematic-debug-fix` | `/pulse systematic-debug` |
-| `pulse:dev-note` | `/pulse note` |
-| `pulse:dev-note-distil` | `/pulse note-distill` |
+| `pulse:preflight` | `pulse:workflow onboard` |
+| `pulse:using-pulse` | `pulse:workflow onboard` |
+| `pulse:exploring` | `pulse:workflow explore` |
+| `pulse:planning` | `pulse:workflow plan` |
+| `pulse:validating` | `pulse:workflow validate` |
+| `pulse:swarming` | `pulse:workflow swarm` |
+| `pulse:executing` | `pulse:workflow execute` |
+| `pulse:reviewing` | `pulse:workflow review` |
+| `pulse:compounding` | `pulse:workflow compound` |
+| `pulse:brainstorming` | `pulse:workflow brainstorm` |
+| `pulse:architecture-rescue` | `pulse:architecture-rescue` |
+| `pulse:systematic-debug-fix` | `pulse:systematic-debug-fix` |
+| `pulse:dev-note` | `pulse:dev-note` |
+| `pulse:dev-note-distil` | `pulse:dev-note-distil` |
 | `pulse:dream` | removed |
 | `br ready` | `pulse-work ready` |
 | `br show <id>` | `pulse-work show <id>` |
@@ -1453,9 +1488,15 @@ Current behavior should map as follows:
 
 ### 19.3 Manifest and metadata rules
 
-Plugin manifests and marketplace metadata must describe Pulse as a single-skill router package, not as a bundle of workflow skills or standalone utilities accidentally exposed as public surface.
+Plugin manifests and marketplace metadata must describe Pulse as:
 
-Structured command metadata must live in `skills/pulse/scripts/command-metadata.json`, not in a second repo-root catalog file.
+- one workflow router skill: `pulse:workflow`
+- a small set of standalone public utility skills
+- a repo-local runtime CLI: `pulse-work`
+
+They must **not** describe Pulse as a bundle of many workflow-phase skills, blur the boundary between the workflow router and standalone skills, or keep removed legacy utilities in the shipped public surface.
+
+Structured workflow command metadata must live in `skills/workflow/scripts/command-metadata.json`, not in a second repo-root catalog file.
 
 ---
 
@@ -1469,26 +1510,27 @@ Deliver:
 
 - updated `PLAN.md` and `SPEC.md`
 - plugin-vs-target-repo boundary clarified, especially around `.pulse/` and `.gitignore`
-- plugin manifests aligned with single-skill architecture
-- explicit removal of `skill-catalog.json` from the target design, with the file treated as legacy-only until Phase 4 cleanup
-- explicit classification of residual `skills/` directories so maintainer-only utilities are not left as accidental public surface
+- plugin manifests aligned with workflow-router + standalone-utility architecture
+- explicit removal of `skill-catalog.json` from the target design
+- explicit classification of workflow router, standalone public utilities, and removed legacy utilities
+- explicit lock that runtime source lives under `runtime/pulse-work/`
 
-### Phase 1 — router skill `/pulse`
+### Phase 1 — workflow router `pulse:workflow`
 
 Deliver:
 
-- `skills/pulse/SKILL.md`
-- command modules under `skills/pulse/commands/<command>/`
-- shared references under `skills/pulse/references/shared/`
-- `skills/pulse/references/HARNESS.md`
-- `skills/pulse/templates/HARNESS_BACKLOG.md`
-- `skills/pulse/scripts/command-metadata.json`
+- `skills/workflow/SKILL.md`
+- workflow command modules under `skills/workflow/commands/<command>/`
+- shared references under `skills/workflow/references/shared/`
+- `skills/workflow/references/HARNESS.md`
+- `skills/workflow/templates/HARNESS_BACKLOG.md`
+- `skills/workflow/scripts/command-metadata.json`
 
 ### Phase 2 — `pulse-work` engine v1
 
 Deliver:
 
-- `pulse-work` CLI implementation under `skills/pulse/scripts/runtime/`
+- `pulse-work` CLI implementation under `runtime/pulse-work/`
 - `.pulse/workgraph/items.jsonl`
 - `.pulse/workgraph/schema.json`
 - lock handling
@@ -1501,28 +1543,31 @@ Deliver:
 Deliver:
 
 - `.pulse/runtime/*` canonical paths
-- onboarding changes under `skills/pulse/commands/onboard/scripts/onboard_pulse.mjs`
-- `pulse_state`, `pulse_status`, `pulse_session_context`, and `pulse_reservations` moved under `skills/pulse/scripts/runtime/`
+- onboarding changes under `skills/workflow/commands/onboard/scripts/onboard_pulse.mjs`
+- `pulse_state`, `pulse_status`, `pulse_session_context`, and `pulse_reservations` moved under `runtime/pulse-work/`
 - removal of `current-feature.json` and `runtime-snapshot.json`
-- `/pulse onboard` replacing the old bootstrap authority
+- `pulse:workflow onboard` replacing the old bootstrap authority
 
-### Phase 4 — collapse legacy skill surface
+### Phase 4 — collapse legacy workflow skill surface
 
 Deliver:
 
-- migration of legacy skill content into `skills/pulse/commands/`
-- removal of legacy packaged public skills
+- migration of legacy workflow skill content into `skills/workflow/commands/`
+- update of standalone utility skills so they remain outside the workflow router
+- removal of legacy packaged workflow skills
 - removal of `dream`
 - removal of `skill-catalog.json`
-- rewrite of public docs to describe one router skill with subcommands
+- retention of `bootstrap-project-context`, `prompt-leverage`, and `gitnexus` as standalone public skills
+- removal of `refresh-project-docs` and `writing-pulse-skills` from the packaged public surface
 
-### Phase 5 — hooks, evals, and tests
+### Phase 5 — docs, hooks, evals, and tests
 
 Deliver:
 
 - removal of `bv`-specific hook assumptions
-- session-start and readiness language updated to `/pulse onboard`
-- eval corpus updated to `/pulse <command>`
+- session-start and readiness language updated to `pulse:workflow onboard`
+- eval corpus updated to `pulse:workflow <command>` for workflow paths
+- standalone-utility docs/tests updated to their direct invocation surfaces
 - router, runtime, workgraph, and harness backlog materialization tests
 
 ### Phase 6 — migration docs, cleanup, and final audit
@@ -1558,24 +1603,38 @@ Automation can follow after the mapping rules are stable.
 
 ## 21. Testing strategy
 
-Pulse v2 must ship with tests for both the standalone workgraph engine and the router / onboarding integration.
+Pulse v2 must ship with tests for both the standalone workgraph engine and the public-surface split.
 
-### 21.1 Router / command-surface coverage
+### 21.1 Workflow router coverage
 
-Required router tests:
+Required workflow router tests:
 
-- `/pulse` with no args renders the command menu correctly
-- `/pulse onboard` routes to the correct command reference
-- `/pulse brainstorm` routes correctly
-- `/pulse plan` routes correctly
-- `/pulse swarm` routes correctly
-- `/pulse rescue` routes correctly
-- `/pulse systematic-debug` routes correctly
-- `/pulse note` routes correctly
-- `/pulse note-distill` routes correctly
+- `pulse:workflow` with no args renders the workflow command menu correctly
+- `pulse:workflow onboard` routes to the correct command reference
+- `pulse:workflow explore` routes correctly
+- `pulse:workflow brainstorm` routes correctly
+- `pulse:workflow plan` routes correctly
+- `pulse:workflow validate` routes correctly
+- `pulse:workflow execute` routes correctly
+- `pulse:workflow swarm` routes correctly
+- `pulse:workflow review` routes correctly
+- `pulse:workflow compound` routes correctly
 - unknown first token falls back to supported help behavior
 
-### 21.2 Unit coverage
+### 21.2 Standalone utility coverage
+
+Required public-surface tests:
+
+- `pulse:architecture-rescue` remains packaged as a standalone skill, not a workflow command
+- `pulse:systematic-debug-fix` remains packaged as a standalone skill, not a workflow command
+- `pulse:dev-note` remains packaged as a standalone skill, not a workflow command
+- `pulse:dev-note-distil` remains packaged as a standalone skill, not a workflow command
+- `pulse:bootstrap-project-context` remains packaged as a standalone skill, not a workflow command
+- `pulse:prompt-leverage` remains packaged as a standalone skill, not a workflow command
+- `pulse:gitnexus` remains packaged as a standalone skill, not a workflow command
+- `refresh-project-docs` and `writing-pulse-skills` are not packaged as public skills
+
+### 21.3 Unit coverage
 
 Required unit tests:
 
@@ -1590,11 +1649,11 @@ Required unit tests:
 - unique prefix resolution
 - lock-file parsing and stale-lock detection
 
-### 21.3 Integration coverage
+### 21.4 Integration coverage
 
 Required integration tests:
 
-- bootstrap repo with `/pulse onboard`
+- bootstrap repo with `pulse:workflow onboard`
 - onboarding creates `.pulse/runtime/*`, `.pulse/workgraph/*`, and `.pulse/harness/HARNESS_BACKLOG.md`
 - create epic / story / task / bug
 - task / bug creation only under a story
@@ -1608,7 +1667,7 @@ Required integration tests:
 - doctor rebuilds views without assuming this plugin repo rewrites `.gitignore`
 - `pulse_status` works in a repo with only v2 artifacts and no `history/` or `.beads/`
 
-### 21.4 Golden fixtures
+### 21.5 Golden fixtures
 
 Required golden fixtures:
 
@@ -1619,7 +1678,7 @@ Required golden fixtures:
 - `graph.json`
 - generated markdown templates
 
-### 21.5 Repo audit coverage
+### 21.6 Repo audit coverage
 
 Final audits must grep for and fail on unexpected active references to:
 
@@ -1643,10 +1702,10 @@ Pulse v2 v1 is acceptable only when all of the following are true.
 
 ### 22.1 Public surface
 
-- the only packaged public workflow skill is `/pulse`
-- all supported capabilities route through `/pulse <command>`
-- `preflight` and `dream` are not shipped as packaged public surfaces
-- maintainer-only utilities do not remain packaged as accidental public surface
+- the only packaged workflow router skill is `pulse:workflow`
+- all supported workflow phases route through `pulse:workflow <command>`
+- `architecture-rescue`, `systematic-debug-fix`, `dev-note`, `dev-note-distil`, `bootstrap-project-context`, `prompt-leverage`, and `gitnexus` remain standalone public utility skills outside the workflow router
+- `preflight`, `dream`, `refresh-project-docs`, and `writing-pulse-skills` are not shipped as packaged public surfaces
 - `skill-catalog.json` does not exist
 
 ### 22.2 Core workgraph
@@ -1673,8 +1732,8 @@ Pulse v2 v1 is acceptable only when all of the following are true.
 
 ### 22.5 Harness source / runtime split
 
-- `HARNESS.md` lives at `skills/pulse/references/HARNESS.md`
-- `HARNESS_BACKLOG.md` lives at `skills/pulse/templates/HARNESS_BACKLOG.md`
+- `HARNESS.md` lives at `skills/workflow/references/HARNESS.md`
+- `HARNESS_BACKLOG.md` lives at `skills/workflow/templates/HARNESS_BACKLOG.md`
 - onboarding materializes `.pulse/harness/HARNESS_BACKLOG.md`
 - the runtime does not rely on a second canonical `.pulse/harness/HARNESS.md`
 
@@ -1692,9 +1751,9 @@ Pulse v2 v1 is acceptable only when all of the following are true.
 
 ### 22.8 Repo self-hosting
 
-- canonical runtime source scripts live in `skills/pulse/scripts/runtime/`
-- command-specific helper scripts live in `skills/pulse/commands/<command>/scripts/`
-- installed runtime scripts under `.pulse/scripts/` have a defined source-of-truth relationship to the canonical source
+- canonical runtime source scripts live in `runtime/pulse-work/`
+- workflow command-specific helper scripts live in `skills/workflow/commands/<command>/scripts/`
+- installed runtime scripts under `.pulse/scripts/` have a defined source-of-truth relationship to the canonical runtime source
 - onboarding tests cover the self-hosted v2 installed layout
 
 ---
@@ -1703,16 +1762,17 @@ Pulse v2 v1 is acceptable only when all of the following are true.
 
 Recommended implementation order:
 
-1. update `SPEC.md` and manifests for the single-skill architecture, and clarify plugin-repo vs target-repo scope
-2. create `skills/pulse/SKILL.md`, command module directories, shared references, and `command-metadata.json`
-3. implement `pulse-work` core create / show / list / ready / update / close / reopen / dep / doctor flow under `skills/pulse/scripts/runtime/`
+1. update `SPEC.md` and manifests for the workflow-router + standalone-utility architecture, and clarify plugin-repo vs target-repo scope
+2. create `skills/workflow/SKILL.md`, workflow command module directories, shared references, and `command-metadata.json`
+3. implement `pulse-work` core create / show / list / ready / update / close / reopen / dep / doctor flow under `runtime/pulse-work/`
 4. implement lock handling, atomic writes, and view rebuilds
 5. implement `works/` scaffolding and markdown templates
 6. move runtime state to `.pulse/runtime/` and collapse duplicated runtime mirrors
-7. update onboarding and readiness into `/pulse onboard`
-8. rewire docs, hooks, examples, manifests, and evals away from the legacy multi-skill surface
-9. write the manual migration blueprint
-10. add router, golden, unit, and integration tests, then remove remaining legacy assumptions
+7. update onboarding and readiness into `pulse:workflow onboard`
+8. update standalone utility surfaces so they remain separate from the workflow router, with `bootstrap-project-context`, `prompt-leverage`, and `gitnexus` retained while `refresh-project-docs` and `writing-pulse-skills` are removed
+9. rewire docs, hooks, examples, manifests, and evals away from the legacy workflow-skill surface
+10. write the manual migration blueprint
+11. add router, golden, unit, and integration tests, then remove remaining legacy assumptions
 
 ---
 
@@ -1720,11 +1780,13 @@ Recommended implementation order:
 
 This spec locks these implementation decisions for Pulse v2 v1:
 
-- `/pulse` is the only packaged public skill surface
+- `pulse:workflow` is the only packaged workflow router surface
+- `pulse:architecture-rescue`, `pulse:systematic-debug-fix`, `pulse:dev-note`, `pulse:dev-note-distil`, `pulse:bootstrap-project-context`, `pulse:prompt-leverage`, and `pulse:gitnexus` remain standalone public utility skills
 - `pulse-work` is the runtime CLI name
-- `skills/pulse/SKILL.md` is the router source of truth
-- command-owned behavior lives under `skills/pulse/commands/<command>/`
-- `skills/pulse/scripts/command-metadata.json` is the structured command metadata source of truth
+- `skills/workflow/SKILL.md` is the workflow router source of truth
+- workflow-command behavior lives under `skills/workflow/commands/<command>/`
+- `skills/workflow/scripts/command-metadata.json` is the structured workflow command metadata source of truth
+- canonical runtime source scripts live under `runtime/pulse-work/`
 - `items.jsonl` is the only canonical writable metadata source
 - generated views are derived and local-only; in this plugin repo they remain under ignored `.pulse/` state
 - `work item` is the human-facing generic noun
@@ -1736,10 +1798,11 @@ This spec locks these implementation decisions for Pulse v2 v1:
 - task / bug close requires verification evidence
 - runtime state moves under `.pulse/runtime/`
 - `current-feature.json` and `runtime-snapshot.json` are removed as persisted artifacts
-- `HARNESS.md` is a skill reference source, not a runtime template
+- `HARNESS.md` is a workflow reference source, not a runtime template
 - `HARNESS_BACKLOG.md` is a template source materialized into `.pulse/harness/`
 - `preflight`, `dream`, and `skill-catalog.json` are removed from the target architecture
-- `bootstrap-project-context`, `prompt-leverage`, `refresh-project-docs`, `writing-pulse-skills`, and `gitnexus` are maintainer-only utilities and must not survive as accidental public workflow surface
+- `bootstrap-project-context`, `prompt-leverage`, and `gitnexus` remain standalone public skills outside the workflow router
+- `refresh-project-docs` and `writing-pulse-skills` are removed from the target packaged surface
 - Pulse v2 remains zero-service and repo-local
 
 This document is the baseline for implementation work.

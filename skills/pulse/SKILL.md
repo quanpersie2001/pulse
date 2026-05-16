@@ -36,8 +36,8 @@ Unknown input should not trigger hidden dispatch behavior.
 | Command | Category | Use when... | Reference | Usually next |
 | --- | --- | --- | --- | --- |
 | `onboard` | Bootstrap | the repo needs bootstrap, readiness, repair, or migration posture | [commands/onboard/command.md](commands/onboard/command.md) | `explore`, `brainstorm`, `plan` |
-| `explore` | Discovery | the problem exists but the codebase or current context still needs investigation | [commands/explore/command.md](commands/explore/command.md) | `brainstorm`, `plan` |
-| `brainstorm` | Design | the user goal is real but the feature shape is still open | [commands/brainstorm/command.md](commands/brainstorm/command.md) | `plan` |
+| `explore` | Discovery | the design direction is chosen but repo-grounded decisions and constraints still need investigation | [commands/explore/command.md](commands/explore/command.md) | `plan` |
+| `brainstorm` | Design | the user goal is real but the feature shape is still open | [commands/brainstorm/command.md](commands/brainstorm/command.md) | `explore` |
 | `plan` | Planning | explored context must become a concrete implementation shape | [commands/plan/command.md](commands/plan/command.md) | `validate` |
 | `validate` | Readiness | the proposed work needs proof before implementation starts | [commands/validate/command.md](commands/validate/command.md) | `swarm`, `execute`, `plan` |
 | `swarm` | Execution | validated work should be executed by multiple agents with explicit coordination | [commands/swarm/command.md](commands/swarm/command.md) | `execute`, `review` |

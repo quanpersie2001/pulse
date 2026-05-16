@@ -1,58 +1,187 @@
 # `/pulse onboard`
 
-Canonical readiness authority replacing legacy `preflight` + `using-pulse` entry flow.
+Readiness and bootstrap authority for Pulse v2.
 
-## Intent
+This command owns onboarding, runtime health checks, and mode recommendation before any downstream `/pulse` phase runs.
 
-Use this command to bootstrap, inspect, or repair Pulse readiness for the current repo.
-It is the authority for readiness posture in the single-router model.
+## Mission
 
-## Inputs expected
+Produce one trustworthy readiness outcome (`PASS`, `DEGRADED`, `FAIL`), persist it under `.pulse/runtime/`, and hand off to the right next command without hidden assumptions.
 
-Bring whichever of these are available:
+## When to run
 
-- the repo root or current checkout
-- the user's requested mode if they have one
-- any suspicious runtime symptoms or stale state
-- any legacy artifacts already present in the repo
+Run `/pulse onboard` when:
 
-Supporting local references:
+- starting a Pulse session in a repo
+- resuming after environment/tool changes
+- runtime artifacts are missing or stale
+- any command reports readiness uncertainty
+- execution posture (`swarm` vs `single-worker`) must be revalidated
+
+## Inputs
+
+- repo root
+- requested intent when known: `full-pipeline | planning-only | execution-only | resume`
+- explicit user requirement for swarm mode (if any)
+- known failures since last successful onboard
+
+## Required runtime artifacts
+
+`/pulse onboard` owns these canonical files:
+
+- `.pulse/runtime/tooling-status.json`
+- `.pulse/runtime/state.json`
+- `.pulse/runtime/STATE.md`
+- `.pulse/runtime/handoffs/manifest.json`
+- `.pulse/runtime/reservations.json`
+
+It also verifies workgraph presence for runtime integrity:
+
+- `.pulse/workgraph/items.jsonl`
+- `.pulse/workgraph/schema.json`
+
+## Outcome contract
+
+Exactly one result:
+
+- `PASS` — required baseline is healthy for requested mode
+- `DEGRADED` — baseline is healthy but mode/capability is downgraded
+- `FAIL` — required prerequisites are unresolved; stop workflow routing
+
+Downstream commands consume this result. They must not rerun onboarding as a local workaround.
+
+## Phase order (mandatory)
+
+### Phase 1 — Establish canonical runtime plane
+
+Ensure `.pulse/runtime/`, `.pulse/workgraph/`, and `.pulse/harness/` structures exist.
+
+Ensure these files exist or are initialized safely:
+
+- `.pulse/runtime/STATE.md`
+- `.pulse/runtime/state.json`
+- `.pulse/runtime/handoffs/manifest.json`
+- `.pulse/runtime/reservations.json`
+- `.pulse/runtime/tooling-status.json` (rewritten later in this run)
+
+If handoff entries exist, surface them as advisory context only. Do not auto-resume.
+
+### Phase 2 — Onboarding status first; apply only with explicit consent
+
+1. Confirm Node runtime is callable and supported for Pulse scripts.
+2. Run onboarding status check from `skills/pulse/commands/onboard/scripts/onboard_pulse.mjs`.
+3. If remediation is required:
+   - summarize what will change
+   - ask explicit approval before mutation
+   - apply only after approval
+4. If user declines required remediation, mark affected modes blocked.
+
+Stopping rule:
+
+- unresolved onboarding/remediation needs => `FAIL`
+
+### Phase 3 — Validate required baseline commands and repo posture
+
+Validate minimum required runtime foundations:
+
+- git availability + valid git repository
+- node availability
+- repo-local Pulse runtime helper availability
+
+Treat missing required dependencies as blockers.
+
+### Phase 4 — Validate execution posture
+
+Decide execution recommendation:
+
+- `swarm` when runtime supports coordinated multi-agent execution
+- `single-worker` when swarm capability is unavailable but execution is still safe
+- `planning-only` when execution should not start yet
+- `blocked` when prerequisites are unresolved
+
+If the user explicitly requires swarm and swarm is unavailable, stop for explicit downgrade approval.
+
+### Phase 5 — Detect legacy drift as migration warnings
+
+Legacy artifacts are warnings unless they create conflicting active truth:
+
+- `.beads/`
+- `history/`
+- references to `br`, `bv`, `preflight`, `using-pulse`, or `dream`
+
+Do not treat legacy presence as active runtime authority.
+
+### Phase 6 — Persist normalized status and mirrors
+
+Write authoritative machine status to `.pulse/runtime/tooling-status.json`:
+
+```json
+{
+  "timestamp": "<ISO-8601>",
+  "project_root": "<absolute path>",
+  "requested_mode": "full-pipeline",
+  "recommended_mode": "single-worker",
+  "status": "pass|degraded|fail",
+  "onboarding": "PASS|NEEDS_SETUP|NEEDS_REMEDIATION",
+  "tools": {},
+  "blockers": [],
+  "degradations": [],
+  "warnings": [],
+  "next_command": "explore"
+}
+```
+
+Refresh routing mirror in `.pulse/runtime/state.json`:
+
+```json
+{
+  "phase": "onboard",
+  "status": "PASS|DEGRADED|FAIL",
+  "requested_mode": "<mode>",
+  "recommended_mode": "<mode>",
+  "tooling_status": ".pulse/runtime/tooling-status.json"
+}
+```
+
+Refresh `.pulse/runtime/STATE.md` with matching values.
+
+### Phase 7 — Present actionable result
+
+Return concise operator output:
+
+- status
+- requested/recommended mode
+- blockers
+- degradations
+- migration warnings
+- exact next command
+
+## Stopping rules
+
+Stop immediately when:
+
+- node/runtime prerequisites are missing
+- onboarding remediation is required but not completed
+- required baseline checks fail
+- user-required swarm cannot be honored and downgrade is not approved
+
+## Guardrails
+
+- never declare `PASS` without real checks
+- never apply onboarding changes silently
+- never continue routing after `FAIL`
+- keep command-vs-MCP gaps explicit
+- keep warnings separate from blockers
+
+## Handoff guidance
+
+- `PASS` -> route to `/pulse explore` or `/pulse brainstorm` based on request clarity
+- `DEGRADED` -> proceed only inside recommended downgraded mode
+- `FAIL` -> stop; remediate; rerun `/pulse onboard`
+
+## References
 
 - `references/readiness.md`
 - `references/migration-warnings.md`
-- `../../references/HARNESS.md`
-- `../../references/shared/planes-and-artifacts.md`
-
-## Primary outputs/artifacts
-
-Typical outputs are:
-
-- a readiness brief
-- recommended operating mode
-- migration warnings for legacy assumptions or artifacts
-- a next-command recommendation
-
-The command owns onboarding posture directly; local helpers are implementation detail and not the contract surface.
-
-## Interaction model
-
-`onboard` may inspect repo state, read runtime artifacts, and call bootstrap helpers.
-
-The command is not a thin wrapper. It is the operational authority that reads and maintains the canonical runtime contract under `.pulse/runtime/`.
-
-## Approval expectations
-
-No human gate is required just to inspect readiness.
-Ask for confirmation before applying repo mutations or repair actions that change local files.
-
-## Next command recommendations
-
-- `explore` when the repo is ready and the next need is context discovery
-- `brainstorm` when the feature shape is still vague
-- `plan` when context is already locked and the next move is execution shaping
-
-## Failure / escalation behavior
-
-- if core prerequisites are missing, stop with explicit remediation guidance
-- if the repo still depends on legacy artifacts, surface them as migration warnings instead of hiding them
-- if readiness is ambiguous, stay in `onboard` until the state is trustworthy enough to route onward
+- `../../references/shared/workflow-contract.md`
+- `../../references/shared/handoff-and-resume.md`
