@@ -59,5 +59,5 @@ Close should require a non-empty verification artifact with at least:
 ## Routing implications
 
 - If validation proof is insufficient, route back to `plan`.
-- If execution fails without clear cause, route to `systematic-debug`.
-- If review finds structural mismatch, route to `rescue` or `plan` depending on blast radius.
+- If execution fails without clear cause, route to `pulse:systematic-debug-fix`.
+- If review finds structural mismatch, route to `pulse:architecture-rescue` or `plan` depending on blast radius.

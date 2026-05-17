@@ -4,12 +4,12 @@ If onboarding/readiness is missing, stale, or blocked (check `.pulse/runtime/too
 
 Compounding turns completed Pulse work into reusable memory for future planning and execution.
 
-Compounding is the canonical post-cycle, machine-readable learning pass for completed Pulse work. Use `note` or `note-distill` for in-flight capture; use `compound` after outcomes are known. Do not turn `compound` into a generic runtime-consolidation route just because the legacy surface was collapsed into `pulse:workflow`.
+Compounding is the canonical post-cycle, machine-readable learning pass for completed Pulse work. Use `pulse:dev-note` or `pulse:dev-note-distil` for in-flight capture; use `compound` after outcomes are known. Do not turn `compound` into a generic runtime-consolidation route.
 
 ## When to Use
 
 - after `pulse:workflow review` completes and the outcome is known
-- after execution, rescue, or systematic-debug work reveals non-obvious reusable lessons
+- after execution, `pulse:architecture-rescue`, or `pulse:systematic-debug-fix` work reveals non-obvious reusable lessons
 - after abandoned or constrained work that still produced durable learning
 
 Skip only when no durable or reusable learning emerged.

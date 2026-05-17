@@ -753,10 +753,9 @@ function runStaticChecks(results) {
   const expectedPackagedSkills = [
     "./skills/workflow",
     "./skills/architecture-rescue",
-    "./skills/systematic-debug-fix",
+    "./skills/systematic-debug",
     "./skills/dev-note",
     "./skills/dev-note-distil",
-    "./skills/bootstrap-project-context",
     "./skills/prompt-leverage",
     "./skills/gitnexus",
   ];

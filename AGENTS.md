@@ -70,7 +70,6 @@ pulse:workflow onboard → pulse:workflow explore → pulse:workflow plan → pu
 - `systematic-debug-fix`
 - `dev-note`
 - `dev-note-distil`
-- `bootstrap-project-context`
 - `prompt-leverage`
 - `gitnexus`
 

@@ -39,7 +39,7 @@ Hierarchy and dependency are separate concepts.
 
 - an `EPIC` is the top-level capability boundary
 - a `STORY` belongs to an epic
-- a `TASK` or `BUG` belongs to an epic or story
+- a `TASK` or `BUG` belongs to a story
 - dependencies may exist across epic boundaries
 
 ## Ready semantics

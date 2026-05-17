@@ -24,12 +24,12 @@ pulse:workflow onboard
   -> pulse:workflow compound
 ```
 
-Intervention commands may be entered when needed:
+When execution gets stuck or needs deeper tactical support, reroute to standalone utilities instead of adding router subcommands:
 
-- `pulse:workflow rescue`
-- `pulse:workflow systematic-debug`
-- `pulse:workflow note`
-- `pulse:workflow note-distill`
+- `pulse:architecture-rescue`
+- `pulse:systematic-debug-fix`
+- `pulse:dev-note`
+- `pulse:dev-note-distil`
 
 ## Command responsibilities
 
@@ -44,10 +44,6 @@ Intervention commands may be entered when needed:
 | `execute` | implement a validated work item |
 | `review` | evaluate completed changes and enforce the final quality gate |
 | `compound` | capture reusable learning after the cycle |
-| `rescue` | recover from wrong-shape or dead-end execution paths |
-| `systematic-debug` | investigate bugs with explicit evidence and hypothesis narrowing |
-| `note` | capture tactical decisions and breadcrumbs |
-| `note-distill` | synthesize raw notes into reusable guidance |
 
 ## Gated progression
 
@@ -87,10 +83,10 @@ The runtime is mechanical and state-oriented.
 | `executing` | `execute` |
 | `reviewing` | `review` |
 | `compounding` | `compound` |
-| `architecture-rescue` | `rescue` |
-| `systematic-debug-fix` | `systematic-debug` |
-| `dev-note` | `note` |
-| `dev-note-distil` | `note-distill` |
+| `architecture-rescue` | standalone utility (outside `pulse:workflow`) |
+| `systematic-debug-fix` | standalone utility (outside `pulse:workflow`) |
+| `dev-note` | standalone utility (outside `pulse:workflow`) |
+| `dev-note-distil` | standalone utility (outside `pulse:workflow`) |
 | `dream` | removed |
 
 ## Failure posture

@@ -347,10 +347,6 @@ function normalizeNextCommandSurface(value) {
     "execute",
     "review",
     "compound",
-    "rescue",
-    "systematic-debug",
-    "note",
-    "note-distill",
   ]);
 
   if (validCommands.has(normalized)) {

@@ -73,7 +73,7 @@ Scout output is context, not a gate bypass. Keep gates and downstream skill cont
 
 Project docs are part of the scout contract:
 - if `.pulse/project-docs.json` is mapped, read the mapped repo-level docs before feature history when terminology or architecture boundaries matter
-- if project docs are only detected, surface that and consider `pulse:bootstrap-project-context` before deeper planning
+- if project docs are only detected, surface that and run `pulse:workflow onboard` before deeper planning
 - if project docs are missing, do not invent a repo glossary silently; keep the absence explicit
 
 ### Checkpoint and State Posture
@@ -139,7 +139,7 @@ Use this routing cookbook to route into the next specialist skill. It is a maint
 | 13 | `pulse:dream` | User asks to consolidate runtime artifacts into machine-readable memory |
 | 14 | `pulse:writing-pulse-skills` | Editing Pulse skills |
 | 15 | `pulse:architecture-rescue` | Architecture cleanup report is requested |
-| 16 | `pulse:bootstrap-project-context` | Project-doc bootstrap or glossary setup is requested |
+| 16 | `pulse:workflow onboard` | Project-doc bootstrap or glossary setup is requested |
 
 ## Routing Logic
 
@@ -169,7 +169,7 @@ If a request introduces user-visible capability, workflow, subsystem, API surfac
 | "Improve Pulse itself" | `pulse:writing-pulse-skills` |
 | "Architecture rescue" asks | `pulse:architecture-rescue` |
 | Architecture/discovery asks | `pulse:gitnexus` |
-| Repo/project-doc bootstrap or glossary setup | `pulse:bootstrap-project-context` |
+| Repo/project-doc bootstrap or glossary setup | `pulse:workflow onboard` |
 | Blocked/failing agent flow | `pulse:systematic-debug-fix` |
 | `/go` / full pipeline | Go Mode (`references/go-mode-pipeline.md`) |
 | Resume interrupted work | Resume logic from handoff manifest |

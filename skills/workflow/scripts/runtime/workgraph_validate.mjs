@@ -214,8 +214,8 @@ function validateHierarchy(item, recordsById, issues) {
     issues.push(createIssue("missing_parent", `Item ${item.id} references missing parent ${item.parent_id}.`, { item_id: item.id }));
   } else if (item.kind === "STORY" && parent.kind !== "EPIC") {
     issues.push(createIssue("invalid_story_parent", `Story ${item.id} must belong to an epic.`, { item_id: item.id }));
-  } else if ((item.kind === "TASK" || item.kind === "BUG") && !["EPIC", "STORY"].includes(parent.kind)) {
-    issues.push(createIssue("invalid_item_parent", `Item ${item.id} must belong to an epic or story.`, { item_id: item.id }));
+  } else if ((item.kind === "TASK" || item.kind === "BUG") && parent.kind !== "STORY") {
+    issues.push(createIssue("invalid_item_parent", `Item ${item.id} must belong to a story.`, { item_id: item.id }));
   }
 
   if (!epic) {

@@ -239,8 +239,8 @@ async function handleCreate(repoRoot, parsed) {
       if (kind === "STORY" && parent.kind !== "EPIC") {
         throw new Error("STORY items must be created under an EPIC.");
       }
-      if ((kind === "TASK" || kind === "BUG") && !["EPIC", "STORY"].includes(parent.kind)) {
-        throw new Error(`${kind} items must be created under an EPIC or STORY.`);
+      if ((kind === "TASK" || kind === "BUG") && parent.kind !== "STORY") {
+        throw new Error(`${kind} items must be created under a STORY.`);
       }
       epicId = parent.kind === "EPIC" ? parent.id : parent.epic_id;
     }

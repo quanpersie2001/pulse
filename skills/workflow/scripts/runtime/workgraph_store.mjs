@@ -74,8 +74,8 @@ export const WORKGRAPH_SCHEMA = {
     hierarchy: {
       EPIC: { parent_id: null, epic_id: "self" },
       STORY: { parent_kind: ["EPIC"], epic_id: "ancestor_epic" },
-      TASK: { parent_kind: ["EPIC", "STORY"], epic_id: "ancestor_epic" },
-      BUG: { parent_kind: ["EPIC", "STORY"], epic_id: "ancestor_epic" },
+      TASK: { parent_kind: ["STORY"], epic_id: "ancestor_epic" },
+      BUG: { parent_kind: ["STORY"], epic_id: "ancestor_epic" },
     },
     lifecycle: {
       blocked_reason_required_for: ["BLOCKED"],

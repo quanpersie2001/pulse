@@ -66,10 +66,9 @@ skills: list[tuple[str, Path]] = []
 packaged_skill_dirs = [
     "workflow",
     "architecture-rescue",
-    "systematic-debug-fix",
+    "systematic-debug",
     "dev-note",
     "dev-note-distil",
-    "bootstrap-project-context",
     "prompt-leverage",
     "gitnexus",
 ]
