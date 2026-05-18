@@ -8,7 +8,7 @@ Use this guide when editing router commands, runtime scripts, manifests, or publ
 These paths matter most:
 
 - [`skills/workflow/`](skills/workflow) is the canonical source of public workflow behavior
-- [`skills/workflow/commands/`](skills/workflow/commands) owns command-level behavior
+- [`skills/workflow/references/`](skills/workflow/references) owns command-level behavior docs
 - [`skills/workflow/scripts/runtime/`](skills/workflow/scripts/runtime) owns canonical runtime CLI logic
 - [`.codex-plugin/plugin.json`](.codex-plugin/plugin.json) is the Codex package manifest
 - [`.claude-plugin/plugin.json`](.claude-plugin/plugin.json) is the Claude plugin manifest
@@ -111,7 +111,7 @@ pulse-work create --kind TASK --title "..." --parent <ID>
 ## Adding or Changing Router Commands
 
 1. Update `skills/workflow/SKILL.md` if routing/help tables change.
-2. Update `skills/workflow/commands/<command>/command.md`.
+2. Update `skills/workflow/references/<command>/command.md`.
 3. Keep shared contracts under `skills/workflow/references/shared/`.
 4. Update public docs when contract language changes:
    - [`README.md`](README.md)

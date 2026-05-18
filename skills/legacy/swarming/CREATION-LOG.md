@@ -31,7 +31,7 @@ What to include:
 What to leave out:
 - Automatic worker replacement or forced reassignment logic
 - Runtime implementation changes outside the skill and reference artifacts
-- Any onboarding rewrite for `.pulse/onboarding.json`
+- Any onboarding rewrite for `.pulse/runtime/onboarding.json`
 
 ## Structure Decisions
 

@@ -65,7 +65,7 @@ The public workflow skill lives at `skills/workflow/SKILL.md`.
 When adding or modifying command behavior:
 
 1. Update router contract in `skills/workflow/SKILL.md` as needed.
-2. Update the command module under `skills/workflow/commands/<command>/command.md`.
+2. Update the command module under `skills/workflow/references/<command>/command.md`.
 3. Keep shared rules in `skills/workflow/references/shared/`.
 
 ## Testing

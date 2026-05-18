@@ -16,7 +16,7 @@ Skip only when no durable or reusable learning emerged.
 
 ## Runtime Contract
 
-All operational rules live in `references/runtime-appendix.md`. Treat that file as canonical for:
+All operational rules live in `runtime-appendix.md`. Treat that file as canonical for:
 
 - context sources across `works/`, `.pulse/runtime/*`, `.pulse/workgraph/*`, and verification artifacts
 - 3-stream analysis (`pattern`, `decision`, `failure`)
@@ -37,7 +37,7 @@ All operational rules live in `references/runtime-appendix.md`. Treat that file 
 
 ## References
 
-- `references/runtime-appendix.md` — canonical runtime contract
-- `references/learnings-template.md` — learnings file structure
-- `references/analysis-prompts.md` — prompts for pattern/decision/failure analysis
-- `references/corrections-and-ratchets.md` — correction and ratchet file structures
+- `runtime-appendix.md` — canonical runtime contract
+- `learnings-template.md` — learnings file structure
+- `analysis-prompts.md` — prompts for pattern/decision/failure analysis
+- `corrections-and-ratchets.md` — correction and ratchet file structures

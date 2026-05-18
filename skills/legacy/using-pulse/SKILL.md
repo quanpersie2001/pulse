@@ -111,7 +111,7 @@ Every packaged Pulse skill must make its dependency posture explicit. There are 
 Do not leave a packaged skill with undeclared dependency posture.
 
 When updating or adding packaged Pulse skills, run:
-- `node skills/using-pulse/scripts/test_onboard_pulse.mjs`
+- `node skills/legacy/using-pulse/scripts/test_onboard_pulse.mjs`
 - `bash scripts/sync-skills.sh --dry-run`
 
 ---

@@ -40,9 +40,9 @@ Rule: answer from repo evidence first; ask users only for decisions evidence can
 
 ## Command-local references
 
-- `references/gray-area-probes.md` — canonical SEE/CALL/RUN/READ/ORGANIZE probe bank
-- `references/context-template.md` — required structure for `works/**/CONTEXT.md`
-- `references/context-reviewer-prompt.md` — optional Phase 4.2 reviewer loop prompt
+- `gray-area-probes.md` — canonical SEE/CALL/RUN/READ/ORGANIZE probe bank
+- `context-template.md` — required structure for `works/**/CONTEXT.md`
+- `context-reviewer-prompt.md` — optional Phase 4.2 reviewer loop prompt
 
 ## Phase model (mandatory order)
 
@@ -73,7 +73,7 @@ Purpose: ensure probes target ambiguity that changes implementation behavior.
 ### Phase 2 — Gray-area extraction
 
 Generate 2–4 gray areas that would force planning assumptions if unresolved.
-Use domain-specific probes from `references/gray-area-probes.md`; select only those genuinely undecided for the active story.
+Use domain-specific probes from `gray-area-probes.md`; select only those genuinely undecided for the active story.
 
 A valid gray area must:
 
@@ -121,7 +121,7 @@ Write canonical story context:
 
 - `works/epics/<epic-id>-<epic-slug>/<story-id>-<story-slug>/CONTEXT.md`
 
-Populate from `references/context-template.md`.
+Populate from `context-template.md`.
 
 Required sections:
 
@@ -138,7 +138,7 @@ If repeated ambiguity is clearly project-level, add `Project Docs Follow-up` as 
 
 Optional Phase 4.2 reviewer loop:
 
-- run a fresh reviewer pass using `references/context-reviewer-prompt.md`
+- run a fresh reviewer pass using `context-reviewer-prompt.md`
 - if issues are found, fix and re-run
 - after two failed reviewer iterations, ask for direct human review instead of churning
 

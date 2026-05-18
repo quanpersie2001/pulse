@@ -25,9 +25,9 @@ Do not explore, plan, validate, swarm, or execute until this skill finishes.
 
 ## What This Skill Produces
 
-- `.pulse/tooling-status.json`
-- `.pulse/state.json`
-- `.pulse/STATE.md` update with the latest preflight result
+- `.pulse/runtime/tooling-status.json`
+- `.pulse/runtime/state.json`
+- `.pulse/runtime/STATE.md` update with the latest preflight result
 - One of three outcomes: `PASS`, `DEGRADED`, or `FAIL`
 
 Load `references/tool-readiness-matrix.md` before Phase 3.
@@ -46,7 +46,7 @@ Load `references/tool-readiness-matrix.md` before Phase 3.
 1. Resolve the project root.
 2. Ensure `.pulse/` exists. Create it if missing.
 3. Ensure `.pulse/handoffs/` exists. Create it if missing.
-4. Ensure `.pulse/STATE.md` exists. If missing, create:
+4. Ensure `.pulse/runtime/STATE.md` exists. If missing, create:
 
 ```markdown
 # STATE
@@ -55,7 +55,7 @@ phase: preflight
 last_updated: <timestamp>
 ```
 
-5. Ensure `.pulse/handoffs/manifest.json` exists. If missing, create:
+5. Ensure `.pulse/runtime/handoffs/manifest.json` exists. If missing, create:
 
 ```json
 {
@@ -65,7 +65,7 @@ last_updated: <timestamp>
 }
 ```
 
-6. Detect whether `.pulse/handoffs/manifest.json` contains active resume entries. Record that resume data exists, but do not auto-resume.
+6. Detect whether `.pulse/runtime/handoffs/manifest.json` contains active resume entries. Record that resume data exists, but do not auto-resume.
 7. Infer the requested mode:
    - `full-pipeline`
    - `planning-only`
@@ -83,7 +83,7 @@ Run `node --version` first.
 If Node.js 18+ is available, run the onboarding status check from this skill's directory. `needs_onboarding` is a remediation path for stale installs, not the normal Pulse bootstrap result:
 
 ```bash
-node skills/using-pulse/scripts/onboard_pulse.mjs --repo-root <project_root>
+node skills/legacy/using-pulse/scripts/onboard_pulse.mjs --repo-root <project_root>
 ```
 
 Interpret the result:
@@ -97,7 +97,7 @@ For `needs_onboarding`:
 1. Summarize what the script wants to create or update from `actions`.
 2. If `requires_confirmation = true`, explain that an existing `compact_prompt` was found and Pulse will preserve it unless the user explicitly approves replacement.
 3. Ask the user before making any repo changes.
-4. After approval, run: `node skills/using-pulse/scripts/onboard_pulse.mjs --repo-root <project_root> --apply`
+4. After approval, run: `node skills/legacy/using-pulse/scripts/onboard_pulse.mjs --repo-root <project_root> --apply`
    - Only pass `--allow-compact-prompt-replace` when the user explicitly approved replacing the existing compaction prompt.
 5. If the apply run succeeds, update `onboarding` to `PASS` and continue.
 6. If the apply run fails, keep `onboarding` blocked and add a blocker entry.
@@ -187,8 +187,8 @@ Choose exactly one result label:
   - onboarding is `NEEDS_SETUP` or `NEEDS_ONBOARDING` and could not be resolved in Phase 2
 
 Normalize status casing explicitly:
-- `.pulse/tooling-status.json` uses lowercase machine values: `pass | degraded | fail`
-- `.pulse/state.json`, `.pulse/STATE.md`, and user-facing summaries may use uppercase labels: `PASS | DEGRADED | FAIL`
+- `.pulse/runtime/tooling-status.json` uses lowercase machine values: `pass | degraded | fail`
+- `.pulse/runtime/state.json`, `.pulse/runtime/STATE.md`, and user-facing summaries may use uppercase labels: `PASS | DEGRADED | FAIL`
 
 Also choose `recommended_mode`:
 
@@ -199,7 +199,7 @@ Also choose `recommended_mode`:
 
 ## Phase 7: Write Artifacts
 
-Write `.pulse/tooling-status.json` with this shape:
+Write `.pulse/runtime/tooling-status.json` with this shape:
 
 ```json
 {
@@ -224,7 +224,7 @@ Write `.pulse/tooling-status.json` with this shape:
 }
 ```
 
-Also refresh `.pulse/state.json` as the lightweight routing mirror:
+Also refresh `.pulse/runtime/state.json` as the lightweight routing mirror:
 
 ```json
 {
@@ -232,19 +232,19 @@ Also refresh `.pulse/state.json` as the lightweight routing mirror:
   "status": "PASS | DEGRADED | FAIL",
   "requested_mode": "<mode>",
   "recommended_mode": "<mode>",
-  "tooling_status": ".pulse/tooling-status.json"
+  "tooling_status": ".pulse/runtime/tooling-status.json"
 }
 ```
 
-Update `.pulse/STATE.md` with:
+Update `.pulse/runtime/STATE.md` with:
 
 ```markdown
 phase: preflight
 preflight_status: PASS | DEGRADED | FAIL
 requested_mode: <mode>
 recommended_mode: <mode>
-tooling_status: .pulse/tooling-status.json
-resume_manifest: .pulse/handoffs/manifest.json
+tooling_status: .pulse/runtime/tooling-status.json
+resume_manifest: .pulse/runtime/handoffs/manifest.json
 last_updated: <timestamp>
 ```
 
@@ -284,7 +284,7 @@ Next:
 - Treating swarm runtime as optional in swarm mode
 - Continuing after `FAIL`
 - Hiding degraded mode from the user
-- Reusing stale `.pulse/tooling-status.json` without refreshing it
+- Reusing stale `.pulse/runtime/tooling-status.json` without refreshing it
 - Using environment hints instead of real tool invocations
 
 ## References

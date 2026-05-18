@@ -69,7 +69,7 @@ If handoff entries exist, surface them as advisory context only. Do not auto-res
 ### Phase 2 — Onboarding status first; apply only with explicit consent
 
 1. Confirm Node runtime is callable and supported for Pulse scripts.
-2. Run onboarding status check from `skills/workflow/commands/onboard/scripts/onboard_pulse.mjs`.
+2. Run onboarding status check from `skills/workflow/scripts/onboard/onboard_pulse.mjs`.
 3. If remediation is required:
    - summarize what will change
    - ask explicit approval before mutation
@@ -181,7 +181,7 @@ Stop immediately when:
 
 ## References
 
-- `references/readiness.md`
-- `references/migration-warnings.md`
-- `../../references/shared/workflow-contract.md`
-- `../../references/shared/handoff-and-resume.md`
+- `readiness.md`
+- `migration-warnings.md`
+- `../../shared/workflow-contract.md`
+- `../../shared/handoff-and-resume.md`

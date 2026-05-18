@@ -374,7 +374,7 @@ pulse/
 Điểm cốt lõi của target structure:
 
 - workflow router có source tree riêng ở `skills/workflow/`
-- workflow commands đi theo command modules ở `skills/workflow/commands/<command>/`
+- workflow commands đi theo command modules ở `skills/workflow/references/<command>/`
 - runtime source canonical nằm trong workflow skill tree ở `skills/workflow/scripts/runtime/`
 - `.pulse/scripts/` chỉ là installed mirror cho runtime-facing scripts
 - standalone public skills vẫn tồn tại ở `skills/architecture-rescue/`, `skills/systematic-debug-fix/`, `skills/dev-note/`, `skills/dev-note-distil/`, `skills/prompt-leverage/`, và `skills/gitnexus/`
@@ -488,7 +488,7 @@ Các file lõi hiện tại tập trung ở:
 Kết luận:
 
 - runtime brain hiện tại đã tồn tại, nhưng neo vào source tree cũ
-- migration đúng không phải viết lại từ số 0, mà là **dời và tái tổ chức** chúng về `skills/workflow/scripts/runtime/` và `skills/workflow/commands/onboard/scripts/`
+- migration đúng không phải viết lại từ số 0, mà là **dời và tái tổ chức** chúng về `skills/workflow/scripts/runtime/` và `skills/workflow/scripts/onboard/`
 
 ### 6.2 `preflight` là behavioral dependency, không chỉ là một folder
 
@@ -513,7 +513,7 @@ Kết luận:
 Với cấu trúc mới:
 
 - workflow menu đến từ `skills/workflow/SKILL.md`
-- workflow command behavior đi qua `skills/workflow/commands/<command>/command.md`
+- workflow command behavior đi qua `skills/workflow/references/<command>/command.md`
 - workflow command metadata đến từ `skills/workflow/scripts/command-metadata.json`
 - standalone skills tự mang contract của chúng trong từng thư mục skill
 
@@ -603,9 +603,9 @@ Tạo workflow surface mới trước khi dẹp workflow surface cũ.
 
 - `skills/workflow/SKILL.md`
 - `skills/workflow/references/HARNESS.md`
-- `skills/workflow/commands/<command>/command.md`
-- `skills/workflow/commands/<command>/references/*`
-- `skills/workflow/commands/<command>/scripts/*`
+- `skills/workflow/references/<command>/command.md`
+- `skills/workflow/references/<command>/*`
+- `skills/workflow/scripts/<command>/*`
 - `skills/workflow/references/shared/*`
 - `skills/workflow/templates/HARNESS_BACKLOG.md`
 - `skills/workflow/scripts/command-metadata.json`
@@ -695,7 +695,7 @@ Bỏ mô hình `preflight -> using-pulse`, thay bằng `pulse:workflow onboard` 
 
 ### File chính
 
-- `skills/workflow/commands/onboard/scripts/onboard_pulse.mjs`
+- `skills/workflow/scripts/onboard/onboard_pulse.mjs`
 - `skills/workflow/scripts/runtime/pulse_state.mjs`
 - `skills/workflow/scripts/runtime/pulse_status.mjs`
 - `skills/workflow/scripts/runtime/pulse_session_context.mjs`
@@ -704,7 +704,7 @@ Bỏ mô hình `preflight -> using-pulse`, thay bằng `pulse:workflow onboard` 
 
 ### Việc cần làm
 
-1. port logic từ `skills/using-pulse/scripts/*` sang `skills/workflow/scripts/runtime/*` và `skills/workflow/commands/onboard/scripts/*`
+1. port logic từ `skills/using-pulse/scripts/*` sang `skills/workflow/scripts/runtime/*` và `skills/workflow/scripts/onboard/*`
 2. chuyển canonical runtime paths sang `.pulse/runtime/*`
 3. bỏ persistence của:
    - `.pulse/current-feature.json`
@@ -752,7 +752,7 @@ Thu gọn workflow surface về `pulse:workflow` trong khi giữ các standalone
 
 ### Việc cần làm
 
-1. migrate nội dung workflow skills cũ sang `skills/workflow/commands/`
+1. migrate nội dung workflow skills cũ sang `skills/workflow/references/`
 2. giữ `architecture-rescue`, `systematic-debug-fix`, `dev-note`, `dev-note-distil`, `prompt-leverage`, và `gitnexus` thành standalone public skills
 3. update các standalone skills để docs của chúng không giả định chúng là workflow phases
 4. xóa các workflow skill public cũ sau khi router mới đã usable
@@ -869,7 +869,7 @@ Khóa lại migration bằng tài liệu rõ ràng và cleanup repo-wide.
 - `skills/workflow/templates/works/story-SPEC.md`
 - `skills/workflow/scripts/command-metadata.json`
 - `skills/workflow/scripts/runtime/pulse_work.mjs`
-- `skills/workflow/commands/onboard/scripts/onboard_pulse.mjs`
+- `skills/workflow/scripts/onboard/onboard_pulse.mjs`
 - `skills/workflow/scripts/runtime/pulse_state.mjs`
 - `skills/workflow/scripts/runtime/pulse_status.mjs`
 - `skills/workflow/scripts/runtime/pulse_session_context.mjs`
@@ -999,7 +999,7 @@ Sau khi gần xong, chạy repo-wide audit để bảo đảm:
 ### Changeset B — Workflow router
 
 - tạo `skills/workflow/SKILL.md`
-- tạo command modules dưới `skills/workflow/commands/`
+- tạo command modules dưới `skills/workflow/references/`
 - tạo `references/HARNESS.md`
 - tạo `templates/HARNESS_BACKLOG.md`
 - tạo `command-metadata.json`
@@ -1014,14 +1014,14 @@ Sau khi gần xong, chạy repo-wide audit để bảo đảm:
 
 ### Changeset D — Runtime / onboard migration
 
-- port scripts từ `skills/using-pulse/scripts/` sang `skills/workflow/scripts/runtime/` và `skills/workflow/commands/onboard/scripts/`
+- port scripts từ `skills/using-pulse/scripts/` sang `skills/workflow/scripts/runtime/` và `skills/workflow/scripts/onboard/`
 - runtime paths sang `.pulse/runtime/*`
 - materialize `.pulse/harness/HARNESS_BACKLOG.md`
 - thay bootstrap bằng `pulse:workflow onboard`
 
 ### Changeset E — Collapse workflow skills + classify surfaces
 
-- migrate nội dung workflow skills cũ vào `skills/workflow/commands/`
+- migrate nội dung workflow skills cũ vào `skills/workflow/references/`
 - giữ rescue/debug/note/support skills đã chốt là standalone public surface
 - xóa `preflight`
 - xóa `dream`
@@ -1043,7 +1043,7 @@ Sau khi gần xong, chạy repo-wide audit để bảo đảm:
 Plan này được coi là đạt mục tiêu khi repo có thể chứng minh đồng thời:
 
 - user có đúng một workflow entrypoint public là `pulse:workflow`
-- workflow command behavior được tổ chức rõ theo `skills/workflow/commands/<command>/`
+- workflow command behavior được tổ chức rõ theo `skills/workflow/references/<command>/`
 - `pulse-work` tồn tại như runtime CLI riêng, có vị trí rõ ràng ở `skills/workflow/scripts/runtime/`
 - bootstrap bằng `pulse:workflow onboard`, không cần `pulse:preflight` hay `pulse:using-pulse`
 - `architecture-rescue`, `systematic-debug-fix`, `dev-note`, `dev-note-distil`, `prompt-leverage`, và `gitnexus` vẫn tồn tại như standalone public skills

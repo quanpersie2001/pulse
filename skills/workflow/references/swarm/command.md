@@ -74,7 +74,7 @@ Establish one authoritative surface for:
 
 No hidden side channel for authoritative decisions.
 
-Use `references/swarming-appendix.md` as the event protocol and message-body contract.
+Use `swarming-appendix.md` as the event protocol and message-body contract.
 
 ### Phase 3 — Spawn workers with startup context
 
@@ -125,7 +125,7 @@ Coordinator must verify, per event:
 
 ### Silence ladder
 
-Use reminder/escalation ladder from `references/swarming-appendix.md` before escalating to user. Escalate only for product decisions, persistent silence, or unresolved collisions after recovery attempts.
+Use reminder/escalation ladder from `swarming-appendix.md` before escalating to user. Escalate only for product decisions, persistent silence, or unresolved collisions after recovery attempts.
 
 ### Handoff reassignment rule
 
@@ -175,5 +175,5 @@ Then route:
 
 ## References
 
-- `references/swarming-appendix.md`
-- `references/runtime-adapter-spec.md`
+- `swarming-appendix.md`
+- `runtime-adapter-spec.md`

@@ -193,5 +193,5 @@ Successful exit requires:
 
 ## References
 
-- `references/planning-reference.md` — mode-quality rules and shape/current-work templates
-- `references/work-item-template.md` — canonical execution item schema and normalization contract
+- `planning-reference.md` — mode-quality rules and shape/current-work templates
+- `work-item-template.md` — canonical execution item schema and normalization contract

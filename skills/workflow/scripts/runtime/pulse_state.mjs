@@ -91,7 +91,7 @@ export function resolveRepoRoot(explicitRoot, startFrom = process.cwd()) {
     while (true) {
       if (
         fs.existsSync(path.join(candidate, ".git")) ||
-        fs.existsSync(path.join(candidate, ".pulse", "onboarding.json"))
+        fs.existsSync(path.join(candidate, ".pulse", "runtime", "onboarding.json"))
       ) {
         return candidate;
       }
@@ -159,7 +159,7 @@ export function normalizePulseState(state) {
 
 export function getPulseStatePaths(repoRoot) {
   return {
-    onboarding: path.join(repoRoot, ".pulse", "onboarding.json"),
+    onboarding: path.join(repoRoot, ".pulse", "runtime", "onboarding.json"),
     toolingStatus: path.join(repoRoot, ".pulse", "runtime", "tooling-status.json"),
     projectDocs: path.join(repoRoot, ".pulse", "project-docs.json"),
     stateJson: path.join(repoRoot, ".pulse", "runtime", "state.json"),

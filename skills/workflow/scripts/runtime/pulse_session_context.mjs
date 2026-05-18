@@ -17,7 +17,7 @@ const SCRIPT_DIR = path.dirname(SCRIPT_PATH);
 export function findPulseRepoRoot(start) {
   let candidate = path.resolve(start || ".");
   while (true) {
-    if (fs.existsSync(path.join(candidate, ".pulse", "onboarding.json"))) {
+    if (fs.existsSync(path.join(candidate, ".pulse", "runtime", "onboarding.json"))) {
       return candidate;
     }
     if (fs.existsSync(path.join(candidate, ".git"))) {
@@ -115,7 +115,7 @@ function buildPulseBootstrapBlock() {
 
 export async function collectPulseSessionStartNotes(repoRoot, options = {}) {
   const { syncRuntimeArtifactsIfOnboarded = true } = options;
-  const onboardingPath = path.join(repoRoot, ".pulse", "onboarding.json");
+  const onboardingPath = path.join(repoRoot, ".pulse", "runtime", "onboarding.json");
   const criticalPatterns = path.join(repoRoot, ".pulse", "memory", "critical-patterns.md");
 
   const notes = [];

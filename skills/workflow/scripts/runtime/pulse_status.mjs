@@ -238,7 +238,7 @@ async function runCheckpointCommand(repoRoot, args) {
 
 export async function main(argv = process.argv.slice(2)) {
   const args = parseCliArgs(argv);
-  const repoRoot = resolveRepoRoot(args.repoRoot, SCRIPT_DIR);
+  const repoRoot = resolveRepoRoot(args.repoRoot);
 
   if (args.command === "checkpoint") {
     const result = await runCheckpointCommand(repoRoot, args);

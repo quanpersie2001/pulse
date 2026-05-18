@@ -355,7 +355,7 @@ After each item:
 - if context is below critical threshold, return to Step 2
 - if context is critical, write owner handoff and stop cleanly
 
-Write handoff using command-local contract at `skills/workflow/commands/execute/references/handoff-contract.md`:
+Write handoff using command-local contract at `skills/workflow/execute/handoff-contract.md`:
 
 - worker mode -> `.pulse/runtime/handoffs/worker-<runtime_identity>.json`
 - standalone mode -> `.pulse/runtime/handoffs/single-worker.json`

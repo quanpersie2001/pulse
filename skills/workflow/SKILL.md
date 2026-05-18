@@ -23,7 +23,7 @@ It does **not** replace the runtime CLI.
 
 Before choosing or executing a command:
 
-1. If repo readiness or runtime posture is unclear, start with [`onboard`](commands/onboard/command.md).
+1. If repo readiness or runtime posture is unclear, start with [`onboard`](references/onboard/command.md).
 2. If the session is resuming active work, inspect the current runtime and handoff posture before routing onward.
 3. When a command is matched, load its command reference before acting.
 4. Load shared references whenever gates, workgraph semantics, swarm behavior, verification, or handoff rules matter.
@@ -35,15 +35,15 @@ Unknown input should not trigger hidden dispatch behavior.
 
 | Command | Category | Use when... | Reference | Usually next |
 | --- | --- | --- | --- | --- |
-| `onboard` | Bootstrap | the repo needs bootstrap, readiness, repair, or migration posture | [commands/onboard/command.md](commands/onboard/command.md) | `explore`, `brainstorm`, `plan` |
-| `explore` | Discovery | the design direction is chosen but repo-grounded decisions and constraints still need investigation | [commands/explore/command.md](commands/explore/command.md) | `plan` |
-| `brainstorm` | Design | the user goal is real but the feature shape is still open | [commands/brainstorm/command.md](commands/brainstorm/command.md) | `explore` |
-| `plan` | Planning | explored context must become a concrete implementation shape | [commands/plan/command.md](commands/plan/command.md) | `validate` |
-| `validate` | Readiness | the proposed work needs proof before implementation starts | [commands/validate/command.md](commands/validate/command.md) | `swarm`, `execute`, `plan` |
-| `swarm` | Execution | validated work should be executed by multiple agents with explicit coordination | [commands/swarm/command.md](commands/swarm/command.md) | `execute`, `review` |
-| `execute` | Execution | a validated work item should be implemented and evidenced | [commands/execute/command.md](commands/execute/command.md) | `review` |
-| `review` | Quality | execution is complete and quality evaluation is next | [commands/review/command.md](commands/review/command.md) | `compound`, `execute` |
-| `compound` | Learning | the completed cycle should produce reusable learnings | [commands/compound/command.md](commands/compound/command.md) | `plan` |
+| `onboard` | Bootstrap | the repo needs bootstrap, readiness, repair, or migration posture | [references/onboard/command.md](references/onboard/command.md) | `explore`, `brainstorm`, `plan` |
+| `explore` | Discovery | the design direction is chosen but repo-grounded decisions and constraints still need investigation | [references/explore/command.md](references/explore/command.md) | `plan` |
+| `brainstorm` | Design | the user goal is real but the feature shape is still open | [references/brainstorm/command.md](references/brainstorm/command.md) | `explore` |
+| `plan` | Planning | explored context must become a concrete implementation shape | [references/plan/command.md](references/plan/command.md) | `validate` |
+| `validate` | Readiness | the proposed work needs proof before implementation starts | [references/validate/command.md](references/validate/command.md) | `swarm`, `execute`, `plan` |
+| `swarm` | Execution | validated work should be executed by multiple agents with explicit coordination | [references/swarm/command.md](references/swarm/command.md) | `execute`, `review` |
+| `execute` | Execution | a validated work item should be implemented and evidenced | [references/execute/command.md](references/execute/command.md) | `review` |
+| `review` | Quality | execution is complete and quality evaluation is next | [references/review/command.md](references/review/command.md) | `compound`, `execute` |
+| `compound` | Learning | the completed cycle should produce reusable learnings | [references/compound/command.md](references/compound/command.md) | `plan` |
 
 ## Routing rules
 
@@ -60,7 +60,7 @@ The runtime owns canonical mutable state.
 | --- | --- |
 | `pulse:workflow` | choose the workflow move, load command guidance, preserve gate discipline |
 | `pulse-work` | manipulate workgraph items and runtime state once the runtime layer is in place |
-| `commands/<command>/command.md` | command-specific behavioral entrypoint |
+| `references/<command>/command.md` | command-specific behavioral entrypoint |
 | `references/shared/*.md` | cross-cutting workflow contracts |
 
 Do not flatten these layers into one file or one command.

@@ -180,4 +180,4 @@ Successful exit requires:
 
 ## References
 
-- `references/runtime-appendix.md` — orientation, gate templates, schema checklist, and Gate 3 prompt
+- `runtime-appendix.md` — orientation, gate templates, schema checklist, and Gate 3 prompt

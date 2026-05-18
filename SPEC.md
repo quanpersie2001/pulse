@@ -487,9 +487,9 @@ The command table in `skills/workflow/SKILL.md` must support:
 The workflow surface is composed from these sources:
 
 - `skills/workflow/SKILL.md` — router entrypoint and workflow command table
-- `skills/workflow/commands/<command>/command.md` — per-command behavior entrypoint
-- `skills/workflow/commands/<command>/references/*` — command-local reference material
-- `skills/workflow/commands/<command>/scripts/*` — command-local helper scripts and assets
+- `skills/workflow/references/<command>/command.md` — per-command behavior entrypoint
+- `skills/workflow/references/<command>/*` — command-local reference material
+- `skills/workflow/scripts/<command>/*` — command-local helper scripts and assets
 - `skills/workflow/references/shared/*.md` — shared workflow contracts and reference material
 - `skills/workflow/scripts/command-metadata.json` — structured metadata for workflow command descriptions, hints, and categories
 
@@ -506,7 +506,7 @@ The following remain standalone public skills and are **not** workflow router su
 - `pulse:prompt-leverage`
 - `pulse:gitnexus`
 
-Their source-of-truth behavior lives in their own skill directories, not under `skills/workflow/commands/`.
+Their source-of-truth behavior lives in their own skill directories, not under `skills/workflow/references/`.
 
 ### 7.5 Legacy skill mapping
 
@@ -1088,7 +1088,7 @@ Implementation form in the plugin repo:
 
 - canonical runtime source scripts live in `skills/workflow/scripts/runtime/`
 - `skills/workflow/scripts/runtime/pulse_work.mjs` is the source entrypoint for the CLI
-- workflow command-local scripts live under `skills/workflow/commands/<command>/scripts/`
+- workflow command-local scripts live under `skills/workflow/scripts/<command>/`
 - standalone utility scripts remain under their own skill directories as needed
 - onboarding installs or syncs a repo-local executable surface under `.pulse/scripts/`
 - v1 should ship a thin executable wrapper named `pulse-work` so the human-facing runtime command remains `pulse-work`
@@ -1392,7 +1392,7 @@ Rules:
 
 - `skills/workflow/scripts/runtime/` is the canonical source for runtime and workgraph scripts
 - `skills/workflow/scripts/lib/` is the canonical source for shared workflow router helpers
-- `skills/workflow/commands/<command>/scripts/` is the canonical source for workflow-command-specific helpers and assets
+- `skills/workflow/scripts/<command>/` is the canonical source for workflow-command-specific helpers and assets
 - standalone public utility scripts stay under their own skill directories unless the runtime must invoke them directly
 - `.pulse/scripts/` is the installed mirror in a self-hosted or downstream repo for runtime-facing executables and helpers
 - command-local workflow scripts do not need a second mirror under `.pulse/scripts/` unless the repo-local runtime must invoke them directly
@@ -1406,7 +1406,7 @@ It is responsible for bootstrap, readiness checks, and installing the local Puls
 
 ### 18.3 Onboarding responsibilities
 
-`skills/workflow/commands/onboard/scripts/onboard_pulse.mjs` must:
+`skills/workflow/scripts/onboard/onboard_pulse.mjs` must:
 
 - create the v2 directory structure under `.pulse/`
 - install `pulse-work` and helper scripts under `.pulse/scripts/`
@@ -1515,7 +1515,7 @@ Deliver:
 Deliver:
 
 - `skills/workflow/SKILL.md`
-- workflow command modules under `skills/workflow/commands/<command>/`
+- workflow command modules under `skills/workflow/references/<command>/`
 - shared references under `skills/workflow/references/shared/`
 - `skills/workflow/references/HARNESS.md`
 - `skills/workflow/templates/HARNESS_BACKLOG.md`
@@ -1538,7 +1538,7 @@ Deliver:
 Deliver:
 
 - `.pulse/runtime/*` canonical paths
-- onboarding changes under `skills/workflow/commands/onboard/scripts/onboard_pulse.mjs`
+- onboarding changes under `skills/workflow/scripts/onboard/onboard_pulse.mjs`
 - `pulse_state`, `pulse_status`, `pulse_session_context`, and `pulse_reservations` moved under `skills/workflow/scripts/runtime/`
 - removal of `current-feature.json` and `runtime-snapshot.json`
 - `pulse:workflow onboard` replacing the old bootstrap authority
@@ -1547,7 +1547,7 @@ Deliver:
 
 Deliver:
 
-- migration of legacy workflow skill content into `skills/workflow/commands/`
+- migration of legacy workflow skill content into `skills/workflow/references/`
 - update of standalone utility skills so they remain outside the workflow router
 - removal of legacy packaged workflow skills
 - removal of `dream`
@@ -1746,7 +1746,7 @@ Pulse v2 v1 is acceptable only when all of the following are true.
 ### 22.8 Repo self-hosting
 
 - canonical runtime source scripts live in `skills/workflow/scripts/runtime/`
-- workflow command-specific helper scripts live in `skills/workflow/commands/<command>/scripts/`
+- workflow command-specific helper scripts live in `skills/workflow/scripts/<command>/`
 - installed runtime scripts under `.pulse/scripts/` have a defined source-of-truth relationship to the canonical runtime source
 - onboarding tests cover the self-hosted v2 installed layout
 
@@ -1778,7 +1778,7 @@ This spec locks these implementation decisions for Pulse v2 v1:
 - `pulse:architecture-rescue`, `pulse:systematic-debug-fix`, `pulse:dev-note`, `pulse:dev-note-distil`, `pulse:prompt-leverage`, and `pulse:gitnexus` remain standalone public utility skills
 - `pulse-work` is the runtime CLI name
 - `skills/workflow/SKILL.md` is the workflow router source of truth
-- workflow-command behavior lives under `skills/workflow/commands/<command>/`
+- workflow-command behavior lives under `skills/workflow/references/<command>/`
 - `skills/workflow/scripts/command-metadata.json` is the structured workflow command metadata source of truth
 - canonical runtime source scripts live under `skills/workflow/scripts/runtime/`
 - `items.jsonl` is the only canonical writable metadata source

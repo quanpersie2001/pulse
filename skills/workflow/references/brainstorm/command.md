@@ -294,7 +294,7 @@ Do not write the spec before the user approves the direction.
 
 ## Phase 7: Spec self-review
 
-After writing the spec, run an independent review using `references/spec-reviewer-prompt.md`.
+After writing the spec, run an independent review using `spec-reviewer-prompt.md`.
 
 Self-review must check for:
 - TODOs, placeholders, or incomplete sections
@@ -410,5 +410,5 @@ No. Use visuals only when seeing options will remove ambiguity. Goals, prioritie
 
 ## References
 
-- `references/spec-reviewer-prompt.md` — review prompt for spec document checking
-- `references/visual-support-guidance.md` — when to use previews versus the advanced visual runtime during brainstorming
+- `spec-reviewer-prompt.md` — review prompt for spec document checking
+- `visual-support-guidance.md` — when to use previews versus the advanced visual runtime during brainstorming

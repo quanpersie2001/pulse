@@ -30,7 +30,7 @@ Read before starting:
 
 ## Runtime contract
 
-`references/runtime-appendix.md` is canonical for:
+`runtime-appendix.md` is canonical for:
 
 - 4+1 review orchestration
 - severity mapping and review-item creation rules
@@ -64,7 +64,7 @@ Assess behavior correctness, regressions, boundary integrity, security posture, 
 
 Reviewers do not silently fix and approve in one motion. Findings must remain explicit.
 
-Use `references/review-agent-prompts.md` to run consistent specialist prompts.
+Use `review-agent-prompts.md` to run consistent specialist prompts.
 
 ### Phase 3 — Evidence integrity pass
 
@@ -86,7 +86,7 @@ Severity contract:
 - P1 = mandatory blocker
 - P2/P3/P4 may be staged, never hidden
 
-When accepted findings need remediation, create explicit fix work items using `references/review-item-template.md`.
+When accepted findings need remediation, create explicit fix work items using `review-item-template.md`.
 
 ### Phase 5 — Gate 4 enforcement
 
@@ -137,6 +137,6 @@ Resume from next incomplete review phase, not memory-only recall.
 
 ## References
 
-- `references/runtime-appendix.md`
-- `references/review-agent-prompts.md`
-- `references/review-item-template.md`
+- `runtime-appendix.md`
+- `review-agent-prompts.md`
+- `review-item-template.md`
