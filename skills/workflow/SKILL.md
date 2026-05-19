@@ -23,8 +23,8 @@ It does **not** replace the runtime CLI.
 
 Before choosing or executing a command:
 
-1. If repo readiness or runtime posture is unclear, start with [`onboard`](references/onboard/command.md).
-2. If the session is resuming active work, inspect the current runtime and handoff posture before routing onward.
+1. If repo readiness, runtime posture, or session context is unclear, start with [`use`](references/use/command.md).
+2. If the session is resuming active work, let `use` inspect the current runtime and handoff posture before routing onward.
 3. When a command is matched, load its command reference before acting.
 4. Load shared references whenever gates, workgraph semantics, swarm behavior, verification, or handoff rules matter.
 
@@ -35,7 +35,7 @@ Unknown input should not trigger hidden dispatch behavior.
 
 | Command | Category | Use when... | Reference | Usually next |
 | --- | --- | --- | --- | --- |
-| `onboard` | Bootstrap | the repo needs bootstrap, readiness, repair, or migration posture | [references/onboard/command.md](references/onboard/command.md) | `explore`, `brainstorm`, `plan` |
+| `use` | Session entrypoint | the repo needs readiness/onboarding if stale, session restoration, resume routing, repair, or migration posture | [references/use/command.md](references/use/command.md) | `explore`, `brainstorm`, `plan` |
 | `explore` | Discovery | the design direction is chosen but repo-grounded decisions and constraints still need investigation | [references/explore/command.md](references/explore/command.md) | `plan` |
 | `brainstorm` | Design | the user goal is real but the feature shape is still open | [references/brainstorm/command.md](references/brainstorm/command.md) | `explore` |
 | `plan` | Planning | explored context must become a concrete implementation shape | [references/plan/command.md](references/plan/command.md) | `validate` |

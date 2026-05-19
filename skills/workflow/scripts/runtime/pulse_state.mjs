@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
-import { readDependencyHealthSafe } from "./pulse_dependencies.mjs";
 
 export const STATE_SCHEMA_VERSION = "1.0";
 export const CHECKPOINT_SCHEMA_VERSION = "1.0";
@@ -34,21 +34,54 @@ function readJsonIfExists(filePath) {
   }
 }
 
-function summarizeConfiguredGitNexusSources(mcpSources) {
-  if (!Array.isArray(mcpSources)) {
+function parseTomlMcpServerNames(filePath) {
+  if (!fs.existsSync(filePath)) {
     return [];
   }
 
-  return [...new Set(
-    mcpSources
-      .filter((source) =>
-        source &&
-        Array.isArray(source.server_names) &&
-        source.server_names.includes("gitnexus") &&
-        source.exists !== false,
-      )
-      .map((source) => source.key),
-  )].sort((left, right) => left.localeCompare(right));
+  const source = fs.readFileSync(filePath, "utf8");
+  const names = new Set();
+  for (const pattern of [/^\s*\[mcp_servers\.([^\]]+)\]\s*$/gm, /^\s*\[mcp\.servers\.([^\]]+)\]\s*$/gm]) {
+    for (const match of source.matchAll(pattern)) {
+      names.add(match[1].trim().replace(/^['"]|['"]$/g, ""));
+    }
+  }
+  return [...names];
+}
+
+function parseJsonMcpServerNames(filePath) {
+  if (!fs.existsSync(filePath)) {
+    return [];
+  }
+
+  try {
+    const payload = JSON.parse(fs.readFileSync(filePath, "utf8"));
+    return payload && typeof payload === "object" && !Array.isArray(payload) ? Object.keys(payload) : [];
+  } catch {
+    return [];
+  }
+}
+
+function readGitNexusMcpSources(repoRoot) {
+  const sources = [
+    {
+      key: "repo_codex_config",
+      server_names: parseTomlMcpServerNames(path.join(repoRoot, ".codex", "config.toml")),
+    },
+    {
+      key: "global_codex_config",
+      server_names: parseTomlMcpServerNames(path.join(os.homedir(), ".codex", "config.toml")),
+    },
+    {
+      key: "plugin_mcp_manifest",
+      server_names: parseJsonMcpServerNames(path.join(repoRoot, ".mcp.json")),
+    },
+  ];
+
+  return sources
+    .filter((source) => source.server_names.includes("gitnexus"))
+    .map((source) => source.key)
+    .sort((left, right) => left.localeCompare(right));
 }
 
 function buildGitNexusRecommendedAction(configured, matchedSources) {
@@ -59,11 +92,8 @@ function buildGitNexusRecommendedAction(configured, matchedSources) {
   return "GitNexus is not configured in known MCP sources — use grep/file inspection fallback, or add the gitnexus MCP server before graph-backed discovery.";
 }
 
-export async function readGitNexusReadiness(repoRoot, dependencyHealth = null) {
-  const health = dependencyHealth && typeof dependencyHealth === "object"
-    ? dependencyHealth
-    : readDependencyHealthSafe(repoRoot);
-  const matchedSources = summarizeConfiguredGitNexusSources(health?.mcp_sources);
+export async function readGitNexusReadiness(repoRoot) {
+  const matchedSources = readGitNexusMcpSources(repoRoot);
   const configured = matchedSources.length > 0;
 
   return {
@@ -91,7 +121,8 @@ export function resolveRepoRoot(explicitRoot, startFrom = process.cwd()) {
     while (true) {
       if (
         fs.existsSync(path.join(candidate, ".git")) ||
-        fs.existsSync(path.join(candidate, ".pulse", "runtime", "onboarding.json"))
+        fs.existsSync(path.join(candidate, ".pulse", "runtime", "onboarding.json")) ||
+        fs.existsSync(path.join(candidate, ".pulse", "onboarding.json"))
       ) {
         return candidate;
       }
@@ -105,19 +136,44 @@ export function resolveRepoRoot(explicitRoot, startFrom = process.cwd()) {
 }
 
 export function buildDefaultState(overrides = {}) {
+  const session = overrides.session && typeof overrides.session === "object" && !Array.isArray(overrides.session)
+    ? overrides.session
+    : {};
+
   return {
     schema_version: STATE_SCHEMA_VERSION,
     phase: typeof overrides.phase === "string" && overrides.phase ? overrides.phase : "idle",
+    status: typeof overrides.status === "string" ? overrides.status : "",
     active_skill:
-      typeof overrides.active_skill === "string" ? overrides.active_skill : "pulse",
+      typeof overrides.active_skill === "string" ? overrides.active_skill : "pulse:workflow",
+    active_command: typeof overrides.active_command === "string" ? overrides.active_command : "",
+    active_epic_id: typeof overrides.active_epic_id === "string" ? overrides.active_epic_id : null,
+    active_story_id: typeof overrides.active_story_id === "string" ? overrides.active_story_id : null,
+    active_item_id: typeof overrides.active_item_id === "string" ? overrides.active_item_id : null,
     active_feature: typeof overrides.active_feature === "string" ? overrides.active_feature : "",
     gate: typeof overrides.gate === "string" ? overrides.gate : "",
     gate_status: typeof overrides.gate_status === "string" ? overrides.gate_status : "",
     requested_mode: typeof overrides.requested_mode === "string" ? overrides.requested_mode : "",
     recommended_mode: typeof overrides.recommended_mode === "string" ? overrides.recommended_mode : "",
     next_action: typeof overrides.next_action === "string" ? overrides.next_action : "",
+    next_command: typeof overrides.next_command === "string" ? overrides.next_command : "",
+    next_command_recommended:
+      typeof overrides.next_command_recommended === "string" ? overrides.next_command_recommended : "",
     next_skill_recommended:
       typeof overrides.next_skill_recommended === "string" ? overrides.next_skill_recommended : "",
+    session: {
+      posture: typeof session.posture === "string" ? session.posture : "",
+      scout_findings: Array.isArray(session.scout_findings) ? session.scout_findings : [],
+      resume_options: Array.isArray(session.resume_options) ? session.resume_options : [],
+    },
+    session_load:
+      overrides.session_load && typeof overrides.session_load === "object" && !Array.isArray(overrides.session_load)
+        ? overrides.session_load
+        : null,
+    tooling_status:
+      typeof overrides.tooling_status === "string" && overrides.tooling_status
+        ? overrides.tooling_status
+        : ".pulse/runtime/tooling-status.json",
     handoff_manifest:
       typeof overrides.handoff_manifest === "string" && overrides.handoff_manifest
         ? overrides.handoff_manifest
@@ -325,8 +381,9 @@ function normalizeNextCommandSurface(value) {
     "pulse:compounding": "pulse:workflow compound",
     "pulse:exploring": "pulse:workflow explore",
     "pulse:brainstorming": "pulse:workflow brainstorm",
-    "pulse:using-pulse": "pulse:workflow onboard",
-    "pulse:preflight": "pulse:workflow onboard",
+    "pulse:using-pulse": "pulse:workflow use",
+    "pulse:preflight": "pulse:workflow use",
+    "pulse:workflow onboard": "pulse:workflow use",
   };
 
   if (legacyMap[normalized]) {
@@ -338,6 +395,7 @@ function normalizeNextCommandSurface(value) {
   }
 
   const validCommands = new Set([
+    "use",
     "onboard",
     "explore",
     "brainstorm",
@@ -694,7 +752,6 @@ function deriveAndPersistRuntimeArtifacts(repoRoot) {
     runtime_snapshot: summarizeRuntimeSnapshot(null),
     reservations: summarizeReservations(readReservationStore(repoRoot)),
     handoff_manifest: summarizeHandoffManifest(handoffManifest),
-    dependency_health: null,
     gitnexus_readiness: null,
     checkpoints: { root_exists: fs.existsSync(paths.checkpointsRoot), feature: "", count: 0, latest: null, entries: [] },
     critical_patterns_exists: fs.existsSync(paths.criticalPatterns),
@@ -1858,8 +1915,8 @@ function buildNextReads(status) {
 function buildRecommendedActions(status) {
   if (!status.onboarding.exists) {
     return [
-      "Run Pulse onboarding before continuing.",
-      "Run pulse:workflow onboard (or onboard_pulse.mjs --apply) to install repo-local assets.",
+      "Run Pulse use before continuing.",
+      "Run pulse:workflow use (or pulse_use.mjs --apply) to install repo-local assets and load session context.",
     ];
   }
 
@@ -2264,8 +2321,7 @@ export async function readPulseStatus(repoRoot) {
   const derivedRuntime = syncPulseRuntimeArtifacts(repoRoot);
   const handoffManifest = readJsonIfExists(paths.handoffManifest);
 
-  const dependencyHealth = readDependencyHealthSafe(repoRoot);
-  const gitNexusReadiness = await readGitNexusReadiness(repoRoot, dependencyHealth);
+  const gitNexusReadiness = await readGitNexusReadiness(repoRoot);
 
   const stateJsonSummary = {
     exists: Boolean(stateJson),
@@ -2314,7 +2370,6 @@ export async function readPulseStatus(repoRoot) {
     history_lifecycle: historyLifecycle,
     project_docs: projectDocsSummary,
     critical_patterns_exists: fs.existsSync(paths.criticalPatterns),
-    dependency_health: dependencyHealth,
     gitnexus_readiness: gitNexusReadiness,
     memory_recall: null,
     next_reads: [],
@@ -2547,89 +2602,6 @@ export async function checkpointResumeBrief(repoRoot, options = {}) {
       note: "Checkpoints are advisory snapshots. Current handoffs and state files remain authoritative; use lifecycle-summary.md as the durable audit trail when present.",
     },
   };
-}
-
-function formatDependencyTarget(target) {
-  if (Array.isArray(target)) {
-    return target.filter(Boolean).join(", ");
-  }
-  return String(target || "");
-}
-
-function formatDependencyImpact(missingDependency) {
-  const requiredBy = Array.isArray(missingDependency.required_by)
-    ? missingDependency.required_by.join(", ")
-    : "(unknown skills)";
-  const effects = Array.isArray(missingDependency.missing_effects)
-    ? missingDependency.missing_effects.join(", ")
-    : "degraded";
-  return `Affects: ${requiredBy}. Reported status impact: ${effects}.`;
-}
-
-function renderDependencyHealthLines(status) {
-  const dependencyHealth =
-    status.dependency_health && typeof status.dependency_health === "object"
-      ? status.dependency_health
-      : null;
-  const summary = dependencyHealth?.summary || {};
-  const missingDependencies = Array.isArray(dependencyHealth?.missing_dependencies)
-    ? dependencyHealth.missing_dependencies
-    : [];
-  const uncoveredSkills = Array.isArray(dependencyHealth?.uncovered_skills)
-    ? dependencyHealth.uncovered_skills
-    : [];
-
-  const lines = [
-    "Dependency health:",
-    `- Packaged skill coverage: ${summary.skills_total || 0} total (${summary.skills_with_declared_dependencies || 0} with declared dependencies, ${summary.skills_dependency_free || 0} dependency-free, ${summary.skills_uncovered || 0} uncovered)`,
-    `- Availability among covered skills: ${summary.skills_available || 0} available, ${summary.skills_degraded || 0} degraded, ${summary.skills_unavailable || 0} unavailable`,
-    `- Declared dependencies: ${summary.declared_dependencies || 0}`,
-    `- Missing declared dependencies: ${summary.missing_dependencies || 0}`,
-  ];
-
-  lines.push("- Uncovered packaged skills:");
-  if (uncoveredSkills.length === 0) {
-    lines.push("  - none");
-  } else {
-    for (const skill of uncoveredSkills) {
-      lines.push(`  - ${skill.skill_name} (${skill.skill_file})`);
-    }
-  }
-
-  if (missingDependencies.length === 0) {
-    lines.push("- Missing commands: none");
-    lines.push("- Missing MCP server configuration: none");
-    return lines;
-  }
-
-  const missingCommands = missingDependencies.filter((dependency) => dependency.kind === "command");
-  const missingMcpServers = missingDependencies.filter(
-    (dependency) => dependency.kind === "mcp_server",
-  );
-
-  lines.push("- Missing commands:");
-  if (missingCommands.length === 0) {
-    lines.push("  - none");
-  } else {
-    for (const dependency of missingCommands) {
-      lines.push(
-        `  - ${formatDependencyTarget(dependency.target)}. ${formatDependencyImpact(dependency)}`,
-      );
-    }
-  }
-
-  lines.push("- Missing MCP server configuration:");
-  if (missingMcpServers.length === 0) {
-    lines.push("  - none");
-  } else {
-    for (const dependency of missingMcpServers) {
-      lines.push(
-        `  - ${formatDependencyTarget(dependency.target)}. ${formatDependencyImpact(dependency)}`,
-      );
-    }
-  }
-
-  return lines;
 }
 
 function renderProjectDocsLines(status) {
@@ -2900,8 +2872,6 @@ export function renderPulseStatus(status) {
     ...renderProjectDocsLines(status),
     "",
     ...renderGitNexusReadinessLines(status),
-    "",
-    ...renderDependencyHealthLines(status),
     "",
     "Next reads:",
     ...status.next_reads.map((item) => `- ${item}`),

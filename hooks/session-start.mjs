@@ -9,6 +9,9 @@ const SCRIPT_PATH = fileURLToPath(import.meta.url);
 function findRepoRoot(start) {
   let candidate = path.resolve(start || ".");
   while (true) {
+    if (fs.existsSync(path.join(candidate, ".pulse", "runtime", "onboarding.json"))) {
+      return candidate;
+    }
     if (fs.existsSync(path.join(candidate, ".pulse", "onboarding.json"))) {
       return candidate;
     }

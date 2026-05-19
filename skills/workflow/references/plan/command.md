@@ -140,7 +140,7 @@ Route back to `pulse:workflow explore` when:
 
 - context decisions are contradictory or under-specified
 
-Route to `pulse:workflow onboard` when:
+Route to `pulse:workflow use` when:
 
 - runtime readiness is untrusted/blocked
 

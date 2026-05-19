@@ -8,9 +8,9 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { execFileSync } from "node:child_process";
 
-import { applyRepo, checkRepo, getNodeRuntimeStatus } from "./onboard_pulse.mjs";
-import { buildPulseDependencyReport } from "./pulse_dependencies.mjs";
-import { syncPulseRuntimeArtifacts } from "./pulse_state.mjs";
+import { applyRepo, checkRepo, getNodeRuntimeStatus } from "../../../workflow/scripts/runtime/onboard_pulse.mjs";
+import { buildPulseDependencyReport } from "../../../workflow/scripts/runtime/pulse_dependencies.mjs";
+import { syncPulseRuntimeArtifacts } from "../../../workflow/scripts/runtime/pulse_state.mjs";
 
 const LOCAL_USING_PULSE_SKILL_PATH = fileURLToPath(new URL("../SKILL.md", import.meta.url));
 const LOCAL_REPO_ROOT = fileURLToPath(new URL("../../../", import.meta.url));
@@ -28,7 +28,7 @@ test("applyRepo creates repo-local Pulse helpers under .pulse/scripts", () => {
     assert.match(fs.readFileSync(path.join(root, "AGENTS.md"), "utf8"), /Pulse Workflow/);
     assert.ok(fs.existsSync(path.join(root, ".codex", "config.toml")));
     assert.equal(fs.existsSync(path.join(root, ".codex", "hooks.json")), false);
-    assert.ok(fs.existsSync(path.join(root, ".pulse", "onboarding.json")));
+    assert.ok(fs.existsSync(path.join(root, ".pulse", "runtime", "onboarding.json")));
     assert.ok(fs.existsSync(path.join(root, ".pulse", "runtime", "state.json")));
     assert.ok(fs.existsSync(path.join(root, ".pulse", "runtime")));
     assert.equal(fs.existsSync(path.join(root, ".pulse", "runtime", "current-feature.json")), false);
@@ -51,6 +51,7 @@ test("applyRepo creates repo-local Pulse helpers under .pulse/scripts", () => {
     assert.ok(fs.existsSync(path.join(root, ".pulse", "scripts", "workgraph_store.mjs")));
     assert.ok(fs.existsSync(path.join(root, ".pulse", "scripts", "workgraph_templates.mjs")));
     assert.ok(fs.existsSync(path.join(root, ".pulse", "scripts", "templates", "works", "epic-README.md")));
+    assert.ok(fs.existsSync(path.join(root, ".pulse", "scripts", "templates", "works", "story-SPEC.md")));
     assert.ok(fs.existsSync(path.join(root, ".pulse", "scripts", "templates", "works", "verification.md")));
     assert.ok(fs.existsSync(path.join(root, ".pulse", "scripts", "pulse_session_context.mjs")));
     assert.ok(fs.existsSync(path.join(root, ".pulse", "scripts", "pulse_state.mjs")));
@@ -62,6 +63,34 @@ test("applyRepo creates repo-local Pulse helpers under .pulse/scripts", () => {
     assert.equal(fs.existsSync(path.join(root, ".codex", "pulse_status.mjs")), false);
     assert.equal(fs.existsSync(path.join(root, ".codex", "pulse_dependencies.mjs")), false);
     assert.equal(fs.existsSync(path.join(root, ".codex", "pulse_reservations.mjs")), false);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("checkRepo reports onboarding marker path, legacy marker presence, and domain normalization actions", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "pulse-onboard-"));
+
+  try {
+    fs.mkdirSync(path.join(root, ".pulse"), { recursive: true });
+    fs.writeFileSync(
+      path.join(root, ".pulse", "onboarding.json"),
+      `${JSON.stringify({ plugin_version: "0.9.0", status: "complete" }, null, 2)}\n`,
+      "utf8",
+    );
+
+    const result = checkRepo(root);
+
+    assert.equal(result.status, "needs_onboarding");
+    assert.ok(result.actions.includes("migrate_legacy_onboarding_marker"));
+    assert.ok(result.actions.includes("normalize_.pulse_structure"));
+    assert.ok(result.actions.includes("normalize_docs_structure"));
+    assert.ok(result.actions.includes("normalize_works_structure"));
+    assert.equal(result.details.onboarding_marker_path, ".pulse/runtime/onboarding.json");
+    assert.equal(result.details.legacy_onboarding_marker_exists, true);
+    assert.equal(result.details.domain_status.pulse, "non_compliant");
+    assert.equal(result.details.domain_status.docs, "missing");
+    assert.equal(result.details.domain_status.works, "missing");
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }

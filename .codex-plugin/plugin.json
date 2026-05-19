@@ -30,7 +30,7 @@
   "interface": {
     "displayName": "Pulse",
     "shortDescription": "One `pulse:workflow` router plus standalone utility skills",
-    "longDescription": "Packages one user-facing `pulse:workflow` router for onboarding, planning, validation, execution, review, and follow-up, plus standalone utility skills outside that router, while `pulse-work` manages the local workgraph and runtime state.",
+    "longDescription": "Packages one user-facing `pulse:workflow` router for session entry, planning, validation, execution, review, and follow-up, plus standalone utility skills outside that router, while `pulse-work` manages the local workgraph and runtime state.",
     "developerName": "quanpersie2001",
     "category": "Productivity",
     "capabilities": [
@@ -40,7 +40,7 @@
     ],
     "websiteURL": "https://github.com/quanpersie2001/pulse",
     "defaultPrompt": [
-      "Run `pulse:workflow onboard` for this repository.",
+      "Run `pulse:workflow use` for this repository.",
       "Use `pulse:workflow plan` and `pulse:workflow validate` before execution.",
       "Use `pulse:workflow review` after execution is complete."
     ],

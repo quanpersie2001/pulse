@@ -9,23 +9,18 @@ import {
   buildDefaultState,
   normalizePulseState,
   syncPulseRuntimeArtifacts,
-  getPulseStatePaths,
-} from "../../../scripts/runtime/pulse_state.mjs";
-import {
-  collectPulseSkillDependencies,
-  readDependencyHealthSafe,
-  buildDependencyWarningSummary,
-} from "../../../scripts/runtime/pulse_dependencies.mjs";
+} from "../runtime/pulse_state.mjs";
 import {
   ensureWorkgraphFilesystem,
   getWorkgraphPaths,
   loadItems,
   writeViews,
-} from "../../../scripts/runtime/workgraph_store.mjs";
+} from "../runtime/workgraph_store.mjs";
+import { buildSessionLoad } from "./load_context.mjs";
 
 const SCRIPT_PATH = fileURLToPath(import.meta.url);
 const COMMAND_SCRIPT_DIR = path.dirname(SCRIPT_PATH);
-const PULSE_SKILL_DIR = path.resolve(COMMAND_SCRIPT_DIR, "..", "..", "..");
+const PULSE_SKILL_DIR = path.resolve(COMMAND_SCRIPT_DIR, "..", "..");
 const PULSE_RUNTIME_DIR = path.join(PULSE_SKILL_DIR, "scripts", "runtime");
 const REPO_ROOT = path.resolve(PULSE_SKILL_DIR, "..", "..");
 const PULSE_WORK_TEMPLATES_DIR = path.join(REPO_ROOT, "skills", "workflow", "templates", "works");
@@ -33,14 +28,11 @@ const HARNESS_BACKLOG_TEMPLATE_PATH = path.join(REPO_ROOT, "skills", "workflow",
 const PLUGIN_MANIFEST_PATH = path.join(REPO_ROOT, ".codex-plugin", "plugin.json");
 const AGENTS_TEMPLATE_PATH = path.join(REPO_ROOT, "AGENTS.template.md");
 const ONBOARDING_SCHEMA_VERSION = "1.0";
-const COMPACT_PROMPT_MARKER_START = "# PULSE: compact_prompt start";
-const COMPACT_PROMPT_MARKER_END = "# PULSE: compact_prompt end";
+const WORKFLOW_COMMAND = "use";
+const WORKFLOW_SETUP_STEP = "onboarding";
+const ONBOARDING_MARKER_PATH = path.join(".pulse", "runtime", "onboarding.json");
+const LEGACY_ONBOARDING_MARKER_PATH = path.join(".pulse", "onboarding.json");
 const MIN_NODE_MAJOR = 18;
-const LEGACY_HOOK_SCRIPT_FILENAMES = [
-  "pulse_session_start.py",
-  "pulse_pre_tool_use.py",
-  "pulse_stop.py",
-];
 const MANAGED_SUPPORT_FILES = {
   "pulse-work": path.join(PULSE_RUNTIME_DIR, "pulse-work"),
   "pulse_work.mjs": path.join(PULSE_RUNTIME_DIR, "pulse_work.mjs"),
@@ -54,18 +46,18 @@ const MANAGED_SUPPORT_FILES = {
   "workgraph_templates.mjs": path.join(PULSE_RUNTIME_DIR, "workgraph_templates.mjs"),
   "pulse_status.mjs": path.join(PULSE_RUNTIME_DIR, "pulse_status.mjs"),
   "pulse_state.mjs": path.join(PULSE_RUNTIME_DIR, "pulse_state.mjs"),
-  "pulse_dependencies.mjs": path.join(PULSE_RUNTIME_DIR, "pulse_dependencies.mjs"),
   "pulse_reservations.mjs": path.join(PULSE_RUNTIME_DIR, "pulse_reservations.mjs"),
   "pulse_session_context.mjs": path.join(PULSE_RUNTIME_DIR, "pulse_session_context.mjs"),
-  "onboard_pulse.mjs": path.join(PULSE_RUNTIME_DIR, "onboard_pulse.mjs"),
+  "load_context.mjs": path.join(COMMAND_SCRIPT_DIR, "load_context.mjs"),
+  "onboard_pulse.mjs": path.join(COMMAND_SCRIPT_DIR, "onboard_pulse.mjs"),
 };
 const MANAGED_SUPPORT_TEMPLATE_FILES = {
   "epic-README.md": path.join(PULSE_WORK_TEMPLATES_DIR, "epic-README.md"),
   "story-README.md": path.join(PULSE_WORK_TEMPLATES_DIR, "story-README.md"),
+  "story-SPEC.md": path.join(PULSE_WORK_TEMPLATES_DIR, "story-SPEC.md"),
   "task-README.md": path.join(PULSE_WORK_TEMPLATES_DIR, "task-README.md"),
   "verification.md": path.join(PULSE_WORK_TEMPLATES_DIR, "verification.md"),
 };
-const MANAGED_SUPPORT_INVENTORY_FILE = "pulse_dependency_inventory.json";
 const LEGACY_RUNTIME_TEXT_REPLACEMENTS = [
   [".pulse/tooling-status.json", ".pulse/runtime/tooling-status.json"],
   [".pulse/state.json", ".pulse/runtime/state.json"],
@@ -75,16 +67,14 @@ const LEGACY_RUNTIME_TEXT_REPLACEMENTS = [
   [".pulse/checkpoints/", ".pulse/runtime/checkpoints/"],
   [".pulse/reservations.json", ".pulse/runtime/reservations.json"],
 ];
-const LEGACY_RUNTIME_FILE_MIGRATIONS = [
-  [".pulse/state.json", ".pulse/runtime/state.json"],
-  [".pulse/STATE.md", ".pulse/runtime/STATE.md"],
-  [".pulse/tooling-status.json", ".pulse/runtime/tooling-status.json"],
-  [".pulse/reservations.json", ".pulse/runtime/reservations.json"],
-];
-const LEGACY_RUNTIME_DIRECTORY_MIGRATIONS = [
-  [".pulse/handoffs", ".pulse/runtime/handoffs"],
-  [".pulse/checkpoints", ".pulse/runtime/checkpoints"],
-];
+
+/**
+ * Runtime checks and CLI root resolution.
+ */
+
+/**
+ * Check whether the current Node.js runtime can execute Pulse onboarding.
+ */
 export function getNodeRuntimeStatus(version = process.versions.node) {
   const major = Number.parseInt(String(version).split(".")[0] || "0", 10);
   const supported = Number.isFinite(major) && major >= MIN_NODE_MAJOR;
@@ -104,6 +94,9 @@ function loadPluginVersion() {
   return JSON.parse(fs.readFileSync(PLUGIN_MANIFEST_PATH, "utf8")).version;
 }
 
+/**
+ * Resolve the target repository root from an explicit path, Git, or cwd fallback.
+ */
 export function resolveRepoRoot(explicitRoot) {
   if (explicitRoot) {
     return path.resolve(explicitRoot);
@@ -132,38 +125,528 @@ export function resolveRepoRoot(explicitRoot) {
   }
 }
 
-function readTemplate() {
-  return `${fs.readFileSync(AGENTS_TEMPLATE_PATH, "utf8").replace(/\s*$/, "")}\n`;
-}
+/**
+ * Tooling status helpers.
+ */
 
-function readTextIfExists(filePath) {
-  return fs.existsSync(filePath) ? fs.readFileSync(filePath, "utf8") : "";
-}
-
-function readJsonIfExists(filePath) {
-  if (!fs.existsSync(filePath)) {
-    return null;
+function buildReadinessStatus({ blockers = [], degradations = [] }) {
+  if ((blockers || []).length > 0) {
+    return "FAIL";
   }
-  try {
-    return JSON.parse(fs.readFileSync(filePath, "utf8"));
-  } catch {
-    return null;
+  if ((degradations || []).length > 0) {
+    return "DEGRADED";
+  }
+  return "PASS";
+}
+
+/**
+ * Build the failure payload returned when Node.js is too old to continue.
+ */
+function buildRuntimeBlockedPayload(repoRoot, action) {
+  const runtime = getNodeRuntimeStatus();
+  return {
+    repo_root: repoRoot,
+    status: "FAIL",
+    action,
+    requires_confirmation: false,
+    actions: ["install_supported_node_runtime"],
+    message: `Pulse requires Node.js ${MIN_NODE_MAJOR}+ before onboarding can continue. Install Node.js and rerun onboarding.`,
+    details: {
+      runtime,
+    },
+  };
+}
+
+/**
+ * Build the machine-readable runtime status payload written by check and apply.
+ */
+function buildToolingStatusPayload(repoRoot, options) {
+  const {
+    requestedMode,
+    recommendedMode,
+    readinessStatus,
+    onboardingStatus,
+    domainStatus,
+    blockers,
+    degradations,
+    warnings,
+    tools,
+    resumeOwner,
+  } = options;
+
+  const sessionLoad = buildSessionLoad(repoRoot, { resumeOwner });
+
+  return {
+    timestamp: utcNow(),
+    project_root: repoRoot,
+    requested_mode: requestedMode,
+    recommended_mode: recommendedMode,
+    status: readinessStatus.toLowerCase(),
+    onboarding: onboardingStatus,
+    onboarding_marker_path: ONBOARDING_MARKER_PATH,
+    domain_status: domainStatus,
+    tools,
+    blockers,
+    degradations,
+    warnings,
+    session: {
+      posture: {
+        route_command: WORKFLOW_COMMAND,
+        setup_step: WORKFLOW_SETUP_STEP,
+        active_command: sessionLoad.active_context.active_command || WORKFLOW_COMMAND,
+        active_epic_id: sessionLoad.active_context.active_epic_id,
+        active_story_id: sessionLoad.active_context.active_story_id,
+        active_item_id: sessionLoad.active_context.active_item_id,
+        in_progress_items: sessionLoad.in_progress_items,
+        open_reservations: sessionLoad.open_reservations,
+      },
+      scout_findings: sessionLoad.scout_findings,
+      resume_options: sessionLoad.resume_options,
+    },
+    session_load: sessionLoad,
+    next_command: sessionLoad.next_command,
+  };
+}
+
+/**
+ * Render the human-readable runtime state mirror from tooling status.
+ */
+function writeStateMarkdownFromTooling(repoRoot, toolingStatusPayload) {
+  const stateMarkdownPath = path.join(repoRoot, ".pulse", "runtime", "STATE.md");
+  const content = [
+    "# Pulse Runtime State",
+    "",
+    `Workflow command: ${WORKFLOW_COMMAND}`,
+    `Setup step: ${WORKFLOW_SETUP_STEP}`,
+    `Status: ${toolingStatusPayload.status.toUpperCase()}`,
+    `Requested mode: ${toolingStatusPayload.requested_mode}`,
+    `Recommended mode: ${toolingStatusPayload.recommended_mode}`,
+    `Next command: ${toolingStatusPayload.next_command || "(none)"}`,
+    `Session posture: ${toolingStatusPayload.session_load?.posture || "fresh"}`,
+    `Open reservations: ${toolingStatusPayload.session?.posture?.open_reservations || 0}`,
+    `Resume options: ${Array.isArray(toolingStatusPayload.session_load?.resume_options) ? toolingStatusPayload.session_load.resume_options.length : 0}`,
+    `Blockers: ${Array.isArray(toolingStatusPayload.blockers) ? toolingStatusPayload.blockers.length : 0}`,
+    `Degradations: ${Array.isArray(toolingStatusPayload.degradations) ? toolingStatusPayload.degradations.length : 0}`,
+    "",
+    "## Session Load",
+    "",
+    `Requires selection: ${toolingStatusPayload.session_load?.requires_selection ? "yes" : "no"}`,
+    `Active command: ${toolingStatusPayload.session_load?.active_context?.active_command || "(none)"}`,
+    `Active epic: ${toolingStatusPayload.session_load?.active_context?.active_epic_id || "(none)"}`,
+    `Active story: ${toolingStatusPayload.session_load?.active_context?.active_story_id || "(none)"}`,
+    `Active item: ${toolingStatusPayload.session_load?.active_context?.active_item_id || "(none)"}`,
+    `Read-first files: ${Array.isArray(toolingStatusPayload.session_load?.read_first) ? toolingStatusPayload.session_load.read_first.length : 0}`,
+    `Missing files: ${Array.isArray(toolingStatusPayload.session_load?.missing_files) ? toolingStatusPayload.session_load.missing_files.length : 0}`,
+    `Rejected paths: ${Array.isArray(toolingStatusPayload.session_load?.rejected_paths) ? toolingStatusPayload.session_load.rejected_paths.length : 0}`,
+    "",
+    toolingStatusPayload.session_load?.summary ? `Summary: ${toolingStatusPayload.session_load.summary}` : "Summary: (none)",
+    toolingStatusPayload.session_load?.next_action ? `Next safe action: ${toolingStatusPayload.session_load.next_action}` : "Next safe action: (none)",
+    "",
+  ].join("\n");
+
+  ensureParent(stateMarkdownPath);
+  fs.writeFileSync(stateMarkdownPath, content, "utf8");
+}
+
+/**
+ * Domain classifiers.
+ */
+
+function listActiveDomainEntries(domainPath) {
+  return listDirectoryEntries(domainPath).filter((entry) => !isBackupEntry(entry));
+}
+
+/**
+ * Classify the .pulse domain against the expected v2 runtime layout.
+ */
+function classifyPulseDomain(repoRoot) {
+  const pulsePath = path.join(repoRoot, ".pulse");
+  if (!fs.existsSync(pulsePath)) {
+    return { status: "missing", missing: [".pulse"], unexpected_legacy: [], conflicts: [] };
+  }
+
+  const required = [
+    ["runtime", "directory"],
+    [path.join("runtime", "handoffs"), "directory"],
+    [path.join("runtime", "checkpoints"), "directory"],
+    ["workgraph", "directory"],
+    [path.join("workgraph", "views"), "directory"],
+    ["scripts", "directory"],
+    ["harness", "directory"],
+    ["memory", "directory"],
+    [path.join("harness", "HARNESS_BACKLOG.md"), "file"],
+  ];
+  const missing = [];
+  for (const [relative, kind] of required) {
+    const absolute = path.join(pulsePath, relative);
+    const exists = fs.existsSync(absolute);
+    if (!exists || (kind === "directory" && !fs.statSync(absolute).isDirectory()) || (kind === "file" && !fs.statSync(absolute).isFile())) {
+      missing.push(path.posix.join(".pulse", relative.split(path.sep).join(path.posix.sep)));
+    }
+  }
+
+  const unexpectedLegacy = [];
+  for (const legacy of ["current-feature.json", "runtime-snapshot.json", "reservations.json", "state.json", "STATE.md", "tooling-status.json"]) {
+    if (fs.existsSync(path.join(pulsePath, legacy))) {
+      unexpectedLegacy.push(path.posix.join(".pulse", legacy));
+    }
+  }
+  for (const legacyDir of ["handoffs", "checkpoints"]) {
+    if (fs.existsSync(path.join(pulsePath, legacyDir))) {
+      unexpectedLegacy.push(path.posix.join(".pulse", legacyDir));
+    }
+  }
+
+  return {
+    status: missing.length === 0 && unexpectedLegacy.length === 0 ? "compliant" : "non_compliant",
+    missing,
+    unexpected_legacy: unexpectedLegacy,
+    conflicts: [],
+  };
+}
+
+/**
+ * Classify the docs domain against the expected semantic docs scaffold.
+ */
+function classifyDocsDomain(repoRoot) {
+  const docsPath = path.join(repoRoot, "docs");
+  if (!fs.existsSync(docsPath)) {
+    return { status: "missing", missing: ["docs"], unexpected_legacy: [], conflicts: [] };
+  }
+  const required = ["ARCHITECTURE.md", "GLOSSARY.md", "decisions", "product"];
+  const missing = required.filter((entry) => !fs.existsSync(path.join(docsPath, entry)));
+  return {
+    status: missing.length === 0 ? "compliant" : "non_compliant",
+    missing: missing.map((entry) => path.posix.join("docs", entry)),
+    unexpected_legacy: [],
+    conflicts: [],
+  };
+}
+
+/**
+ * Classify the works domain against the expected story-first work layout.
+ */
+function classifyWorksDomain(repoRoot) {
+  const worksPath = path.join(repoRoot, "works");
+  if (!fs.existsSync(worksPath)) {
+    return { status: "missing", missing: ["works"], unexpected_legacy: [], conflicts: [] };
+  }
+
+  const activeEntries = listActiveDomainEntries(worksPath);
+  const allowedTopLevel = new Set(["epics", "backlog.md", "test-matrix.md"]);
+  const unexpectedLegacy = activeEntries.filter((entry) => !allowedTopLevel.has(entry));
+  const missing = fs.existsSync(path.join(worksPath, "epics")) ? [] : ["works/epics"];
+
+  return {
+    status: missing.length === 0 && unexpectedLegacy.length === 0 ? "compliant" : "non_compliant",
+    missing,
+    unexpected_legacy: unexpectedLegacy.map((entry) => path.posix.join("works", entry)),
+    conflicts: [],
+  };
+}
+
+function classifyDomains(repoRoot) {
+  return {
+    pulse: classifyPulseDomain(repoRoot),
+    docs: classifyDocsDomain(repoRoot),
+    works: classifyWorksDomain(repoRoot),
+  };
+}
+
+function domainStatusSummary(domains) {
+  return Object.fromEntries(Object.entries(domains).map(([name, value]) => [name, value.status]));
+}
+
+/**
+ * Domain normalization helpers.
+ */
+
+function backupDomainInPlace(repoRoot, relativePath, stamp) {
+  const domainPath = path.join(repoRoot, relativePath);
+  if (!fs.existsSync(domainPath)) {
+    return { backup: "", moved: [] };
+  }
+  ensureDirectory(domainPath);
+  const backupName = `backup-${stamp}`;
+  const backupAbsolute = path.join(domainPath, backupName);
+  const moved = [];
+  ensureDirectory(backupAbsolute);
+  for (const entry of fs.readdirSync(domainPath)) {
+    if (entry === backupName || isBackupEntry(entry)) {
+      continue;
+    }
+    fs.renameSync(path.join(domainPath, entry), path.join(backupAbsolute, entry));
+    moved.push(entry);
+  }
+  return {
+    backup: path.posix.join(relativePath.split(path.sep).join(path.posix.sep), backupName),
+    moved,
+  };
+}
+
+function readOnboardingState(repoRoot, onboardingPath) {
+  const legacyPath = path.join(repoRoot, LEGACY_ONBOARDING_MARKER_PATH);
+  let onboarding = readJsonIfExists(onboardingPath) || {};
+  let legacyMigrated = false;
+  if (Object.keys(onboarding).length === 0 && fs.existsSync(legacyPath)) {
+    onboarding = readJsonIfExists(legacyPath) || {};
+  }
+  if (fs.existsSync(legacyPath) && !fs.existsSync(onboardingPath)) {
+    ensureParent(onboardingPath);
+    fs.copyFileSync(legacyPath, onboardingPath);
+    fs.rmSync(legacyPath, { force: true });
+    legacyMigrated = true;
+  } else if (fs.existsSync(legacyPath)) {
+    fs.rmSync(legacyPath, { force: true });
+    legacyMigrated = true;
+  }
+  return { onboarding, legacyMigrated };
+}
+
+function ensurePulseDomainLayout(repoRoot) {
+  for (const relative of [
+    [".pulse", "runtime"],
+    [".pulse", "runtime", "handoffs"],
+    [".pulse", "runtime", "checkpoints"],
+    [".pulse", "runtime", "onboarding-migration"],
+    [".pulse", "workgraph"],
+    [".pulse", "workgraph", "views"],
+    [".pulse", "scripts"],
+    [".pulse", "harness"],
+    [".pulse", "memory"],
+  ]) {
+    ensureDirectory(path.join(repoRoot, ...relative));
+  }
+
+  const manifestPath = path.join(repoRoot, ".pulse", "runtime", "handoffs", "manifest.json");
+  if (!fs.existsSync(manifestPath)) {
+    fs.writeFileSync(manifestPath, `${JSON.stringify({ schema_version: "1.0", updated_at: utcNow(), active: [] }, null, 2)}\n`, "utf8");
+  }
+  const reservationsPath = path.join(repoRoot, ".pulse", "runtime", "reservations.json");
+  if (!fs.existsSync(reservationsPath)) {
+    fs.writeFileSync(reservationsPath, `${JSON.stringify({ schema_version: "1.0", reservations: [] }, null, 2)}\n`, "utf8");
   }
 }
 
-function ensureParent(filePath) {
-  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+function ensureDocsScaffold(repoRoot) {
+  ensureDirectory(path.join(repoRoot, "docs"));
+  ensureDirectory(path.join(repoRoot, "docs", "decisions"));
+  ensureDirectory(path.join(repoRoot, "docs", "product"));
+  const architecturePath = path.join(repoRoot, "docs", "ARCHITECTURE.md");
+  if (!fs.existsSync(architecturePath)) {
+    fs.writeFileSync(architecturePath, "# Architecture\n", "utf8");
+  }
+  const glossaryPath = path.join(repoRoot, "docs", "GLOSSARY.md");
+  if (!fs.existsSync(glossaryPath)) {
+    fs.writeFileSync(glossaryPath, "# Glossary\n", "utf8");
+  }
 }
 
-function buildManagedDependencyInventory() {
-  return `${JSON.stringify({
-    schema_version: "1.0",
-    skills: collectPulseSkillDependencies({
-      repoRoot: REPO_ROOT,
-      skillsRoot: path.join(REPO_ROOT, "skills"),
-    }),
-  }, null, 2)}\n`;
+function ensureWorksScaffold(repoRoot) {
+  ensureDirectory(path.join(repoRoot, "works"));
+  ensureDirectory(path.join(repoRoot, "works", "epics"));
 }
+
+/**
+ * Copy known-safe runtime artifacts from a backed-up .pulse domain.
+ */
+function migratePulseBackup(repoRoot, backupRelativePath) {
+  const migrated = [];
+  const notes = [];
+  if (!backupRelativePath) {
+    return { migrated, notes };
+  }
+
+  const backupAbsolute = path.join(repoRoot, backupRelativePath);
+  const copyIfPresent = (from, to) => {
+    if (copyPathIfExists(path.join(backupAbsolute, from), path.join(repoRoot, to))) {
+      migrated.push(`${path.posix.join(backupRelativePath, from.split(path.sep).join(path.posix.sep))} -> ${to.split(path.sep).join(path.posix.sep)}`);
+    }
+  };
+  const copyTextIfPresent = (from, to) => {
+    if (copyRewrittenTextIfExists(path.join(backupAbsolute, from), path.join(repoRoot, to))) {
+      migrated.push(`${path.posix.join(backupRelativePath, from.split(path.sep).join(path.posix.sep))} -> ${to.split(path.sep).join(path.posix.sep)}`);
+    }
+  };
+
+  copyTextIfPresent("state.json", path.join(".pulse", "runtime", "state.json"));
+  copyTextIfPresent("STATE.md", path.join(".pulse", "runtime", "STATE.md"));
+  copyTextIfPresent("tooling-status.json", path.join(".pulse", "runtime", "tooling-status.json"));
+  copyTextIfPresent("reservations.json", path.join(".pulse", "runtime", "reservations.json"));
+  copyIfPresent("handoffs", path.join(".pulse", "runtime", "handoffs"));
+  copyIfPresent("checkpoints", path.join(".pulse", "runtime", "checkpoints"));
+  copyIfPresent("runtime", path.join(".pulse", "runtime"));
+  copyIfPresent("memory", path.join(".pulse", "memory"));
+  copyIfPresent("workgraph", path.join(".pulse", "workgraph"));
+
+  const unmapped = listActiveDomainEntries(backupAbsolute).filter(
+    (entry) => !["state.json", "STATE.md", "tooling-status.json", "reservations.json", "handoffs", "checkpoints", "runtime", "memory", "workgraph"].includes(entry),
+  );
+  if (unmapped.length > 0) {
+    notes.push(`Unmapped .pulse backup entries require review: ${unmapped.join(", ")}.`);
+  }
+
+  return { migrated, notes };
+}
+
+/**
+ * Write operator briefs for content that was backed up during normalization.
+ */
+function writeOnboardingMigrationBriefs(repoRoot, normalization) {
+  const migrationDir = path.join(repoRoot, ".pulse", "runtime", "onboarding-migration");
+  ensureDirectory(migrationDir);
+  const briefs = [];
+
+  const writeBrief = (fileName, lines) => {
+    const target = path.join(migrationDir, fileName);
+    fs.writeFileSync(target, `${lines.join("\n").replace(/\s*$/, "")}\n`, "utf8");
+    briefs.push(relativePosix(repoRoot, target));
+  };
+
+  if (normalization.domains.pulse.backup) {
+    writeBrief("pulse-migration-brief.md", [
+      "# Pulse Runtime Migration Brief",
+      "",
+      `Backup: ${normalization.domains.pulse.backup}`,
+      "",
+      "Known-safe runtime paths were copied into the v2 .pulse layout when possible.",
+      "Review unmapped backup entries before treating them as current runtime truth.",
+    ]);
+  }
+
+  if (normalization.domains.docs.backup) {
+    writeBrief("docs-regeneration-brief.md", [
+      "# Docs Regeneration Brief",
+      "",
+      `Backup: ${normalization.domains.docs.backup}`,
+      "",
+      "Read the backed-up docs and the current codebase, then regenerate target docs that conform to:",
+      "",
+      "- docs/ARCHITECTURE.md",
+      "- docs/GLOSSARY.md",
+      "- docs/decisions/",
+      "- docs/product/",
+      "",
+      "Do not blindly copy the old docs structure back into active docs/.",
+    ]);
+  }
+
+  if (normalization.domains.works.backup) {
+    writeBrief("works-migration-brief.md", [
+      "# Works Migration Brief",
+      "",
+      `Backup: ${normalization.domains.works.backup}`,
+      "",
+      "Read the backed-up work artifacts, infer the active work slices, and migrate them into:",
+      "",
+      "- works/epics/<E-id>-<slug>/README.md",
+      "- works/epics/<E-id>-<slug>/<S-id>-<slug>/README.md",
+      "- works/epics/<E-id>-<slug>/<S-id>-<slug>/SPEC.md",
+      "- works/epics/<E-id>-<slug>/<S-id>-<slug>/tasks/<item-id>-<slug>/README.md",
+      "- works/epics/<E-id>-<slug>/<S-id>-<slug>/tasks/<item-id>-<slug>/verification.md",
+      "",
+      "Synchronize migrated work with .pulse/workgraph/items.jsonl instead of preserving legacy layout as active truth.",
+    ]);
+  }
+
+  if (briefs.length > 0) {
+    const manifestPath = path.join(migrationDir, "manifest.json");
+    fs.writeFileSync(manifestPath, `${JSON.stringify({ schema_version: "1.0", generated_at: utcNow(), briefs }, null, 2)}\n`, "utf8");
+  }
+
+  return briefs;
+}
+
+function ensureDocsDomain(repoRoot, stamp) {
+  const initial = classifyDocsDomain(repoRoot);
+  const notes = [];
+  const migrations = [];
+  let backup = "";
+
+  if (initial.status === "missing") {
+    ensureDocsScaffold(repoRoot);
+    return { ...initial, backup, notes, migrations };
+  }
+
+  if (initial.status === "non_compliant") {
+    const activeEntries = listActiveDomainEntries(path.join(repoRoot, "docs"));
+    if (activeEntries.length > 0) {
+      const backupResult = backupDomainInPlace(repoRoot, "docs", stamp);
+      backup = backupResult.backup;
+      migrations.push(`docs active content -> ${backup}`);
+      notes.push("docs domain was backed up and scaffolded; regenerate semantic docs from the onboarding migration brief.");
+    }
+    ensureDocsScaffold(repoRoot);
+  }
+
+  return { ...initial, backup, notes, migrations };
+}
+
+function ensureWorksDomain(repoRoot, stamp) {
+  const initial = classifyWorksDomain(repoRoot);
+  const notes = [];
+  const migrations = [];
+  let backup = "";
+
+  if (initial.status === "missing") {
+    ensureWorksScaffold(repoRoot);
+    return { ...initial, backup, notes, migrations };
+  }
+
+  if (initial.status === "non_compliant") {
+    const activeEntries = listActiveDomainEntries(path.join(repoRoot, "works"));
+    if (activeEntries.length > 0) {
+      const backupResult = backupDomainInPlace(repoRoot, "works", stamp);
+      backup = backupResult.backup;
+      migrations.push(`works active content -> ${backup}`);
+      notes.push("works domain was backed up and scaffolded; migrate work items from the onboarding migration brief.");
+    }
+    ensureWorksScaffold(repoRoot);
+  }
+
+  return { ...initial, backup, notes, migrations };
+}
+
+/**
+ * Normalize .pulse, docs, and works into the managed v2 layout.
+ */
+function buildDomainNormalization(repoRoot) {
+  const stamp = backupStamp();
+  const initial = classifyDomains(repoRoot);
+  let pulseBackup = "";
+  let pulseMigrations = [];
+  let pulseNotes = [];
+
+  if (initial.pulse.status === "missing") {
+    ensurePulseDomainLayout(repoRoot);
+  } else if (initial.pulse.status === "non_compliant") {
+    const backupResult = backupDomainInPlace(repoRoot, ".pulse", stamp);
+    pulseBackup = backupResult.backup;
+    ensurePulseDomainLayout(repoRoot);
+    const migration = migratePulseBackup(repoRoot, pulseBackup);
+    pulseMigrations = migration.migrated;
+    pulseNotes = migration.notes;
+  } else {
+    ensurePulseDomainLayout(repoRoot);
+  }
+
+  const docs = ensureDocsDomain(repoRoot, stamp);
+  const works = ensureWorksDomain(repoRoot, stamp);
+  const normalization = {
+    backup_stamp: stamp,
+    domains: {
+      pulse: { ...initial.pulse, backup: pulseBackup, notes: pulseNotes, migrations: pulseMigrations },
+      docs,
+      works,
+    },
+  };
+  normalization.migration_briefs = writeOnboardingMigrationBriefs(repoRoot, normalization);
+  return normalization;
+}
+
+/**
+ * Legacy runtime text rewriting helpers.
+ */
 
 function rewriteLegacyRuntimeText(text) {
   let next = String(text || "");
@@ -195,121 +678,9 @@ function rewriteLegacyRuntimeTree(rootPath) {
   }
 }
 
-function migrateLegacyRuntimeFile(repoRoot, legacyRelativePath, canonicalRelativePath) {
-  const sourcePath = path.join(repoRoot, legacyRelativePath);
-  const targetPath = path.join(repoRoot, canonicalRelativePath);
-  if (!fs.existsSync(sourcePath)) {
-    return { migrated: [], removed_duplicates: [], conflicts: [] };
-  }
-
-  const sourceText = rewriteLegacyRuntimeText(fs.readFileSync(sourcePath, "utf8"));
-  if (!fs.existsSync(targetPath)) {
-    ensureParent(targetPath);
-    fs.writeFileSync(targetPath, sourceText, "utf8");
-    fs.rmSync(sourcePath, { force: true });
-    return { migrated: [`${legacyRelativePath} -> ${canonicalRelativePath}`], removed_duplicates: [], conflicts: [] };
-  }
-
-  const targetText = fs.readFileSync(targetPath, "utf8");
-  if (targetText === sourceText) {
-    fs.rmSync(sourcePath, { force: true });
-    return { migrated: [], removed_duplicates: [legacyRelativePath], conflicts: [] };
-  }
-
-  return {
-    migrated: [],
-    removed_duplicates: [],
-    conflicts: [`${legacyRelativePath} != ${canonicalRelativePath}`],
-  };
-}
-
-function migrateLegacyRuntimeDirectory(repoRoot, legacyRelativePath, canonicalRelativePath) {
-  const sourcePath = path.join(repoRoot, legacyRelativePath);
-  const targetPath = path.join(repoRoot, canonicalRelativePath);
-  if (!fs.existsSync(sourcePath)) {
-    return { migrated: [], removed_duplicates: [], conflicts: [] };
-  }
-
-  if (fs.existsSync(targetPath)) {
-    return {
-      migrated: [],
-      removed_duplicates: [],
-      conflicts: [`${legacyRelativePath} != ${canonicalRelativePath}`],
-    };
-  }
-
-  ensureParent(targetPath);
-  fs.renameSync(sourcePath, targetPath);
-  rewriteLegacyRuntimeTree(targetPath);
-  return {
-    migrated: [`${legacyRelativePath} -> ${canonicalRelativePath}`],
-    removed_duplicates: [],
-    conflicts: [],
-  };
-}
-
-function collectLegacyRuntimeMigrationSummary(repoRoot) {
-  const summary = {
-    pending: [],
-    migrated: [],
-    removed_duplicates: [],
-    conflicts: [],
-  };
-
-  for (const [legacyRelativePath, canonicalRelativePath] of LEGACY_RUNTIME_FILE_MIGRATIONS) {
-    const sourcePath = path.join(repoRoot, legacyRelativePath);
-    const targetPath = path.join(repoRoot, canonicalRelativePath);
-    if (!fs.existsSync(sourcePath)) {
-      continue;
-    }
-    summary.pending.push(`${legacyRelativePath} -> ${canonicalRelativePath}`);
-    if (fs.existsSync(targetPath)) {
-      const sourceText = rewriteLegacyRuntimeText(fs.readFileSync(sourcePath, "utf8"));
-      const targetText = fs.readFileSync(targetPath, "utf8");
-      if (targetText !== sourceText) {
-        summary.conflicts.push(`${legacyRelativePath} != ${canonicalRelativePath}`);
-      }
-    }
-  }
-
-  for (const [legacyRelativePath, canonicalRelativePath] of LEGACY_RUNTIME_DIRECTORY_MIGRATIONS) {
-    const sourcePath = path.join(repoRoot, legacyRelativePath);
-    const targetPath = path.join(repoRoot, canonicalRelativePath);
-    if (!fs.existsSync(sourcePath)) {
-      continue;
-    }
-    summary.pending.push(`${legacyRelativePath} -> ${canonicalRelativePath}`);
-    if (fs.existsSync(targetPath)) {
-      summary.conflicts.push(`${legacyRelativePath} != ${canonicalRelativePath}`);
-    }
-  }
-
-  return summary;
-}
-
-function migrateLegacyRuntimeArtifacts(repoRoot) {
-  const summary = {
-    migrated: [],
-    removed_duplicates: [],
-    conflicts: [],
-  };
-
-  for (const [legacyRelativePath, canonicalRelativePath] of LEGACY_RUNTIME_FILE_MIGRATIONS) {
-    const outcome = migrateLegacyRuntimeFile(repoRoot, legacyRelativePath, canonicalRelativePath);
-    summary.migrated.push(...outcome.migrated);
-    summary.removed_duplicates.push(...outcome.removed_duplicates);
-    summary.conflicts.push(...outcome.conflicts);
-  }
-
-  for (const [legacyRelativePath, canonicalRelativePath] of LEGACY_RUNTIME_DIRECTORY_MIGRATIONS) {
-    const outcome = migrateLegacyRuntimeDirectory(repoRoot, legacyRelativePath, canonicalRelativePath);
-    summary.migrated.push(...outcome.migrated);
-    summary.removed_duplicates.push(...outcome.removed_duplicates);
-    summary.conflicts.push(...outcome.conflicts);
-  }
-
-  return summary;
-}
+/**
+ * Managed AGENTS.md block helpers.
+ */
 
 function managedAgentsPresent(text) {
   return text.includes("<!-- PULSE:START -->") && text.includes("<!-- PULSE:END -->");
@@ -336,294 +707,9 @@ function mergeAgentsContent(existing, template) {
   };
 }
 
-function insertBeforeFirstTable(text, block) {
-  const match = text.match(/^\[/m);
-  if (match && match.index !== undefined) {
-    return `${text.slice(0, match.index)}${block}\n${text.slice(match.index)}`;
-  }
-  return `${text.replace(/\s*$/, "")}${text.trim() ? "\n\n" : ""}${block}\n`;
-}
-
-function findProjectDocMaxBytes(text) {
-  const match = text.match(/^project_doc_max_bytes\s*=\s*(.+)$/m);
-  if (!match) {
-    return undefined;
-  }
-  const value = Number.parseInt(match[1], 10);
-  return Number.isFinite(value) ? value : undefined;
-}
-
-function upsertProjectDocMaxBytes(text, existingValue) {
-  const desired = 65536;
-  const line = `project_doc_max_bytes = ${desired}`;
-
-  if (existingValue === undefined) {
-    return insertBeforeFirstTable(text, `${line}\n`);
-  }
-
-  if (existingValue >= desired) {
-    return text;
-  }
-
-  return text.replace(/^project_doc_max_bytes\s*=\s*.+$/m, line);
-}
-
-function findSectionRange(text, sectionName) {
-  const lines = text.split("\n");
-  let offset = 0;
-  let start = null;
-
-  for (let index = 0; index < lines.length; index += 1) {
-    const line = lines[index];
-    if (start === null) {
-      if (line.trim() === `[${sectionName}]`) {
-        start = offset + line.length + 1;
-      }
-      offset += line.length + 1;
-      continue;
-    }
-
-    if (/^\[[^\]]+\]\s*$/.test(line)) {
-      return { start, end: offset };
-    }
-    offset += line.length + 1;
-  }
-
-  return start === null ? null : { start, end: text.length };
-}
-
-function featureSectionBody(text) {
-  const range = findSectionRange(text, "features");
-  return range ? text.slice(range.start, range.end) : null;
-}
-
-function isCodexHooksEnabled(text) {
-  const body = featureSectionBody(text);
-  return body ? /^codex_hooks\s*=\s*true\s*$/m.test(body) : false;
-}
-
-function upsertFeaturesCodexHooks(text) {
-  const range = findSectionRange(text, "features");
-  if (!range) {
-    const block = "[features]\ncodex_hooks = true\n";
-    const suffix = text && !text.endsWith("\n") ? "\n" : "";
-    return `${text}${suffix}${text.trim() ? "\n" : ""}${block}`;
-  }
-
-  let body = text.slice(range.start, range.end);
-  if (/^codex_hooks\s*=/m.test(body)) {
-    body = body.replace(/^codex_hooks\s*=.*$/m, "codex_hooks = true");
-  } else {
-    if (body && !body.endsWith("\n")) {
-      body += "\n";
-    }
-    body += "codex_hooks = true\n";
-  }
-
-  return `${text.slice(0, range.start)}${body}${text.slice(range.end)}`;
-}
-
-function renderCompactPromptBlock() {
-  return [
-    COMPACT_PROMPT_MARKER_START,
-    'compact_prompt = """',
-    "MANDATORY: Pulse context compaction recovery.",
-    "",
-    "STOP. Before doing anything else:",
-    "1. Read AGENTS.md completely.",
-    "2. If present, run `node .pulse/scripts/pulse_status.mjs --json` for a quick Pulse status snapshot.",
-    "3. Read .pulse/runtime/tooling-status.json, .pulse/runtime/state.json, and .pulse/runtime/STATE.md if they exist.",
-    "4. Read .pulse/runtime/handoffs/manifest.json and any active owner handoff you are resuming.",
-    "5. Re-open the active feature CONTEXT.md before more planning or edits.",
-    "6. Re-open the current bead or task before running more implementation commands.",
-    "7. Check the current worktree state with git status before resuming.",
-    "",
-    "After completing these steps, briefly confirm what context you restored and only then continue.",
-    '"""',
-    COMPACT_PROMPT_MARKER_END,
-    "",
-  ].join("\n");
-}
-
-function hasManagedCompactPrompt(text) {
-  return text.includes(COMPACT_PROMPT_MARKER_START) && text.includes(COMPACT_PROMPT_MARKER_END);
-}
-
-function hasCompactPrompt(text) {
-  return /^compact_prompt\s*=/m.test(text);
-}
-
-function replaceExistingCompactPrompt(text, replacement) {
-  const tripleQuotePattern = /^compact_prompt\s*=\s*"""[\s\S]*?^"""\s*$/m;
-  if (tripleQuotePattern.test(text)) {
-    return text.replace(tripleQuotePattern, replacement.replace(/\n$/, ""));
-  }
-
-  const singleLinePattern = /^compact_prompt\s*=.*$/m;
-  if (singleLinePattern.test(text)) {
-    return text.replace(singleLinePattern, replacement.replace(/\n$/, ""));
-  }
-
-  return insertBeforeFirstTable(text, replacement);
-}
-
-function mergeCompactPrompt(text, allowReplace) {
-  if (hasManagedCompactPrompt(text)) {
-    const updated = text.replace(
-      new RegExp(
-        `${escapeRegExp(COMPACT_PROMPT_MARKER_START)}[\\s\\S]*?${escapeRegExp(COMPACT_PROMPT_MARKER_END)}\\n?`,
-      ),
-      renderCompactPromptBlock(),
-    );
-    return {
-      text: updated,
-      compact_prompt_status: "managed",
-    };
-  }
-
-  if (hasCompactPrompt(text) && !allowReplace) {
-    return {
-      text,
-      compact_prompt_status: "conflict_preserved",
-    };
-  }
-
-  if (hasCompactPrompt(text) && allowReplace) {
-    return {
-      text: replaceExistingCompactPrompt(text, renderCompactPromptBlock()),
-      compact_prompt_status: "replaced",
-    };
-  }
-
-  return {
-    text: insertBeforeFirstTable(text, renderCompactPromptBlock()),
-    compact_prompt_status: "installed",
-  };
-}
-
-function mergeCodexConfig(configPath, allowCompactPromptReplace) {
-  const existingText = readTextIfExists(configPath);
-  const changes = [];
-
-  let updatedText = existingText;
-  const nextProjectDocText = upsertProjectDocMaxBytes(updatedText, findProjectDocMaxBytes(existingText));
-  if (nextProjectDocText !== updatedText) {
-    changes.push("set_project_doc_max_bytes");
-    updatedText = nextProjectDocText;
-  }
-
-  const nextFeatureText = upsertFeaturesCodexHooks(updatedText);
-  if (nextFeatureText !== updatedText) {
-    changes.push("enable_codex_hooks_feature");
-    updatedText = nextFeatureText;
-  }
-
-  const compactResult = mergeCompactPrompt(updatedText, allowCompactPromptReplace);
-  if (compactResult.text !== updatedText) {
-    changes.push(`compact_prompt_${compactResult.compact_prompt_status}`);
-    updatedText = compactResult.text;
-  } else if (compactResult.compact_prompt_status === "conflict_preserved") {
-    changes.push("compact_prompt_conflict_preserved");
-  }
-
-  return {
-    text: `${updatedText.replace(/\s*$/, "")}\n`,
-    changes,
-  };
-}
-
-function isPulseHook(hook) {
-  const command = hook?.command || "";
-  const status = hook?.statusMessage || "";
-  return command.includes(".codex/hooks/pulse_") || status.startsWith("Pulse:");
-}
-
-function parseHooksJson(text) {
-  if (!text.trim()) {
-    return {};
-  }
-  return JSON.parse(text);
-}
-
-function cleanupLegacyPulseHookEntries(text) {
-  const existing = text ? parseHooksJson(text) : {};
-  const hooks = existing.hooks && typeof existing.hooks === "object" ? existing.hooks : {};
-  const cleanedHooks = {};
-  const changes = [];
-
-  for (const [eventName, entries] of Object.entries(hooks)) {
-    const currentEntries = Array.isArray(entries) ? entries : [];
-    const nextEntries = [];
-
-    for (const entry of currentEntries) {
-      const hooksList = Array.isArray(entry?.hooks) ? entry.hooks : [];
-      const preservedHooks = hooksList.filter((hook) => !isPulseHook(hook));
-      if (preservedHooks.length === hooksList.length) {
-        nextEntries.push(entry);
-        continue;
-      }
-      if (preservedHooks.length > 0) {
-        nextEntries.push({
-          ...entry,
-          hooks: preservedHooks,
-        });
-      }
-    }
-
-    if (nextEntries.length > 0) {
-      cleanedHooks[eventName] = nextEntries;
-    }
-    if (JSON.stringify(currentEntries) !== JSON.stringify(nextEntries)) {
-      changes.push(`remove_legacy_pulse_hooks_${eventName}`);
-    }
-  }
-
-  const next = { ...existing };
-  if (Object.keys(cleanedHooks).length > 0) {
-    next.hooks = cleanedHooks;
-  } else {
-    delete next.hooks;
-  }
-
-  return {
-    text: Object.keys(next).length > 0 ? `${JSON.stringify(next, null, 2)}\n` : "",
-    changes,
-  };
-}
-
-function legacyPulseHookConfigStatus(hooksText) {
-  if (!hooksText) {
-    return {
-      exists: false,
-      needs_cleanup: false,
-      changes: [],
-      text: "",
-    };
-  }
-
-  try {
-    const cleaned = cleanupLegacyPulseHookEntries(hooksText);
-    return {
-      exists: true,
-      needs_cleanup: cleaned.text !== `${hooksText.replace(/\s*$/, "")}\n`,
-      changes: cleaned.changes,
-      text: cleaned.text,
-    };
-  } catch {
-    return {
-      exists: true,
-      needs_cleanup: false,
-      changes: [],
-      text: `${hooksText.replace(/\s*$/, "")}\n`,
-    };
-  }
-}
-
-function legacyHookScriptsNeedCleanup(repoRoot) {
-  const hooksDir = path.join(repoRoot, ".codex", "hooks");
-
-  return LEGACY_HOOK_SCRIPT_FILENAMES.some((name) => fs.existsSync(path.join(hooksDir, name)));
-}
+/**
+ * Managed support asset helpers.
+ */
 
 function getManagedSupportScriptsDir(repoRoot) {
   return path.join(repoRoot, ".pulse", "scripts");
@@ -633,11 +719,12 @@ function getManagedSupportTemplatesDir(repoRoot) {
   return path.join(getManagedSupportScriptsDir(repoRoot), "templates", "works");
 }
 
+/**
+ * Detect whether managed repo-local support scripts or templates are stale.
+ */
 function supportScriptsNeedUpdate(repoRoot) {
   const supportDir = getManagedSupportScriptsDir(repoRoot);
   const templatesDir = getManagedSupportTemplatesDir(repoRoot);
-  const inventoryPath = path.join(supportDir, MANAGED_SUPPORT_INVENTORY_FILE);
-  const inventorySource = buildManagedDependencyInventory();
 
   for (const [name, sourcePath] of Object.entries(MANAGED_SUPPORT_FILES)) {
     const targetPath = path.join(supportDir, name);
@@ -655,59 +742,15 @@ function supportScriptsNeedUpdate(repoRoot) {
     }
   }
 
-  if (!fs.existsSync(inventoryPath) || fs.readFileSync(inventoryPath, "utf8") !== inventorySource) {
-    return true;
-  }
-
   return false;
 }
 
-function legacySupportScriptsNeedCleanup(repoRoot) {
-  return Object.keys(MANAGED_SUPPORT_FILES).some((name) =>
-    fs.existsSync(path.join(repoRoot, ".codex", name)),
-  );
-}
-
-function cleanupLegacyHookScripts(repoRoot) {
-  const hooksDir = path.join(repoRoot, ".codex", "hooks");
-  if (!fs.existsSync(hooksDir)) {
-    return [];
-  }
-
-  const removed = [];
-  for (const name of LEGACY_HOOK_SCRIPT_FILENAMES) {
-    const target = path.join(hooksDir, name);
-    if (fs.existsSync(target)) {
-      fs.unlinkSync(target);
-      removed.push(path.relative(repoRoot, target));
-    }
-  }
-
-  if (fs.existsSync(hooksDir) && fs.readdirSync(hooksDir).length === 0) {
-    fs.rmdirSync(hooksDir);
-  }
-
-  return removed;
-}
-
-function cleanupLegacySupportScripts(repoRoot) {
-  const removed = [];
-
-  for (const name of Object.keys(MANAGED_SUPPORT_FILES)) {
-    const target = path.join(repoRoot, ".codex", name);
-    if (fs.existsSync(target)) {
-      fs.rmSync(target, { force: true });
-      removed.push(path.relative(repoRoot, target));
-    }
-  }
-
-  return removed;
-}
-
+/**
+ * Materialize managed Pulse support scripts, templates, and harness backlog.
+ */
 function writeSupportScripts(repoRoot) {
   const supportDir = getManagedSupportScriptsDir(repoRoot);
   const templatesDir = getManagedSupportTemplatesDir(repoRoot);
-  const inventoryPath = path.join(supportDir, MANAGED_SUPPORT_INVENTORY_FILE);
   fs.mkdirSync(supportDir, { recursive: true });
   fs.mkdirSync(templatesDir, { recursive: true });
 
@@ -724,10 +767,6 @@ function writeSupportScripts(repoRoot) {
     fs.chmodSync(target, 0o644);
     written.push(path.relative(repoRoot, target));
   }
-  fs.writeFileSync(inventoryPath, buildManagedDependencyInventory(), "utf8");
-  fs.chmodSync(inventoryPath, 0o644);
-  written.push(path.relative(repoRoot, inventoryPath));
-
   const harnessDir = path.join(repoRoot, ".pulse", "harness");
   fs.mkdirSync(harnessDir, { recursive: true });
   const harnessBacklogTarget = path.join(harnessDir, "HARNESS_BACKLOG.md");
@@ -738,41 +777,31 @@ function writeSupportScripts(repoRoot) {
   return written;
 }
 
+/**
+ * Initialize workgraph storage and refresh derived views.
+ */
 function initializeWorkgraphFilesystem(repoRoot) {
   ensureWorkgraphFilesystem(repoRoot, { syncSchema: true });
   writeViews(repoRoot, loadItems(repoRoot));
   return getWorkgraphPaths(repoRoot);
 }
 
-function buildRuntimeBlockedPayload(repoRoot, action) {
-  const runtime = getNodeRuntimeStatus();
-  return {
-    repo_root: repoRoot,
-    status: "missing_runtime",
-    action,
-    requires_confirmation: false,
-    actions: ["install_supported_node_runtime"],
-    message: `Pulse requires Node.js ${MIN_NODE_MAJOR}+ before onboarding can continue. Install Node.js and rerun onboarding.`,
-    details: {
-      runtime,
-    },
-  };
-}
+/**
+ * Public onboarding API.
+ */
 
-export function checkRepo(repoRoot) {
+/**
+ * Check onboarding readiness without modifying the repository.
+ */
+export function checkRepo(repoRoot, options = {}) {
   const runtime = getNodeRuntimeStatus();
   if (!runtime.supported) {
     return buildRuntimeBlockedPayload(repoRoot, "check");
   }
 
-  const dependencyHealth = readDependencyHealthSafe(repoRoot);
-  const dependencyWarning = buildDependencyWarningSummary(dependencyHealth);
-
   const pluginVersion = loadPluginVersion();
   const agentsPath = path.join(repoRoot, "AGENTS.md");
-  const configPath = path.join(repoRoot, ".codex", "config.toml");
-  const hooksPath = path.join(repoRoot, ".codex", "hooks.json");
-  const onboardingPath = path.join(repoRoot, ".pulse", "onboarding.json");
+  const onboardingPath = path.join(repoRoot, ONBOARDING_MARKER_PATH);
   const statePath = path.join(repoRoot, ".pulse", "runtime", "state.json");
   const workgraphPaths = getWorkgraphPaths(repoRoot);
 
@@ -780,20 +809,15 @@ export function checkRepo(repoRoot) {
   const agentsExists = agentsText.trim() !== "";
   const managedAgents = agentsExists && managedAgentsPresent(agentsText);
 
-  const configText = readTextIfExists(configPath);
-  const hooksText = readTextIfExists(hooksPath);
+  const legacyOnboardingPath = path.join(repoRoot, LEGACY_ONBOARDING_MARKER_PATH);
+  const onboarding =
+    readJsonIfExists(onboardingPath) ||
+    readJsonIfExists(legacyOnboardingPath) ||
+    {};
+  const onboardingMarkerExists = fs.existsSync(onboardingPath) || fs.existsSync(legacyOnboardingPath);
 
-  let onboarding = {};
-  if (fs.existsSync(onboardingPath)) {
-    try {
-      onboarding = JSON.parse(fs.readFileSync(onboardingPath, "utf8"));
-    } catch {
-      onboarding = {};
-    }
-  }
-
-  const compactPromptManaged = hasManagedCompactPrompt(configText);
-  const compactPromptConflict = hasCompactPrompt(configText) && !compactPromptManaged;
+  const domainDetails = classifyDomains(repoRoot);
+  const domainStatus = domainStatusSummary(domainDetails);
 
   const actions = [];
   if (!agentsExists) {
@@ -802,43 +826,21 @@ export function checkRepo(repoRoot) {
     actions.push("append_pulse_managed_block_to_AGENTS.md");
   }
 
-  if (!configText) {
-    actions.push("create_.codex/config.toml");
-  } else {
-    const projectDocMaxBytes = findProjectDocMaxBytes(configText);
-    if (projectDocMaxBytes === undefined || projectDocMaxBytes < 65536) {
-      actions.push("set_project_doc_max_bytes");
-    }
-    if (!isCodexHooksEnabled(configText)) {
-      actions.push("enable_features.codex_hooks");
-    }
-    if (compactPromptConflict) {
-      actions.push("compact_prompt_requires_confirmation");
-    } else if (!compactPromptManaged) {
-      actions.push("install_pulse_compact_prompt");
-    }
-  }
-
-  const legacyHookConfig = legacyPulseHookConfigStatus(hooksText);
-  if (legacyHookConfig.needs_cleanup) {
-    actions.push("remove_legacy_pulse_hook_entries");
-  }
-
-  if (legacyHookScriptsNeedCleanup(repoRoot)) {
-    actions.push("remove_legacy_pulse_hook_scripts");
-  }
-
-  if (legacySupportScriptsNeedCleanup(repoRoot)) {
-    actions.push("remove_legacy_pulse_support_scripts");
-  }
-
   if (supportScriptsNeedUpdate(repoRoot)) {
     actions.push("sync_pulse_support_scripts");
   }
 
-  const legacyRuntimeMigration = collectLegacyRuntimeMigrationSummary(repoRoot);
-  if (legacyRuntimeMigration.pending.length > 0) {
-    actions.push("migrate_legacy_runtime_artifacts");
+  if (fs.existsSync(legacyOnboardingPath)) {
+    actions.push("migrate_legacy_onboarding_marker");
+  }
+  if (domainStatus.pulse !== "compliant") {
+    actions.push("normalize_.pulse_structure");
+  }
+  if (domainStatus.docs !== "compliant") {
+    actions.push("normalize_docs_structure");
+  }
+  if (domainStatus.works !== "compliant") {
+    actions.push("normalize_works_structure");
   }
 
   if (!fs.existsSync(workgraphPaths.schemaPath)) {
@@ -860,27 +862,57 @@ export function checkRepo(repoRoot) {
   }
 
   if (onboarding.plugin_version !== pluginVersion) {
-    actions.push("write_.pulse/onboarding.json");
+    actions.push("write_.pulse/runtime/onboarding.json");
   }
+
+  const blockers = [...actions];
+  const degradations = [];
+  const warnings = [];
+
+  const requestedMode = "full-pipeline";
+  const recommendedMode = blockers.length > 0 ? "blocked" : "single-worker";
+  const readinessStatus = buildReadinessStatus({ blockers, degradations });
+  const toolingStatusPreview = buildToolingStatusPayload(repoRoot, {
+    requestedMode,
+    recommendedMode,
+    readinessStatus,
+    onboardingStatus: actions.length === 0
+      ? "PASS"
+      : onboardingMarkerExists
+        ? "NEEDS_REMEDIATION"
+        : "NEEDS_SETUP",
+    domainStatus,
+    blockers,
+    degradations,
+    warnings,
+    tools: {
+      git: { available: true },
+      node: runtime,
+      pulse_runtime_helper: { available: true, command: "node .pulse/scripts/pulse_status.mjs --json" },
+    },
+    resumeOwner: options.resumeOwner,
+  });
 
   return {
     repo_root: repoRoot,
-    status: actions.length === 0 ? "up_to_date" : "needs_onboarding",
+    status: readinessStatus,
+    requested_mode: requestedMode,
+    recommended_mode: recommendedMode,
     actions,
-    requires_confirmation: compactPromptConflict,
+    blockers,
+    degradations,
+    warnings,
+    requires_confirmation: false,
+    next_command: toolingStatusPreview.next_command,
     details: {
       plugin_version: pluginVersion,
       agents_exists: agentsExists,
       agents_managed_block: managedAgents,
-      config_exists: fs.existsSync(configPath),
-      hooks_exists: legacyHookConfig.exists,
-      legacy_hook_cleanup_actions: legacyHookConfig.changes,
-      legacy_support_scripts: Object.keys(MANAGED_SUPPORT_FILES)
-        .filter((name) => fs.existsSync(path.join(repoRoot, ".codex", name)))
-        .map((name) => path.posix.join(".codex", name)),
-      legacy_runtime_migration: legacyRuntimeMigration,
-      compact_prompt_conflict: compactPromptConflict,
+      onboarding_marker_path: ONBOARDING_MARKER_PATH,
+      legacy_onboarding_marker_exists: fs.existsSync(legacyOnboardingPath),
       onboarding_state: Object.keys(onboarding).length > 0 ? onboarding : null,
+      domain_status: domainStatus,
+      domain_details: domainDetails,
       state_exists: fs.existsSync(statePath),
       workgraph: {
         schema_exists: fs.existsSync(workgraphPaths.schemaPath),
@@ -890,13 +922,15 @@ export function checkRepo(repoRoot) {
         ),
       },
       runtime,
-      dependency_health: dependencyHealth,
-      dependency_warning: dependencyWarning,
+      tooling_status_preview: toolingStatusPreview,
     },
   };
 }
 
-export function applyRepo(repoRoot, allowCompactPromptReplace) {
+/**
+ * Apply onboarding, normalize managed domains, and write runtime state.
+ */
+export function applyRepo(repoRoot, _allowCompactPromptReplace, options = {}) {
   const runtime = getNodeRuntimeStatus();
   if (!runtime.supported) {
     return buildRuntimeBlockedPayload(repoRoot, "apply");
@@ -904,21 +938,21 @@ export function applyRepo(repoRoot, allowCompactPromptReplace) {
 
   const pluginVersion = loadPluginVersion();
   const template = readTemplate();
+  const legacyOnboardingPath = path.join(repoRoot, LEGACY_ONBOARDING_MARKER_PATH);
+  const hadLegacyOnboardingMarker = fs.existsSync(legacyOnboardingPath);
+  const domainNormalization = buildDomainNormalization(repoRoot);
 
   const agentsPath = path.join(repoRoot, "AGENTS.md");
-  const configPath = path.join(repoRoot, ".codex", "config.toml");
-  const hooksPath = path.join(repoRoot, ".codex", "hooks.json");
-  const onboardingPath = path.join(repoRoot, ".pulse", "onboarding.json");
+  const onboardingPath = path.join(repoRoot, ONBOARDING_MARKER_PATH);
   const statePath = path.join(repoRoot, ".pulse", "runtime", "state.json");
   const checkpointsRootPath = path.join(repoRoot, ".pulse", "runtime", "checkpoints");
   const memoryRootPath = path.join(repoRoot, ".pulse", "memory");
   const memoryLearningsPath = path.join(memoryRootPath, "learnings");
   const memoryCorrectionsPath = path.join(memoryRootPath, "corrections");
   const memoryRatchetPath = path.join(memoryRootPath, "ratchet");
-  const legacyRuntimeMigration = migrateLegacyRuntimeArtifacts(repoRoot);
+  const { onboarding: existingOnboarding, legacyMigrated: legacyOnboardingMarkerMigrated } = readOnboardingState(repoRoot, onboardingPath);
 
   ensureParent(agentsPath);
-  ensureParent(configPath);
   ensureParent(onboardingPath);
   ensureParent(statePath);
   fs.mkdirSync(checkpointsRootPath, { recursive: true });
@@ -929,39 +963,74 @@ export function applyRepo(repoRoot, allowCompactPromptReplace) {
   const mergedAgents = mergeAgentsContent(readTextIfExists(agentsPath), template);
   fs.writeFileSync(agentsPath, mergedAgents.text, "utf8");
 
-  const configResult = mergeCodexConfig(configPath, allowCompactPromptReplace);
-  fs.writeFileSync(configPath, configResult.text, "utf8");
-
-  const legacyHookConfig = legacyPulseHookConfigStatus(readTextIfExists(hooksPath));
-  if (legacyHookConfig.needs_cleanup) {
-    if (legacyHookConfig.text) {
-      fs.writeFileSync(hooksPath, legacyHookConfig.text, "utf8");
-    } else {
-      fs.rmSync(hooksPath, { force: true });
-    }
-  }
+  const supportScripts = writeSupportScripts(repoRoot);
+  const workgraphPaths = initializeWorkgraphFilesystem(repoRoot);
 
   const defaultState = buildDefaultState();
+  const domainDetails = classifyDomains(repoRoot);
+  const domainStatus = domainStatusSummary(domainDetails);
+  const blockers = [];
+  const degradations = [];
+  const warnings = [];
+
+  const requestedMode = "full-pipeline";
+  const recommendedMode = "single-worker";
+  const readinessStatus = buildReadinessStatus({ blockers, degradations });
+
+  const toolingStatusPayload = buildToolingStatusPayload(repoRoot, {
+    requestedMode,
+    recommendedMode,
+    readinessStatus,
+    onboardingStatus: "PASS",
+    domainStatus,
+    blockers,
+    degradations,
+    warnings,
+    tools: {
+      git: { available: true },
+      node: runtime,
+      pulse_runtime_helper: { available: true, command: "node .pulse/scripts/pulse_status.mjs --json" },
+    },
+    resumeOwner: options.resumeOwner,
+  });
+
   const nextState = normalizePulseState({
     ...defaultState,
     ...readJsonIfExists(statePath),
+    phase: WORKFLOW_COMMAND,
+    active_command: toolingStatusPayload.session_load?.active_context?.active_command || WORKFLOW_COMMAND,
+    active_epic_id: toolingStatusPayload.session_load?.active_context?.active_epic_id || null,
+    active_story_id: toolingStatusPayload.session_load?.active_context?.active_story_id || null,
+    active_item_id: toolingStatusPayload.session_load?.active_context?.active_item_id || null,
+    status: readinessStatus,
+    requested_mode: requestedMode,
+    recommended_mode: recommendedMode,
+    session: {
+      posture: toolingStatusPayload.session_load?.posture || "fresh",
+      scout_findings: toolingStatusPayload.session?.scout_findings || [],
+      resume_options: toolingStatusPayload.session_load?.resume_options || [],
+    },
+    session_load: toolingStatusPayload.session_load,
+    tooling_status: ".pulse/runtime/tooling-status.json",
+    next_command: toolingStatusPayload.next_command || "pulse:workflow explore",
+    next_command_recommended: toolingStatusPayload.next_command || "pulse:workflow explore",
+    next_skill_recommended: toolingStatusPayload.next_command || "pulse:workflow explore",
   });
+
+  const toolingStatusPath = path.join(repoRoot, ".pulse", "runtime", "tooling-status.json");
+  ensureParent(toolingStatusPath);
+  fs.writeFileSync(toolingStatusPath, `${JSON.stringify(toolingStatusPayload, null, 2)}\n`, "utf8");
   fs.writeFileSync(statePath, `${JSON.stringify(nextState, null, 2)}\n`, "utf8");
+  writeStateMarkdownFromTooling(repoRoot, toolingStatusPayload);
+
   syncPulseRuntimeArtifacts(repoRoot);
-  const workgraphPaths = initializeWorkgraphFilesystem(repoRoot);
 
-  const legacyHookScripts = cleanupLegacyHookScripts(repoRoot);
-  const legacySupportScripts = cleanupLegacySupportScripts(repoRoot);
-  const supportScripts = writeSupportScripts(repoRoot);
-
-  const onboardingNotes = [];
-  let status = "complete";
-  if (configResult.changes.includes("compact_prompt_conflict_preserved")) {
-    status = "partial";
-    onboardingNotes.push(
-      "Existing compact_prompt preserved; Pulse compaction recovery was not installed.",
-    );
-  }
+  const onboardingNotes = [
+    ...domainNormalization.domains.pulse.notes,
+    ...domainNormalization.domains.docs.notes,
+    ...domainNormalization.domains.works.notes,
+  ];
+  const status = "complete";
 
   const onboardingPayload = {
     schema_version: ONBOARDING_SCHEMA_VERSION,
@@ -969,13 +1038,18 @@ export function applyRepo(repoRoot, allowCompactPromptReplace) {
     plugin_version: pluginVersion,
     installed_at: utcNow(),
     status,
+    previous_onboarding_status:
+      typeof existingOnboarding?.status === "string" && existingOnboarding.status
+        ? existingOnboarding.status
+        : null,
     managed_assets: {
       agents_mode: mergedAgents.status,
-      config_changes: configResult.changes,
-      legacy_hook_cleanup: legacyHookConfig.changes,
-      legacy_hook_scripts_removed: legacyHookScripts,
-      legacy_support_scripts_removed: legacySupportScripts,
       support_scripts: supportScripts,
+      onboarding_marker_path: ONBOARDING_MARKER_PATH,
+      legacy_onboarding_marker_migrated: legacyOnboardingMarkerMigrated || hadLegacyOnboardingMarker,
+      domain_normalization: domainNormalization,
+      works_migrations: domainNormalization.domains.works.migrations,
+      docs_migrations: domainNormalization.domains.docs.migrations,
       workgraph: {
         schema: path.relative(repoRoot, workgraphPaths.schemaPath),
         items: path.relative(repoRoot, workgraphPaths.itemsPath),
@@ -994,31 +1068,112 @@ export function applyRepo(repoRoot, allowCompactPromptReplace) {
     },
     notes: onboardingNotes,
   };
-  if (
-    legacyRuntimeMigration.migrated.length > 0 ||
-    legacyRuntimeMigration.removed_duplicates.length > 0 ||
-    legacyRuntimeMigration.conflicts.length > 0
-  ) {
-    onboardingPayload.managed_assets.migration_summary = legacyRuntimeMigration;
-  }
   fs.writeFileSync(`${onboardingPath}`, `${JSON.stringify(onboardingPayload, null, 2)}\n`, "utf8");
 
   return {
-    ...checkRepo(repoRoot),
+    ...checkRepo(repoRoot, { resumeOwner: options.resumeOwner }),
     applied: true,
     result: onboardingPayload,
   };
 }
 
-function escapeRegExp(value) {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+// Compact prompt draft, intentionally not installed by onboarding:
+// MANDATORY: Pulse context compaction recovery.
+// STOP. Before doing anything else: read AGENTS.md completely.
+// If present, run `node .pulse/scripts/pulse_status.mjs --json` for a quick Pulse status snapshot.
+// Read .pulse/runtime/tooling-status.json, .pulse/runtime/state.json, and .pulse/runtime/STATE.md if they exist.
+// Read .pulse/runtime/handoffs/manifest.json and any active owner handoff you are resuming.
+// Re-open the active feature CONTEXT.md before more planning or edits.
+// Re-open the current bead or task before running more implementation commands.
+// Check the current worktree state with git status before resuming.
+// After completing these steps, briefly confirm what context you restored and only then continue.
+
+/**
+ * Helper functions.
+ */
+
+function readTemplate() {
+  return `${fs.readFileSync(AGENTS_TEMPLATE_PATH, "utf8").replace(/\s*$/, "")}\n`;
 }
 
+function readTextIfExists(filePath) {
+  return fs.existsSync(filePath) ? fs.readFileSync(filePath, "utf8") : "";
+}
+
+function readJsonIfExists(filePath) {
+  if (!fs.existsSync(filePath)) {
+    return null;
+  }
+  try {
+    return JSON.parse(fs.readFileSync(filePath, "utf8"));
+  } catch {
+    return null;
+  }
+}
+
+function ensureParent(filePath) {
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+}
+
+function ensureDirectory(dirPath) {
+  fs.mkdirSync(dirPath, { recursive: true });
+}
+
+function movePathIfExists(sourcePath, targetPath) {
+  if (!fs.existsSync(sourcePath)) {
+    return false;
+  }
+  ensureParent(targetPath);
+  fs.renameSync(sourcePath, targetPath);
+  return true;
+}
+
+function listDirectoryEntries(dirPath) {
+  return fs.existsSync(dirPath) ? fs.readdirSync(dirPath) : [];
+}
+
+function isBackupEntry(name) {
+  return /^backup-/.test(name);
+}
+
+function backupStamp() {
+  return utcNow().replace(/[:.]/g, "-");
+}
+
+function relativePosix(repoRoot, filePath) {
+  return path.relative(repoRoot, filePath).split(path.sep).join(path.posix.sep);
+}
+
+function copyPathIfExists(sourcePath, targetPath) {
+  if (!fs.existsSync(sourcePath)) {
+    return false;
+  }
+  ensureParent(targetPath);
+  fs.cpSync(sourcePath, targetPath, { recursive: true, force: true });
+  return true;
+}
+
+function copyRewrittenTextIfExists(sourcePath, targetPath) {
+  if (!fs.existsSync(sourcePath) || !fs.statSync(sourcePath).isFile()) {
+    return false;
+  }
+  ensureParent(targetPath);
+  fs.writeFileSync(targetPath, rewriteLegacyRuntimeText(fs.readFileSync(sourcePath, "utf8")), "utf8");
+  return true;
+}
+
+/**
+ * CLI argument parsing and process entrypoint.
+ */
+
+/**
+ * Parse onboard CLI arguments.
+ */
 function parseCliArgs(argv) {
   const args = {
     repoRoot: undefined,
     apply: false,
-    allowCompactPromptReplace: false,
+    resumeOwner: "",
   };
 
   for (let index = 0; index < argv.length; index += 1) {
@@ -1036,16 +1191,21 @@ function parseCliArgs(argv) {
       args.apply = true;
       continue;
     }
-    if (arg === "--allow-compact-prompt-replace") {
-      args.allowCompactPromptReplace = true;
+    if (arg === "--resume-owner") {
+      args.resumeOwner = argv[index + 1] || "";
+      index += 1;
+      continue;
+    }
+    if (arg.startsWith("--resume-owner=")) {
+      args.resumeOwner = arg.slice("--resume-owner=".length);
       continue;
     }
     if (arg === "--help" || arg === "-h") {
       process.stdout.write(
         [
-          "Usage: onboard_pulse.mjs [--repo-root <path>] [--apply] [--allow-compact-prompt-replace]",
+          "Usage: onboard_pulse.mjs [--repo-root <path>] [--apply] [--resume-owner <owner_id>]",
           "",
-          "Checks or applies pulse:workflow onboard runtime onboarding.",
+          "Checks or applies pulse:workflow use readiness and session loading.",
         ].join("\n"),
       );
       process.exit(0);
@@ -1056,15 +1216,18 @@ function parseCliArgs(argv) {
   return args;
 }
 
+/**
+ * Run the onboard CLI and print the JSON payload.
+ */
 export function main(argv = process.argv.slice(2)) {
   const args = parseCliArgs(argv);
   const repoRoot = resolveRepoRoot(args.repoRoot);
   const payload = args.apply
-    ? applyRepo(repoRoot, args.allowCompactPromptReplace)
-    : checkRepo(repoRoot);
+    ? applyRepo(repoRoot, false, { resumeOwner: args.resumeOwner })
+    : checkRepo(repoRoot, { resumeOwner: args.resumeOwner });
 
   process.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
-  return payload.status === "missing_runtime" ? 1 : 0;
+  return payload.status === "FAIL" ? 1 : 0;
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === SCRIPT_PATH) {

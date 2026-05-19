@@ -5,11 +5,10 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import {
-  readDependencyHealthSafe,
-  normalizeDependencyTarget,
-  uniqueSorted,
-} from "./pulse_dependencies.mjs";
-import { readGitNexusReadiness, syncPulseRuntimeArtifacts } from "./pulse_state.mjs";
+  readGitNexusReadiness,
+  readPulseStatus,
+  syncPulseRuntimeArtifacts,
+} from "./pulse_state.mjs";
 
 const SCRIPT_PATH = fileURLToPath(import.meta.url);
 const SCRIPT_DIR = path.dirname(SCRIPT_PATH);
@@ -40,45 +39,6 @@ export async function readHookPayload(stream = process.stdin) {
   return JSON.parse(raw || "{}");
 }
 
-export function buildPulseSessionDependencyWarning(repoRoot) {
-  const dependencyHealth = readDependencyHealthSafe(repoRoot);
-
-  const missingDependencies = Array.isArray(dependencyHealth?.missing_dependencies)
-    ? dependencyHealth.missing_dependencies
-    : [];
-  if (missingDependencies.length === 0) {
-    return "";
-  }
-
-  const affectedSkills = uniqueSorted(
-    missingDependencies.flatMap((dependency) =>
-      Array.isArray(dependency.required_by) ? dependency.required_by : [],
-    ),
-  );
-  const missingCommands = uniqueSorted(
-    missingDependencies
-      .filter((dependency) => dependency.kind === "command")
-      .flatMap((dependency) => normalizeDependencyTarget(dependency.target)),
-  );
-  const missingMcpServers = uniqueSorted(
-    missingDependencies
-      .filter((dependency) => dependency.kind === "mcp_server")
-      .flatMap((dependency) => normalizeDependencyTarget(dependency.target)),
-  );
-
-  const affected = affectedSkills.length > 0 ? affectedSkills.join(", ") : "(unknown skills)";
-  const commands = missingCommands.length > 0 ? missingCommands.join(", ") : "none";
-  const mcpServers = missingMcpServers.length > 0 ? missingMcpServers.join(", ") : "none";
-
-  return (
-    `Dependency warning: ${missingDependencies.length} declared dependencies are missing, ` +
-    `so some Pulse skills are degraded or unavailable. ` +
-    `Affected skills: ${affected}. ` +
-    `Missing commands: ${commands}. ` +
-    `Missing MCP server configuration: ${mcpServers}.`
-  );
-}
-
 function readPulseSkillText() {
   const candidates = [
     process.env.CLAUDE_PLUGIN_ROOT
@@ -106,28 +66,101 @@ function buildPulseBootstrapBlock() {
     "<EXTREMELY_IMPORTANT>",
     "You have Pulse.",
     "",
-    "Below is the full content of your `pulse:workflow onboard` bootstrap skill. Use it to route safely before loading downstream Pulse skills:",
+    "Below is the full content of your `pulse:workflow use` session-entry skill. Use it to route safely before loading downstream Pulse skills:",
     "",
     skillText,
     "</EXTREMELY_IMPORTANT>",
   ].join("\n");
 }
 
+function firstNonEmptyString(...values) {
+  for (const value of values) {
+    if (typeof value === "string" && value.trim()) {
+      return value.trim();
+    }
+  }
+  return "";
+}
+
+function buildPulseSessionPostureSummary(status) {
+  const runtimeSnapshot = status?.runtime_snapshot || {};
+  const currentFeature = status?.current_feature || {};
+  const handoffManifest = status?.handoff_manifest || {};
+  const sessionLoad = status?.tooling_status?.session_load || runtimeSnapshot.session_load || {};
+  const activeContext = sessionLoad.active_context || {};
+
+  const phase = firstNonEmptyString(runtimeSnapshot.phase, currentFeature.phase, "idle");
+  const feature = firstNonEmptyString(
+    activeContext.active_item_id,
+    activeContext.active_story_id,
+    activeContext.active_epic_id,
+    runtimeSnapshot.active_item_id,
+    runtimeSnapshot.active_story_id,
+    runtimeSnapshot.active_epic_id,
+    runtimeSnapshot.active_feature,
+    currentFeature.feature_key,
+    "(none)",
+  );
+  const gate = firstNonEmptyString(runtimeSnapshot.gate, currentFeature.gate, "(none)");
+  const gateStatus = firstNonEmptyString(runtimeSnapshot.gate_status, currentFeature.gate_status);
+  const nextCommand = firstNonEmptyString(
+    sessionLoad.next_command,
+    runtimeSnapshot.next_command_recommended,
+    runtimeSnapshot.next_command,
+    currentFeature.next_skill_recommended,
+    runtimeSnapshot.next_skill_recommended,
+    status?.tooling_status?.next_command,
+    status?.tooling_status?.next_skill,
+  );
+
+  const activeHandoffs = Array.isArray(handoffManifest.active) ? handoffManifest.active : [];
+  const handoffSummary =
+    activeHandoffs.length > 0
+      ? activeHandoffs
+          .slice(0, 2)
+          .map((entry) => entry?.operator_summary || entry?.handoff_summary || entry?.path || "(unknown handoff)")
+          .filter(Boolean)
+          .join(" ; ")
+      : "none";
+
+  const routing = nextCommand
+    ? `Recommended next workflow command: ${nextCommand}.`
+    : "No explicit next workflow command is recorded yet; run pulse:workflow explore if you need to establish direction.";
+
+  const gateSummary = gateStatus ? `${gate} (${gateStatus})` : gate;
+
+  return (
+    `Pulse session posture: phase=${phase}, feature=${feature}, gate=${gateSummary}. ` +
+    `Active handoffs: ${activeHandoffs.length}. ${activeHandoffs.length > 0 ? `Top handoffs: ${handoffSummary}. ` : ""}` +
+    routing
+  );
+}
+
 export async function collectPulseSessionStartNotes(repoRoot, options = {}) {
   const { syncRuntimeArtifactsIfOnboarded = true } = options;
   const onboardingPath = path.join(repoRoot, ".pulse", "runtime", "onboarding.json");
+  const legacyOnboardingPath = path.join(repoRoot, ".pulse", "onboarding.json");
   const criticalPatterns = path.join(repoRoot, ".pulse", "memory", "critical-patterns.md");
 
   const notes = [];
-  if (fs.existsSync(onboardingPath)) {
+  if (fs.existsSync(onboardingPath) || fs.existsSync(legacyOnboardingPath)) {
     if (syncRuntimeArtifactsIfOnboarded) {
       syncPulseRuntimeArtifacts(repoRoot);
     }
     notes.push(
-      "Pulse onboarding is installed for this repo. Read AGENTS.md, then run node .pulse/scripts/pulse_status.mjs --json for a quick scout before substantive work.",
+      "Pulse is installed for this repo. Read AGENTS.md, then run pulse:workflow use or node .pulse/scripts/pulse_status.mjs --json before substantive work.",
     );
+
+    try {
+      const status = await readPulseStatus(repoRoot);
+      notes.push(buildPulseSessionPostureSummary(status));
+    } catch {
+      notes.push(
+        "Pulse session posture could not be loaded from runtime artifacts; run node .pulse/scripts/pulse_status.mjs --json to refresh and inspect current handoff/next-step context.",
+      );
+    }
   } else {
-    notes.push("Onboarding readiness has not been established for this repo. Run pulse:workflow onboard before continuing.");
+    notes.push("Pulse readiness has not been established for this repo. Run pulse:workflow use before continuing.");
   }
 
   if (fs.existsSync(criticalPatterns)) {
@@ -143,11 +176,6 @@ export async function collectPulseSessionStartNotes(repoRoot, options = {}) {
     notes.push(
       "GitNexus is not configured for this repo/session, so architecture discovery should use grep/file inspection fallback unless the MCP server is added.",
     );
-  }
-
-  const dependencyWarning = buildPulseSessionDependencyWarning(repoRoot);
-  if (dependencyWarning) {
-    notes.push(dependencyWarning);
   }
 
   return notes;

@@ -33,7 +33,7 @@ Pulse is not:
 
 | Command | Purpose |
 |---|---|
-| `pulse:workflow onboard` | Bootstrap runtime/readiness |
+| `pulse:workflow use` | Session entrypoint, readiness, and resume context |
 | `pulse:workflow explore` | Discover and lock decisions |
 | `pulse:workflow brainstorm` | Expand and compare approaches |
 | `pulse:workflow plan` | Select shape and execution contract |
@@ -46,7 +46,7 @@ Pulse is not:
 ## Chain
 
 ```
-pulse:workflow onboard → pulse:workflow explore → pulse:workflow plan → pulse:workflow validate → pulse:workflow swarm or pulse:workflow execute → pulse:workflow review → pulse:workflow compound
+pulse:workflow use → pulse:workflow brainstorm (optional) → pulse:workflow explore → pulse:workflow plan → pulse:workflow validate → pulse:workflow swarm or pulse:workflow execute → pulse:workflow review → pulse:workflow compound
 ```
 
 ## Go Mode Gates
@@ -107,7 +107,7 @@ works/
 
 ### Start a fresh run
 
-1. Run `pulse:workflow onboard`.
+1. Run `pulse:workflow use`.
 2. Run `node .pulse/scripts/pulse_status.mjs --json`.
 3. Open only the artifacts scout points to.
 

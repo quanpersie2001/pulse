@@ -60,7 +60,7 @@ Cross-owner transfer requires explicit coordinator decision and manifest update 
 
 ## Router implications
 
-- `onboard` surfaces readiness and resumability
+- `use` surfaces readiness, session restoration, and resumability
 - `explore`/`plan`/`validate` may emit decision-state handoffs
 - `swarm`/`execute` commonly emit operational handoffs
 - `review`/`compound` may emit follow-up handoffs

@@ -8,12 +8,12 @@
   ],
   "commands": [
     {
-      "name": "onboard",
-      "summary": "Bootstrap the repo, report readiness, and surface migration posture.",
-      "hint": "Use first in a new, resumed, or suspiciously stale Pulse session.",
-      "category": "bootstrap",
-      "maps_from": ["preflight", "using-pulse"],
-      "produces": ["readiness brief", "migration warnings", "next-command recommendation"],
+      "name": "use",
+      "summary": "Prepare the repo if needed, load the current Pulse session, and route the next workflow move.",
+      "hint": "Use first in any new, resumed, or suspiciously stale Pulse session, or whenever runtime/session posture is unclear.",
+      "category": "session-entrypoint",
+      "maps_from": ["preflight", "using-pulse", "onboard"],
+      "produces": ["readiness brief", "session load", "resume options", "migration warnings", "next-command recommendation"],
       "next_commands": ["explore", "brainstorm", "plan"]
     },
     {

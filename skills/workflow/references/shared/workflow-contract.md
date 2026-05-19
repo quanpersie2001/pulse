@@ -14,7 +14,7 @@ This document describes the Pulse workflow pipeline in router language.
 ## Canonical command pipeline
 
 ```text
-pulse:workflow onboard
+pulse:workflow use
   -> pulse:workflow brainstorm     (optional when feature shape is still vague)
   -> pulse:workflow explore
   -> pulse:workflow plan
@@ -35,7 +35,7 @@ When execution gets stuck or needs deeper tactical support, reroute to standalon
 
 | Command | Primary responsibility |
 | --- | --- |
-| `onboard` | bootstrap the repo, report readiness, and surface migration posture |
+| `use` | prepare the repo if needed, load the current session, and surface migration posture |
 | `explore` | understand the codebase, current state, and implementation-relevant decision context |
 | `brainstorm` | shape vague intent into candidate approaches and an approved design before exploration |
 | `plan` | turn context into a concrete implementation shape |
@@ -74,7 +74,7 @@ The runtime is mechanical and state-oriented.
 
 | Legacy surface | Router replacement |
 | --- | --- |
-| `preflight` + `using-pulse` | `onboard` |
+| `preflight` + `using-pulse` + `onboard` | `use` |
 | `exploring` | `explore` |
 | `brainstorming` | `brainstorm` |
 | `planning` | `plan` |

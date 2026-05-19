@@ -20,7 +20,7 @@ Do not run when:
 
 - approved context already exists for the exact active story and no decision drift exists
 - work is pure implementation under Gate 3-approved current work
-- `pulse:workflow onboard` readiness is stale or blocked
+- `pulse:workflow use` readiness is stale or blocked
 
 ## Required reads before questioning
 

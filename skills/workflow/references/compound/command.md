@@ -1,6 +1,6 @@
 # `pulse:workflow compound`
 
-If onboarding/readiness is missing, stale, or blocked (check `.pulse/runtime/tooling-status.json`), stop and invoke `pulse:workflow onboard` before continuing.
+If onboarding/readiness is missing, stale, or blocked (check `.pulse/runtime/tooling-status.json`), stop and invoke `pulse:workflow use` before continuing.
 
 Compounding turns completed Pulse work into reusable memory for future planning and execution.
 
