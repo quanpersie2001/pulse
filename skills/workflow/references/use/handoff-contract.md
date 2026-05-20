@@ -15,7 +15,7 @@ The handoff system has to support multiple paused actors safely:
 One shared JSON file creates race conditions and schema drift. Pulse avoids that by separating:
 
 - `manifest.json` -> discovery and resume index
-- `<owner>.json` -> checkpoint for exactly one owner
+- `<owner>.json` -> handoff record for exactly one owner
 
 ## Directory Layout
 
@@ -290,65 +290,6 @@ Guidance:
 - Include both the owner handoff path and the manifest path.
 - Do not claim the block was auto-generated unless a real command produced it.
 
-## Checkpoint Companion Contract (v1)
-
-Pulse checkpoints are advisory operator aids under `.pulse/runtime/checkpoints/<scope>/...`.
-They are not a replacement for owner handoffs, and they are not a second workflow state machine.
-
-Recommended v1 actions:
-
-- `save` -> capture a scoped checkpoint artifact from known current state
-- `list` -> enumerate checkpoints for a scope with compact summaries
-- `show` -> render one checkpoint in human-readable and JSON-friendly form
-- `diff` -> compare two checkpoints at the summary level
-- `resume-brief` -> synthesize a restart packet from a checkpoint plus current runtime/handoff state
-
-Recommended checkpoint record shape:
-
-```json
-{
-  "schema_version": "1.0",
-  "checkpoint_id": "2026-05-20T10-30-00Z-plan",
-  "created_at": "2026-05-20T10:30:00.000Z",
-  "summary": "Planning is complete and validation is next.",
-  "next_action": "Run pulse:workflow validate for the active story.",
-  "captured": {
-    "surface": "pulse:workflow",
-    "active_command": "plan",
-    "phase": "plan/finalized",
-    "gate": "GATE 2",
-    "requested_mode": "standard_feature",
-    "active_epic_id": "E-0V9K4F",
-    "active_story_id": "S-0V9K4G",
-    "active_item_id": null
-  },
-  "links": {
-    "workgraph": ".pulse/workgraph/items.jsonl",
-    "state": ".pulse/runtime/state.json",
-    "handoff": ".pulse/runtime/handoffs/workflow-plan.json",
-    "story": "works/epics/E-0V9K4F-authentication/S-0V9K4G-oauth-login/README.md",
-    "story_spec": "works/epics/E-0V9K4F-authentication/S-0V9K4G-oauth-login/SPEC.md"
-  },
-  "blockers": [],
-  "memory_hooks": {
-    "critical_patterns": ".pulse/memory/critical-patterns.md",
-    "learnings": [".pulse/memory/learnings/20260520-auth-refresh.md"],
-    "corrections": [],
-    "ratchet": []
-  }
-}
-```
-
-Checkpoint rules:
-
-- Checkpoints are advisory snapshots. If checkpoint content disagrees with current handoff, runtime state, or workgraph artifacts, current handoff/runtime/workgraph artifacts win.
-- A checkpoint scope directory must contain only `manifest.json` and valid checkpoint `*.json` records.
-- Debugging or verification evidence belongs in the relevant work item `verification.md` or a clearly linked artifact path, not in checkpoint state.
-- `resume-brief` can point to relevant memory files, but it must not create a second durable memory store.
-- `diff` should stay summary-level: surface, active command, phase, gate, mode, next action, blockers, links, and memory hooks.
-- `save` may write a checkpoint record, but read-only status/scout flows must never mutate runtime state.
-- Productized checkpoint trigger points should be phase/gate transitions, pause-handoff boundaries, and pre-review freeze-frames — not arbitrary heartbeat logging.
-
 ## Rules
 
 1. One owner file = one writer.
@@ -358,4 +299,3 @@ Checkpoint rules:
 5. Resume flows always require user confirmation.
 6. Human-readable summaries must stay consistent with the JSON handoff; if they drift, the JSON handoff wins.
 7. Human-readable handoff notes are rendered companions from authoritative JSON, not a second source of truth.
-8. Checkpoints are advisory artifacts, not authoritative pause/resume ownership records.

@@ -183,13 +183,11 @@ export function buildSessionLoad(repoRoot, options = {}) {
   const toolingStatus = readJsonIfExistsSafe(path.join(repoRoot, ".pulse", "runtime", "tooling-status.json")) || {};
   const handoffManifest = readJsonIfExistsSafe(path.join(repoRoot, ".pulse", "runtime", "handoffs", "manifest.json")) || {};
   const reservations = readJsonIfExistsSafe(path.join(repoRoot, ".pulse", "runtime", "reservations.json")) || {};
-  const checkpointsPath = path.join(repoRoot, ".pulse", "runtime", "checkpoints");
 
   const activeHandoffs = Array.isArray(handoffManifest.active) ? handoffManifest.active : [];
   const activeReservations = Array.isArray(reservations.reservations)
     ? reservations.reservations.filter((entry) => entry?.status === "active")
     : [];
-  const checkpointEntries = fs.existsSync(checkpointsPath) ? fs.readdirSync(checkpointsPath) : [];
   const resumeOptions = mapResumeOptions(activeHandoffs);
 
   const selectedEntry = options.resumeOwner
@@ -269,16 +267,13 @@ export function buildSessionLoad(repoRoot, options = {}) {
   if (activeReservations.length > 0) {
     scoutFindings.push(`Detected ${activeReservations.length} active runtime reservations.`);
   }
-  if (checkpointEntries.length > 0) {
-    scoutFindings.push(`Detected ${checkpointEntries.length} runtime checkpoint artifacts for advisory context.`);
-  }
   if (activeContext.active_command) {
     scoutFindings.push(`Active workflow command detected: ${activeContext.active_command}.`);
   }
   if (activeItemIds.length > 0) {
     scoutFindings.push(`Active work item context detected: ${activeItemIds.join(" / ")}.`);
   }
-  if (activeHandoffs.length > 0 || checkpointEntries.length > 0) {
+  if (activeHandoffs.length > 0) {
     scoutFindings.push("Recommended read order: handoff manifest, selected owner handoff, runtime state, then the next workflow command contract.");
   }
 

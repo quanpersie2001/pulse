@@ -37,7 +37,6 @@ Use must verify or materialize:
 .pulse/runtime/STATE.md
 .pulse/runtime/handoffs/manifest.json
 .pulse/runtime/reservations.json
-.pulse/runtime/checkpoints/
 ```
 
 ## Required v2 workgraph files

@@ -17,7 +17,7 @@ Pulse has four important layers:
    - user-facing workflow contract
    - command docs and shared references
 2. **Runtime layer** — `.pulse/runtime/`
-   - session state, gate state, handoffs, checkpoints, reservations
+   - session state, gate state, handoffs, reservations
 3. **Workgraph layer** — `.pulse/workgraph/`
    - canonical item metadata and derived views
 4. **Work content layer** — `works/`

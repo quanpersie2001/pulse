@@ -64,7 +64,6 @@ const LEGACY_RUNTIME_TEXT_REPLACEMENTS = [
   [".pulse/STATE.md", ".pulse/runtime/STATE.md"],
   [".pulse/handoffs/manifest.json", ".pulse/runtime/handoffs/manifest.json"],
   [".pulse/handoffs/", ".pulse/runtime/handoffs/"],
-  [".pulse/checkpoints/", ".pulse/runtime/checkpoints/"],
   [".pulse/reservations.json", ".pulse/runtime/reservations.json"],
 ];
 
@@ -268,7 +267,6 @@ function classifyPulseDomain(repoRoot) {
   const required = [
     ["runtime", "directory"],
     [path.join("runtime", "handoffs"), "directory"],
-    [path.join("runtime", "checkpoints"), "directory"],
     ["workgraph", "directory"],
     [path.join("workgraph", "views"), "directory"],
     ["scripts", "directory"],
@@ -291,7 +289,7 @@ function classifyPulseDomain(repoRoot) {
       unexpectedLegacy.push(path.posix.join(".pulse", legacy));
     }
   }
-  for (const legacyDir of ["handoffs", "checkpoints"]) {
+  for (const legacyDir of ["handoffs"]) {
     if (fs.existsSync(path.join(pulsePath, legacyDir))) {
       unexpectedLegacy.push(path.posix.join(".pulse", legacyDir));
     }
@@ -407,7 +405,6 @@ function ensurePulseDomainLayout(repoRoot) {
   for (const relative of [
     [".pulse", "runtime"],
     [".pulse", "runtime", "handoffs"],
-    [".pulse", "runtime", "checkpoints"],
     [".pulse", "runtime", "onboarding-migration"],
     [".pulse", "workgraph"],
     [".pulse", "workgraph", "views"],
@@ -474,13 +471,12 @@ function migratePulseBackup(repoRoot, backupRelativePath) {
   copyTextIfPresent("tooling-status.json", path.join(".pulse", "runtime", "tooling-status.json"));
   copyTextIfPresent("reservations.json", path.join(".pulse", "runtime", "reservations.json"));
   copyIfPresent("handoffs", path.join(".pulse", "runtime", "handoffs"));
-  copyIfPresent("checkpoints", path.join(".pulse", "runtime", "checkpoints"));
   copyIfPresent("runtime", path.join(".pulse", "runtime"));
   copyIfPresent("memory", path.join(".pulse", "memory"));
   copyIfPresent("workgraph", path.join(".pulse", "workgraph"));
 
   const unmapped = listActiveDomainEntries(backupAbsolute).filter(
-    (entry) => !["state.json", "STATE.md", "tooling-status.json", "reservations.json", "handoffs", "checkpoints", "runtime", "memory", "workgraph"].includes(entry),
+    (entry) => !["state.json", "STATE.md", "tooling-status.json", "reservations.json", "handoffs", "runtime", "memory", "workgraph"].includes(entry),
   );
   if (unmapped.length > 0) {
     notes.push(`Unmapped .pulse backup entries require review: ${unmapped.join(", ")}.`);
@@ -945,7 +941,6 @@ export function applyRepo(repoRoot, _allowCompactPromptReplace, options = {}) {
   const agentsPath = path.join(repoRoot, "AGENTS.md");
   const onboardingPath = path.join(repoRoot, ONBOARDING_MARKER_PATH);
   const statePath = path.join(repoRoot, ".pulse", "runtime", "state.json");
-  const checkpointsRootPath = path.join(repoRoot, ".pulse", "runtime", "checkpoints");
   const memoryRootPath = path.join(repoRoot, ".pulse", "memory");
   const memoryLearningsPath = path.join(memoryRootPath, "learnings");
   const memoryCorrectionsPath = path.join(memoryRootPath, "corrections");
@@ -955,7 +950,6 @@ export function applyRepo(repoRoot, _allowCompactPromptReplace, options = {}) {
   ensureParent(agentsPath);
   ensureParent(onboardingPath);
   ensureParent(statePath);
-  fs.mkdirSync(checkpointsRootPath, { recursive: true });
   fs.mkdirSync(memoryLearningsPath, { recursive: true });
   fs.mkdirSync(memoryCorrectionsPath, { recursive: true });
   fs.mkdirSync(memoryRatchetPath, { recursive: true });
@@ -1058,7 +1052,6 @@ export function applyRepo(repoRoot, _allowCompactPromptReplace, options = {}) {
         ),
       },
       state_file: path.relative(repoRoot, statePath),
-      checkpoints_root: path.relative(repoRoot, checkpointsRootPath),
       memory_root: path.relative(repoRoot, memoryRootPath),
       memory_directories: [
         path.relative(repoRoot, memoryLearningsPath),

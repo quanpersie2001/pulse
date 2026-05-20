@@ -7,7 +7,7 @@ Pulse v2 separates workflow conversation, runtime state, canonical metadata, and
 | Plane | Canonical location | Purpose | What belongs here |
 | --- | --- | --- | --- |
 | Public router | `skills/workflow/` | user-facing workflow contract | `SKILL.md`, command docs, shared references |
-| Runtime plane | `.pulse/runtime/` | machine and operator state for the active workflow | `state.json`, `STATE.md`, handoffs, checkpoints, reservations |
+| Runtime plane | `.pulse/runtime/` | machine and operator state for the active workflow | `state.json`, `STATE.md`, handoffs, reservations |
 | Workgraph plane | `.pulse/workgraph/` | canonical metadata for work items | `items.jsonl`, `schema.json`, derived views, write lock |
 | Work content plane | `works/` | human-authored execution content and verification | epic, story, task, and bug markdown |
 | Harness reference/template plane | `skills/workflow/references/`, `skills/workflow/templates/` | source docs and seed artifacts owned by the plugin | `HARNESS.md`, `HARNESS_BACKLOG.md` |

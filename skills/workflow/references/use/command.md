@@ -43,7 +43,6 @@ Use verifies the v2 runtime plane:
 .pulse/runtime/STATE.md
 .pulse/runtime/handoffs/manifest.json
 .pulse/runtime/reservations.json
-.pulse/runtime/checkpoints/
 ```
 
 Use verifies the v2 workgraph plane:
@@ -180,7 +179,7 @@ It must read from pointers, not by scanning the whole repo:
 1. Read `.pulse/runtime/state.json`.
 2. Read `.pulse/runtime/tooling-status.json`.
 3. Read `.pulse/runtime/handoffs/manifest.json`.
-4. Read `.pulse/runtime/reservations.json` and checkpoint directory names for posture only.
+4. Read `.pulse/runtime/reservations.json` for posture only.
 5. If exactly one active handoff exists, read that owner file automatically.
 6. If multiple active handoffs exist, present resume options and require operator selection before reading an owner file.
 7. Resolve active epic/story/item IDs through `.pulse/workgraph/items.jsonl`.

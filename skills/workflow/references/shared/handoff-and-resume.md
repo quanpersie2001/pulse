@@ -7,14 +7,12 @@ Handoffs preserve execution continuity across pauses, context limits, and owners
 - `.pulse/runtime/state.json`
 - `.pulse/runtime/STATE.md`
 - `.pulse/runtime/handoffs/manifest.json`
-- `.pulse/runtime/checkpoints/` (advisory)
 - `.pulse/runtime/reservations.json`
 
 ## Principles
 
 - handoffs are owner-scoped
 - manifest is authoritative for active handoff selection
-- checkpoints are optional snapshots, not source of truth
 - resume must verify previous state is still current before acting
 
 ## Required handoff payload
