@@ -1,5 +1,14 @@
 #!/usr/bin/env node
 
+/**
+ * Purpose: Check/apply Pulse onboarding and runtime-domain normalization.
+ * Caller/flow: Invoked by /pulse workflow use/onboard to bootstrap and verify runtime readiness.
+ * Reads/Writes: Reads plugin/runtime/workgraph/docs/works state and writes managed .pulse/runtime, workgraph, and AGENTS assets.
+ * CLI args: --repo-root, --apply, --resume-owner, --help.
+ * Ownership: Owns onboarding orchestration; delegates status/session derivation to shared modules.
+ * Repo root rule: Uses shared resolver from pulse_paths.mjs; treats target repo root as mutation boundary.
+ */
+
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -7,23 +16,23 @@ import { fileURLToPath } from "node:url";
 import {
   buildDefaultState,
   normalizePulseState,
-  syncPulseRuntimeArtifacts,
-} from "../runtime/pulse_state.mjs";
+} from "./pulse_state.mjs";
+import { syncPulseRuntimeArtifacts } from "./pulse_runtime_sync.mjs";
 import {
   relativePosix,
   resolveRepoRoot as resolveRepoRootFromPaths,
-} from "../runtime/pulse_paths.mjs";
+} from "./pulse_paths.mjs";
 import {
   ensureWorkgraphFilesystem,
   getWorkgraphPaths,
   loadItems,
   writeViews,
-} from "../runtime/workgraph_store.mjs";
-import { buildSessionLoad } from "../runtime/pulse_session_load.mjs";
+} from "./workgraph_store.mjs";
+import { buildSessionLoad } from "./pulse_session_load.mjs";
 
 const SCRIPT_PATH = fileURLToPath(import.meta.url);
 const COMMAND_SCRIPT_DIR = path.dirname(SCRIPT_PATH);
-const PULSE_SKILL_DIR = path.resolve(COMMAND_SCRIPT_DIR, "..", "..");
+const PULSE_SKILL_DIR = path.resolve(COMMAND_SCRIPT_DIR, "..");
 const REPO_ROOT = path.resolve(PULSE_SKILL_DIR, "..", "..");
 const HARNESS_BACKLOG_TEMPLATE_PATH = path.join(REPO_ROOT, "skills", "workflow", "templates", "HARNESS_BACKLOG.md");
 const PLUGIN_MANIFEST_PATH = path.join(REPO_ROOT, ".codex-plugin", "plugin.json");
@@ -792,7 +801,7 @@ export function checkRepo(repoRoot, options = {}) {
     tools: {
       git: { available: true },
       node: runtime,
-      pulse_runtime_helper: { available: true, command: "node {{scripts_path}}/runtime/pulse_status.mjs --repo-root <repo> --json" },
+      pulse_runtime_helper: { available: true, command: "node {{scripts_path}}/pulse_status.mjs --repo-root <repo> --json" },
     },
     resumeOwner: options.resumeOwner,
   });
@@ -891,7 +900,7 @@ export function applyRepo(repoRoot, _allowCompactPromptReplace, options = {}) {
     tools: {
       git: { available: true },
       node: runtime,
-      pulse_runtime_helper: { available: true, command: "node {{scripts_path}}/runtime/pulse_status.mjs --repo-root <repo> --json" },
+      pulse_runtime_helper: { available: true, command: "node {{scripts_path}}/pulse_status.mjs --repo-root <repo> --json" },
     },
     resumeOwner: options.resumeOwner,
   });

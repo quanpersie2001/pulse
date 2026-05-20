@@ -9,7 +9,7 @@ These paths matter most:
 
 - [`skills/workflow/`](skills/workflow) is the canonical source of public workflow behavior
 - [`skills/workflow/references/`](skills/workflow/references) owns command-level behavior docs
-- [`skills/workflow/scripts/runtime/`](skills/workflow/scripts/runtime) owns canonical runtime CLI logic
+- `{{scripts_path}}/` owns canonical runtime CLI logic
 - [`.codex-plugin/plugin.json`](.codex-plugin/plugin.json) is the Codex package manifest
 - [`.claude-plugin/plugin.json`](.claude-plugin/plugin.json) is the Claude plugin manifest
 - [`.mcp.json`](.mcp.json) is the packaged MCP manifest for shared runtime servers
@@ -132,7 +132,7 @@ Minimum verification:
 For runtime changes, verify:
 
 - `pulse:workflow onboard` initializes expected `.pulse/runtime` and `.pulse/workgraph` layout.
-- `node .pulse/scripts/pulse_status.mjs --json` returns valid scout state.
+- `node {{scripts_path}}/pulse_status.mjs --json` returns valid scout state.
 - `pulse-work` commands produce expected JSON/human outputs.
 
 ## Documentation Rules

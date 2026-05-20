@@ -1,3 +1,12 @@
+/**
+ * Purpose: Persist and enforce runtime reservation records and lock discipline.
+ * Caller/flow: Used by pulse_reservations CLI and status aggregation.
+ * Reads/Writes: Reads/writes .pulse/runtime/reservations.json and a sibling lock file.
+ * CLI args: None (module API).
+ * Ownership: Owns normalization, conflict detection, overlap checks, and atomic mutation behavior.
+ * Repo root rule: Caller passes repo root; store path is resolved via pulse_paths.mjs.
+ */
+
 import fs from "node:fs";
 import path from "node:path";
 
@@ -520,5 +529,20 @@ export function summarizeReservationStatus(repoRoot) {
     released_count: released.length,
     active_agents: [...new Set(active.map((item) => item.agent).filter(Boolean))].sort(),
     active_reservations: active,
+  };
+}
+
+export function summarizeReservationStatusForState(repoRoot) {
+  const summary = summarizeReservationStatus(repoRoot);
+  const reservationStore = readReservationStore(repoRoot);
+
+  return {
+    exists: true,
+    schema_version:
+      typeof reservationStore?.schema_version === "string"
+        ? reservationStore.schema_version
+        : RESERVATION_SCHEMA_VERSION,
+    updated_at: typeof reservationStore?.updated_at === "string" ? reservationStore.updated_at : "",
+    ...summary,
   };
 }

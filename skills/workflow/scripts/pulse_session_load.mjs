@@ -1,5 +1,14 @@
 #!/usr/bin/env node
 
+/**
+ * Purpose: Build manifest-first Pulse session resume context.
+ * Caller/flow: Used by onboard/status flows to restore safe next command context.
+ * Reads/Writes: Reads runtime state, handoffs, reservations, and workgraph pointers; no writes.
+ * CLI args: --repo-root, --resume-owner, --json, --help.
+ * Ownership: Advisory loader only; does not mutate runtime or workgraph.
+ * Repo root rule: Uses shared resolver from pulse_paths.mjs.
+ */
+
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";

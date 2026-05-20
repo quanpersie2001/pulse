@@ -42,7 +42,7 @@ This is the shortest concrete example of a standard Pulse v2 run.
 Before resuming or planning deeper work on an onboarded repo:
 
 ```bash
-node .pulse/scripts/pulse_status.mjs --json
+node {{scripts_path}}/pulse_status.mjs --json
 ```
 
 Use the scout output to decide which artifacts to open next.

@@ -1,9 +1,18 @@
 #!/usr/bin/env node
 
+/**
+ * Purpose: Render Pulse scout status as JSON or text.
+ * Caller/flow: Invoked by operators and onboarding/status checks.
+ * Reads/Writes: Reads runtime files via status model; writes stdout only.
+ * CLI args: --repo-root, --json, --sync, --help.
+ * Ownership: Read surface only; optional --sync delegates artifact refresh.
+ * Repo root rule: Uses shared resolver from pulse_paths.mjs.
+ */
+
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { syncPulseRuntimeArtifacts } from "./pulse_state.mjs";
+import { syncPulseRuntimeArtifacts } from "./pulse_runtime_sync.mjs";
 import { readPulseStatus } from "./pulse_status_model.mjs";
 import { renderPulseStatus } from "./pulse_status_render.mjs";
 import { resolveRepoRoot } from "./pulse_paths.mjs";

@@ -37,7 +37,7 @@ The contract lives in `skills/workflow/references/HARNESS.md`.
 ### Runtime relocation follow-up
 - Discovered while: Phase 1 router build
 - Current pain: some onboarding and runtime logic still lives under legacy source paths until later phases
-- Suggested improvement: relocate canonical runtime scripts under `skills/workflow/scripts/runtime/` and materialize the v2 layout under `.pulse/`
+- Suggested improvement: keep canonical runtime scripts flat under `skills/workflow/scripts/` while materializing the v2 layout under `.pulse/`
 - Risk: high
 - Status: planned
 - Evidence: `PLAN.md`, `SPEC.md`

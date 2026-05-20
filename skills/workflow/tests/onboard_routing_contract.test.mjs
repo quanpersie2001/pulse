@@ -6,8 +6,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { checkRepo, applyRepo, resolveRepoRoot } from "../scripts/onboard/onboard_pulse.mjs";
-import { collectPulseSessionStartNotes } from "../scripts/runtime/pulse_session_context.mjs";
+import { checkRepo, applyRepo, resolveRepoRoot } from "../scripts/onboard_pulse.mjs";
+import { collectPulseSessionStartNotes } from "../scripts/pulse_session_context.mjs";
 
 function mkRoot() {
   return fs.mkdtempSync(path.join(os.tmpdir(), "pulse-onboard-routing-"));

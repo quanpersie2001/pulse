@@ -15,9 +15,10 @@ import {
   reservePaths,
   sweepExpiredReservations,
   main as reservationsMain,
-} from "../../scripts/runtime/pulse_reservations.mjs";
-import { readPulseStatus } from "../../scripts/runtime/pulse_status_model.mjs";
-import { resolveRepoRoot } from "../../scripts/runtime/pulse_paths.mjs";
+} from "../../scripts/pulse_reservations.mjs";
+import { readPulseStatus } from "../../scripts/pulse_status_model.mjs";
+import { buildSessionLoad } from "../../scripts/pulse_session_load.mjs";
+import { resolveRepoRoot } from "../../scripts/pulse_paths.mjs";
 
 function mkRoot() {
   return fs.mkdtempSync(path.join(os.tmpdir(), "pulse-reservations-runtime-"));
@@ -89,7 +90,7 @@ test("reservation conflict detection blocks overlapping paths across agents", ()
 
     const second = reservePaths(root, {
       agent: "agent-b",
-      paths: ["skills/workflow/scripts/runtime/pulse_state.mjs"],
+      paths: ["skills/workflow/scripts/pulse_state.mjs"],
     });
 
     assert.equal(second.ok, false);
@@ -156,6 +157,8 @@ test("CLI main uses --repo-root store even when cwd points elsewhere", () => {
         "reserve",
         "--agent",
         "agent-main",
+        "--item",
+        "S-42",
         "--path",
         "skills/workflow/tests/**",
         "--json",
@@ -166,6 +169,7 @@ test("CLI main uses --repo-root store even when cwd points elsewhere", () => {
     const reservePayload = JSON.parse(reserveCall.output);
     assert.equal(reservePayload.ok, true);
     assert.equal(reservePayload.reservation.agent, "agent-main");
+    assert.equal(reservePayload.reservation.bead_id, "S-42");
 
     const listCall = withCapturedStdout(() =>
       reservationsMain(["--repo-root", root, "list", "--active-only", "--json"]),
@@ -229,6 +233,7 @@ test("readPulseStatus exposes reservation compatibility summary keys", async () 
 
     const status = await readPulseStatus(root);
     const reservations = status.reservations;
+    const expectedSessionLoad = buildSessionLoad(root);
 
     assert.equal(reservations.exists, true);
     assert.equal(typeof reservations.schema_version, "string");
@@ -241,6 +246,10 @@ test("readPulseStatus exposes reservation compatibility summary keys", async () 
     assert.equal(Array.isArray(reservations.active_reservations), true);
     assert.equal(reservations.active_count, 1);
     assert.deepEqual(reservations.active_agents, ["agent-a"]);
+    assert.ok(status.session_load);
+    assert.deepEqual(status.session_load, expectedSessionLoad);
+    assert.equal(typeof status.session_load.next_command, "string");
+    assert.ok(status.session_load.next_command.startsWith("pulse:workflow "));
   } finally {
     cleanup(root);
   }

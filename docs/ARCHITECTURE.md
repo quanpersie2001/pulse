@@ -61,7 +61,7 @@ flowchart TD
 ### State and scout
 
 - Canonical runtime state: `.pulse/runtime/*`.
-- Scout entrypoint: `node .pulse/scripts/pulse_status.mjs --json`.
+- Scout entrypoint: `node {{scripts_path}}/pulse_status.mjs --json`.
 
 ## Canonical Planes and Key Files
 

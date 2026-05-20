@@ -1,5 +1,14 @@
 #!/usr/bin/env node
 
+/**
+ * Purpose: Resolve repo root and canonical Pulse runtime file paths.
+ * Caller/flow: Imported by runtime helpers and CLIs under {{scripts_path}}.
+ * Reads/Writes: Reads git top-level via `git rev-parse`; no repo file writes.
+ * CLI args: None.
+ * Ownership: Path resolver only; does not own state transitions or mutations.
+ * Repo root rule: explicitRoot > PULSE_REPO_ROOT > git top-level > cwd.
+ */
+
 import path from "node:path";
 import { execFileSync } from "node:child_process";
 

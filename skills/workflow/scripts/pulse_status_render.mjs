@@ -1,3 +1,12 @@
+/**
+ * Purpose: Render human-readable Pulse status from normalized status payload.
+ * Caller/flow: Used by pulse_status.mjs text mode.
+ * Reads/Writes: Pure formatting logic; no filesystem or runtime writes.
+ * CLI args: None (module API).
+ * Ownership: Presentation only; data sourcing/validation is owned by status model.
+ * Repo root rule: Not applicable (no path resolution).
+ */
+
 function deriveFeature(status) {
   if (status.current_feature?.feature_key) {
     return status.current_feature.feature_key;

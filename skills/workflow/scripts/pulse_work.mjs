@@ -1,6 +1,14 @@
 #!/usr/bin/env node
 
-import { execFileSync } from "node:child_process";
+/**
+ * Purpose: Runtime CLI for canonical workgraph metadata mutations and reads.
+ * Caller/flow: Invoked by pulse-work during execute/swarm/review lifecycle work.
+ * Reads/Writes: Reads/writes .pulse/workgraph/items.jsonl, views, lock, and work item files.
+ * CLI args: create|show|list|ready|update|close|reopen|dep|children|graph|doctor plus --repo-root/--json.
+ * Ownership: Owns workgraph mutation contract; not a conversational router.
+ * Repo root rule: Uses shared resolver from pulse_paths.mjs.
+ */
+
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -14,6 +22,7 @@ import {
   parsePriority,
   utcNow,
 } from "./workgraph_model.mjs";
+import { resolveRepoRoot as resolveSharedRepoRoot } from "./pulse_paths.mjs";
 import { applyCanonicalPaths, sanitizeSlug } from "./workgraph_paths.mjs";
 import {
   ensureWorkgraphFilesystem,
@@ -35,21 +44,7 @@ import { inspectLock, removeStaleLock } from "./workgraph_lock.mjs";
 const SCRIPT_PATH = fileURLToPath(import.meta.url);
 
 function resolveRepoRoot(explicitRoot) {
-  if (explicitRoot) {
-    return path.resolve(explicitRoot);
-  }
-
-  const cwd = path.resolve(process.cwd());
-  try {
-    const stdout = execFileSync("git", ["rev-parse", "--show-toplevel"], {
-      cwd,
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "ignore"],
-    });
-    return path.resolve(stdout.trim());
-  } catch {
-    return cwd;
-  }
+  return resolveSharedRepoRoot({ explicitRoot });
 }
 
 function parseArgv(argv) {

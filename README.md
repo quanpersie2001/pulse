@@ -77,7 +77,7 @@ Codex reads the marketplace name from [`.agents/plugins/marketplace.json`](.agen
 
 ### After Install
 
-Start with **`pulse:workflow onboard`** in the target repo to initialize `.pulse/runtime`, `.pulse/workgraph`, and runtime helpers under `.pulse/scripts/`.
+Start with **`pulse:workflow use`** in the target repo to initialize `.pulse/runtime` and `.pulse/workgraph`; canonical runtime helpers run from `{{scripts_path}}`.
 
 ## Project Docs
 
@@ -85,7 +85,6 @@ Start with **`pulse:workflow onboard`** in the target repo to initialize `.pulse
 | --- | --- |
 | The architecture and runtime model | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) |
 | A concrete walkthrough | [docs/examples/golden-path.md](docs/examples/golden-path.md) |
-| The evaluation workflow | [docs/evaluation/pulse-plugin-eval.md](docs/evaluation/pulse-plugin-eval.md) |
 
 ## Maintainer Notes
 
@@ -94,12 +93,6 @@ When public docs or `pulse:workflow` router metadata change:
 ```bash
 bash scripts/check-markdown-links.sh
 bash scripts/sync-skills.sh --dry-run
-```
-
-Run evaluations through the canonical entrypoint:
-
-```bash
-node scripts/pulse-plugin-eval.mjs run
 ```
 
 ## Contributing

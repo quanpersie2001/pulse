@@ -106,7 +106,7 @@ Each cycle must:
 5. Refresh reservation posture when conflicts or stalled workers appear:
 
 ```bash
-node {{scripts_path}}/runtime/pulse_reservations.mjs --repo-root <repo> list --active-only --json
+node {{scripts_path}}/pulse_reservations.mjs --repo-root <repo> list --active-only --json
 ```
 
 6. Enforce one active commit slot on shared branch at a time.

@@ -1,5 +1,14 @@
 #!/usr/bin/env node
 
+/**
+ * Purpose: CLI facade for runtime reservation operations.
+ * Caller/flow: Invoked by operators/workers to reserve, release, list, and sweep paths.
+ * Reads/Writes: Reads/writes .pulse/runtime/reservations.json via reservation store.
+ * CLI args: reserve|release|list|sweep with --repo-root, --agent, --task/--bead, --path, --ttl, --json.
+ * Ownership: Command surface only; lock/overlap rules are owned by pulse_reservation_store.mjs.
+ * Repo root rule: Uses shared resolver from pulse_paths.mjs.
+ */
+
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -72,12 +81,12 @@ function parseArgs(argv) {
       args.agent = arg.slice("--agent=".length);
       continue;
     }
-    if (arg === "--bead" || arg === "--task") {
+    if (arg === "--bead" || arg === "--task" || arg === "--item") {
       args.beadId = argv[index + 1] || "";
       index += 1;
       continue;
     }
-    if (arg.startsWith("--bead=") || arg.startsWith("--task=")) {
+    if (arg.startsWith("--bead=") || arg.startsWith("--task=") || arg.startsWith("--item=")) {
       args.beadId = arg.split("=")[1] || "";
       continue;
     }
@@ -138,8 +147,8 @@ function parseArgs(argv) {
       process.stdout.write(
         [
           "Usage:",
-          "  node pulse_reservations.mjs --repo-root <repo> reserve --agent <name> --bead <id> --path <glob> [--ttl <seconds>] [--note <text>] [--json]",
-          "  node pulse_reservations.mjs --repo-root <repo> release --agent <name> [--bead <id>] [--path <glob>] [--id <reservation-id>] [--json]",
+          "  node pulse_reservations.mjs --repo-root <repo> reserve --agent <name> [--bead|--task|--item <id>] --path <glob> [--ttl <seconds>] [--note <text>] [--json]",
+          "  node pulse_reservations.mjs --repo-root <repo> release --agent <name> [--bead|--task|--item <id>] [--path <glob>] [--id <reservation-id>] [--json]",
           "  node pulse_reservations.mjs --repo-root <repo> list [--active-only] [--agent <name>] [--path <glob>] [--status active|released|expired] [--json]",
           "  node pulse_reservations.mjs --repo-root <repo> sweep [--json]",
         ].join("\n"),

@@ -60,8 +60,8 @@ pulse:workflow use → pulse:workflow brainstorm (optional) → pulse:workflow e
 
 - `pulse:workflow` — user-facing workflow router
 - `pulse-work` — runtime CLI for workgraph metadata operations
-- `node .pulse/scripts/pulse_status.mjs --json` — scout orientation
-- `.pulse/scripts/pulse_reservations.mjs` — local reservation coordination
+- `node skills/workflow/scripts/pulse_status.mjs --repo-root <repo> --json` — scout orientation
+- `node skills/workflow/scripts/pulse_reservations.mjs --repo-root <repo> ... --json` — local reservation coordination
 - native swarm adapters — Claude teammates/Codex subagents
 
 ## Packaged Standalone Utility Skills
@@ -108,7 +108,7 @@ works/
 ### Start a fresh run
 
 1. Run `pulse:workflow use`.
-2. Run `node .pulse/scripts/pulse_status.mjs --json`.
+2. Run `node skills/workflow/scripts/pulse_status.mjs --repo-root <repo> --json`.
 3. Open only the artifacts scout points to.
 
 ### Resume safely

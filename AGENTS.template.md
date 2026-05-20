@@ -21,7 +21,7 @@ Pulse is not a license to skip decision locking, validation, review gates, or hu
 
 1. Read this file at session start and again after context compaction.
 2. If runtime readiness is missing/stale in `.pulse/runtime/tooling-status.json`, run `/pulse onboard`.
-3. If `.pulse/scripts/pulse_status.mjs` exists, run `node .pulse/scripts/pulse_status.mjs --json` for scout state.
+3. Run `node {{scripts_path}}/pulse_status.mjs --json` for scout state.
 4. If `.pulse/runtime/handoffs/manifest.json` exists, surface it and wait for explicit resume confirmation.
 5. If `.pulse/memory/critical-patterns.md` exists, read it before planning or execution.
 
@@ -76,7 +76,7 @@ works/
 ### Startup scout
 
 1. Run `/pulse onboard` when runtime readiness is missing/stale.
-2. Run `node .pulse/scripts/pulse_status.mjs --json`.
+2. Run `node {{scripts_path}}/pulse_status.mjs --json`.
 3. Open only artifacts indicated by the scout.
 
 ### Resume scout

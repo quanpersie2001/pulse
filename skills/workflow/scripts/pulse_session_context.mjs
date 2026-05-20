@@ -4,7 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { syncPulseRuntimeArtifacts } from "./pulse_state.mjs";
+import { syncPulseRuntimeArtifacts } from "./pulse_runtime_sync.mjs";
 import { readGitNexusReadiness } from "./pulse_gitnexus_readiness.mjs";
 import { readPulseStatus } from "./pulse_status_model.mjs";
 

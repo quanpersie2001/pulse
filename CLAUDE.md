@@ -23,7 +23,7 @@ Pulse is a packaged skill plugin for Claude Code and Codex. Its public workflow 
 |------|-----|---------|
 | Pulse Router | `pulse:workflow` | User-facing workflow entrypoint |
 | Pulse Runtime CLI | `pulse-work` | Workgraph/runtime metadata mutations |
-| Scout | `node .pulse/scripts/pulse_status.mjs --json` | Read-only runtime orientation |
+| Scout | `node {{scripts_path}}/pulse_status.mjs --json` | Read-only runtime orientation |
 | Git | `git` | Version control |
 | Native swarm adapters | — | Claude Code teammates or Codex subagents |
 | GitNexus | `gitnexus` | Optional graph-backed codebase intelligence |
@@ -77,7 +77,7 @@ Pulse has automated coverage for onboarding/runtime control-plane behavior in `s
 ```bash
 git status
 # edit files
-node .pulse/scripts/pulse_status.mjs --json
+node {{scripts_path}}/pulse_status.mjs --json
 pulse-work ready --json
 git add <files>
 git commit -m "..."

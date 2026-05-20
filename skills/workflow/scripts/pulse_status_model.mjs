@@ -1,23 +1,34 @@
+/**
+ * Purpose: Build structured Pulse status payload consumed by scout output.
+ * Caller/flow: Used by pulse_status.mjs and onboarding/readiness flows.
+ * Reads/Writes: Reads runtime state, handoffs, project docs, reservations, memory, and gitnexus readiness; no writes.
+ * CLI args: None (module API).
+ * Ownership: Status aggregation only; does not own rendering or direct CLI I/O.
+ * Repo root rule: Caller provides repo root and module reads within that boundary.
+ */
+
 import fs from "node:fs";
 
 import {
-  buildNextReads,
-  buildRecommendedActions,
   fileTextIfExists,
   getPulseStatePaths,
   normalizePulseState,
   parseLooseKeyValueMarkdown,
   readJsonIfExists,
-  summarizeCurrentFeature,
-  summarizeHistoryLifecycle,
-  summarizeMemoryRecall,
-  summarizeReservationStatusForState,
-  summarizeRuntimeSnapshot,
-  syncPulseRuntimeArtifacts,
 } from "./pulse_state.mjs";
+import { syncPulseRuntimeArtifacts } from "./pulse_runtime_sync.mjs";
+import { summarizeReservationStatusForState } from "./pulse_reservation_store.mjs";
+import { buildNextReads, buildRecommendedActions } from "./pulse_recommendations.mjs";
+import { summarizeMemoryRecall } from "./pulse_memory_recall.mjs";
+import { summarizeHistoryLifecycle } from "./pulse_history_lifecycle.mjs";
+import {
+  summarizeCurrentFeature,
+  summarizeRuntimeSnapshot,
+} from "./pulse_runtime_derivations.mjs";
 import { readGitNexusReadiness } from "./pulse_gitnexus_readiness.mjs";
 import { summarizeHandoffManifest } from "./pulse_handoffs.mjs";
 import { summarizeProjectDocs } from "./pulse_project_docs.mjs";
+import { buildSessionLoad } from "./pulse_session_load.mjs";
 
 function deriveFeature(status) {
   if (status.current_feature?.feature_key) {
@@ -39,6 +50,7 @@ export async function readPulseStatus(repoRoot) {
   const stateMarkdown = parseLooseKeyValueMarkdown(stateMarkdownText);
   const derivedRuntime = syncPulseRuntimeArtifacts(repoRoot);
   const handoffManifest = readJsonIfExists(paths.handoffManifest);
+  const sessionLoad = buildSessionLoad(repoRoot);
 
   const gitNexusReadiness = await readGitNexusReadiness(repoRoot);
 
@@ -83,6 +95,7 @@ export async function readPulseStatus(repoRoot) {
     current_feature: currentFeatureSummary,
     runtime_snapshot: runtimeSnapshotSummary,
     reservations: summarizeReservationStatusForState(repoRoot),
+    session_load: sessionLoad,
     handoff_manifest: handoffManifestSummary,
     history_lifecycle: historyLifecycle,
     project_docs: projectDocsSummary,

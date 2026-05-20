@@ -53,7 +53,7 @@ Treat `startup_hint` as a hint, not a silent permanent assignment. Re-check live
 ### 1b. Read project context (in this order)
 
 1. `AGENTS.md`
-2. if available: `node {{scripts_path}}/runtime/pulse_status.mjs --repo-root <repo> --json`
+2. if available: `node {{scripts_path}}/pulse_status.mjs --repo-root <repo> --json`
 3. `.pulse/runtime/state.json`
 4. `.pulse/runtime/STATE.md`
 5. active current-slice artifacts under `works/` (from runtime state and selected item contract)
@@ -180,7 +180,7 @@ If item touches interfaces, ownership boundaries, or high-risk constraints, also
 In worker mode, reserve all declared paths before editing:
 
 ```bash
-node {{scripts_path}}/runtime/pulse_reservations.mjs --repo-root <repo> reserve --agent <runtime_identity> --item <item-id> --path "src/foo.ts" --path "src/bar.ts" --json
+node {{scripts_path}}/pulse_reservations.mjs --repo-root <repo> reserve --agent <runtime_identity> --item <item-id> --path "src/foo.ts" --path "src/bar.ts" --json
 ```
 
 In standalone mode there is no cross-worker race, but declared scope remains a hard boundary.
@@ -334,7 +334,7 @@ In standalone mode, use same one-item commit format only when no active swarm co
 ### 6d. Release reservations (worker mode)
 
 ```bash
-node {{scripts_path}}/runtime/pulse_reservations.mjs --repo-root <repo> release --agent <runtime_identity> --json
+node {{scripts_path}}/pulse_reservations.mjs --repo-root <repo> release --agent <runtime_identity> --json
 ```
 
 Release before completion report so others can acquire files immediately.
@@ -372,7 +372,7 @@ If context compaction/summarization is detected, stop immediately and re-read be
 2. `.pulse/runtime/state.json`
 3. current item contract: `pulse-work show <item-id> --json`
 4. required current-slice artifacts under `works/`
-5. active reservations: `node {{scripts_path}}/runtime/pulse_reservations.mjs --repo-root <repo> list --active-only --json`
+5. active reservations: `node {{scripts_path}}/pulse_reservations.mjs --repo-root <repo> list --active-only --json`
 6. latest coordinator updates on active coordination surface
 
 Resume only after all applicable reads complete.
@@ -403,9 +403,9 @@ Stop and reassess if you notice:
 |---|---|
 | List ready items | `pulse-work ready --json` |
 | Read item contract | `pulse-work show <item-id> --json` |
-| Reserve scope | `node {{scripts_path}}/runtime/pulse_reservations.mjs --repo-root <repo> reserve --agent <runtime_identity> --item <item-id> --path "..." --json` |
-| Release scope | `node {{scripts_path}}/runtime/pulse_reservations.mjs --repo-root <repo> release --agent <runtime_identity> --json` |
-| List active reservations | `node {{scripts_path}}/runtime/pulse_reservations.mjs --repo-root <repo> list --active-only --json` |
+| Reserve scope | `node {{scripts_path}}/pulse_reservations.mjs --repo-root <repo> reserve --agent <runtime_identity> --item <item-id> --path "..." --json` |
+| Release scope | `node {{scripts_path}}/pulse_reservations.mjs --repo-root <repo> release --agent <runtime_identity> --json` |
+| List active reservations | `node {{scripts_path}}/pulse_reservations.mjs --repo-root <repo> list --active-only --json` |
 | Close item | `pulse-work close <item-id> --json` |
 | Report lifecycle events | active coordination surface (`[ONLINE]`, `[DONE]`, `[BLOCKED]`, `[FILE CONFLICT]`, `[HANDOFF]`) |
 
