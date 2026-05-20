@@ -305,15 +305,8 @@ pulse/
 |   |   |   |   `-- command.md
 |   |   |   |-- brainstorm/
 |   |   |   |   |-- command.md
-|   |   |   |   |-- references/
-|   |   |   |   |   |-- spec-reviewer-prompt.md
-|   |   |   |   |   `-- visual-support-guidance.md
-|   |   |   |   `-- scripts/
-|   |   |   |       |-- start-visual-server.sh
-|   |   |   |       |-- stop-visual-server.sh
-|   |   |   |       |-- visual-frame-template.html
-|   |   |   |       |-- visual-helper.js
-|   |   |   |       `-- visual-server.cjs
+|   |   |   |   `-- references/
+|   |   |   |       `-- spec-reviewer-prompt.md
 |   |   |   |-- plan/
 |   |   |   |   `-- command.md
 |   |   |   |-- validate/

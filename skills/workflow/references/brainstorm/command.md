@@ -30,7 +30,6 @@ This is not the path for trivial non-feature corrections already covered by ligh
 |---|---|---|
 | Explore context | Read just enough project material to understand what already exists | Internal context snapshot |
 | Assess scope | Decide whether this is one feature or multiple independent systems | Scoped brainstorming target |
-| Visual decision point | Decide whether upcoming questions are easier to answer by seeing options | User consent for visual support, or text-only path |
 | Clarifying questions | Ask one question at a time to uncover purpose, constraints, and success criteria | Validated requirements |
 | Approaches | Present 2–3 viable directions with trade-offs | Chosen direction |
 | Design | Present the solution in sections and validate incrementally | Approved design |
@@ -47,14 +46,13 @@ Create a task for each item and complete them in order:
 
 1. **Explore project context** — read files, docs, and recent commits relevant to the request
 2. **Assess scope** — is this one feature or multiple independent systems?
-3. **Offer visual support** — if upcoming questions would be easier to answer by seeing options, offer visuals in their own message
-4. **Ask clarifying questions** — one at a time; purpose, constraints, and success criteria
-5. **Propose 2–3 approaches** — with trade-offs and your recommendation
-6. **Present design** — in sections scaled to complexity; get user approval after each section
-7. **Write spec doc** — save the approved design to `works/epics/<epic-id>-<epic-slug>/<story-id>-<story-slug>/SPEC.md` and note the path
-8. **Spec self-review** — independent check for placeholders, contradictions, scope, and ambiguity
-9. **User reviews spec** — ask the user to confirm before proceeding
-10. **Handoff to `pulse:workflow explore`** — recommend `pulse:workflow explore` as the next manual step to lock implementation decisions
+3. **Ask clarifying questions** — one at a time; purpose, constraints, and success criteria
+4. **Propose 2–3 approaches** — with trade-offs and your recommendation
+5. **Present design** — in sections scaled to complexity; get user approval after each section
+6. **Write spec doc** — save the approved design to `works/epics/<epic-id>-<epic-slug>/<story-id>-<story-slug>/SPEC.md` and note the path
+7. **Spec self-review** — independent check for placeholders, contradictions, scope, and ambiguity
+8. **User reviews spec** — ask the user to confirm before proceeding
+9. **Handoff to `pulse:workflow explore`** — recommend `pulse:workflow explore` as the next manual step to lock implementation decisions
 
 ---
 
@@ -65,8 +63,6 @@ digraph brainstorming {
     "Explore project context" [shape=box];
     "Multi-system?" [shape=diamond];
     "Decompose first" [shape=box];
-    "Visual questions ahead?" [shape=diamond];
-    "Offer visual support\n(own message only)" [shape=box];
     "Ask clarifying questions" [shape=box];
     "Propose 2-3 approaches" [shape=box];
     "Present design sections" [shape=box];
@@ -78,11 +74,8 @@ digraph brainstorming {
 
     "Explore project context" -> "Multi-system?";
     "Multi-system?" -> "Decompose first" [label="yes"];
-    "Multi-system?" -> "Visual questions ahead?" [label="no"];
-    "Decompose first" -> "Visual questions ahead?";
-    "Visual questions ahead?" -> "Offer visual support\n(own message only)" [label="yes"];
-    "Visual questions ahead?" -> "Ask clarifying questions" [label="no"];
-    "Offer visual support\n(own message only)" -> "Ask clarifying questions";
+    "Multi-system?" -> "Ask clarifying questions" [label="no"];
+    "Decompose first" -> "Ask clarifying questions";
     "Ask clarifying questions" -> "Propose 2-3 approaches";
     "Propose 2-3 approaches" -> "Present design sections";
     "Present design sections" -> "User approves design?";
@@ -152,41 +145,6 @@ Example internal frame:
 
 ---
 
-## Visual decision point
-
-When upcoming questions involve layout, visual hierarchy, diagrams, flows, or side-by-side interface choices, offer visual support once before continuing.
-
-Use this offer as its own message:
-
-> "Some of this may be easier to evaluate if I show concrete options instead of only describing them in text. I can use inline previews or small mockups for the visual decision points. Want me to do that when it helps?"
-
-<HARD-GATE>
-This offer MUST be its own message. Do NOT combine it with a clarifying question, a context summary, or a recommendation. Ask, wait, then continue.
-</HARD-GATE>
-
-**How to decide:**
-
-- **Use visuals** for layout comparisons, information hierarchy, diagrams, wireframes, and other questions where seeing options will reduce ambiguity.
-- **Stay in text** for goals, scope, constraints, prioritization, trade-offs, and conceptual choices.
-- A UI topic is not automatically visual. "Which outcome matters most?" is text. "Which dashboard layout is closer?" is visual.
-
-**How to present visual choices:**
-
-- Prefer `AskUserQuestion` with `preview` for side-by-side concrete artifacts.
-- If the active harness offers another structured question tool instead of `AskUserQuestion`, use that tool rather than asking a plain-text visual question.
-- Escalate to the local visual server only for genuinely complex visual ambiguity: styling direction, multi-screen flow shape, design-system composition, dense layout comparison, or hierarchy questions where a browser-rendered screen will clarify faster than previews.
-- Start it with `scripts/start-visual-server.sh --project-dir <repo-root>`.
-- If startup returns a `url`, tell the user the visual runtime is active, share the exact URL, tell them to open it in a browser, make their selection there, and return to the terminal after interacting.
-- If startup returns an `error` or Node is unavailable, briefly tell the user the runtime could not be used, surface any useful retry hint, and continue with structured question-tool previews or text-only fallback if no question tool exists. Do NOT block the session on the runtime.
-- After serving a visual screen, read `state_dir/events` on the next turn to pick up browser selections.
-- Keep choices focused — 2–4 options max.
-- Use single-select for competing directions; use multi-select only for independent add-on ideas.
-- If a preview, mockup, or browser screen will not make the decision clearer, do not create one.
-
-Accepting visual support does NOT turn the whole session visual. Decide per question whether text or visuals are the better fit.
-
----
-
 ## Phase 3: Clarifying questions
 
 <HARD-GATE>
@@ -214,13 +172,13 @@ This gate is non-negotiable.
 **Question patterns:**
 
 - **Product intent / constraints** → structured multiple-choice or short open-ended question via the harness question tool when available.
-- **Competing layouts / hierarchy / flows** → offer visual support first, then use structured previews, mockups, or the advanced runtime when needed.
-- **Trade-off choice** → keep it in text unless the trade-off is inherently visual, but still ask through the harness question tool when available.
+- **Competing layouts / hierarchy / flows** → ask the decision through the harness question tool when available, using concise text choices instead of visual mode.
+- **Trade-off choice** → keep it in text and ask through the harness question tool when available.
 - **Checkpointing** → after a few questions on one area, confirm whether to continue or advance with the harness question tool when available.
 
 Examples:
 - Text: "Which primary outcome should this optimize for first?"
-- Visual: "Which of these three dashboard layouts is closer to the experience you want?"
+- Layout choice: "Which dashboard structure is closer to the experience you want: navigation-first, metrics-first, or workflow-first?"
 
 **Scope creep** — when the user suggests something out of scope:
 
@@ -381,10 +339,9 @@ Stop immediately if you catch yourself doing any of these:
 - writing code or pseudocode during the design phase
 - asking two questions in the same message
 - asking a plain-text question while `AskUserQuestion`, `AskMeTool`, or another structured question tool is available
-- offering visual support and a clarifying question in the same message
 - skipping the spec because the feature "seems obvious"
 - answering a question you just asked
-- treating every UI topic as visual instead of deciding per question
+- treating UI topics as requiring a separate visual mode instead of asking clear text questions
 - invoking planning or execution before the spec is approved
 - creating work items or referencing non-workgraph item IDs
 
@@ -402,12 +359,11 @@ Run the clarifying flow and let the user confirm the direction.
 **"This is too small to document"**
 The spec can be three sentences. But it MUST exist so `pulse:workflow explore` has a stable target.
 
-**"This is a visual topic, so every question should be a mockup"**
-No. Use visuals only when seeing options will remove ambiguity. Goals, priorities, and constraints still belong in text.
+**"This is a visual topic, so it needs a separate visual mode"**
+No. Keep brainstorming in the structured text flow; ask clear layout or hierarchy choices through the harness question tool when needed.
 
 ---
 
 ## References
 
 - `spec-reviewer-prompt.md` — review prompt for spec document checking
-- `visual-support-guidance.md` — when to use previews versus the advanced visual runtime during brainstorming
