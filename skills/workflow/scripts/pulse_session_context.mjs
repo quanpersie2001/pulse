@@ -137,11 +137,10 @@ function buildPulseSessionPostureSummary(status) {
 export async function collectPulseSessionStartNotes(repoRoot, options = {}) {
   const { syncRuntimeArtifactsIfOnboarded = true } = options;
   const onboardingPath = path.join(repoRoot, ".pulse", "runtime", "onboarding.json");
-  const legacyOnboardingPath = path.join(repoRoot, ".pulse", "onboarding.json");
   const criticalPatterns = path.join(repoRoot, ".pulse", "memory", "critical-patterns.md");
 
   const notes = [];
-  if (fs.existsSync(onboardingPath) || fs.existsSync(legacyOnboardingPath)) {
+  if (fs.existsSync(onboardingPath)) {
     if (syncRuntimeArtifactsIfOnboarded) {
       syncPulseRuntimeArtifacts(repoRoot);
     }

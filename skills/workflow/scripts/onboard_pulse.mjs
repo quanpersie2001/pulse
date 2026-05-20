@@ -41,16 +41,7 @@ const ONBOARDING_SCHEMA_VERSION = "1.0";
 const WORKFLOW_COMMAND = "use";
 const WORKFLOW_SETUP_STEP = "onboarding";
 const ONBOARDING_MARKER_PATH = path.join(".pulse", "runtime", "onboarding.json");
-const LEGACY_ONBOARDING_MARKER_PATH = path.join(".pulse", "onboarding.json");
 const MIN_NODE_MAJOR = 18;
-const LEGACY_RUNTIME_TEXT_REPLACEMENTS = [
-  [".pulse/tooling-status.json", ".pulse/runtime/tooling-status.json"],
-  [".pulse/state.json", ".pulse/runtime/state.json"],
-  [".pulse/STATE.md", ".pulse/runtime/STATE.md"],
-  [".pulse/handoffs/manifest.json", ".pulse/runtime/handoffs/manifest.json"],
-  [".pulse/handoffs/", ".pulse/runtime/handoffs/"],
-  [".pulse/reservations.json", ".pulse/runtime/reservations.json"],
-];
 
 /**
  * Runtime checks and CLI root resolution.
@@ -222,7 +213,7 @@ function listActiveDomainEntries(domainPath) {
 function classifyPulseDomain(repoRoot) {
   const pulsePath = path.join(repoRoot, ".pulse");
   if (!fs.existsSync(pulsePath)) {
-    return { status: "missing", missing: [".pulse"], unexpected_legacy: [], conflicts: [] };
+    return { status: "missing", missing: [".pulse"], unexpected_entries: [], conflicts: [] };
   }
 
   const required = [
@@ -243,22 +234,15 @@ function classifyPulseDomain(repoRoot) {
     }
   }
 
-  const unexpectedLegacy = [];
-  for (const legacy of ["current-feature.json", "runtime-snapshot.json", "reservations.json", "state.json", "STATE.md", "tooling-status.json"]) {
-    if (fs.existsSync(path.join(pulsePath, legacy))) {
-      unexpectedLegacy.push(path.posix.join(".pulse", legacy));
-    }
-  }
-  for (const legacyDir of ["handoffs"]) {
-    if (fs.existsSync(path.join(pulsePath, legacyDir))) {
-      unexpectedLegacy.push(path.posix.join(".pulse", legacyDir));
-    }
-  }
+  const allowedTopLevel = new Set(["runtime", "workgraph", "harness", "memory", "scripts"]);
+  const unexpectedEntries = listActiveDomainEntries(pulsePath)
+    .filter((entry) => !allowedTopLevel.has(entry))
+    .map((entry) => path.posix.join(".pulse", entry));
 
   return {
-    status: missing.length === 0 && unexpectedLegacy.length === 0 ? "compliant" : "non_compliant",
+    status: missing.length === 0 && unexpectedEntries.length === 0 ? "compliant" : "non_compliant",
     missing,
-    unexpected_legacy: unexpectedLegacy,
+    unexpected_entries: unexpectedEntries,
     conflicts: [],
   };
 }
@@ -269,14 +253,14 @@ function classifyPulseDomain(repoRoot) {
 function classifyDocsDomain(repoRoot) {
   const docsPath = path.join(repoRoot, "docs");
   if (!fs.existsSync(docsPath)) {
-    return { status: "missing", missing: ["docs"], unexpected_legacy: [], conflicts: [] };
+    return { status: "missing", missing: ["docs"], unexpected_entries: [], conflicts: [] };
   }
   const required = ["ARCHITECTURE.md", "GLOSSARY.md", "decisions", "product"];
   const missing = required.filter((entry) => !fs.existsSync(path.join(docsPath, entry)));
   return {
     status: missing.length === 0 ? "compliant" : "non_compliant",
     missing: missing.map((entry) => path.posix.join("docs", entry)),
-    unexpected_legacy: [],
+    unexpected_entries: [],
     conflicts: [],
   };
 }
@@ -287,18 +271,18 @@ function classifyDocsDomain(repoRoot) {
 function classifyWorksDomain(repoRoot) {
   const worksPath = path.join(repoRoot, "works");
   if (!fs.existsSync(worksPath)) {
-    return { status: "missing", missing: ["works"], unexpected_legacy: [], conflicts: [] };
+    return { status: "missing", missing: ["works"], unexpected_entries: [], conflicts: [] };
   }
 
   const activeEntries = listActiveDomainEntries(worksPath);
   const allowedTopLevel = new Set(["epics", "backlog.md", "test-matrix.md"]);
-  const unexpectedLegacy = activeEntries.filter((entry) => !allowedTopLevel.has(entry));
+  const unexpectedEntries = activeEntries.filter((entry) => !allowedTopLevel.has(entry));
   const missing = fs.existsSync(path.join(worksPath, "epics")) ? [] : ["works/epics"];
 
   return {
-    status: missing.length === 0 && unexpectedLegacy.length === 0 ? "compliant" : "non_compliant",
+    status: missing.length === 0 && unexpectedEntries.length === 0 ? "compliant" : "non_compliant",
     missing,
-    unexpected_legacy: unexpectedLegacy.map((entry) => path.posix.join("works", entry)),
+    unexpected_entries: unexpectedEntries.map((entry) => path.posix.join("works", entry)),
     conflicts: [],
   };
 }
@@ -342,30 +326,15 @@ function backupDomainInPlace(repoRoot, relativePath, stamp) {
   };
 }
 
-function readOnboardingState(repoRoot, onboardingPath) {
-  const legacyPath = path.join(repoRoot, LEGACY_ONBOARDING_MARKER_PATH);
-  let onboarding = readJsonIfExists(onboardingPath) || {};
-  let legacyMigrated = false;
-  if (Object.keys(onboarding).length === 0 && fs.existsSync(legacyPath)) {
-    onboarding = readJsonIfExists(legacyPath) || {};
-  }
-  if (fs.existsSync(legacyPath) && !fs.existsSync(onboardingPath)) {
-    ensureParent(onboardingPath);
-    fs.copyFileSync(legacyPath, onboardingPath);
-    fs.rmSync(legacyPath, { force: true });
-    legacyMigrated = true;
-  } else if (fs.existsSync(legacyPath)) {
-    fs.rmSync(legacyPath, { force: true });
-    legacyMigrated = true;
-  }
-  return { onboarding, legacyMigrated };
+function readOnboardingState(onboardingPath) {
+  return readJsonIfExists(onboardingPath) || {};
 }
 
 function ensurePulseDomainLayout(repoRoot) {
   for (const relative of [
     [".pulse", "runtime"],
     [".pulse", "runtime", "handoffs"],
-    [".pulse", "runtime", "onboarding-migration"],
+    [".pulse", "runtime", "onboarding"],
     [".pulse", "workgraph"],
     [".pulse", "workgraph", "views"],
     [".pulse", "harness"],
@@ -406,61 +375,51 @@ function ensureWorksScaffold(repoRoot) {
 /**
  * Copy known-safe runtime artifacts from a backed-up .pulse domain.
  */
-function migratePulseBackup(repoRoot, backupRelativePath) {
-  const migrated = [];
+function restorePulseBackup(repoRoot, backupRelativePath) {
+  const restored = [];
   const notes = [];
   if (!backupRelativePath) {
-    return { migrated, notes };
+    return { restored, notes };
   }
 
   const backupAbsolute = path.join(repoRoot, backupRelativePath);
   const copyIfPresent = (from, to) => {
     if (copyPathIfExists(path.join(backupAbsolute, from), path.join(repoRoot, to))) {
-      migrated.push(`${path.posix.join(backupRelativePath, from.split(path.sep).join(path.posix.sep))} -> ${to.split(path.sep).join(path.posix.sep)}`);
-    }
-  };
-  const copyTextIfPresent = (from, to) => {
-    if (copyRewrittenTextIfExists(path.join(backupAbsolute, from), path.join(repoRoot, to))) {
-      migrated.push(`${path.posix.join(backupRelativePath, from.split(path.sep).join(path.posix.sep))} -> ${to.split(path.sep).join(path.posix.sep)}`);
+      restored.push(`${path.posix.join(backupRelativePath, from.split(path.sep).join(path.posix.sep))} -> ${to.split(path.sep).join(path.posix.sep)}`);
     }
   };
 
-  copyTextIfPresent("state.json", path.join(".pulse", "runtime", "state.json"));
-  copyTextIfPresent("STATE.md", path.join(".pulse", "runtime", "STATE.md"));
-  copyTextIfPresent("tooling-status.json", path.join(".pulse", "runtime", "tooling-status.json"));
-  copyTextIfPresent("reservations.json", path.join(".pulse", "runtime", "reservations.json"));
-  copyIfPresent("handoffs", path.join(".pulse", "runtime", "handoffs"));
   copyIfPresent("runtime", path.join(".pulse", "runtime"));
   copyIfPresent("memory", path.join(".pulse", "memory"));
   copyIfPresent("workgraph", path.join(".pulse", "workgraph"));
 
   const unmapped = listActiveDomainEntries(backupAbsolute).filter(
-    (entry) => !["state.json", "STATE.md", "tooling-status.json", "reservations.json", "handoffs", "runtime", "memory", "workgraph"].includes(entry),
+    (entry) => !["runtime", "memory", "workgraph"].includes(entry),
   );
   if (unmapped.length > 0) {
     notes.push(`Unmapped .pulse backup entries require review: ${unmapped.join(", ")}.`);
   }
 
-  return { migrated, notes };
+  return { restored, notes };
 }
 
 /**
  * Write operator briefs for content that was backed up during normalization.
  */
-function writeOnboardingMigrationBriefs(repoRoot, normalization) {
-  const migrationDir = path.join(repoRoot, ".pulse", "runtime", "onboarding-migration");
-  ensureDirectory(migrationDir);
+function writeOnboardingReconstructionBriefs(repoRoot, normalization) {
+  const reconstructionDir = path.join(repoRoot, ".pulse", "runtime", "onboarding");
+  ensureDirectory(reconstructionDir);
   const briefs = [];
 
   const writeBrief = (fileName, lines) => {
-    const target = path.join(migrationDir, fileName);
+    const target = path.join(reconstructionDir, fileName);
     fs.writeFileSync(target, `${lines.join("\n").replace(/\s*$/, "")}\n`, "utf8");
     briefs.push(relativePosix(repoRoot, target));
   };
 
   if (normalization.domains.pulse.backup) {
-    writeBrief("pulse-migration-brief.md", [
-      "# Pulse Runtime Migration Brief",
+    writeBrief("pulse-reconstruction-brief.md", [
+      "# Pulse Runtime Reconstruction Brief",
       "",
       `Backup: ${normalization.domains.pulse.backup}`,
       "",
@@ -487,12 +446,12 @@ function writeOnboardingMigrationBriefs(repoRoot, normalization) {
   }
 
   if (normalization.domains.works.backup) {
-    writeBrief("works-migration-brief.md", [
-      "# Works Migration Brief",
+    writeBrief("works-reconstruction-brief.md", [
+      "# Works Reconstruction Brief",
       "",
       `Backup: ${normalization.domains.works.backup}`,
       "",
-      "Read the backed-up work artifacts, infer the active work slices, and migrate them into:",
+      "Read the backed-up work artifacts, infer the active work slices, and reconstruct them into:",
       "",
       "- works/epics/<E-id>-<slug>/README.md",
       "- works/epics/<E-id>-<slug>/<S-id>-<slug>/README.md",
@@ -500,12 +459,12 @@ function writeOnboardingMigrationBriefs(repoRoot, normalization) {
       "- works/epics/<E-id>-<slug>/<S-id>-<slug>/tasks/<item-id>-<slug>/README.md",
       "- works/epics/<E-id>-<slug>/<S-id>-<slug>/tasks/<item-id>-<slug>/verification.md",
       "",
-      "Synchronize migrated work with .pulse/workgraph/items.jsonl instead of preserving legacy layout as active truth.",
+      "Synchronize reconstructed work with .pulse/workgraph/items.jsonl instead of preserving backed-up layout as active truth.",
     ]);
   }
 
   if (briefs.length > 0) {
-    const manifestPath = path.join(migrationDir, "manifest.json");
+    const manifestPath = path.join(reconstructionDir, "manifest.json");
     fs.writeFileSync(manifestPath, `${JSON.stringify({ schema_version: "1.0", generated_at: utcNow(), briefs }, null, 2)}\n`, "utf8");
   }
 
@@ -515,12 +474,12 @@ function writeOnboardingMigrationBriefs(repoRoot, normalization) {
 function ensureDocsDomain(repoRoot, stamp) {
   const initial = classifyDocsDomain(repoRoot);
   const notes = [];
-  const migrations = [];
+  const reconstructions = [];
   let backup = "";
 
   if (initial.status === "missing") {
     ensureDocsScaffold(repoRoot);
-    return { ...initial, backup, notes, migrations };
+    return { ...initial, backup, notes, reconstructions };
   }
 
   if (initial.status === "non_compliant") {
@@ -528,24 +487,24 @@ function ensureDocsDomain(repoRoot, stamp) {
     if (activeEntries.length > 0) {
       const backupResult = backupDomainInPlace(repoRoot, "docs", stamp);
       backup = backupResult.backup;
-      migrations.push(`docs active content -> ${backup}`);
-      notes.push("docs domain was backed up and scaffolded; regenerate semantic docs from the onboarding migration brief.");
+      reconstructions.push(`docs active content -> ${backup}`);
+      notes.push("docs domain was backed up and scaffolded; regenerate semantic docs from the onboarding reconstruction brief.");
     }
     ensureDocsScaffold(repoRoot);
   }
 
-  return { ...initial, backup, notes, migrations };
+  return { ...initial, backup, notes, reconstructions };
 }
 
 function ensureWorksDomain(repoRoot, stamp) {
   const initial = classifyWorksDomain(repoRoot);
   const notes = [];
-  const migrations = [];
+  const reconstructions = [];
   let backup = "";
 
   if (initial.status === "missing") {
     ensureWorksScaffold(repoRoot);
-    return { ...initial, backup, notes, migrations };
+    return { ...initial, backup, notes, reconstructions };
   }
 
   if (initial.status === "non_compliant") {
@@ -553,13 +512,13 @@ function ensureWorksDomain(repoRoot, stamp) {
     if (activeEntries.length > 0) {
       const backupResult = backupDomainInPlace(repoRoot, "works", stamp);
       backup = backupResult.backup;
-      migrations.push(`works active content -> ${backup}`);
-      notes.push("works domain was backed up and scaffolded; migrate work items from the onboarding migration brief.");
+      reconstructions.push(`works active content -> ${backup}`);
+      notes.push("works domain was backed up and scaffolded; reconstruct work items from the onboarding reconstruction brief.");
     }
     ensureWorksScaffold(repoRoot);
   }
 
-  return { ...initial, backup, notes, migrations };
+  return { ...initial, backup, notes, reconstructions };
 }
 
 /**
@@ -569,7 +528,7 @@ function buildDomainNormalization(repoRoot) {
   const stamp = backupStamp();
   const initial = classifyDomains(repoRoot);
   let pulseBackup = "";
-  let pulseMigrations = [];
+  let pulseReconstructions = [];
   let pulseNotes = [];
 
   if (initial.pulse.status === "missing") {
@@ -578,9 +537,9 @@ function buildDomainNormalization(repoRoot) {
     const backupResult = backupDomainInPlace(repoRoot, ".pulse", stamp);
     pulseBackup = backupResult.backup;
     ensurePulseDomainLayout(repoRoot);
-    const migration = migratePulseBackup(repoRoot, pulseBackup);
-    pulseMigrations = migration.migrated;
-    pulseNotes = migration.notes;
+    const reconstruction = restorePulseBackup(repoRoot, pulseBackup);
+    pulseReconstructions = reconstruction.restored;
+    pulseNotes = reconstruction.notes;
   } else {
     ensurePulseDomainLayout(repoRoot);
   }
@@ -590,47 +549,13 @@ function buildDomainNormalization(repoRoot) {
   const normalization = {
     backup_stamp: stamp,
     domains: {
-      pulse: { ...initial.pulse, backup: pulseBackup, notes: pulseNotes, migrations: pulseMigrations },
+      pulse: { ...initial.pulse, backup: pulseBackup, notes: pulseNotes, reconstructions: pulseReconstructions },
       docs,
       works,
     },
   };
-  normalization.migration_briefs = writeOnboardingMigrationBriefs(repoRoot, normalization);
+  normalization.reconstruction_briefs = writeOnboardingReconstructionBriefs(repoRoot, normalization);
   return normalization;
-}
-
-/**
- * Legacy runtime text rewriting helpers.
- */
-
-function rewriteLegacyRuntimeText(text) {
-  let next = String(text || "");
-  for (const [from, to] of LEGACY_RUNTIME_TEXT_REPLACEMENTS) {
-    next = next.replaceAll(from, to);
-  }
-  return next;
-}
-
-function rewriteLegacyRuntimeTree(rootPath) {
-  if (!fs.existsSync(rootPath)) {
-    return;
-  }
-
-  for (const entry of fs.readdirSync(rootPath, { withFileTypes: true })) {
-    const entryPath = path.join(rootPath, entry.name);
-    if (entry.isDirectory()) {
-      rewriteLegacyRuntimeTree(entryPath);
-      continue;
-    }
-    if (!entry.isFile() || !/\.(json|md|txt)$/i.test(entry.name)) {
-      continue;
-    }
-    const original = fs.readFileSync(entryPath, "utf8");
-    const rewritten = rewriteLegacyRuntimeText(original);
-    if (rewritten !== original) {
-      fs.writeFileSync(entryPath, rewritten, "utf8");
-    }
-  }
 }
 
 /**
@@ -722,12 +647,8 @@ export function checkRepo(repoRoot, options = {}) {
   const agentsExists = agentsText.trim() !== "";
   const managedAgents = agentsExists && managedAgentsPresent(agentsText);
 
-  const legacyOnboardingPath = path.join(repoRoot, LEGACY_ONBOARDING_MARKER_PATH);
-  const onboarding =
-    readJsonIfExists(onboardingPath) ||
-    readJsonIfExists(legacyOnboardingPath) ||
-    {};
-  const onboardingMarkerExists = fs.existsSync(onboardingPath) || fs.existsSync(legacyOnboardingPath);
+  const onboarding = readJsonIfExists(onboardingPath) || {};
+  const onboardingMarkerExists = fs.existsSync(onboardingPath);
 
   const domainDetails = classifyDomains(repoRoot);
   const domainStatus = domainStatusSummary(domainDetails);
@@ -743,9 +664,6 @@ export function checkRepo(repoRoot, options = {}) {
     actions.push("sync_pulse_data_assets");
   }
 
-  if (fs.existsSync(legacyOnboardingPath)) {
-    actions.push("migrate_legacy_onboarding_marker");
-  }
   if (domainStatus.pulse !== "compliant") {
     actions.push("normalize_.pulse_structure");
   }
@@ -822,7 +740,6 @@ export function checkRepo(repoRoot, options = {}) {
       agents_exists: agentsExists,
       agents_managed_block: managedAgents,
       onboarding_marker_path: ONBOARDING_MARKER_PATH,
-      legacy_onboarding_marker_exists: fs.existsSync(legacyOnboardingPath),
       onboarding_state: Object.keys(onboarding).length > 0 ? onboarding : null,
       domain_status: domainStatus,
       domain_details: domainDetails,
@@ -851,8 +768,6 @@ export function applyRepo(repoRoot, _allowCompactPromptReplace, options = {}) {
 
   const pluginVersion = loadPluginVersion();
   const template = readTemplate();
-  const legacyOnboardingPath = path.join(repoRoot, LEGACY_ONBOARDING_MARKER_PATH);
-  const hadLegacyOnboardingMarker = fs.existsSync(legacyOnboardingPath);
   const domainNormalization = buildDomainNormalization(repoRoot);
 
   const agentsPath = path.join(repoRoot, "AGENTS.md");
@@ -862,7 +777,7 @@ export function applyRepo(repoRoot, _allowCompactPromptReplace, options = {}) {
   const memoryLearningsPath = path.join(memoryRootPath, "learnings");
   const memoryCorrectionsPath = path.join(memoryRootPath, "corrections");
   const memoryRatchetPath = path.join(memoryRootPath, "ratchet");
-  const { onboarding: existingOnboarding, legacyMigrated: legacyOnboardingMarkerMigrated } = readOnboardingState(repoRoot, onboardingPath);
+  const existingOnboarding = readOnboardingState(onboardingPath);
 
   ensureParent(agentsPath);
   ensureParent(onboardingPath);
@@ -957,10 +872,9 @@ export function applyRepo(repoRoot, _allowCompactPromptReplace, options = {}) {
       agents_mode: mergedAgents.status,
       support_assets: supportAssets,
       onboarding_marker_path: ONBOARDING_MARKER_PATH,
-      legacy_onboarding_marker_migrated: legacyOnboardingMarkerMigrated || hadLegacyOnboardingMarker,
       domain_normalization: domainNormalization,
-      works_migrations: domainNormalization.domains.works.migrations,
-      docs_migrations: domainNormalization.domains.docs.migrations,
+      works_reconstructions: domainNormalization.domains.works.reconstructions,
+      docs_reconstructions: domainNormalization.domains.docs.reconstructions,
       workgraph: {
         schema: path.relative(repoRoot, workgraphPaths.schemaPath),
         items: path.relative(repoRoot, workgraphPaths.itemsPath),
@@ -993,8 +907,8 @@ export function applyRepo(repoRoot, _allowCompactPromptReplace, options = {}) {
 // If available, run the plugin-owned `pulse_status.mjs --repo-root <repo> --json` helper for a quick Pulse status snapshot.
 // Read .pulse/runtime/tooling-status.json, .pulse/runtime/state.json, and .pulse/runtime/STATE.md if they exist.
 // Read .pulse/runtime/handoffs/manifest.json and any active owner handoff you are resuming.
-// Re-open the active feature CONTEXT.md before more planning or edits.
-// Re-open the current bead or task before running more implementation commands.
+// Re-open the active work content before more planning or edits.
+// Re-open the current work item before running more implementation commands.
 // Check the current worktree state with git status before resuming.
 // After completing these steps, briefly confirm what context you restored and only then continue.
 
@@ -1056,15 +970,6 @@ function copyPathIfExists(sourcePath, targetPath) {
   }
   ensureParent(targetPath);
   fs.cpSync(sourcePath, targetPath, { recursive: true, force: true });
-  return true;
-}
-
-function copyRewrittenTextIfExists(sourcePath, targetPath) {
-  if (!fs.existsSync(sourcePath) || !fs.statSync(sourcePath).isFile()) {
-    return false;
-  }
-  ensureParent(targetPath);
-  fs.writeFileSync(targetPath, rewriteLegacyRuntimeText(fs.readFileSync(sourcePath, "utf8")), "utf8");
   return true;
 }
 

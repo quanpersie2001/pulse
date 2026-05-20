@@ -7,48 +7,14 @@ function firstNonEmptyString(...values) {
   return "";
 }
 
-function deriveFeature(status) {
-  if (status.current_feature?.feature_key) {
-    return status.current_feature.feature_key;
-  }
-  if (status.state_json?.active_feature) {
-    return status.state_json.active_feature;
-  }
-  const focus = status.state_markdown?.focus || "";
-  return focus === "(none)" ? "" : focus;
-}
-
 export function normalizeNextCommandSurface(value) {
   const normalized = firstNonEmptyString(value);
   if (!normalized) {
     return "";
   }
 
-  const legacyMap = {
-    "pulse:planning": "pulse:workflow plan",
-    "pulse:validating": "pulse:workflow validate",
-    "pulse:swarming": "pulse:workflow swarm",
-    "pulse:executing": "pulse:workflow execute",
-    "pulse:reviewing": "pulse:workflow review",
-    "pulse:compounding": "pulse:workflow compound",
-    "pulse:exploring": "pulse:workflow explore",
-    "pulse:brainstorming": "pulse:workflow brainstorm",
-    "pulse:using-pulse": "pulse:workflow use",
-    "pulse:preflight": "pulse:workflow use",
-    "pulse:workflow onboard": "pulse:workflow use",
-  };
-
-  if (legacyMap[normalized]) {
-    return legacyMap[normalized];
-  }
-
-  if (normalized.startsWith("pulse:workflow")) {
-    return normalized;
-  }
-
   const validCommands = new Set([
     "use",
-    "onboard",
     "explore",
     "brainstorm",
     "plan",
@@ -58,6 +24,15 @@ export function normalizeNextCommandSurface(value) {
     "review",
     "compound",
   ]);
+
+  if (normalized.startsWith("pulse:workflow ")) {
+    const command = normalized.slice("pulse:workflow ".length).trim();
+    return validCommands.has(command) ? normalized : "";
+  }
+
+  if (normalized.startsWith("pulse:")) {
+    return "";
+  }
 
   if (validCommands.has(normalized)) {
     return `pulse:workflow ${normalized}`;
@@ -219,14 +194,6 @@ export function buildNextReads(status) {
     }
   }
 
-  const feature = deriveFeature(status);
-  if (feature) {
-    reads.push(`history/${feature}/CONTEXT.md`);
-  }
-
-  for (const item of status.history_lifecycle?.next_reads || []) {
-    reads.push(item);
-  }
 
   for (const entry of status.memory_recall?.recall_pack || []) {
     if (entry.path) {
@@ -262,20 +229,13 @@ export function buildRecommendedActions(status) {
       "Use the generated handoff summary, resume briefing, and transfer block instead of ad hoc prose when presenting a resume path.",
     ];
     if (status.project_docs?.status === "mapped") {
-      actions.push("When repo terminology or ownership boundaries matter, read the mapped project docs before going deeper into feature history.");
+      actions.push("When repo terminology or ownership boundaries matter, read the mapped project docs before going deeper into active work context.");
     } else if (status.project_docs?.status === "detected") {
       actions.push("Repo-level project docs were detected but are not mapped yet; map .pulse/project-docs.json before deeper planning.");
     } else {
       actions.push("If repo-wide terminology keeps drifting, propose a lightweight project-doc scaffold before deeper planning.");
     }
 
-    if (status.history_lifecycle?.exists) {
-      actions.push(
-        status.history_lifecycle.self_sufficient
-          ? "History plane has enough promoted lifecycle evidence for a durable audit pass without reopening live runtime state."
-          : "History plane already exposes a promoted lifecycle trail, but live control state is still authoritative for resume and in-flight work.",
-      );
-    }
     if (recallPack.length > 0) {
       actions.push("Use the targeted recall pack to reopen only the most relevant critical patterns, corrections, ratchet rules, and learnings.");
     }
@@ -377,13 +337,6 @@ export function buildRecommendedActions(status) {
     actions.push("If durable repo-level terminology or architecture context is missing, propose a lightweight project-doc scaffold before deeper planning.");
   }
 
-  if (status.history_lifecycle?.exists) {
-    actions.push(
-      status.history_lifecycle.self_sufficient
-        ? "History plane has enough promoted lifecycle evidence for a durable audit pass without reopening live runtime state."
-        : "History plane already exposes a promoted lifecycle trail, but live control state is still authoritative for resume and in-flight work.",
-    );
-  }
   if (recallPack.length > 0) {
     actions.push("Use the targeted recall pack to pull in the smallest relevant memory context before planning, debugging, or review.");
   }

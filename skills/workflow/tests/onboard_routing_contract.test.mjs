@@ -39,15 +39,12 @@ test("resolveRepoRoot uses PULSE_REPO_ROOT when explicitRoot is missing", () => 
   }
 });
 
-test("checkRepo/applyRepo expose FAIL->PASS readiness without legacy br/bv blockers", () => {
+test("checkRepo/applyRepo expose FAIL->PASS readiness without optional external CLI blockers", () => {
   const root = mkRoot();
   try {
     const before = checkRepo(root);
     assert.equal(before.status, "FAIL");
 
-    const beforeSerialized = JSON.stringify(before);
-    assert.doesNotMatch(beforeSerialized, /\bbr\b/i);
-    assert.doesNotMatch(beforeSerialized, /\bbv\b/i);
 
     const applied = applyRepo(root, false);
     assert.equal(applied.status, "PASS");
@@ -266,7 +263,7 @@ test("session_load requires selection for multiple handoffs and rejects unsafe r
   }
 });
 
-test("passive legacy archive docs do not trigger active routing drift warnings", () => {
+test("passive archive docs do not trigger active routing drift warnings", () => {
   const root = mkRoot();
   try {
     applyRepo(root, false);
@@ -274,8 +271,8 @@ test("passive legacy archive docs do not trigger active routing drift warnings",
     const archiveDir = path.join(root, "docs", "archive");
     fs.mkdirSync(archiveDir, { recursive: true });
     fs.writeFileSync(
-      path.join(archiveDir, "legacy-routing-notes.md"),
-      "Historical notes: pulse:preflight and pulse:using-pulse and dream were old routes.\n",
+      path.join(archiveDir, "archived-routing-notes.md"),
+      "Historical notes: removed route names in archived docs should not affect active readiness.\n",
       "utf8",
     );
 
@@ -288,13 +285,13 @@ test("passive legacy archive docs do not trigger active routing drift warnings",
   }
 });
 
-test("applyRepo backs up non-compliant .pulse in-place and migrates safe memory data", () => {
+test("applyRepo backs up non-compliant .pulse in-place and restores safe memory data", () => {
   const root = mkRoot();
   try {
     const correctionsDir = path.join(root, ".pulse", "memory", "corrections");
     fs.mkdirSync(correctionsDir, { recursive: true });
     fs.writeFileSync(path.join(correctionsDir, "lesson.md"), "# Lesson\n", "utf8");
-    fs.writeFileSync(path.join(root, ".pulse", "state.json"), `${JSON.stringify({ phase: "legacy" })}\n`, "utf8");
+    fs.writeFileSync(path.join(root, ".pulse", "extra-state.json"), `${JSON.stringify({ phase: "archived" })}\n`, "utf8");
 
     const applied = applyRepo(root, false);
     assert.equal(applied.status, "PASS");
@@ -304,14 +301,14 @@ test("applyRepo backs up non-compliant .pulse in-place and migrates safe memory 
     assert.ok(backupName);
     assert.ok(fs.existsSync(path.join(root, ".pulse", backupName, "memory", "corrections", "lesson.md")));
     assert.ok(fs.existsSync(path.join(root, ".pulse", "memory", "corrections", "lesson.md")));
-    assert.ok(fs.existsSync(path.join(root, ".pulse", "runtime", "onboarding-migration", "pulse-migration-brief.md")));
+    assert.ok(fs.existsSync(path.join(root, ".pulse", "runtime", "onboarding", "pulse-reconstruction-brief.md")));
     assert.equal(fs.existsSync(path.join(root, ".pulse-backups")), false);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
 
-test("applyRepo backs up non-compliant docs and works in-place with migration briefs", () => {
+test("applyRepo backs up non-compliant docs and works in-place with reconstruction briefs", () => {
   const root = mkRoot();
   try {
     fs.mkdirSync(path.join(root, "docs", "adr"), { recursive: true });
@@ -333,8 +330,8 @@ test("applyRepo backs up non-compliant docs and works in-place with migration br
     assert.ok(fs.existsSync(path.join(root, "docs", "decisions")));
     assert.ok(fs.existsSync(path.join(root, "docs", "product")));
     assert.ok(fs.existsSync(path.join(root, "works", "epics")));
-    assert.ok(fs.existsSync(path.join(root, ".pulse", "runtime", "onboarding-migration", "docs-regeneration-brief.md")));
-    assert.ok(fs.existsSync(path.join(root, ".pulse", "runtime", "onboarding-migration", "works-migration-brief.md")));
+    assert.ok(fs.existsSync(path.join(root, ".pulse", "runtime", "onboarding", "docs-regeneration-brief.md")));
+    assert.ok(fs.existsSync(path.join(root, ".pulse", "runtime", "onboarding", "works-reconstruction-brief.md")));
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }

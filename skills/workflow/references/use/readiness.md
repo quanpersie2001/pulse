@@ -97,20 +97,6 @@ works/
 docs/
 ```
 
-## Legacy posture handling
-
-Legacy artifacts are migration context, not baseline readiness blockers.
-
-Treat them as warnings unless they create conflicting active truth or make safe routing impossible:
-
-- `.beads/`
-- `history/`
-- old workflow-skill command names
-- removed utility skill routes
-- old top-level `.pulse` runtime files
-
-Missing legacy CLIs must not block a greenfield v2 repo.
-
 ## What readiness must report
 
 A complete readiness brief should include:
@@ -126,13 +112,13 @@ A complete readiness brief should include:
 - resumable handoffs
 - missing core prerequisites
 - degraded capabilities
-- migration warnings
+- domain status for `.pulse`, `docs`, and `works`
 - runtime file status
 - workgraph file status
 - plugin runtime availability and optional shim warnings
 - harness backlog status
 - domain normalization status for `.pulse`, `docs`, and `works` (`missing|compliant|non_compliant`)
-- backup paths and onboarding migration briefs when semantic migration is required
+- backup paths and onboarding reconstruction briefs when semantic reconstruction is required
 - loaded, missing, and rejected session files
 - recommended next command
 

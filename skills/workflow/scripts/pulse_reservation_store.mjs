@@ -170,7 +170,7 @@ function normalizeReservation(entry) {
         : `resv-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
     agent:
       typeof entry?.agent === "string" && entry.agent.trim() ? entry.agent.trim() : "unknown",
-    bead_id: typeof entry?.bead_id === "string" ? entry.bead_id.trim() : "",
+    item_id: typeof entry?.item_id === "string" ? entry.item_id.trim() : "",
     paths: Array.isArray(entry?.paths)
       ? entry.paths.filter((item) => typeof item === "string" && item.trim())
       : [],
@@ -357,7 +357,7 @@ export function listReservations(repoRoot, options = {}) {
       if (options.agent && reservation.agent !== options.agent) {
         return false;
       }
-      if (options.beadId && reservation.bead_id !== options.beadId) {
+      if (options.itemId && reservation.item_id !== options.itemId) {
         return false;
       }
       return reservationMatchesPathFilter(reservation, options.paths);
@@ -444,7 +444,7 @@ export function reservePaths(repoRoot, options = {}) {
         : null;
     const reservation = normalizeReservation({
       agent,
-      bead_id: typeof options.beadId === "string" ? options.beadId.trim() : "",
+      item_id: typeof options.itemId === "string" ? options.itemId.trim() : "",
       paths: normalizedPaths,
       created_at: now,
       updated_at: now,
@@ -478,7 +478,7 @@ function shouldReleaseReservation(reservation, options = {}) {
   if (options.ids?.length && !options.ids.includes(reservation.id)) {
     return false;
   }
-  if (options.beadId && reservation.bead_id !== options.beadId) {
+  if (options.itemId && reservation.item_id !== options.itemId) {
     return false;
   }
   if (!reservationMatchesPathFilter(reservation, options.paths)) {

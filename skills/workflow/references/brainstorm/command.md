@@ -275,7 +275,7 @@ After the user approves the design, write the spec.
 
 Rules:
 - If the canonical story path is already known, write directly there.
-- If the exact `works/` path is not yet known, confirm the target location with the user instead of inventing a legacy history mirror.
+- If the exact `works/` path is not yet known, confirm the target location with the user instead of inventing another artifact root.
 - Do not overwrite the story `README.md`; that file remains the durable story description, not the brainstorming output.
 - The brainstorm artifact is a sibling file named `SPEC.md` inside the story directory.
 
@@ -387,7 +387,7 @@ Stop immediately if you catch yourself doing any of these:
 - answering a question you just asked
 - treating every UI topic as visual instead of deciding per question
 - invoking planning or execution before the spec is approved
-- creating work items or referencing legacy bead IDs
+- creating work items or referencing non-workgraph item IDs
 
 ---
 

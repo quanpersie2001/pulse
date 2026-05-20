@@ -48,16 +48,27 @@ function normalizeWorkflowCommand(value) {
   if (!normalized) {
     return "";
   }
+
+  const validCommands = new Set([
+    "use",
+    "explore",
+    "brainstorm",
+    "plan",
+    "validate",
+    "swarm",
+    "execute",
+    "review",
+    "compound",
+  ]);
+
   if (normalized.startsWith("pulse:workflow ")) {
-    return normalized === "pulse:workflow onboard" ? "pulse:workflow use" : normalized;
-  }
-  if (normalized === "onboard") {
-    return "pulse:workflow use";
+    const command = normalized.slice("pulse:workflow ".length).trim();
+    return validCommands.has(command) ? normalized : "";
   }
   if (normalized.startsWith("pulse:")) {
     return "";
   }
-  return `pulse:workflow ${normalized}`;
+  return validCommands.has(normalized) ? `pulse:workflow ${normalized}` : "";
 }
 
 function isSafeSessionRelativePath(relativePath) {

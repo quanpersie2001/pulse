@@ -54,7 +54,7 @@ test("reservation module reserve/list/release lifecycle works with repo-root", (
 
     const reserved = reservePaths(root, {
       agent: "agent-a",
-      beadId: "S-123",
+      itemId: "S-123",
       paths: ["skills/workflow/**"],
       ttlSeconds: 120,
       note: "runtime test",
@@ -117,7 +117,7 @@ test("sweep marks already-expired active reservations without waiting", () => {
           {
             id: "resv-expired",
             agent: "agent-a",
-            bead_id: "S-1",
+            item_id: "S-1",
             paths: ["works/**"],
             created_at: new Date(Date.now() - 120_000).toISOString(),
             updated_at: new Date(Date.now() - 120_000).toISOString(),
@@ -169,7 +169,7 @@ test("CLI main uses --repo-root store even when cwd points elsewhere", () => {
     const reservePayload = JSON.parse(reserveCall.output);
     assert.equal(reservePayload.ok, true);
     assert.equal(reservePayload.reservation.agent, "agent-main");
-    assert.equal(reservePayload.reservation.bead_id, "S-42");
+    assert.equal(reservePayload.reservation.item_id, "S-42");
 
     const listCall = withCapturedStdout(() =>
       reservationsMain(["--repo-root", root, "list", "--active-only", "--json"]),

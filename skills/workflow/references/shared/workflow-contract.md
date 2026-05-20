@@ -9,7 +9,7 @@ This document describes the Pulse workflow pipeline in router language.
 - `pulse:workflow` renders help.
 - `pulse:workflow <command>` loads that command's contract.
 - Unknown commands fall back to help.
-- The router never dispatches silently to legacy skills.
+- The router never dispatches silently to another workflow surface.
 
 ## Canonical command pipeline
 
@@ -35,7 +35,7 @@ When execution gets stuck or needs deeper tactical support, reroute to standalon
 
 | Command | Primary responsibility |
 | --- | --- |
-| `use` | prepare the repo if needed, load the current session, and surface migration posture |
+| `use` | prepare the repo if needed, load the current session, and surface runtime posture |
 | `explore` | understand the codebase, current state, and implementation-relevant decision context |
 | `brainstorm` | shape vague intent into candidate approaches and an approved design before exploration |
 | `plan` | turn context into a concrete implementation shape |
@@ -47,7 +47,7 @@ When execution gets stuck or needs deeper tactical support, reroute to standalon
 
 ## Gated progression
 
-The router keeps the existing human-gate model, but the gates attach to artifacts rather than legacy skill names.
+The router keeps the human-gate model attached to artifacts and runtime state.
 
 1. after `explore`, approve the context artifact
 2. after `plan`, approve the selected shape artifact
@@ -69,25 +69,6 @@ Examples:
 
 The router is conversational and decision-oriented.
 The runtime is mechanical and state-oriented.
-
-## Legacy mapping
-
-| Legacy surface | Router replacement |
-| --- | --- |
-| `preflight` + `using-pulse` + `onboard` | `use` |
-| `exploring` | `explore` |
-| `brainstorming` | `brainstorm` |
-| `planning` | `plan` |
-| `validating` | `validate` |
-| `swarming` | `swarm` |
-| `executing` | `execute` |
-| `reviewing` | `review` |
-| `compounding` | `compound` |
-| `architecture-rescue` | standalone utility (outside `pulse:workflow`) |
-| `systematic-debug-fix` | standalone utility (outside `pulse:workflow`) |
-| `dev-note` | standalone utility (outside `pulse:workflow`) |
-| `dev-note-distil` | standalone utility (outside `pulse:workflow`) |
-| `dream` | removed |
 
 ## Failure posture
 

@@ -1,6 +1,6 @@
 # Pressure Scenarios: `pulse:workflow use`
 
-Use these scenarios when hardening Pulse v2 readiness, session loading, migration warning, and dependency-reporting behavior.
+Use these scenarios when hardening Pulse v2 readiness, session loading, normalization warning, and dependency-reporting behavior.
 
 ---
 
@@ -61,46 +61,6 @@ Expected pass:
 - Choose `B`.
 - Treat the v2 workgraph schema as a required contract.
 - Do not let runtime mirrors substitute for canonical workgraph readiness.
-
----
-
-## Scenario: Legacy Metadata Present
-
-```text
-IMPORTANT: This is a real scenario. You must choose and act.
-
-The repo contains `.beads/`, but `.pulse/workgraph/items.jsonl` and `.pulse/workgraph/schema.json` are valid. No hook or script is actively reading `.beads/` as current truth.
-
-Options:
-A) Fail readiness because `.beads/` exists.
-B) Surface `.beads/` as a migration warning and continue.
-C) Import `.beads/` silently into the workgraph.
-```
-
-Expected pass:
-- Choose `B`.
-- Keep legacy metadata visible but non-blocking.
-- Do not silently import or dual-write legacy state.
-
----
-
-## Scenario: Missing Legacy CLIs
-
-```text
-IMPORTANT: This is a real scenario. You must choose and act.
-
-`br` and `bv` are not installed. `node`, `git`, `pulse-work`, `.pulse/runtime/*`, and `.pulse/workgraph/*` are healthy.
-
-Options:
-A) Fail readiness because legacy CLIs are missing.
-B) Pass v2 readiness and optionally report that legacy CLIs are not required.
-C) Degrade execution mode because legacy CLIs are missing.
-```
-
-Expected pass:
-- Choose `B`.
-- Never make missing legacy CLIs baseline v2 blockers.
-- Keep readiness anchored on `pulse-work` and v2 runtime files.
 
 ---
 

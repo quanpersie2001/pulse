@@ -82,18 +82,6 @@ function renderOperatorSurfaceLines(status) {
   const reservations = status.reservations && typeof status.reservations === "object"
     ? status.reservations
     : { exists: false, total: 0, active_count: 0, expired_count: 0, released_count: 0, active_agents: [] };
-  const historyLifecycle = status.history_lifecycle && typeof status.history_lifecycle === "object"
-    ? status.history_lifecycle
-    : {
-        exists: false,
-        lifecycle_summary: "",
-        approved_artifacts: [],
-        verification: [],
-        memory_promotions: [],
-        lifecycle_signals: [],
-        next_reads: [],
-        self_sufficient: false,
-      };
   const projectDocs = status.project_docs && typeof status.project_docs === "object"
     ? status.project_docs
     : {
@@ -188,21 +176,6 @@ function renderOperatorSurfaceLines(status) {
       lines.push(`  - ${handoff.operator_summary}`);
     }
     lines.push(`  - manifest_updated_at: ${handoffManifest.updated_at || "(none)"}`);
-  }
-
-  lines.push(`- History lifecycle: ${historyLifecycle.exists ? "present" : "missing"}`);
-  if (historyLifecycle.exists) {
-    lines.push(`  - lifecycle_summary: ${historyLifecycle.lifecycle_summary || "(none)"}`);
-    lines.push(`  - self_sufficient: ${historyLifecycle.self_sufficient ? "yes" : "no"}`);
-    if ((historyLifecycle.approved_artifacts || []).length > 0) {
-      lines.push(`  - approved_artifacts: ${historyLifecycle.approved_artifacts.join(", ")}`);
-    }
-    if ((historyLifecycle.lifecycle_signals || []).length > 0) {
-      lines.push(`  - lifecycle_signals: ${historyLifecycle.lifecycle_signals.join(", ")}`);
-    }
-    if ((historyLifecycle.verification || []).length > 0) {
-      lines.push(`  - canonical_verification: ${historyLifecycle.verification.join(", ")}`);
-    }
   }
 
   lines.push(`- Memory recall root: ${memoryRecall.root_exists ? "present" : "missing"}`);

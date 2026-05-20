@@ -11,8 +11,6 @@ It combines two responsibilities behind one public command:
 1. **Readiness/onboarding phase** — if the repo is missing or stale, materialize and repair the v2 runtime surface.
 2. **Session-load phase** — once readiness is established, load the current Pulse session from runtime pointers, handoffs, workgraph metadata, and selected work artifacts.
 
-This replaces the old split between setup/preflight and `using-pulse`. Operators should not need to remember a separate one-time onboarding command.
-
 ## Authority
 
 `pulse:workflow use` is the workflow session authority.
@@ -29,7 +27,6 @@ Run `pulse:workflow use` when:
 - the current workflow command, active work item, or next safe action is unclear
 - a handoff exists and the operator needs to resume from it
 - a workflow command cannot prove current runtime readiness or session context
-- legacy Pulse artifacts are present and may conflict with v2 runtime truth
 
 ## Phase 1: readiness and materialization
 
@@ -96,7 +93,7 @@ A complete use result must report:
 - recommended mode
 - missing blockers
 - degraded capabilities
-- migration warnings
+- domain status for `.pulse/`, `docs/`, and `works/`
 - workgraph health
 - runtime materialization status
 - plugin runtime availability and optional shim warnings
@@ -132,17 +129,9 @@ Use `DEGRADED` only when the workflow remains safe but reduced. Examples:
 
 - swarm coordination is unavailable, but single-worker execution is safe
 - optional GitNexus discovery is not configured, but file-based discovery is available
-- migration warnings exist but do not create conflicting active truth
+- a domain is non-compliant, but use can back it up and rebuild the v2 shape safely
 
 Do not use `DEGRADED` to bypass a blocker.
-
-## Migration warnings
-
-Legacy artifacts are visible migration context, not v2 readiness blockers by default.
-
-Use must surface them separately from blockers and explain the v2 target contract. Escalate a warning to `FAIL` only when the legacy artifact creates conflicting active truth or makes safe routing impossible without human choice.
-
-See [Migration warnings](migration-warnings.md) for the warning catalog.
 
 ## First-run materialization model
 
@@ -151,15 +140,15 @@ The readiness/onboarding phase should use this sequence:
 1. Detect current target repo posture.
 2. Classify `.pulse/`, `docs/`, and `works/` as `missing`, `compliant`, or `non_compliant`.
 3. If a domain is missing, create the required v2 structure.
-4. If `.pulse/` exists but is non-compliant, move active contents into `.pulse/backup-<date>/`, rebuild the v2 `.pulse/` layout, then migrate known-safe data such as memory and runtime state into the new layout.
-5. If `docs/` exists but is non-compliant, move active contents into `docs/backup-<date>/`, scaffold the v2 docs shape, and emit a docs regeneration brief for AI-assisted reconstruction from old docs plus the codebase.
-6. If `works/` exists but is non-compliant, move active contents into `works/backup-<date>/`, scaffold the v2 works shape, and emit a works migration brief for AI-assisted migration into `works/epics/**` plus `.pulse/workgraph/items.jsonl`.
+4. If `.pulse/` exists but is non-compliant, move active contents into `.pulse/backup-<date>/`, rebuild the v2 `.pulse/` layout, then preserve known-safe data such as memory and runtime state in the new layout.
+5. If `docs/` exists but is non-compliant, move active contents into `docs/backup-<date>/`, scaffold the v2 docs shape, and emit a docs regeneration brief for AI-assisted reconstruction from backed-up docs plus the codebase.
+6. If `works/` exists but is non-compliant, move active contents into `works/backup-<date>/`, scaffold the v2 works shape, and emit a works reconstruction brief for AI-assisted reconstruction into `works/epics/**` plus `.pulse/workgraph/items.jsonl`.
 7. Materialize `.pulse/harness/HARNESS_BACKLOG.md` from `skills/workflow/templates/HARNESS_BACKLOG.md`.
 8. Rebuild generated workgraph views.
 9. Write `tooling-status.json`, `state.json`, `STATE.md`, and the onboarding install receipt.
 10. Continue into session-load.
 
-Use must not silently overwrite human-authored docs or work artifacts. Brownfield normalization backs up in-place first and writes migration briefs under `.pulse/runtime/onboarding-migration/` for semantic follow-up.
+Use must not silently overwrite human-authored docs or work artifacts. Brownfield normalization backs up in-place first and writes reconstruction briefs under `.pulse/runtime/onboarding/` for semantic follow-up.
 
 ## Phase 2: session load
 
@@ -261,8 +250,6 @@ Use recommends supported v2 workflow surfaces only.
 | Implementation is complete and quality gate is next | `pulse:workflow review` |
 | Cycle is complete and durable learnings should be captured | `pulse:workflow compound` |
 
-Removed legacy surfaces must not be recommended as next commands.
-
 ## Gate posture
 
 Use reports gate state; it does not approve gates.
@@ -284,12 +271,9 @@ Return `FAIL` or pause for human decision when:
 - multiple active handoffs exist and no owner has been selected
 - work content paths escape `works/`
 - read-first paths escape the repo or point outside allowed roots
-- legacy artifacts are being used as current truth instead of migration context
-- the user asks to route to a removed workflow surface
 
 ## Command-local references
 
 - [Readiness](readiness.md)
-- [Migration warnings](migration-warnings.md)
 - [Handoff contract](handoff-contract.md)
 - [Pressure scenarios](pressure-scenarios.md)

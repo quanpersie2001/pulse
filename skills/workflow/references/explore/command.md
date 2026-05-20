@@ -34,7 +34,7 @@ Read in this order (if present):
 
 Quick scout boundary: keep this shallow (targeted grep + 2–3 file reads). Deep codebase analysis belongs to `pulse:workflow plan`.
 
-Active story context is `works/**/CONTEXT.md`; do not route exploration truth through legacy history paths.
+Active story context is `works/**/CONTEXT.md`; do not route exploration truth through another artifact root.
 
 Rule: answer from repo evidence first; ask users only for decisions evidence cannot settle.
 
@@ -189,7 +189,7 @@ Do not mark exploration complete while paused.
 - drifting into solution design
 - writing `CONTEXT.md` before decisions are locked
 - mutating runtime/workgraph state as if Gate 1 already passed
-- writing active truth to `history/`, `.beads`, or legacy `pulse:*` skill naming instead of `works/**` + `pulse:workflow` routing
+- writing active truth outside `works/**` + `pulse:workflow` routing
 
 ## Exit contract
 

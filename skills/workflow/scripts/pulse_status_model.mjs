@@ -20,7 +20,6 @@ import { syncPulseRuntimeArtifacts } from "./pulse_runtime_sync.mjs";
 import { summarizeReservationStatusForState } from "./pulse_reservation_store.mjs";
 import { buildNextReads, buildRecommendedActions } from "./pulse_recommendations.mjs";
 import { summarizeMemoryRecall } from "./pulse_memory_recall.mjs";
-import { summarizeHistoryLifecycle } from "./pulse_history_lifecycle.mjs";
 import {
   summarizeCurrentFeature,
   summarizeRuntimeSnapshot,
@@ -70,7 +69,6 @@ export async function readPulseStatus(repoRoot) {
     state_json: stateJsonSummary,
     state_markdown: stateMarkdownSummary,
   });
-  const historyLifecycle = summarizeHistoryLifecycle(repoRoot, derivedFeature);
   const projectDocsSummary = summarizeProjectDocs(repoRoot, paths, readJsonIfExists);
 
   const status = {
@@ -97,7 +95,6 @@ export async function readPulseStatus(repoRoot) {
     reservations: summarizeReservationStatusForState(repoRoot),
     session_load: sessionLoad,
     handoff_manifest: handoffManifestSummary,
-    history_lifecycle: historyLifecycle,
     project_docs: projectDocsSummary,
     critical_patterns_exists: fs.existsSync(paths.criticalPatterns),
     gitnexus_readiness: gitNexusReadiness,

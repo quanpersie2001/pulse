@@ -4,7 +4,7 @@
  * Purpose: CLI facade for runtime reservation operations.
  * Caller/flow: Invoked by operators/workers to reserve, release, list, and sweep paths.
  * Reads/Writes: Reads/writes .pulse/runtime/reservations.json via reservation store.
- * CLI args: reserve|release|list|sweep with --repo-root, --agent, --task/--bead, --path, --ttl, --json.
+ * CLI args: reserve|release|list|sweep with --repo-root, --agent, --item, --path, --ttl, --json.
  * Ownership: Command surface only; lock/overlap rules are owned by pulse_reservation_store.mjs.
  * Repo root rule: Uses shared resolver from pulse_paths.mjs.
  */
@@ -47,7 +47,7 @@ function parseArgs(argv) {
     command: "",
     repoRoot: undefined,
     agent: "",
-    beadId: "",
+    itemId: "",
     ttlSeconds: null,
     note: "",
     paths: [],
@@ -81,13 +81,13 @@ function parseArgs(argv) {
       args.agent = arg.slice("--agent=".length);
       continue;
     }
-    if (arg === "--bead" || arg === "--task" || arg === "--item") {
-      args.beadId = argv[index + 1] || "";
+    if (arg === "--item") {
+      args.itemId = argv[index + 1] || "";
       index += 1;
       continue;
     }
-    if (arg.startsWith("--bead=") || arg.startsWith("--task=") || arg.startsWith("--item=")) {
-      args.beadId = arg.split("=")[1] || "";
+    if (arg.startsWith("--item=")) {
+      args.itemId = arg.slice("--item=".length);
       continue;
     }
     if (arg === "--ttl") {
@@ -147,8 +147,8 @@ function parseArgs(argv) {
       process.stdout.write(
         [
           "Usage:",
-          "  node pulse_reservations.mjs --repo-root <repo> reserve --agent <name> [--bead|--task|--item <id>] --path <glob> [--ttl <seconds>] [--note <text>] [--json]",
-          "  node pulse_reservations.mjs --repo-root <repo> release --agent <name> [--bead|--task|--item <id>] [--path <glob>] [--id <reservation-id>] [--json]",
+          "  node pulse_reservations.mjs --repo-root <repo> reserve --agent <name> [--item <id>] --path <glob> [--ttl <seconds>] [--note <text>] [--json]",
+          "  node pulse_reservations.mjs --repo-root <repo> release --agent <name> [--item <id>] [--path <glob>] [--id <reservation-id>] [--json]",
           "  node pulse_reservations.mjs --repo-root <repo> list [--active-only] [--agent <name>] [--path <glob>] [--status active|released|expired] [--json]",
           "  node pulse_reservations.mjs --repo-root <repo> sweep [--json]",
         ].join("\n"),
@@ -166,7 +166,7 @@ function renderText(result) {
     return [
       `Reservation created: ${result.reservation.id}`,
       `Agent: ${result.reservation.agent}`,
-      `Bead: ${result.reservation.bead_id || "(none)"}`,
+      `Item: ${result.reservation.item_id || "(none)"}`,
       `Paths: ${result.reservation.paths.join(", ")}`,
       `TTL seconds: ${result.reservation.ttl_seconds ?? "none"}`,
       `Status: ${result.reservation.status}`,
@@ -219,7 +219,7 @@ export function main(argv = process.argv.slice(2)) {
     case "reserve":
       result = reservePaths(repoRoot, {
         agent: args.agent,
-        beadId: args.beadId,
+        itemId: args.itemId,
         paths: args.paths,
         ttlSeconds: args.ttlSeconds,
         note: args.note,
@@ -228,7 +228,7 @@ export function main(argv = process.argv.slice(2)) {
     case "release":
       result = releaseReservations(repoRoot, {
         agent: args.agent,
-        beadId: args.beadId,
+        itemId: args.itemId,
         paths: args.paths.map((item) => normalizeReservationPattern(repoRoot, item)),
         ids: args.ids,
       });
@@ -237,7 +237,7 @@ export function main(argv = process.argv.slice(2)) {
       result = listReservations(repoRoot, {
         activeOnly: args.activeOnly,
         agent: args.agent || undefined,
-        beadId: args.beadId || undefined,
+        itemId: args.itemId || undefined,
         paths: args.paths.map((item) => normalizeReservationPattern(repoRoot, item)),
         status: args.status || undefined,
       });

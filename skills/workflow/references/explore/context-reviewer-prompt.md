@@ -12,7 +12,7 @@ Check for:
 - Clarity: decisions vague enough to force planner assumptions
 - Decision integrity: all locked decisions have stable IDs (D1, D2...)
 - Open-questions split: Resolve Before Planning vs Deferred to Planning is explicit and coherent
-- Contract alignment: no active truth points to history/, .beads, br, bv, or legacy pulse:* skill naming
+- Contract alignment: active truth uses `works/**`, `.pulse/workgraph/items.jsonl`, and `pulse:workflow` routing
 
 Calibration:
 Only flag issues that materially risk wrong planning or validation behavior.

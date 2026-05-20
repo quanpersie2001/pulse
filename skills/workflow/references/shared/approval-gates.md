@@ -1,6 +1,6 @@
 # Approval Gates
 
-Pulse keeps a human approval model, but the gates now attach to artifacts and workflow state rather than to legacy skill names.
+Pulse keeps a human approval model attached to artifacts and workflow state.
 
 ## Gate model overview
 
