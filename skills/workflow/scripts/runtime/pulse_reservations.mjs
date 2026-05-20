@@ -4,7 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { getPulseStatePaths, resolveRepoRoot } from "./pulse_state.mjs";
+import { getPulsePaths, resolveRepoRoot } from "./pulse_paths.mjs";
 
 export const RESERVATION_SCHEMA_VERSION = "1.0";
 const LOCK_RETRY_MS = 50;
@@ -199,7 +199,7 @@ function normalizeReservationStore(store) {
 }
 
 export function getReservationsPath(repoRoot) {
-  return getPulseStatePaths(repoRoot).reservations;
+  return getPulsePaths(repoRoot).reservations;
 }
 
 export function readReservationStore(repoRoot) {
@@ -631,10 +631,10 @@ function parseArgs(argv) {
       process.stdout.write(
         [
           "Usage:",
-          "  node .pulse/scripts/pulse_reservations.mjs reserve --agent <name> --bead <id> --path <glob> [--ttl <seconds>] [--note <text>] [--json]",
-          "  node .pulse/scripts/pulse_reservations.mjs release --agent <name> [--bead <id>] [--path <glob>] [--id <reservation-id>] [--json]",
-          "  node .pulse/scripts/pulse_reservations.mjs list [--active-only] [--agent <name>] [--path <glob>] [--status active|released|expired] [--json]",
-          "  node .pulse/scripts/pulse_reservations.mjs sweep [--json]",
+          "  node pulse_reservations.mjs --repo-root <repo> reserve --agent <name> --bead <id> --path <glob> [--ttl <seconds>] [--note <text>] [--json]",
+          "  node pulse_reservations.mjs --repo-root <repo> release --agent <name> [--bead <id>] [--path <glob>] [--id <reservation-id>] [--json]",
+          "  node pulse_reservations.mjs --repo-root <repo> list [--active-only] [--agent <name>] [--path <glob>] [--status active|released|expired] [--json]",
+          "  node pulse_reservations.mjs --repo-root <repo> sweep [--json]",
         ].join("\n"),
       );
       process.exit(0);

@@ -29,6 +29,6 @@ Adapter must support:
 
 - ready work selected from `pulse-work ready --json`
 - graph truth from `pulse-work graph --json`
-- reservation layer from `.pulse/scripts/pulse_reservations.mjs`
+- reservation layer from plugin-owned `pulse_reservations.mjs` or the public `pulse-work` surface
 - owner-scoped handoffs in `.pulse/runtime/handoffs/`
 - one shared-branch commit slot at a time

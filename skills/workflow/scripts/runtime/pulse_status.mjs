@@ -6,9 +6,9 @@ import { fileURLToPath } from "node:url";
 import {
   readPulseStatus,
   renderPulseStatus,
-  resolveRepoRoot,
   syncPulseRuntimeArtifacts,
 } from "./pulse_state.mjs";
+import { resolveRepoRoot } from "./pulse_paths.mjs";
 
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 

@@ -19,8 +19,8 @@ Readiness must tell the operator whether Pulse can proceed, in what mode, and wh
 | Capability | Why it matters | Missing effect |
 | --- | --- | --- |
 | `git` | Repo identity and normal software workflow operations | `FAIL` when source-control context is required |
-| `node` | Repo-local Pulse runtime helpers | `FAIL` |
-| repo-local Pulse workflow source tree | Router, references, templates, and runtime-owned assets must exist | `FAIL` |
+| `node` | Plugin-owned Pulse runtime helpers | `FAIL` |
+| Pulse workflow source tree | Router, references, templates, and runtime-owned assets must be available through the installed skill package | `FAIL` |
 | installed `pulse-work` surface | Runtime and workgraph mutation commands must be available locally | `FAIL` after materialization is requested |
 | valid workgraph schema | `.pulse/workgraph/schema.json` is the machine-readable workgraph contract | `FAIL` |
 | valid workgraph metadata | `.pulse/workgraph/items.jsonl` is the only writable item metadata truth | `FAIL` |
@@ -54,19 +54,11 @@ Use must verify or materialize:
 
 `write.lock` may be absent when no mutation is active. If it exists and is owned by a live process, readiness must fail for mutating workflow steps.
 
-## Required installed runtime scripts
+## Plugin runtime availability
 
-Use must verify or materialize the repo-local runtime script surface from `skills/workflow/scripts/runtime/`:
+Use must verify that runtime helpers are available from the installed workflow skill package or `pulse-work` surface. Canonical runtime code is not a repo-local readiness asset.
 
-```text
-.pulse/scripts/pulse-work
-.pulse/scripts/pulse_work.mjs
-.pulse/scripts/pulse_use.mjs
-.pulse/scripts/pulse_state.mjs
-.pulse/scripts/pulse_status.mjs
-.pulse/scripts/pulse_session_context.mjs
-.pulse/scripts/pulse_reservations.mjs
-```
+`.pulse/scripts/` may exist only as an optional compatibility shim surface. Missing shims must not block a greenfield v2 repo; stale shims are warnings unless an operator is actively treating them as current truth.
 
 ## Harness readiness
 
@@ -137,7 +129,7 @@ A complete readiness brief should include:
 - migration warnings
 - runtime file status
 - workgraph file status
-- installed script status
+- plugin runtime availability and optional shim warnings
 - harness backlog status
 - domain normalization status for `.pulse`, `docs`, and `works` (`missing|compliant|non_compliant`)
 - backup paths and onboarding migration briefs when semantic migration is required

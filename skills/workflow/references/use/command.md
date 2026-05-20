@@ -25,7 +25,7 @@ Run `pulse:workflow use` when:
 
 - starting any Pulse session in a repo
 - resuming after environment, branch, dependency, or runtime drift
-- `.pulse/runtime/*`, `.pulse/workgraph/*`, `.pulse/scripts/*`, or `.pulse/harness/*` is missing or stale
+- `.pulse/runtime/*`, `.pulse/workgraph/*`, or `.pulse/harness/*` is missing or stale
 - the current workflow command, active work item, or next safe action is unclear
 - a handoff exists and the operator needs to resume from it
 - a workflow command cannot prove current runtime readiness or session context
@@ -57,17 +57,9 @@ Use verifies the v2 workgraph plane:
 .pulse/workgraph/write.lock
 ```
 
-Use verifies the installed local runtime surface:
+Use verifies that plugin-owned runtime helpers are available through the installed workflow skill or runtime CLI. Canonical runtime code is not copied into the target repo.
 
-```text
-.pulse/scripts/pulse-work
-.pulse/scripts/pulse_work.mjs
-.pulse/scripts/pulse_use.mjs
-.pulse/scripts/pulse_state.mjs
-.pulse/scripts/pulse_status.mjs
-.pulse/scripts/pulse_session_context.mjs
-.pulse/scripts/pulse_reservations.mjs
-```
+If `.pulse/scripts/` exists, treat it as an optional compatibility shim surface only. Missing or stale shims may produce warnings, but they are not baseline readiness blockers.
 
 Use verifies the harness seed artifact:
 
@@ -107,7 +99,7 @@ A complete use result must report:
 - migration warnings
 - workgraph health
 - runtime materialization status
-- installed script status
+- plugin runtime availability and optional shim warnings
 - harness backlog status
 - session-load posture
 - selected handoff, when one is selected
@@ -122,9 +114,9 @@ A complete use result must report:
 Treat these as blockers for v2 readiness:
 
 - missing `git` when repo identity or normal source-control operations are required
-- missing `node` for repo-local runtime helpers
+- missing `node` for plugin-owned runtime helpers
 - missing or unreadable Pulse workflow source tree
-- missing installed `pulse-work` runtime surface after use has been asked to materialize it
+- unavailable plugin-owned runtime helper or `pulse-work` surface after use has been asked to materialize repo data
 - invalid `.pulse/workgraph/items.jsonl`
 - missing or invalid `.pulse/workgraph/schema.json`
 - active workgraph write lock owned by a live process
@@ -162,11 +154,10 @@ The readiness/onboarding phase should use this sequence:
 4. If `.pulse/` exists but is non-compliant, move active contents into `.pulse/backup-<date>/`, rebuild the v2 `.pulse/` layout, then migrate known-safe data such as memory and runtime state into the new layout.
 5. If `docs/` exists but is non-compliant, move active contents into `docs/backup-<date>/`, scaffold the v2 docs shape, and emit a docs regeneration brief for AI-assisted reconstruction from old docs plus the codebase.
 6. If `works/` exists but is non-compliant, move active contents into `works/backup-<date>/`, scaffold the v2 works shape, and emit a works migration brief for AI-assisted migration into `works/epics/**` plus `.pulse/workgraph/items.jsonl`.
-7. Materialize `.pulse/scripts/pulse-work` and runtime helper scripts from packaged Pulse runtime sources.
-8. Materialize `.pulse/harness/HARNESS_BACKLOG.md` from `skills/workflow/templates/HARNESS_BACKLOG.md`.
-9. Rebuild generated workgraph views.
-10. Write `tooling-status.json`, `state.json`, `STATE.md`, and the onboarding install receipt.
-11. Continue into session-load.
+7. Materialize `.pulse/harness/HARNESS_BACKLOG.md` from `skills/workflow/templates/HARNESS_BACKLOG.md`.
+8. Rebuild generated workgraph views.
+9. Write `tooling-status.json`, `state.json`, `STATE.md`, and the onboarding install receipt.
+10. Continue into session-load.
 
 Use must not silently overwrite human-authored docs or work artifacts. Brownfield normalization backs up in-place first and writes migration briefs under `.pulse/runtime/onboarding-migration/` for semantic follow-up.
 
@@ -248,10 +239,10 @@ Use runs against the repo where Pulse is installed.
 
 Rules:
 
-- treat `.pulse/` as the installed Pulse runtime plane
+- treat `.pulse/` as the repo-local Pulse data plane
 - treat `works/` as the installed work-content plane
-- install runtime-facing scripts into `.pulse/scripts/` from the packaged Pulse runtime sources
-- materialize only runtime/template artifacts that belong in the target repo
+- run canonical runtime helpers from the installed workflow skill package or `pulse-work` surface, not from copied repo-local code
+- materialize only data/template artifacts that belong in the target repo
 - do not require the target repo to contain the plugin source tree
 
 ## Next-command recommendation

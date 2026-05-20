@@ -3,7 +3,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { execFileSync } from "node:child_process";
+import { getPulsePaths, resolveRepoRoot as resolveRepoRootFromPaths } from "./pulse_paths.mjs";
 
 export const STATE_SCHEMA_VERSION = "1.0";
 export const CURRENT_FEATURE_SCHEMA_VERSION = "1.0";
@@ -102,36 +102,12 @@ export async function readGitNexusReadiness(repoRoot) {
   };
 }
 
-export function resolveRepoRoot(explicitRoot, startFrom = process.cwd()) {
-  if (explicitRoot) {
-    return path.resolve(explicitRoot);
-  }
-
-  const cwd = path.resolve(startFrom);
-  try {
-    const stdout = execFileSync("git", ["rev-parse", "--show-toplevel"], {
-      cwd,
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "ignore"],
-    });
-    return path.resolve(stdout.trim());
-  } catch {
-    let candidate = cwd;
-    while (true) {
-      if (
-        fs.existsSync(path.join(candidate, ".git")) ||
-        fs.existsSync(path.join(candidate, ".pulse", "runtime", "onboarding.json")) ||
-        fs.existsSync(path.join(candidate, ".pulse", "onboarding.json"))
-      ) {
-        return candidate;
-      }
-      const parent = path.dirname(candidate);
-      if (parent === candidate) {
-        return cwd;
-      }
-      candidate = parent;
-    }
-  }
+export function resolveRepoRoot(explicitRoot, startFrom = process.cwd(), env = process.env) {
+  return resolveRepoRootFromPaths({
+    explicitRoot,
+    cwd: startFrom,
+    env,
+  });
 }
 
 export function buildDefaultState(overrides = {}) {
@@ -213,21 +189,7 @@ export function normalizePulseState(state) {
 }
 
 export function getPulseStatePaths(repoRoot) {
-  return {
-    onboarding: path.join(repoRoot, ".pulse", "runtime", "onboarding.json"),
-    toolingStatus: path.join(repoRoot, ".pulse", "runtime", "tooling-status.json"),
-    projectDocs: path.join(repoRoot, ".pulse", "project-docs.json"),
-    stateJson: path.join(repoRoot, ".pulse", "runtime", "state.json"),
-    stateMarkdown: path.join(repoRoot, ".pulse", "runtime", "STATE.md"),
-    reservations: path.join(repoRoot, ".pulse", "runtime", "reservations.json"),
-    handoffManifest: path.join(repoRoot, ".pulse", "runtime", "handoffs", "manifest.json"),
-    memoryRoot: path.join(repoRoot, ".pulse", "memory"),
-    memoryLearnings: path.join(repoRoot, ".pulse", "memory", "learnings"),
-    memoryCorrections: path.join(repoRoot, ".pulse", "memory", "corrections"),
-    memoryRatchet: path.join(repoRoot, ".pulse", "memory", "ratchet"),
-    agents: path.join(repoRoot, "AGENTS.md"),
-    criticalPatterns: path.join(repoRoot, ".pulse", "memory", "critical-patterns.md"),
-  };
+  return getPulsePaths(repoRoot);
 }
 
 function summarizeProjectDocs(repoRoot, paths) {

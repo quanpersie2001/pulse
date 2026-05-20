@@ -148,7 +148,7 @@ export async function collectPulseSessionStartNotes(repoRoot, options = {}) {
       syncPulseRuntimeArtifacts(repoRoot);
     }
     notes.push(
-      "Pulse is installed for this repo. Read AGENTS.md, then run pulse:workflow use or node .pulse/scripts/pulse_status.mjs --json before substantive work.",
+      "Pulse is installed for this repo. Read AGENTS.md, then run pulse:workflow use or the plugin-owned pulse_status.mjs helper before substantive work.",
     );
 
     try {
@@ -156,7 +156,7 @@ export async function collectPulseSessionStartNotes(repoRoot, options = {}) {
       notes.push(buildPulseSessionPostureSummary(status));
     } catch {
       notes.push(
-        "Pulse session posture could not be loaded from runtime artifacts; run node .pulse/scripts/pulse_status.mjs --json to refresh and inspect current handoff/next-step context.",
+        "Pulse session posture could not be loaded from runtime artifacts; run the plugin-owned pulse_status.mjs helper to refresh and inspect current handoff/next-step context.",
       );
     }
   } else {

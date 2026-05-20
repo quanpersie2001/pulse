@@ -2,7 +2,6 @@
 
 import fs from "node:fs";
 import path from "node:path";
-import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 import {
@@ -10,6 +9,10 @@ import {
   normalizePulseState,
   syncPulseRuntimeArtifacts,
 } from "../runtime/pulse_state.mjs";
+import {
+  relativePosix,
+  resolveRepoRoot as resolveRepoRootFromPaths,
+} from "../runtime/pulse_paths.mjs";
 import {
   ensureWorkgraphFilesystem,
   getWorkgraphPaths,
@@ -21,9 +24,7 @@ import { buildSessionLoad } from "./load_context.mjs";
 const SCRIPT_PATH = fileURLToPath(import.meta.url);
 const COMMAND_SCRIPT_DIR = path.dirname(SCRIPT_PATH);
 const PULSE_SKILL_DIR = path.resolve(COMMAND_SCRIPT_DIR, "..", "..");
-const PULSE_RUNTIME_DIR = path.join(PULSE_SKILL_DIR, "scripts", "runtime");
 const REPO_ROOT = path.resolve(PULSE_SKILL_DIR, "..", "..");
-const PULSE_WORK_TEMPLATES_DIR = path.join(REPO_ROOT, "skills", "workflow", "templates", "works");
 const HARNESS_BACKLOG_TEMPLATE_PATH = path.join(REPO_ROOT, "skills", "workflow", "templates", "HARNESS_BACKLOG.md");
 const PLUGIN_MANIFEST_PATH = path.join(REPO_ROOT, ".codex-plugin", "plugin.json");
 const AGENTS_TEMPLATE_PATH = path.join(REPO_ROOT, "AGENTS.template.md");
@@ -33,31 +34,6 @@ const WORKFLOW_SETUP_STEP = "onboarding";
 const ONBOARDING_MARKER_PATH = path.join(".pulse", "runtime", "onboarding.json");
 const LEGACY_ONBOARDING_MARKER_PATH = path.join(".pulse", "onboarding.json");
 const MIN_NODE_MAJOR = 18;
-const MANAGED_SUPPORT_FILES = {
-  "pulse-work": path.join(PULSE_RUNTIME_DIR, "pulse-work"),
-  "pulse_work.mjs": path.join(PULSE_RUNTIME_DIR, "pulse_work.mjs"),
-  "workgraph_model.mjs": path.join(PULSE_RUNTIME_DIR, "workgraph_model.mjs"),
-  "workgraph_ids.mjs": path.join(PULSE_RUNTIME_DIR, "workgraph_ids.mjs"),
-  "workgraph_paths.mjs": path.join(PULSE_RUNTIME_DIR, "workgraph_paths.mjs"),
-  "workgraph_views.mjs": path.join(PULSE_RUNTIME_DIR, "workgraph_views.mjs"),
-  "workgraph_lock.mjs": path.join(PULSE_RUNTIME_DIR, "workgraph_lock.mjs"),
-  "workgraph_validate.mjs": path.join(PULSE_RUNTIME_DIR, "workgraph_validate.mjs"),
-  "workgraph_store.mjs": path.join(PULSE_RUNTIME_DIR, "workgraph_store.mjs"),
-  "workgraph_templates.mjs": path.join(PULSE_RUNTIME_DIR, "workgraph_templates.mjs"),
-  "pulse_status.mjs": path.join(PULSE_RUNTIME_DIR, "pulse_status.mjs"),
-  "pulse_state.mjs": path.join(PULSE_RUNTIME_DIR, "pulse_state.mjs"),
-  "pulse_reservations.mjs": path.join(PULSE_RUNTIME_DIR, "pulse_reservations.mjs"),
-  "pulse_session_context.mjs": path.join(PULSE_RUNTIME_DIR, "pulse_session_context.mjs"),
-  "load_context.mjs": path.join(COMMAND_SCRIPT_DIR, "load_context.mjs"),
-  "onboard_pulse.mjs": path.join(COMMAND_SCRIPT_DIR, "onboard_pulse.mjs"),
-};
-const MANAGED_SUPPORT_TEMPLATE_FILES = {
-  "epic-README.md": path.join(PULSE_WORK_TEMPLATES_DIR, "epic-README.md"),
-  "story-README.md": path.join(PULSE_WORK_TEMPLATES_DIR, "story-README.md"),
-  "story-SPEC.md": path.join(PULSE_WORK_TEMPLATES_DIR, "story-SPEC.md"),
-  "task-README.md": path.join(PULSE_WORK_TEMPLATES_DIR, "task-README.md"),
-  "verification.md": path.join(PULSE_WORK_TEMPLATES_DIR, "verification.md"),
-};
 const LEGACY_RUNTIME_TEXT_REPLACEMENTS = [
   [".pulse/tooling-status.json", ".pulse/runtime/tooling-status.json"],
   [".pulse/state.json", ".pulse/runtime/state.json"],
@@ -96,32 +72,8 @@ function loadPluginVersion() {
 /**
  * Resolve the target repository root from an explicit path, Git, or cwd fallback.
  */
-export function resolveRepoRoot(explicitRoot) {
-  if (explicitRoot) {
-    return path.resolve(explicitRoot);
-  }
-
-  const cwd = path.resolve(process.cwd());
-  try {
-    const stdout = execFileSync("git", ["rev-parse", "--show-toplevel"], {
-      cwd,
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "ignore"],
-    });
-    return path.resolve(stdout.trim());
-  } catch {
-    let candidate = cwd;
-    while (true) {
-      if (fs.existsSync(path.join(candidate, ".git"))) {
-        return candidate;
-      }
-      const parent = path.dirname(candidate);
-      if (parent === candidate) {
-        return cwd;
-      }
-      candidate = parent;
-    }
-  }
+export function resolveRepoRoot(explicitRoot, env = process.env, cwd = process.cwd()) {
+  return resolveRepoRootFromPaths({ explicitRoot, env, cwd });
 }
 
 /**
@@ -269,7 +221,6 @@ function classifyPulseDomain(repoRoot) {
     [path.join("runtime", "handoffs"), "directory"],
     ["workgraph", "directory"],
     [path.join("workgraph", "views"), "directory"],
-    ["scripts", "directory"],
     ["harness", "directory"],
     ["memory", "directory"],
     [path.join("harness", "HARNESS_BACKLOG.md"), "file"],
@@ -408,7 +359,6 @@ function ensurePulseDomainLayout(repoRoot) {
     [".pulse", "runtime", "onboarding-migration"],
     [".pulse", "workgraph"],
     [".pulse", "workgraph", "views"],
-    [".pulse", "scripts"],
     [".pulse", "harness"],
     [".pulse", "memory"],
   ]) {
@@ -704,65 +654,23 @@ function mergeAgentsContent(existing, template) {
 }
 
 /**
- * Managed support asset helpers.
+ * Managed repo-local data asset helpers.
  */
 
-function getManagedSupportScriptsDir(repoRoot) {
-  return path.join(repoRoot, ".pulse", "scripts");
-}
-
-function getManagedSupportTemplatesDir(repoRoot) {
-  return path.join(getManagedSupportScriptsDir(repoRoot), "templates", "works");
+/**
+ * Detect whether managed repo-local data assets are stale.
+ */
+function supportAssetsNeedUpdate(repoRoot) {
+  const harnessBacklogTarget = path.join(repoRoot, ".pulse", "harness", "HARNESS_BACKLOG.md");
+  const source = fs.readFileSync(HARNESS_BACKLOG_TEMPLATE_PATH, "utf8");
+  return !fs.existsSync(harnessBacklogTarget) || fs.readFileSync(harnessBacklogTarget, "utf8") !== source;
 }
 
 /**
- * Detect whether managed repo-local support scripts or templates are stale.
+ * Materialize managed Pulse data assets.
  */
-function supportScriptsNeedUpdate(repoRoot) {
-  const supportDir = getManagedSupportScriptsDir(repoRoot);
-  const templatesDir = getManagedSupportTemplatesDir(repoRoot);
-
-  for (const [name, sourcePath] of Object.entries(MANAGED_SUPPORT_FILES)) {
-    const targetPath = path.join(supportDir, name);
-    const source = fs.readFileSync(sourcePath, "utf8");
-    if (!fs.existsSync(targetPath) || fs.readFileSync(targetPath, "utf8") !== source) {
-      return true;
-    }
-  }
-
-  for (const [name, sourcePath] of Object.entries(MANAGED_SUPPORT_TEMPLATE_FILES)) {
-    const targetPath = path.join(templatesDir, name);
-    const source = fs.readFileSync(sourcePath, "utf8");
-    if (!fs.existsSync(targetPath) || fs.readFileSync(targetPath, "utf8") !== source) {
-      return true;
-    }
-  }
-
-  return false;
-}
-
-/**
- * Materialize managed Pulse support scripts, templates, and harness backlog.
- */
-function writeSupportScripts(repoRoot) {
-  const supportDir = getManagedSupportScriptsDir(repoRoot);
-  const templatesDir = getManagedSupportTemplatesDir(repoRoot);
-  fs.mkdirSync(supportDir, { recursive: true });
-  fs.mkdirSync(templatesDir, { recursive: true });
-
+function writeSupportAssets(repoRoot) {
   const written = [];
-  for (const [name, sourcePath] of Object.entries(MANAGED_SUPPORT_FILES)) {
-    const target = path.join(supportDir, name);
-    fs.copyFileSync(sourcePath, target);
-    fs.chmodSync(target, 0o755);
-    written.push(path.relative(repoRoot, target));
-  }
-  for (const [name, sourcePath] of Object.entries(MANAGED_SUPPORT_TEMPLATE_FILES)) {
-    const target = path.join(templatesDir, name);
-    fs.copyFileSync(sourcePath, target);
-    fs.chmodSync(target, 0o644);
-    written.push(path.relative(repoRoot, target));
-  }
   const harnessDir = path.join(repoRoot, ".pulse", "harness");
   fs.mkdirSync(harnessDir, { recursive: true });
   const harnessBacklogTarget = path.join(harnessDir, "HARNESS_BACKLOG.md");
@@ -822,8 +730,8 @@ export function checkRepo(repoRoot, options = {}) {
     actions.push("append_pulse_managed_block_to_AGENTS.md");
   }
 
-  if (supportScriptsNeedUpdate(repoRoot)) {
-    actions.push("sync_pulse_support_scripts");
+  if (supportAssetsNeedUpdate(repoRoot)) {
+    actions.push("sync_pulse_data_assets");
   }
 
   if (fs.existsSync(legacyOnboardingPath)) {
@@ -884,7 +792,7 @@ export function checkRepo(repoRoot, options = {}) {
     tools: {
       git: { available: true },
       node: runtime,
-      pulse_runtime_helper: { available: true, command: "node .pulse/scripts/pulse_status.mjs --json" },
+      pulse_runtime_helper: { available: true, command: "node {{scripts_path}}/runtime/pulse_status.mjs --repo-root <repo> --json" },
     },
     resumeOwner: options.resumeOwner,
   });
@@ -957,7 +865,7 @@ export function applyRepo(repoRoot, _allowCompactPromptReplace, options = {}) {
   const mergedAgents = mergeAgentsContent(readTextIfExists(agentsPath), template);
   fs.writeFileSync(agentsPath, mergedAgents.text, "utf8");
 
-  const supportScripts = writeSupportScripts(repoRoot);
+  const supportAssets = writeSupportAssets(repoRoot);
   const workgraphPaths = initializeWorkgraphFilesystem(repoRoot);
 
   const defaultState = buildDefaultState();
@@ -983,7 +891,7 @@ export function applyRepo(repoRoot, _allowCompactPromptReplace, options = {}) {
     tools: {
       git: { available: true },
       node: runtime,
-      pulse_runtime_helper: { available: true, command: "node .pulse/scripts/pulse_status.mjs --json" },
+      pulse_runtime_helper: { available: true, command: "node {{scripts_path}}/runtime/pulse_status.mjs --repo-root <repo> --json" },
     },
     resumeOwner: options.resumeOwner,
   });
@@ -1038,7 +946,7 @@ export function applyRepo(repoRoot, _allowCompactPromptReplace, options = {}) {
         : null,
     managed_assets: {
       agents_mode: mergedAgents.status,
-      support_scripts: supportScripts,
+      support_assets: supportAssets,
       onboarding_marker_path: ONBOARDING_MARKER_PATH,
       legacy_onboarding_marker_migrated: legacyOnboardingMarkerMigrated || hadLegacyOnboardingMarker,
       domain_normalization: domainNormalization,
@@ -1073,7 +981,7 @@ export function applyRepo(repoRoot, _allowCompactPromptReplace, options = {}) {
 // Compact prompt draft, intentionally not installed by onboarding:
 // MANDATORY: Pulse context compaction recovery.
 // STOP. Before doing anything else: read AGENTS.md completely.
-// If present, run `node .pulse/scripts/pulse_status.mjs --json` for a quick Pulse status snapshot.
+// If available, run the plugin-owned `pulse_status.mjs --repo-root <repo> --json` helper for a quick Pulse status snapshot.
 // Read .pulse/runtime/tooling-status.json, .pulse/runtime/state.json, and .pulse/runtime/STATE.md if they exist.
 // Read .pulse/runtime/handoffs/manifest.json and any active owner handoff you are resuming.
 // Re-open the active feature CONTEXT.md before more planning or edits.
@@ -1131,10 +1039,6 @@ function isBackupEntry(name) {
 
 function backupStamp() {
   return utcNow().replace(/[:.]/g, "-");
-}
-
-function relativePosix(repoRoot, filePath) {
-  return path.relative(repoRoot, filePath).split(path.sep).join(path.posix.sep);
 }
 
 function copyPathIfExists(sourcePath, targetPath) {
