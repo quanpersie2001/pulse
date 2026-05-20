@@ -1,7 +1,6 @@
 #!/usr/bin/env node
 
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { getPulsePaths, resolveRepoRoot as resolveRepoRootFromPaths } from "./pulse_paths.mjs";
 import {
@@ -10,6 +9,7 @@ import {
   readReservationStore,
   summarizeReservationStatus,
 } from "./pulse_reservation_store.mjs";
+import { summarizeHandoffManifest } from "./pulse_handoffs.mjs";
 
 export const STATE_SCHEMA_VERSION = "1.0";
 export const CURRENT_FEATURE_SCHEMA_VERSION = "1.0";
@@ -36,75 +36,6 @@ export function readJsonIfExists(filePath) {
   } catch {
     return null;
   }
-}
-
-function parseTomlMcpServerNames(filePath) {
-  if (!fs.existsSync(filePath)) {
-    return [];
-  }
-
-  const source = fs.readFileSync(filePath, "utf8");
-  const names = new Set();
-  for (const pattern of [/^\s*\[mcp_servers\.([^\]]+)\]\s*$/gm, /^\s*\[mcp\.servers\.([^\]]+)\]\s*$/gm]) {
-    for (const match of source.matchAll(pattern)) {
-      names.add(match[1].trim().replace(/^['"]|['"]$/g, ""));
-    }
-  }
-  return [...names];
-}
-
-function parseJsonMcpServerNames(filePath) {
-  if (!fs.existsSync(filePath)) {
-    return [];
-  }
-
-  try {
-    const payload = JSON.parse(fs.readFileSync(filePath, "utf8"));
-    return payload && typeof payload === "object" && !Array.isArray(payload) ? Object.keys(payload) : [];
-  } catch {
-    return [];
-  }
-}
-
-function readGitNexusMcpSources(repoRoot) {
-  const sources = [
-    {
-      key: "repo_codex_config",
-      server_names: parseTomlMcpServerNames(path.join(repoRoot, ".codex", "config.toml")),
-    },
-    {
-      key: "global_codex_config",
-      server_names: parseTomlMcpServerNames(path.join(os.homedir(), ".codex", "config.toml")),
-    },
-    {
-      key: "plugin_mcp_manifest",
-      server_names: parseJsonMcpServerNames(path.join(repoRoot, ".mcp.json")),
-    },
-  ];
-
-  return sources
-    .filter((source) => source.server_names.includes("gitnexus"))
-    .map((source) => source.key)
-    .sort((left, right) => left.localeCompare(right));
-}
-
-function buildGitNexusRecommendedAction(configured, matchedSources) {
-  if (configured) {
-    return `GitNexus is configured in ${matchedSources.join(", ")} — use graph-backed discovery as supporting context, then confirm results with direct file reads.`;
-  }
-
-  return "GitNexus is not configured in known MCP sources — use grep/file inspection fallback, or add the gitnexus MCP server before graph-backed discovery.";
-}
-
-export async function readGitNexusReadiness(repoRoot) {
-  const matchedSources = readGitNexusMcpSources(repoRoot);
-  const configured = matchedSources.length > 0;
-
-  return {
-    configured,
-    matched_sources: matchedSources,
-    recommended_action: buildGitNexusRecommendedAction(configured, matchedSources),
-  };
 }
 
 export function resolveRepoRoot(explicitRoot, startFrom = process.cwd(), env = process.env) {
@@ -174,76 +105,6 @@ export function normalizePulseState(state) {
 
 export function getPulseStatePaths(repoRoot) {
   return getPulsePaths(repoRoot);
-}
-
-export function summarizeProjectDocs(repoRoot, paths) {
-  const projectDocs = readJsonIfExists(paths.projectDocs);
-  const rootContextPath = "CONTEXT.md";
-  const contextMapPath = "CONTEXT-MAP.md";
-  const adrDirPath = "docs/adr";
-  const hasRootContext = fs.existsSync(path.join(repoRoot, rootContextPath));
-  const hasContextMap = fs.existsSync(path.join(repoRoot, contextMapPath));
-  const hasAdrDir = fs.existsSync(path.join(repoRoot, adrDirPath));
-
-  const mappedEntries = Array.isArray(projectDocs?.context?.entries)
-    ? projectDocs.context.entries
-        .filter((entry) => entry && typeof entry.path === "string" && entry.path)
-        .map((entry) => ({
-          id: typeof entry.id === "string" ? entry.id : "",
-          path: normalizeSelector(entry.path),
-        }))
-    : [];
-
-  const mappedMode = typeof projectDocs?.mode === "string" ? projectDocs.mode : "";
-  const status = projectDocs
-    ? (typeof projectDocs.status === "string" && projectDocs.status ? projectDocs.status : "mapped")
-    : ((hasRootContext || hasContextMap || hasAdrDir) ? "detected" : "missing");
-  const mode = mappedMode || (hasContextMap ? "multi-context" : (hasRootContext ? "single-context" : ""));
-  const contextRoot = typeof projectDocs?.context?.root === "string" && projectDocs.context.root
-    ? normalizeSelector(projectDocs.context.root)
-    : (hasRootContext ? rootContextPath : "");
-  const contextMap = typeof projectDocs?.context?.map === "string" && projectDocs.context.map
-    ? normalizeSelector(projectDocs.context.map)
-    : (hasContextMap ? contextMapPath : "");
-  const adrDir = typeof projectDocs?.adrs?.dir === "string" && projectDocs.adrs.dir
-    ? normalizeSelector(projectDocs.adrs.dir)
-    : (hasAdrDir ? adrDirPath : "");
-  const notes = Array.isArray(projectDocs?.notes)
-    ? projectDocs.notes.filter((item) => typeof item === "string" && item.trim() !== "")
-    : [];
-  const warnings = [];
-
-  if (projectDocs && !mode) {
-    warnings.push("project-docs.json exists but mode is missing.");
-  }
-  if (projectDocs && mode === "single-context" && !contextRoot) {
-    warnings.push("project-docs.json says single-context but no root CONTEXT.md is mapped.");
-  }
-  if (projectDocs && mode === "multi-context" && !contextMap && mappedEntries.length === 0) {
-    warnings.push("project-docs.json says multi-context but no CONTEXT-MAP.md or context entries are mapped.");
-  }
-  if (!projectDocs && (hasRootContext || hasContextMap || hasAdrDir)) {
-    warnings.push("Repo-level project docs were detected but .pulse/project-docs.json is missing.");
-  }
-
-  return {
-    exists: Boolean(projectDocs),
-    status,
-    mode,
-    mapping_path: projectDocs ? ".pulse/project-docs.json" : "",
-    context: {
-      root: contextRoot,
-      map: contextMap,
-      entries: mappedEntries,
-    },
-    adrs: {
-      enabled: typeof projectDocs?.adrs?.enabled === "boolean" ? projectDocs.adrs.enabled : hasAdrDir,
-      dir: adrDir,
-      exists: adrDir ? fs.existsSync(path.join(repoRoot, adrDir)) : false,
-    },
-    notes,
-    warnings,
-  };
 }
 
 export function readPulseState(repoRoot) {
@@ -737,10 +598,6 @@ function listDirectoryFiles(dirPath) {
   } catch {
     return [];
   }
-}
-
-function normalizeSelector(selector) {
-  return String(selector || "").trim().replaceAll("\\", "/");
 }
 
 function tokenizeRecallValue(value) {
@@ -1606,120 +1463,4 @@ export function summarizeRuntimeSnapshot(runtimeSnapshot) {
   };
 }
 
-function renderHandoffSummary(entry) {
-  const readFirst = Array.isArray(entry.read_first) ? entry.read_first.filter(Boolean) : [];
-  return [
-    "## Handoff Summary",
-    `- Owner: ${entry.owner_id || "(unknown)"}`,
-    `- Skill: ${entry.skill || "(unknown)"}`,
-    `- Feature: ${entry.feature || "(none)"}`,
-    `- Phase: ${entry.phase || "(none)"}`,
-    `- Status: ${entry.status || "ready_to_resume"}`,
-    `- Paused at: ${entry.paused_at || "(unknown)"}`,
-    `- Reason: ${entry.reason || "(unspecified)"}`,
-    `- Next action: ${entry.next_action || "(none)"}`,
-    "- Read first:",
-    ...(readFirst.length > 0 ? readFirst.map((item) => `  - ${item}`) : ["  - (none)"]),
-    `- Summary: ${entry.summary || "(none)"}`,
-  ].join("\n");
-}
-
-function renderResumeBriefing(entry) {
-  const readFirst = Array.isArray(entry.read_first) ? entry.read_first.filter(Boolean) : [];
-  return [
-    "## Resume Briefing",
-    `- Resuming: ${entry.owner_id || "(unknown)"} via ${entry.skill || "(unknown)"}`,
-    `- Feature: ${entry.feature || "(none)"}`,
-    `- Phase: ${entry.phase || "(none)"}`,
-    `- Current state: ${entry.summary || "(none)"}`,
-    `- Next action: ${entry.next_action || "(none)"}`,
-    "- Required reads:",
-    ...(readFirst.length > 0 ? readFirst.map((item) => `  - ${item}`) : ["  - (none)"]),
-    "- Resume check: wait for explicit user confirmation before continuing.",
-  ].join("\n");
-}
-
-function renderTransferBlock(entry) {
-  const readFirst = Array.isArray(entry.read_first) ? entry.read_first.filter(Boolean).join(" | ") : "";
-  return [
-    "```text",
-    "PULSE TRANSFER",
-    `owner=${entry.owner_id || ""}`,
-    `skill=${entry.skill || ""}`,
-    `feature=${entry.feature || ""}`,
-    `phase=${entry.phase || ""}`,
-    `status=${entry.status || "ready_to_resume"}`,
-    `paused_at=${entry.paused_at || ""}`,
-    `reason=${entry.reason || ""}`,
-    `next_action=${entry.next_action || ""}`,
-    `read_first=${readFirst}`,
-    `summary=${entry.summary || ""}`,
-    `handoff_path=${entry.path || ""}`,
-    "manifest_path=.pulse/runtime/handoffs/manifest.json",
-    "```",
-  ].join("\n");
-}
-
-function summarizeActiveHandoffEntry(entry) {
-  if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
-    return null;
-  }
-
-  const ownerId = typeof entry.owner_id === "string" ? entry.owner_id : "";
-  const ownerType = typeof entry.owner_type === "string" ? entry.owner_type : "";
-  const skill = typeof entry.skill === "string" ? entry.skill : "";
-  const feature = typeof entry.feature === "string" ? entry.feature : "";
-  const phase = typeof entry.phase === "string" ? entry.phase : "";
-  const nextAction = typeof entry.next_action === "string" ? entry.next_action : "";
-  const summary = typeof entry.summary === "string" ? entry.summary : "";
-  const handoffPath = typeof entry.path === "string" ? entry.path : "";
-  const status = typeof entry.status === "string" ? entry.status : "ready_to_resume";
-  const pausedAt = typeof entry.paused_at === "string" ? entry.paused_at : "";
-  const reason = typeof entry.reason === "string" ? entry.reason : "";
-  const readFirst = Array.isArray(entry.read_first) ? entry.read_first.filter(Boolean) : [];
-
-  const normalizedEntry = {
-    owner_id: ownerId,
-    owner_type: ownerType,
-    skill,
-    feature,
-    phase,
-    next_action: nextAction,
-    summary,
-    path: handoffPath,
-    status,
-    paused_at: pausedAt,
-    reason,
-    read_first: readFirst,
-  };
-
-  return {
-    ...normalizedEntry,
-    handoff_summary: renderHandoffSummary(normalizedEntry),
-    resume_briefing: renderResumeBriefing(normalizedEntry),
-    transfer_block: renderTransferBlock(normalizedEntry),
-    operator_summary: [
-      ownerId || "(unknown owner)",
-      skill ? `via ${skill}` : "",
-      feature ? `feature=${feature}` : "",
-      phase ? `phase=${phase}` : "",
-      nextAction ? `next=${nextAction}` : "",
-      summary ? `summary=${summary}` : "",
-      handoffPath ? `path=${handoffPath}` : "",
-    ].filter(Boolean).join(" | "),
-  };
-}
-
-export function summarizeHandoffManifest(handoffManifest) {
-  const activeEntries = Array.isArray(handoffManifest?.active)
-    ? handoffManifest.active.map(summarizeActiveHandoffEntry).filter(Boolean)
-    : [];
-
-  return {
-    exists: Boolean(handoffManifest),
-    active_count: activeEntries.length,
-    updated_at: typeof handoffManifest?.updated_at === "string" ? handoffManifest.updated_at : "",
-    active: activeEntries,
-  };
-}
 

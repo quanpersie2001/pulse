@@ -7,17 +7,17 @@ import {
   getPulseStatePaths,
   normalizePulseState,
   parseLooseKeyValueMarkdown,
-  readGitNexusReadiness,
   readJsonIfExists,
   summarizeCurrentFeature,
-  summarizeHandoffManifest,
   summarizeHistoryLifecycle,
   summarizeMemoryRecall,
-  summarizeProjectDocs,
   summarizeReservationStatusForState,
   summarizeRuntimeSnapshot,
   syncPulseRuntimeArtifacts,
 } from "./pulse_state.mjs";
+import { readGitNexusReadiness } from "./pulse_gitnexus_readiness.mjs";
+import { summarizeHandoffManifest } from "./pulse_handoffs.mjs";
+import { summarizeProjectDocs } from "./pulse_project_docs.mjs";
 
 function deriveFeature(status) {
   if (status.current_feature?.feature_key) {
@@ -59,7 +59,7 @@ export async function readPulseStatus(repoRoot) {
     state_markdown: stateMarkdownSummary,
   });
   const historyLifecycle = summarizeHistoryLifecycle(repoRoot, derivedFeature);
-  const projectDocsSummary = summarizeProjectDocs(repoRoot, paths);
+  const projectDocsSummary = summarizeProjectDocs(repoRoot, paths, readJsonIfExists);
 
   const status = {
     repo_root: repoRoot,
