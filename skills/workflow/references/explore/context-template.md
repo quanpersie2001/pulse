@@ -22,7 +22,6 @@ Rules:
 **Date:** YYYY-MM-DD
 **Exploring session:** complete
 **Scope:** quick | standard | deep
-**Project docs consumed:** [.pulse/project-docs.json -> <doc paths>] | [detected docs: <doc paths>] | none
 
 ---
 
@@ -89,17 +88,16 @@ From the quick scout during explore.
 Downstream agents should read these before planning or implementation.
 
 - `path/to/spec.md` — [what it defines]
-- `path/to/adr.md` — [decision it records]
 
 *[Remove section if none]*
 
 ---
 
-## Project Docs Follow-up
+## Documentation Follow-up
 
-[Optional. Repo-level ambiguity discovered during explore.]
+[Optional. Story-level ambiguity discovered during explore.]
 
-- **Target:** [doc path or artifact]
+- **Target:** [story artifact]
   *Why:* [ambiguity it resolves]
 
 ---

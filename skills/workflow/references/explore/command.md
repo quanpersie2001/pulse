@@ -26,11 +26,10 @@ Do not run when:
 
 Read in this order (if present):
 
-1. `.pulse/project-docs.json` and smallest relevant listed docs
-2. active story spec: `works/epics/<epic-id>-<epic-slug>/<story-id>-<story-slug>/SPEC.md`
-3. existing story context: `works/epics/<epic-id>-<epic-slug>/<story-id>-<story-slug>/CONTEXT.md`
-4. `.pulse/runtime/STATE.md` and `.pulse/runtime/state.json`
-5. minimal quick code scout targets required to resolve terminology/behavior contradictions
+1. active story spec: `works/epics/<epic-id>-<epic-slug>/<story-id>-<story-slug>/SPEC.md`
+2. existing story context: `works/epics/<epic-id>-<epic-slug>/<story-id>-<story-slug>/CONTEXT.md`
+3. `.pulse/runtime/STATE.md` and `.pulse/runtime/state.json`
+4. minimal quick code scout targets required to resolve terminology/behavior contradictions
 
 Quick scout boundary: keep this shallow (targeted grep + 2–3 file reads). Deep codebase analysis belongs to `pulse:workflow plan`.
 
@@ -107,7 +106,7 @@ Locking protocol:
 Scope discipline during loop:
 
 - if user introduces a new capability outside current boundary, capture it under deferred ideas and return to the active gray area
-- if wording conflicts with project docs or code evidence, resolve the contradiction before locking
+- if wording conflicts with story artifacts or code evidence, resolve the contradiction before locking
 
 Stop conditions:
 
@@ -132,9 +131,9 @@ Required sections:
 - open questions split into:
   - resolve before planning
   - deferred to planning
-- project-doc terminology alignment (reused, corrected, missing)
+- terminology alignment (reused, corrected, missing)
 
-If repeated ambiguity is clearly project-level, add `Project Docs Follow-up` as a proposal only.
+If repeated ambiguity is clearly story-level documentation drift, add a documentation follow-up as a proposal only.
 
 Optional Phase 4.2 reviewer loop:
 

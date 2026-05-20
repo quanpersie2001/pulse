@@ -26,7 +26,7 @@ Read before starting:
 - `.pulse/runtime/state.json` and `.pulse/runtime/STATE.md`
 - lifecycle summary for the active story/slice when present
 - completed change set and verification evidence artifacts
-- minimal project context docs (README/architecture/ADR) when needed for correctness checks
+- minimal existing repo docs or code paths when needed for correctness checks
 
 ## Runtime contract
 

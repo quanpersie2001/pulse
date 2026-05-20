@@ -170,9 +170,6 @@ project/
 `-- .pulse/
     # Internal machine/runtime plane. Không phải nơi viết product truth.
     |
-    |-- project-docs.json
-    |   # Mapping cho application/product docs nếu cần scout / bootstrap.
-    |
     |-- harness/
     |   # Durable harness/agent operating surface. Không phải application docs/work.
     |   |

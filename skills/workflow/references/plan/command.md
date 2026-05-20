@@ -26,7 +26,6 @@ Block planning when:
 
 - story-scoped context artifact under `works/epics/<epic-id>-<epic-slug>/<story-id>-<story-slug>/CONTEXT.md` (authoritative)
 - story-scoped spec artifact under `works/epics/<epic-id>-<epic-slug>/<story-id>-<story-slug>/SPEC.md`
-- `.pulse/project-docs.json` and minimal relevant project docs
 - `.pulse/memory/critical-patterns.md`
 - `.pulse/runtime/state.json` and `.pulse/runtime/STATE.md` for mirror checks
 - prior planning artifacts if iterating in the same story directory (canonical: `DISCOVERY.md`, `APPROACH.md`, and one approved shape doc)

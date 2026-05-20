@@ -103,9 +103,8 @@ digraph brainstorming {
 
 Before asking any question, understand what already exists:
 
-- Read `.pulse/project-docs.json` first when present, then read the listed project docs before relying on feature history alone.
-- If `.pulse/project-docs.json` is absent, detect likely project docs such as `README.md`, architecture docs, ADRs, and domain docs, then read the smallest relevant set.
-- Reuse existing glossary and terminology from project docs when present; do not invent new terms when established names already exist.
+- Read existing story artifacts under `works/` first when present, then inspect the smallest relevant repo docs or code paths needed for the request.
+- Reuse established glossary and terminology from story artifacts or code when present; do not invent new terms when established names already exist.
 - Before asking, eliminate questions the repo can already answer. Read docs, code, and recent repo history first, then ask only for unresolved design intent.
 - Check relevant files, docs, and the last few commits related to the topic.
 - Identify existing patterns, components, or decisions that constrain the design.
@@ -357,7 +356,7 @@ The only valid next step is `pulse:workflow explore`.
 - **Always propose alternatives** — 2–3 approaches before settling.
 - **Incremental validation** — present design in sections, get approval before continuing.
 - **Be ready to revise** — go back and clarify when something does not fit.
-- **Do not scaffold project docs here** — brainstorming can consume existing docs, but durable project-doc scaffolding belongs to `pulse:workflow explore` when needed.
+- **Do not scaffold repo-level docs here** — brainstorming consumes existing context and writes only the approved story `SPEC.md`.
 
 ---
 

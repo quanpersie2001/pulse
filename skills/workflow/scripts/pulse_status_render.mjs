@@ -18,35 +18,6 @@ function deriveFeature(status) {
   return focus === "(none)" ? "" : focus;
 }
 
-function renderProjectDocsLines(status) {
-  const projectDocs = status.project_docs && typeof status.project_docs === "object"
-    ? status.project_docs
-    : {
-        exists: false,
-        status: "missing",
-        mode: "",
-        mapping_path: "",
-        context: { root: "", map: "", entries: [] },
-        adrs: { enabled: false, dir: "", exists: false },
-        notes: [],
-        warnings: [],
-      };
-
-  const lines = ["Project docs:"];
-  lines.push(`- Status: ${projectDocs.status || "missing"}`);
-  lines.push(`- Mode: ${projectDocs.mode || "(unknown)"}`);
-  lines.push(`- Mapping path: ${projectDocs.mapping_path || "(none)"}`);
-  lines.push(`- Root context: ${projectDocs.context?.root || "(none)"}`);
-  lines.push(`- Context map: ${projectDocs.context?.map || "(none)"}`);
-  lines.push(`- Context entries: ${Array.isArray(projectDocs.context?.entries) ? projectDocs.context.entries.length : 0}`);
-  lines.push(`- ADR dir: ${projectDocs.adrs?.dir || "(none)"}`);
-  lines.push(`- ADRs present: ${projectDocs.adrs?.exists ? "yes" : "no"}`);
-  if (Array.isArray(projectDocs.warnings) && projectDocs.warnings[0]) {
-    lines.push(`- Warning: ${projectDocs.warnings[0]}`);
-  }
-  return lines;
-}
-
 function renderGitNexusReadinessLines(status) {
   const readiness = status.gitnexus_readiness && typeof status.gitnexus_readiness === "object"
     ? status.gitnexus_readiness
@@ -82,16 +53,6 @@ function renderOperatorSurfaceLines(status) {
   const reservations = status.reservations && typeof status.reservations === "object"
     ? status.reservations
     : { exists: false, total: 0, active_count: 0, expired_count: 0, released_count: 0, active_agents: [] };
-  const projectDocs = status.project_docs && typeof status.project_docs === "object"
-    ? status.project_docs
-    : {
-        status: "missing",
-        mode: "",
-        mapping_path: "",
-        context: { root: "", map: "", entries: [] },
-        adrs: { enabled: false, dir: "", exists: false },
-        warnings: [],
-      };
   const memoryRecall = status.memory_recall && typeof status.memory_recall === "object"
     ? status.memory_recall
     : {
@@ -108,19 +69,6 @@ function renderOperatorSurfaceLines(status) {
   lines.push(
     `- Current feature snapshot: ${currentFeature.exists ? "present" : "missing"}`,
   );
-  lines.push(`- Project docs: ${projectDocs.status || "missing"}${projectDocs.mode ? ` (${projectDocs.mode})` : ""}`);
-  if (projectDocs.mapping_path) {
-    lines.push(`  - mapping_path: ${projectDocs.mapping_path}`);
-  }
-  if (projectDocs.context?.root) {
-    lines.push(`  - root_context: ${projectDocs.context.root}`);
-  }
-  if (projectDocs.context?.map) {
-    lines.push(`  - context_map: ${projectDocs.context.map}`);
-  }
-  if (projectDocs.adrs?.dir) {
-    lines.push(`  - adr_dir: ${projectDocs.adrs.dir}`);
-  }
   if (currentFeature.exists) {
     lines.push(`  - feature_key: ${currentFeature.feature_key || "(none)"}`);
     lines.push(`  - phase: ${currentFeature.phase || "(none)"}`);
@@ -236,8 +184,6 @@ export function renderPulseStatus(status) {
     `Active handoffs: ${status.handoff_manifest.active_count}`,
     "",
     ...renderOperatorSurfaceLines(status),
-    "",
-    ...renderProjectDocsLines(status),
     "",
     ...renderGitNexusReadinessLines(status),
     "",

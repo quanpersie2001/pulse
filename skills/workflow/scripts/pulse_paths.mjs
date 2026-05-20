@@ -42,7 +42,6 @@ export function getPulsePaths(repoRoot) {
   return {
     onboarding: path.join(repoRoot, ".pulse", "runtime", "onboarding.json"),
     toolingStatus: path.join(repoRoot, ".pulse", "runtime", "tooling-status.json"),
-    projectDocs: path.join(repoRoot, ".pulse", "project-docs.json"),
     stateJson: path.join(repoRoot, ".pulse", "runtime", "state.json"),
     stateMarkdown: path.join(repoRoot, ".pulse", "runtime", "STATE.md"),
     reservations: path.join(repoRoot, ".pulse", "runtime", "reservations.json"),

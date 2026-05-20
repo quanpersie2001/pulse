@@ -159,24 +159,6 @@ export function inferGateNextAction(status, gateStatus, nextSkillRecommended) {
 export function buildNextReads(status) {
   const reads = ["AGENTS.md", ".pulse/runtime/tooling-status.json"];
 
-  if (status.project_docs?.mapping_path) {
-    reads.push(status.project_docs.mapping_path);
-  }
-  if (status.project_docs?.context?.root) {
-    reads.push(status.project_docs.context.root);
-  }
-  if (status.project_docs?.context?.map) {
-    reads.push(status.project_docs.context.map);
-  }
-  for (const entry of status.project_docs?.context?.entries || []) {
-    if (entry.path) {
-      reads.push(entry.path);
-    }
-  }
-  if (status.project_docs?.adrs?.dir) {
-    reads.push(status.project_docs.adrs.dir);
-  }
-
   if (status.state_json.exists) {
     reads.push(".pulse/runtime/state.json");
   }
@@ -218,32 +200,17 @@ export function buildRecommendedActions(status) {
   const hygieneWarnings = Array.isArray(status.memory_recall?.hygiene?.warnings)
     ? status.memory_recall.hygiene.warnings
     : [];
-  const projectDocsWarnings = Array.isArray(status.project_docs?.warnings)
-    ? status.project_docs.warnings
-    : [];
-
   if (status.handoff_manifest.active_count > 0) {
     const actions = [
       "Surface the active handoffs to the user before resuming.",
       "Read the chosen handoff path, then reopen the active feature context.",
       "Use the generated handoff summary, resume briefing, and transfer block instead of ad hoc prose when presenting a resume path.",
     ];
-    if (status.project_docs?.status === "mapped") {
-      actions.push("When repo terminology or ownership boundaries matter, read the mapped project docs before going deeper into active work context.");
-    } else if (status.project_docs?.status === "detected") {
-      actions.push("Repo-level project docs were detected but are not mapped yet; map .pulse/project-docs.json before deeper planning.");
-    } else {
-      actions.push("If repo-wide terminology keeps drifting, propose a lightweight project-doc scaffold before deeper planning.");
-    }
-
     if (recallPack.length > 0) {
       actions.push("Use the targeted recall pack to reopen only the most relevant critical patterns, corrections, ratchet rules, and learnings.");
     }
     if (hygieneWarnings.length > 0) {
       actions.push(`Memory hygiene warning: ${hygieneWarnings[0]}`);
-    }
-    if (projectDocsWarnings.length > 0) {
-      actions.push(`Project docs warning: ${projectDocsWarnings[0]}`);
     }
 
     return actions;
@@ -263,21 +230,11 @@ export function buildRecommendedActions(status) {
   if (nextAction === "manual_invoke" && nextSkillRecommended) {
     const actions = [`Gate cleared. Manually invoke ${nextSkillRecommended} when ready.`];
     actions.push("You can clear chat context or switch to a stronger model before invoking the recommended next skill.");
-    if (status.project_docs?.status === "mapped") {
-      actions.push("Read the mapped project docs when repo-level terminology, boundaries, or ADR context may affect the next decision.");
-    } else if (status.project_docs?.status === "detected") {
-      actions.push("Repo-level project docs were detected but .pulse/project-docs.json is missing; record the mapping before deeper planning.");
-    } else {
-      actions.push("If durable repo-level terminology or architecture context is missing, propose a lightweight project-doc scaffold before deeper planning.");
-    }
     if (recallPack.length > 0) {
       actions.push("Before planning or debugging, consult the targeted recall pack instead of grepping the whole memory plane.");
     }
     if (hygieneWarnings.length > 0) {
       actions.push(`Memory hygiene warning: ${hygieneWarnings[0]}`);
-    }
-    if (projectDocsWarnings.length > 0) {
-      actions.push(`Project docs warning: ${projectDocsWarnings[0]}`);
     }
     return actions;
   }
@@ -285,42 +242,22 @@ export function buildRecommendedActions(status) {
   const sessionLoadNextCommand = normalizeNextCommandSurface(status.session_load?.next_command);
   if (sessionLoadNextCommand) {
     const actions = [`Next command suggestion: ${sessionLoadNextCommand}.`];
-    if (status.project_docs?.status === "mapped") {
-      actions.push("Read the mapped project docs when repo-level terminology, boundaries, or ADR context may affect the next decision.");
-    } else if (status.project_docs?.status === "detected") {
-      actions.push("Repo-level project docs were detected but .pulse/project-docs.json is missing; record the mapping before deeper planning.");
-    } else {
-      actions.push("If durable repo-level terminology or architecture context is missing, propose a lightweight project-doc scaffold before deeper planning.");
-    }
     if (recallPack.length > 0) {
       actions.push("Before planning or debugging, consult the targeted recall pack instead of grepping the whole memory plane.");
     }
     if (hygieneWarnings.length > 0) {
       actions.push(`Memory hygiene warning: ${hygieneWarnings[0]}`);
-    }
-    if (projectDocsWarnings.length > 0) {
-      actions.push(`Project docs warning: ${projectDocsWarnings[0]}`);
     }
     return actions;
   }
 
   if (status.tooling_status.next_skill) {
     const actions = [`Next command suggestion: ${normalizeNextCommandSurface(status.tooling_status.next_skill)}.`];
-    if (status.project_docs?.status === "mapped") {
-      actions.push("Read the mapped project docs when repo-level terminology, boundaries, or ADR context may affect the next decision.");
-    } else if (status.project_docs?.status === "detected") {
-      actions.push("Repo-level project docs were detected but .pulse/project-docs.json is missing; record the mapping before deeper planning.");
-    } else {
-      actions.push("If durable repo-level terminology or architecture context is missing, propose a lightweight project-doc scaffold before deeper planning.");
-    }
     if (recallPack.length > 0) {
       actions.push("Before planning or debugging, consult the targeted recall pack instead of grepping the whole memory plane.");
     }
     if (hygieneWarnings.length > 0) {
       actions.push(`Memory hygiene warning: ${hygieneWarnings[0]}`);
-    }
-    if (projectDocsWarnings.length > 0) {
-      actions.push(`Project docs warning: ${projectDocsWarnings[0]}`);
     }
     return actions;
   }
@@ -329,23 +266,11 @@ export function buildRecommendedActions(status) {
     "Use this snapshot for fast orientation before deeper reads.",
     "If work is resuming, reopen the active feature context before planning or execution.",
   ];
-  if (status.project_docs?.status === "mapped") {
-    actions.push("Read the mapped project docs when repo-level terminology, boundaries, or ADR context may affect the next decision.");
-  } else if (status.project_docs?.status === "detected") {
-    actions.push("Repo-level project docs were detected but .pulse/project-docs.json is missing; record the mapping before deeper planning.");
-  } else {
-    actions.push("If durable repo-level terminology or architecture context is missing, propose a lightweight project-doc scaffold before deeper planning.");
-  }
-
   if (recallPack.length > 0) {
     actions.push("Use the targeted recall pack to pull in the smallest relevant memory context before planning, debugging, or review.");
   }
   if (hygieneWarnings.length > 0) {
     actions.push(`Memory hygiene warning: ${hygieneWarnings[0]}`);
   }
-  if (projectDocsWarnings.length > 0) {
-    actions.push(`Project docs warning: ${projectDocsWarnings[0]}`);
-  }
-
   return actions;
 }

@@ -723,7 +723,6 @@ Should not include:
 
 - memory recall
 - history lifecycle
-- project docs detection
 - GitNexus readiness
 - handoff rendering
 - full status rendering
@@ -807,7 +806,6 @@ Responsibilities:
 - summarize state
 - summarize reservations
 - summarize handoffs
-- summarize project docs
 - summarize history lifecycle
 - summarize memory recall
 - summarize GitNexus readiness
@@ -947,9 +945,6 @@ If optional `.pulse/scripts/` shims exist, they may have their own compatibility
 The following domains should be split out of `pulse_state.mjs` into narrow modules.
 
 ```text
-pulse_project_docs.mjs
-  summarizeProjectDocs(...)
-
 pulse_memory_recall.mjs
   summarizeMemoryRecall(...)
 
@@ -1230,7 +1225,6 @@ Actions:
 Create and wire:
 
 ```text
-pulse_project_docs.mjs
 pulse_memory_recall.mjs
 pulse_handoffs.mjs
 pulse_history_lifecycle.mjs
