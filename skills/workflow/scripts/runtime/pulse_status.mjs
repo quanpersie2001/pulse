@@ -3,11 +3,9 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import {
-  readPulseStatus,
-  renderPulseStatus,
-  syncPulseRuntimeArtifacts,
-} from "./pulse_state.mjs";
+import { syncPulseRuntimeArtifacts } from "./pulse_state.mjs";
+import { readPulseStatus } from "./pulse_status_model.mjs";
+import { renderPulseStatus } from "./pulse_status_render.mjs";
 import { resolveRepoRoot } from "./pulse_paths.mjs";
 
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
