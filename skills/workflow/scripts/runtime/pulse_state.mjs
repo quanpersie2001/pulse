@@ -4,12 +4,16 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { getPulsePaths, resolveRepoRoot as resolveRepoRootFromPaths } from "./pulse_paths.mjs";
-import { renderPulseStatus as renderPulseStatusImpl } from "./pulse_status_render.mjs";
+import {
+  RESERVATION_SCHEMA_VERSION,
+  ensureReservationStore,
+  readReservationStore,
+  summarizeReservationStatus,
+} from "./pulse_reservation_store.mjs";
 
 export const STATE_SCHEMA_VERSION = "1.0";
 export const CURRENT_FEATURE_SCHEMA_VERSION = "1.0";
 export const RUNTIME_SNAPSHOT_SCHEMA_VERSION = "1.0";
-export const RESERVATION_SCHEMA_VERSION = "1.0";
 
 function utcNow() {
   return new Date().toISOString();
@@ -19,11 +23,11 @@ function ensureParent(filePath) {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
 }
 
-function fileTextIfExists(filePath) {
+export function fileTextIfExists(filePath) {
   return fs.existsSync(filePath) ? fs.readFileSync(filePath, "utf8") : "";
 }
 
-function readJsonIfExists(filePath) {
+export function readJsonIfExists(filePath) {
   if (!fs.existsSync(filePath)) {
     return null;
   }
@@ -161,27 +165,6 @@ export function buildDefaultState(overrides = {}) {
   };
 }
 
-export function buildEmptyReservationStore() {
-  return {
-    schema_version: RESERVATION_SCHEMA_VERSION,
-    updated_at: utcNow(),
-    reservations: [],
-  };
-}
-
-export function normalizeReservationStore(store) {
-  if (!store || typeof store !== "object" || Array.isArray(store)) {
-    return buildEmptyReservationStore();
-  }
-
-  return {
-    schema_version: RESERVATION_SCHEMA_VERSION,
-    updated_at:
-      typeof store.updated_at === "string" && store.updated_at ? store.updated_at : utcNow(),
-    reservations: Array.isArray(store.reservations) ? store.reservations : [],
-  };
-}
-
 export function normalizePulseState(state) {
   if (!state || typeof state !== "object" || Array.isArray(state)) {
     return buildDefaultState();
@@ -193,7 +176,7 @@ export function getPulseStatePaths(repoRoot) {
   return getPulsePaths(repoRoot);
 }
 
-function summarizeProjectDocs(repoRoot, paths) {
+export function summarizeProjectDocs(repoRoot, paths) {
   const projectDocs = readJsonIfExists(paths.projectDocs);
   const rootContextPath = "CONTEXT.md";
   const contextMapPath = "CONTEXT-MAP.md";
@@ -276,40 +259,18 @@ export function writePulseState(repoRoot, nextState) {
   return normalized;
 }
 
-export function readReservationStore(repoRoot) {
-  const paths = getPulseStatePaths(repoRoot);
-  return normalizeReservationStore(readJsonIfExists(paths.reservations));
-}
-
-export function writeReservationStore(repoRoot, nextStore) {
-  const paths = getPulseStatePaths(repoRoot);
-  const normalized = normalizeReservationStore(nextStore);
-  ensureParent(paths.reservations);
-  fs.writeFileSync(paths.reservations, `${JSON.stringify(normalized, null, 2)}\n`, "utf8");
-  return normalized;
-}
-
-export function ensureReservationStore(repoRoot) {
-  const store = readReservationStore(repoRoot);
-  return writeReservationStore(repoRoot, store);
-}
-
-function summarizeReservations(store) {
-  const reservations = Array.isArray(store?.reservations) ? store.reservations : [];
-  const active = reservations.filter((item) => item?.status === "active");
-  const expired = reservations.filter((item) => item?.status === "expired");
-  const released = reservations.filter((item) => item?.status === "released");
+export function summarizeReservationStatusForState(repoRoot) {
+  const summary = summarizeReservationStatus(repoRoot);
+  const reservationStore = readReservationStore(repoRoot);
 
   return {
     exists: true,
-    schema_version: typeof store?.schema_version === "string" ? store.schema_version : RESERVATION_SCHEMA_VERSION,
-    updated_at: typeof store?.updated_at === "string" ? store.updated_at : "",
-    total: reservations.length,
-    active_count: active.length,
-    expired_count: expired.length,
-    released_count: released.length,
-    active_agents: [...new Set(active.map((item) => item?.agent).filter(Boolean))].sort(),
-    active_reservations: active,
+    schema_version:
+      typeof reservationStore?.schema_version === "string"
+        ? reservationStore.schema_version
+        : RESERVATION_SCHEMA_VERSION,
+    updated_at: typeof reservationStore?.updated_at === "string" ? reservationStore.updated_at : "",
+    ...summary,
   };
 }
 
@@ -711,7 +672,7 @@ function deriveAndPersistRuntimeArtifacts(repoRoot) {
     },
     current_feature: summarizeCurrentFeature(null),
     runtime_snapshot: summarizeRuntimeSnapshot(null),
-    reservations: summarizeReservations(readReservationStore(repoRoot)),
+    reservations: summarizeReservationStatusForState(repoRoot),
     handoff_manifest: summarizeHandoffManifest(handoffManifest),
     gitnexus_readiness: null,
     critical_patterns_exists: fs.existsSync(paths.criticalPatterns),
@@ -739,7 +700,7 @@ export function syncPulseRuntimeArtifacts(repoRoot) {
   return deriveAndPersistRuntimeArtifacts(normalizedRoot);
 }
 
-function parseLooseKeyValueMarkdown(text) {
+export function parseLooseKeyValueMarkdown(text) {
   const parsed = {};
   for (const line of text.split("\n")) {
     const match = line.match(/^([A-Za-z][A-Za-z0-9 _/-]+):\s*(.+)$/);
@@ -752,7 +713,7 @@ function parseLooseKeyValueMarkdown(text) {
   return parsed;
 }
 
-export function deriveFeature(status) {
+function deriveFeature(status) {
   if (status.current_feature?.feature_key) {
     return status.current_feature.feature_key;
   }
@@ -1190,7 +1151,7 @@ function buildRecallPack(criticalPatternsPath, selectedRecall) {
   return pack;
 }
 
-function summarizeMemoryRecall(paths, feature, status) {
+export function summarizeMemoryRecall(paths, feature, status) {
   const memoryRootExists = fs.existsSync(paths.memoryRoot);
   const criticalPatternsExists = fs.existsSync(paths.criticalPatterns);
   const repoRoot = path.dirname(paths.agents);
@@ -1261,7 +1222,7 @@ function listHistoryFeatureFiles(repoRoot, feature) {
   return files.sort((left, right) => left.localeCompare(right));
 }
 
-function summarizeHistoryLifecycle(repoRoot, feature) {
+export function summarizeHistoryLifecycle(repoRoot, feature) {
   const summary = {
     feature,
     exists: false,
@@ -1332,7 +1293,7 @@ function summarizeHistoryLifecycle(repoRoot, feature) {
   return summary;
 }
 
-function buildNextReads(status) {
+export function buildNextReads(status) {
   const reads = ["AGENTS.md", ".pulse/runtime/tooling-status.json"];
 
   if (status.project_docs?.mapping_path) {
@@ -1389,7 +1350,7 @@ function buildNextReads(status) {
   return [...new Set(reads)];
 }
 
-function buildRecommendedActions(status) {
+export function buildRecommendedActions(status) {
   if (!status.onboarding.exists) {
     return [
       "Run Pulse use before continuing.",
@@ -1527,7 +1488,7 @@ function buildRecommendedActions(status) {
   return actions;
 }
 
-function summarizeCurrentFeature(currentFeature) {
+export function summarizeCurrentFeature(currentFeature) {
   if (!currentFeature || typeof currentFeature !== "object" || Array.isArray(currentFeature)) {
     return {
       exists: false,
@@ -1571,7 +1532,7 @@ function summarizeCurrentFeature(currentFeature) {
   };
 }
 
-function summarizeRuntimeSnapshot(runtimeSnapshot) {
+export function summarizeRuntimeSnapshot(runtimeSnapshot) {
   if (!runtimeSnapshot || typeof runtimeSnapshot !== "object" || Array.isArray(runtimeSnapshot)) {
     return {
       exists: false,
@@ -1749,7 +1710,7 @@ function summarizeActiveHandoffEntry(entry) {
   };
 }
 
-function summarizeHandoffManifest(handoffManifest) {
+export function summarizeHandoffManifest(handoffManifest) {
   const activeEntries = Array.isArray(handoffManifest?.active)
     ? handoffManifest.active.map(summarizeActiveHandoffEntry).filter(Boolean)
     : [];
@@ -1761,297 +1722,4 @@ function summarizeHandoffManifest(handoffManifest) {
     active: activeEntries,
   };
 }
-export async function readPulseStatus(repoRoot) {
-  const paths = getPulseStatePaths(repoRoot);
-  const onboarding = readJsonIfExists(paths.onboarding);
-  const toolingStatus = readJsonIfExists(paths.toolingStatus);
-  const stateJson = readJsonIfExists(paths.stateJson);
-  const stateMarkdownText = fileTextIfExists(paths.stateMarkdown);
-  const stateMarkdown = parseLooseKeyValueMarkdown(stateMarkdownText);
-  const derivedRuntime = syncPulseRuntimeArtifacts(repoRoot);
-  const handoffManifest = readJsonIfExists(paths.handoffManifest);
 
-  const gitNexusReadiness = await readGitNexusReadiness(repoRoot);
-
-  const stateJsonSummary = {
-    exists: Boolean(stateJson),
-    ...normalizePulseState(stateJson),
-  };
-  const stateMarkdownSummary = {
-    exists: stateMarkdownText.trim() !== "",
-    ...stateMarkdown,
-  };
-  const currentFeatureSummary = summarizeCurrentFeature(derivedRuntime.current_feature);
-  const runtimeSnapshotSummary = summarizeRuntimeSnapshot(derivedRuntime.runtime_snapshot);
-  const handoffManifestSummary = summarizeHandoffManifest(handoffManifest);
-  const derivedFeature = deriveFeature({
-    current_feature: currentFeatureSummary,
-    state_json: stateJsonSummary,
-    state_markdown: stateMarkdownSummary,
-  });
-  const historyLifecycle = summarizeHistoryLifecycle(repoRoot, derivedFeature);
-  const projectDocsSummary = summarizeProjectDocs(repoRoot, paths);
-
-  const status = {
-    repo_root: repoRoot,
-    onboarding: {
-      exists: Boolean(onboarding),
-      status: onboarding?.status || "",
-      plugin_version: onboarding?.plugin_version || "",
-    },
-    tooling_status: {
-      exists: Boolean(toolingStatus),
-      status: typeof toolingStatus?.status === "string" ? toolingStatus.status : "",
-      requested_mode:
-        typeof toolingStatus?.requested_mode === "string" ? toolingStatus.requested_mode : "",
-      recommended_mode:
-        typeof toolingStatus?.recommended_mode === "string" ? toolingStatus.recommended_mode : "",
-      next_skill: typeof toolingStatus?.next_skill === "string" ? toolingStatus.next_skill : "",
-      blockers: Array.isArray(toolingStatus?.blockers) ? toolingStatus.blockers : [],
-    },
-    state_json: stateJsonSummary,
-    state_markdown: stateMarkdownSummary,
-    current_feature: currentFeatureSummary,
-    runtime_snapshot: runtimeSnapshotSummary,
-    reservations: summarizeReservations(readReservationStore(repoRoot)),
-    handoff_manifest: handoffManifestSummary,
-    history_lifecycle: historyLifecycle,
-    project_docs: projectDocsSummary,
-    critical_patterns_exists: fs.existsSync(paths.criticalPatterns),
-    gitnexus_readiness: gitNexusReadiness,
-    memory_recall: null,
-    next_reads: [],
-    recommended_actions: [],
-  };
-
-  status.memory_recall = summarizeMemoryRecall(paths, derivedFeature, status);
-  status.next_reads = buildNextReads(status);
-  status.recommended_actions = buildRecommendedActions(status);
-  return status;
-}
-
-export function renderProjectDocsLines(status) {
-  const projectDocs = status.project_docs && typeof status.project_docs === "object"
-    ? status.project_docs
-    : {
-        exists: false,
-        status: "missing",
-        mode: "",
-        mapping_path: "",
-        context: { root: "", map: "", entries: [] },
-        adrs: { enabled: false, dir: "", exists: false },
-        notes: [],
-        warnings: [],
-      };
-
-  const lines = ["Project docs:"];
-  lines.push(`- Status: ${projectDocs.status || "missing"}`);
-  lines.push(`- Mode: ${projectDocs.mode || "(unknown)"}`);
-  lines.push(`- Mapping path: ${projectDocs.mapping_path || "(none)"}`);
-  lines.push(`- Root context: ${projectDocs.context?.root || "(none)"}`);
-  lines.push(`- Context map: ${projectDocs.context?.map || "(none)"}`);
-  lines.push(`- Context entries: ${Array.isArray(projectDocs.context?.entries) ? projectDocs.context.entries.length : 0}`);
-  lines.push(`- ADR dir: ${projectDocs.adrs?.dir || "(none)"}`);
-  lines.push(`- ADRs present: ${projectDocs.adrs?.exists ? "yes" : "no"}`);
-  if (Array.isArray(projectDocs.warnings) && projectDocs.warnings[0]) {
-    lines.push(`- Warning: ${projectDocs.warnings[0]}`);
-  }
-  return lines;
-}
-
-export function renderGitNexusReadinessLines(status) {
-  const readiness = status.gitnexus_readiness && typeof status.gitnexus_readiness === "object"
-    ? status.gitnexus_readiness
-    : null;
-  if (!readiness) {
-    return [];
-  }
-
-  const matchedSources =
-    Array.isArray(readiness.matched_sources) && readiness.matched_sources.length > 0
-      ? readiness.matched_sources.join(", ")
-      : "none";
-
-  return [
-    "gitnexus readiness:",
-    `- Configured: ${readiness.configured ? "yes" : "no"}`,
-    `- Matched sources: ${matchedSources}`,
-    `- Recommended action: ${readiness.recommended_action || "n/a"}`,
-  ];
-}
-
-export function renderOperatorSurfaceLines(status) {
-  const lines = ["Operator surface:"];
-  const currentFeature = status.current_feature && typeof status.current_feature === "object"
-    ? status.current_feature
-    : { exists: false };
-  const runtimeSnapshot = status.runtime_snapshot && typeof status.runtime_snapshot === "object"
-    ? status.runtime_snapshot
-    : { exists: false };
-  const handoffManifest = status.handoff_manifest && typeof status.handoff_manifest === "object"
-    ? status.handoff_manifest
-    : { exists: false, active_count: 0, active: [] };
-  const reservations = status.reservations && typeof status.reservations === "object"
-    ? status.reservations
-    : { exists: false, total: 0, active_count: 0, expired_count: 0, released_count: 0, active_agents: [] };
-  const historyLifecycle = status.history_lifecycle && typeof status.history_lifecycle === "object"
-    ? status.history_lifecycle
-    : {
-        exists: false,
-        lifecycle_summary: "",
-        approved_artifacts: [],
-        verification: [],
-        memory_promotions: [],
-        lifecycle_signals: [],
-        next_reads: [],
-        self_sufficient: false,
-      };
-  const projectDocs = status.project_docs && typeof status.project_docs === "object"
-    ? status.project_docs
-    : {
-        status: "missing",
-        mode: "",
-        mapping_path: "",
-        context: { root: "", map: "", entries: [] },
-        adrs: { enabled: false, dir: "", exists: false },
-        warnings: [],
-      };
-  const memoryRecall = status.memory_recall && typeof status.memory_recall === "object"
-    ? status.memory_recall
-    : {
-        root_exists: false,
-        critical_patterns: "",
-        learnings: [],
-        corrections: [],
-        ratchet: [],
-        recall_pack: [],
-        schema_summary: null,
-        hygiene: { warnings: [] },
-      };
-
-  lines.push(
-    `- Current feature snapshot: ${currentFeature.exists ? "present" : "missing"}`,
-  );
-  lines.push(`- Project docs: ${projectDocs.status || "missing"}${projectDocs.mode ? ` (${projectDocs.mode})` : ""}`);
-  if (projectDocs.mapping_path) {
-    lines.push(`  - mapping_path: ${projectDocs.mapping_path}`);
-  }
-  if (projectDocs.context?.root) {
-    lines.push(`  - root_context: ${projectDocs.context.root}`);
-  }
-  if (projectDocs.context?.map) {
-    lines.push(`  - context_map: ${projectDocs.context.map}`);
-  }
-  if (projectDocs.adrs?.dir) {
-    lines.push(`  - adr_dir: ${projectDocs.adrs.dir}`);
-  }
-  if (currentFeature.exists) {
-    lines.push(`  - feature_key: ${currentFeature.feature_key || "(none)"}`);
-    lines.push(`  - phase: ${currentFeature.phase || "(none)"}`);
-    lines.push(`  - gate: ${currentFeature.gate || "(none)"}`);
-    if (currentFeature.gate_status) {
-      lines.push(`  - gate_status: ${currentFeature.gate_status}`);
-    }
-    lines.push(`  - status: ${currentFeature.status || "(none)"}`);
-    if (currentFeature.next_action) {
-      lines.push(`  - next_action: ${currentFeature.next_action}`);
-    }
-    if (currentFeature.next_skill_recommended) {
-      lines.push(`  - next_skill_recommended: ${currentFeature.next_skill_recommended}`);
-    }
-    lines.push(`  - updated_at: ${currentFeature.updated_at || "(none)"}`);
-  }
-
-  lines.push(
-    `- Runtime snapshot: ${runtimeSnapshot.exists ? "present" : "missing"}`,
-  );
-  if (runtimeSnapshot.exists) {
-    lines.push(`  - schema_version: ${runtimeSnapshot.schema_version || "(none)"}`);
-    lines.push(`  - active_feature: ${runtimeSnapshot.active_feature || "(none)"}`);
-    lines.push(`  - active_skill: ${runtimeSnapshot.active_skill || "(none)"}`);
-    lines.push(`  - phase: ${runtimeSnapshot.phase || "(none)"}`);
-    if (runtimeSnapshot.gate) {
-      lines.push(`  - gate: ${runtimeSnapshot.gate}`);
-    }
-    if (runtimeSnapshot.gate_status) {
-      lines.push(`  - gate_status: ${runtimeSnapshot.gate_status}`);
-    }
-    lines.push(`  - requested_mode: ${runtimeSnapshot.requested_mode || "(unspecified)"}`);
-    lines.push(`  - recommended_mode: ${runtimeSnapshot.recommended_mode || "(unspecified)"}`);
-    if (runtimeSnapshot.next_action) {
-      lines.push(`  - next_action: ${runtimeSnapshot.next_action}`);
-    }
-    if (runtimeSnapshot.next_skill_recommended) {
-      lines.push(`  - next_skill_recommended: ${runtimeSnapshot.next_skill_recommended}`);
-    }
-    lines.push(`  - updated_at: ${runtimeSnapshot.updated_at || "(none)"}`);
-  }
-
-  lines.push(`- Active reservations: ${reservations.active_count || 0}`);
-  lines.push(`  - reservation_store: ${reservations.exists ? "present" : "missing"}`);
-  lines.push(`  - reservation_count: ${reservations.total || 0}`);
-  lines.push(`  - expired_reservations: ${reservations.expired_count || 0}`);
-  lines.push(`  - released_reservations: ${reservations.released_count || 0}`);
-  lines.push(`  - active_agents: ${(reservations.active_agents || []).length > 0 ? reservations.active_agents.join(", ") : "(none)"}`);
-
-  lines.push(`- Active handoffs: ${handoffManifest.active_count || 0}`);
-  if (Array.isArray(handoffManifest.active) && handoffManifest.active.length > 0) {
-    for (const handoff of handoffManifest.active) {
-      lines.push(`  - ${handoff.operator_summary}`);
-    }
-    lines.push(`  - manifest_updated_at: ${handoffManifest.updated_at || "(none)"}`);
-  }
-
-
-  lines.push(`- History lifecycle: ${historyLifecycle.exists ? "present" : "missing"}`);
-  if (historyLifecycle.exists) {
-    lines.push(`  - lifecycle_summary: ${historyLifecycle.lifecycle_summary || "(none)"}`);
-    lines.push(`  - self_sufficient: ${historyLifecycle.self_sufficient ? "yes" : "no"}`);
-    if ((historyLifecycle.approved_artifacts || []).length > 0) {
-      lines.push(`  - approved_artifacts: ${historyLifecycle.approved_artifacts.join(", ")}`);
-    }
-    if ((historyLifecycle.lifecycle_signals || []).length > 0) {
-      lines.push(`  - lifecycle_signals: ${historyLifecycle.lifecycle_signals.join(", ")}`);
-    }
-    if ((historyLifecycle.verification || []).length > 0) {
-      lines.push(`  - canonical_verification: ${historyLifecycle.verification.join(", ")}`);
-    }
-  }
-
-  lines.push(`- Memory recall root: ${memoryRecall.root_exists ? "present" : "missing"}`);
-  if (memoryRecall.critical_patterns) {
-    lines.push(`  - critical_patterns: ${memoryRecall.critical_patterns}`);
-  }
-  if ((memoryRecall.learnings || []).length > 0) {
-    lines.push(`  - learnings: ${(memoryRecall.learnings || []).join(", ")}`);
-  }
-  if ((memoryRecall.corrections || []).length > 0) {
-    lines.push(`  - corrections: ${(memoryRecall.corrections || []).join(", ")}`);
-  }
-  if ((memoryRecall.ratchet || []).length > 0) {
-    lines.push(`  - ratchet: ${(memoryRecall.ratchet || []).join(", ")}`);
-  }
-  if ((memoryRecall.recall_pack || []).length > 0) {
-    lines.push("  - recall_pack:");
-    for (const entry of memoryRecall.recall_pack) {
-      lines.push(`    - ${entry.kind}: ${entry.path} (${entry.reason})`);
-    }
-  }
-  if (memoryRecall.schema_summary) {
-    lines.push(
-      `  - schema_summary: ${memoryRecall.schema_summary.strong_schema_entries || 0}/${memoryRecall.schema_summary.selected_entries || 0} strong-schema entries selected; metadata_first=${memoryRecall.schema_summary.metadata_first_ranking ? "yes" : "no"}; filename_fallback=${memoryRecall.schema_summary.fallback_to_filename_tokens ? "yes" : "no"}`,
-    );
-  }
-  if ((memoryRecall.hygiene?.warnings || []).length > 0) {
-    lines.push("  - hygiene_warnings:");
-    for (const warning of memoryRecall.hygiene.warnings) {
-      lines.push(`    - ${warning}`);
-    }
-  }
-
-  return lines;
-}
-
-export function renderPulseStatus(status) {
-  return renderPulseStatusImpl(status);
-}

@@ -4,11 +4,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import {
-  readGitNexusReadiness,
-  readPulseStatus,
-  syncPulseRuntimeArtifacts,
-} from "./pulse_state.mjs";
+import { readGitNexusReadiness, syncPulseRuntimeArtifacts } from "./pulse_state.mjs";
+import { readPulseStatus } from "./pulse_status_model.mjs";
 
 const SCRIPT_PATH = fileURLToPath(import.meta.url);
 const SCRIPT_DIR = path.dirname(SCRIPT_PATH);
