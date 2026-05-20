@@ -1,5 +1,10 @@
+#!/usr/bin/env node
+
 import fs from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+import { resolveRepoRoot } from "./pulse_paths.mjs";
 
 function firstNonEmptyString(...values) {
   for (const value of values) {
@@ -178,6 +183,8 @@ function mapResumeOptions(activeHandoffs) {
   }));
 }
 
+const SCRIPT_PATH = fileURLToPath(import.meta.url);
+
 export function buildSessionLoad(repoRoot, options = {}) {
   const state = readJsonIfExistsSafe(path.join(repoRoot, ".pulse", "runtime", "state.json")) || {};
   const toolingStatus = readJsonIfExistsSafe(path.join(repoRoot, ".pulse", "runtime", "tooling-status.json")) || {};
@@ -300,4 +307,71 @@ export function buildSessionLoad(repoRoot, options = {}) {
     next_action: nextAction,
     next_command: nextCommand,
   };
+}
+
+function parseCliArgs(argv) {
+  const args = {
+    repoRoot: undefined,
+    resumeOwner: "",
+    json: false,
+  };
+
+  for (let index = 0; index < argv.length; index += 1) {
+    const arg = argv[index];
+    if (arg === "--repo-root") {
+      args.repoRoot = argv[index + 1];
+      index += 1;
+      continue;
+    }
+    if (arg.startsWith("--repo-root=")) {
+      args.repoRoot = arg.slice("--repo-root=".length);
+      continue;
+    }
+    if (arg === "--resume-owner") {
+      args.resumeOwner = argv[index + 1] || "";
+      index += 1;
+      continue;
+    }
+    if (arg.startsWith("--resume-owner=")) {
+      args.resumeOwner = arg.slice("--resume-owner=".length);
+      continue;
+    }
+    if (arg === "--json") {
+      args.json = true;
+      continue;
+    }
+    if (arg === "--help" || arg === "-h") {
+      process.stdout.write(
+        [
+          "Usage: pulse_session_load.mjs [--repo-root <path>] [--resume-owner <owner_id>] [--json]",
+          "",
+          "Loads Pulse session context from runtime pointers.",
+        ].join("\n"),
+      );
+      process.exit(0);
+    }
+    throw new Error(`Unknown argument: ${arg}`);
+  }
+
+  return args;
+}
+
+export function main(argv = process.argv.slice(2), env = process.env, cwd = process.cwd()) {
+  const args = parseCliArgs(argv);
+  const repoRoot = resolveRepoRoot({ explicitRoot: args.repoRoot, env, cwd });
+  const payload = buildSessionLoad(repoRoot, { resumeOwner: args.resumeOwner });
+
+  if (args.json) {
+    process.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
+  } else {
+    process.stdout.write(`${payload.summary}\n`);
+    process.stdout.write(`posture: ${payload.posture}\n`);
+    process.stdout.write(`next_command: ${payload.next_command}\n`);
+  }
+
+  return 0;
+}
+
+if (process.argv[1] && path.resolve(process.argv[1]) === SCRIPT_PATH) {
+  process.exitCode = main();
 }

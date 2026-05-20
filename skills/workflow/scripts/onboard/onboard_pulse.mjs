@@ -19,7 +19,7 @@ import {
   loadItems,
   writeViews,
 } from "../runtime/workgraph_store.mjs";
-import { buildSessionLoad } from "./load_context.mjs";
+import { buildSessionLoad } from "../runtime/pulse_session_load.mjs";
 
 const SCRIPT_PATH = fileURLToPath(import.meta.url);
 const COMMAND_SCRIPT_DIR = path.dirname(SCRIPT_PATH);
