@@ -13,8 +13,6 @@ import {
 } from "../scripts/pulse_session_context.mjs";
 import { assertNoUnresolvedRuntimePlaceholders } from "../../../scripts/lib/render-pulse-placeholders.mjs";
 
-const LEGACY_RUNTIME_COMMAND_PATTERN = /pulse-work status --repo-root <repo> --json/;
-
 function mkRoot() {
   return fs.mkdtempSync(path.join(os.tmpdir(), "pulse-onboard-routing-"));
 }
@@ -32,7 +30,6 @@ function assertNoRuntimeArtifactLeaks(root) {
       const content = fs.readFileSync(entryPath, "utf8");
       const relativePath = path.relative(root, entryPath);
       assertNoUnresolvedRuntimePlaceholders(content, relativePath);
-      assert.doesNotMatch(content, LEGACY_RUNTIME_COMMAND_PATTERN, relativePath);
     }
   }
 }

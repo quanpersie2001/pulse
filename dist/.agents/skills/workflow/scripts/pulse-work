@@ -1,5 +1,0 @@
-#!/usr/bin/env node
-
-import { main } from "./pulse_work.mjs";
-
-process.exitCode = await main();

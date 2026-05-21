@@ -2,7 +2,7 @@
 
 /**
  * Purpose: Runtime CLI for canonical workgraph metadata mutations and reads.
- * Caller/flow: Invoked by pulse-work during execute/swarm/review lifecycle work.
+ * Caller/flow: Invoked by pulse_work.mjs during execute/swarm/review lifecycle work.
  * Reads/Writes: Reads/writes .pulse/workgraph/items.jsonl, views, lock, and work item files.
  * CLI args: create|show|list|ready|update|close|reopen|dep|children|graph|doctor plus --repo-root/--json.
  * Ownership: Owns workgraph mutation contract; not a conversational router.
@@ -11,7 +11,6 @@
 
 import fs from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 
 import { generateItemId, resolveItemId } from "./workgraph_ids.mjs";
 import {
@@ -40,8 +39,7 @@ import {
 } from "./workgraph_validate.mjs";
 import { buildGraphView, deriveViewState } from "./workgraph_views.mjs";
 import { inspectLock, removeStaleLock } from "./workgraph_lock.mjs";
-
-const SCRIPT_PATH = fileURLToPath(import.meta.url);
+import { isDirectExecution } from "./cli_execution.mjs";
 
 function resolveRepoRoot(explicitRoot) {
   return resolveSharedRepoRoot({ explicitRoot });
@@ -185,7 +183,7 @@ function renderHumanSummary(result) {
 
   if (result.command === "help") {
     return [
-      "Usage: pulse-work <command> [options]",
+      "Usage: pulse_work.mjs <command> [options]",
       "",
       ...result.commands.map((commandName) => `  ${commandName}`),
     ].join("\n");
@@ -221,7 +219,7 @@ async function handleCreate(repoRoot, parsed) {
     throw new Error(`${kind} items require --parent.`);
   }
 
-  const outcome = await runMutation(repoRoot, "pulse-work create", ({ items }) => {
+  const outcome = await runMutation(repoRoot, "pulse_work.mjs create", ({ items }) => {
     const existingIds = items.map((item) => item.id);
     const id = generateItemId(kind, existingIds);
     const now = utcNow();
@@ -355,7 +353,7 @@ async function handleUpdate(repoRoot, parsed) {
   const removeRisks = new Set(uppercaseList(takeListOption(parsed, "rm-risk")));
   const priorityProvided = parsed.options.has("priority");
 
-  const outcome = await runMutation(repoRoot, "pulse-work update", ({ items }) => {
+  const outcome = await runMutation(repoRoot, "pulse_work.mjs update", ({ items }) => {
     const id = resolveItemId(items, lookup);
     const previousItem = items.find((item) => item.id === id);
     const nextItem = cloneItemRecord(previousItem);
@@ -429,7 +427,7 @@ async function handleUpdate(repoRoot, parsed) {
 
 async function handleClose(repoRoot, parsed) {
   const lookup = requirePositional(parsed, 1, "id");
-  const outcome = await runMutation(repoRoot, "pulse-work close", ({ items }) => {
+  const outcome = await runMutation(repoRoot, "pulse_work.mjs close", ({ items }) => {
     const id = resolveItemId(items, lookup);
     const previousItem = items.find((item) => item.id === id);
     if (previousItem.status === "CLOSED") {
@@ -459,7 +457,7 @@ async function handleClose(repoRoot, parsed) {
 
 async function handleReopen(repoRoot, parsed) {
   const lookup = requirePositional(parsed, 1, "id");
-  const outcome = await runMutation(repoRoot, "pulse-work reopen", ({ items }) => {
+  const outcome = await runMutation(repoRoot, "pulse_work.mjs reopen", ({ items }) => {
     const id = resolveItemId(items, lookup);
     const previousItem = items.find((item) => item.id === id);
     assertItemReopenable(previousItem);
@@ -487,7 +485,7 @@ async function handleDependencyMutation(repoRoot, parsed, mode) {
   const lookup = requirePositional(parsed, 2, "id");
   const dependencyLookup = requirePositional(parsed, 3, "depends-on");
 
-  const outcome = await runMutation(repoRoot, `pulse-work dep ${mode}`, ({ items }) => {
+  const outcome = await runMutation(repoRoot, `pulse_work.mjs dep ${mode}`, ({ items }) => {
     const id = resolveItemId(items, lookup);
     const dependencyId = resolveItemId(items, dependencyLookup);
     const previousItem = items.find((item) => item.id === id);
@@ -575,7 +573,7 @@ async function handleDoctor(repoRoot, parsed) {
 
   const canonicalItems = applyCanonicalPaths(items);
   const canonicalById = new Map(canonicalItems.map((item) => [item.id, item]));
-  const fixOutcome = await runMutation(repoRoot, "pulse-work doctor --fix", ({ items: currentItems }) => ({
+  const fixOutcome = await runMutation(repoRoot, "pulse_work.mjs doctor --fix", ({ items: currentItems }) => ({
     items: currentItems,
     beforeWrite: ({ repoRoot: currentRoot }) => {
       for (const item of currentItems) {
@@ -674,7 +672,7 @@ export async function main(argv = process.argv.slice(2)) {
   if (argv.includes("--help") || argv.includes("-h")) {
     process.stdout.write(
       [
-        "Usage: pulse-work <command> [options]",
+        "Usage: pulse_work.mjs <command> [options]",
         "",
         "Commands:",
         "  create --kind <kind> --title <title> [--parent <id>]",
@@ -713,6 +711,6 @@ export async function main(argv = process.argv.slice(2)) {
   }
 }
 
-if (process.argv[1] && path.resolve(process.argv[1]) === SCRIPT_PATH) {
+if (isDirectExecution(import.meta.url)) {
   process.exitCode = await main();
 }

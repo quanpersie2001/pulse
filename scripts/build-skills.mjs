@@ -32,7 +32,7 @@ const TEXT_EXTENSIONS = new Set([
   ".yaml",
   ".yml",
 ]);
-const TEXT_FILENAMES = new Set(["SKILL.md", "pulse-work"]);
+const TEXT_FILENAMES = new Set(["SKILL.md"]);
 const EXCLUDED_DIRS = new Set(["tests"]);
 
 function readJson(filePath) {
