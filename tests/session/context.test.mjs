@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 
-import { applyRepo } from "../../skills/workflow/scripts/onboard_pulse.mjs";
+import { applyRepo } from "../../skills/workflow/scripts/onboard/apply.mjs";
 import {
   buildPulseSessionStartContext,
   collectPulseSessionStartNotes,

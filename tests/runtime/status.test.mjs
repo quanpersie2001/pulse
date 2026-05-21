@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 
-import { applyRepo } from "../../skills/workflow/scripts/onboard_pulse.mjs";
+import { applyRepo } from "../../skills/workflow/scripts/onboard/apply.mjs";
 import { REPO_ROOT } from "../helpers/fixtures.mjs";
 import { importModuleInNode } from "../helpers/import-module.mjs";
 import { cleanupTempRepo, mkTempRepo } from "../helpers/temp-repo.mjs";

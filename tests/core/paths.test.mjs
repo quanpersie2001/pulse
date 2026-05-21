@@ -11,7 +11,7 @@ import {
   resolveRepoRoot,
   resolveSafeRepoRelativePath,
 } from "../../skills/workflow/scripts/core/paths.mjs";
-import { resolveRepoRoot as resolveOnboardRepoRoot } from "../../skills/workflow/scripts/onboard_pulse.mjs";
+import { resolveRepoRoot as resolveOnboardRepoRoot } from "../../skills/workflow/scripts/onboard/package.mjs";
 import { cleanupTempRepo, initGitRepo, mkTempRepo } from "../helpers/temp-repo.mjs";
 
 test("resolveRepoRoot respects explicitRoot over PULSE_REPO_ROOT and cwd", () => {
