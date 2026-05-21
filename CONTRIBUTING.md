@@ -9,12 +9,11 @@ These paths matter most:
 
 - [`skills/workflow/`](skills/workflow) is the canonical source of public workflow behavior
 - [`skills/workflow/references/`](skills/workflow/references) owns command-level behavior docs
-- `{{scripts_path}}/` owns canonical runtime CLI logic
+- [`skills/workflow/scripts/`](skills/workflow/scripts) owns canonical runtime CLI logic
 - [`.codex-plugin/plugin.json`](.codex-plugin/plugin.json) is the Codex package manifest
 - [`.claude-plugin/plugin.json`](.claude-plugin/plugin.json) is the Claude plugin manifest
 - [`.mcp.json`](.mcp.json) is the packaged MCP manifest for shared runtime servers
 - [`.agents/plugins/marketplace.json`](.agents/plugins/marketplace.json) exposes the packaged plugin to Codex
-- [`scripts/sync-skills.sh`](scripts/sync-skills.sh) mirrors the canonical `skills/workflow/` workflow-router surface and packaged standalone utility skills for other runtimes
 - [`AGENTS.md`](AGENTS.md), [`README.md`](README.md), and this file are contract docs and must stay consistent
 
 ## Plugin Packaging Overview
@@ -41,7 +40,7 @@ skills/workflow/
 └── scripts/
 ```
 
-Runtime metadata operations are exposed via `pulse-work`, with canonical state in:
+Runtime metadata operations are exposed via the installed `pulse-work` CLI when the active runtime explicitly exposes it. Canonical state lives in:
 
 - `.pulse/runtime/`
 - `.pulse/workgraph/items.jsonl`
@@ -131,8 +130,9 @@ Minimum verification:
 
 For runtime changes, verify:
 
-- `pulse:workflow onboard` initializes expected `.pulse/runtime` and `.pulse/workgraph` layout.
-- `node {{scripts_path}}/pulse_status.mjs --json` returns valid scout state.
+- `pulse:workflow use` initializes expected `.pulse/runtime` and `.pulse/workgraph` layout when needed and restores session context.
+- `pulse:workflow onboard` still performs explicit bootstrap/remediation correctly when invoked directly.
+- `pulse-work status --repo-root <repo> --json` returns valid scout state.
 - `pulse-work` commands produce expected JSON/human outputs.
 
 ## Documentation Rules
@@ -147,5 +147,4 @@ Run:
 
 ```bash
 bash scripts/check-markdown-links.sh
-bash scripts/sync-skills.sh --dry-run
 ```

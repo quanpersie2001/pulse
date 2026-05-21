@@ -29,14 +29,15 @@ import {
   writeViews,
 } from "./workgraph_store.mjs";
 import { buildSessionLoad } from "./pulse_session_load.mjs";
+import { isDirectExecution } from "./cli_execution.mjs";
 
 const SCRIPT_PATH = fileURLToPath(import.meta.url);
-const COMMAND_SCRIPT_DIR = path.dirname(SCRIPT_PATH);
-const PULSE_SKILL_DIR = path.resolve(COMMAND_SCRIPT_DIR, "..");
-const REPO_ROOT = path.resolve(PULSE_SKILL_DIR, "..", "..");
-const HARNESS_BACKLOG_TEMPLATE_PATH = path.join(REPO_ROOT, "skills", "workflow", "templates", "HARNESS_BACKLOG.md");
-const PLUGIN_MANIFEST_PATH = path.join(REPO_ROOT, ".codex-plugin", "plugin.json");
-const AGENTS_TEMPLATE_PATH = path.join(REPO_ROOT, "AGENTS.template.md");
+const SCRIPT_DIR = path.dirname(SCRIPT_PATH);
+const WORKFLOW_SKILL_DIR = path.resolve(SCRIPT_DIR, "..");
+const PLUGIN_ROOT = path.resolve(WORKFLOW_SKILL_DIR, "..", "..");
+const HARNESS_BACKLOG_TEMPLATE_PATH = path.join(WORKFLOW_SKILL_DIR, "templates", "HARNESS_BACKLOG.md");
+const PLUGIN_MANIFEST_PATH = path.join(PLUGIN_ROOT, ".codex-plugin", "plugin.json");
+const AGENTS_TEMPLATE_PATH = path.join(PLUGIN_ROOT, "AGENTS.template.md");
 const ONBOARDING_SCHEMA_VERSION = "1.0";
 const WORKFLOW_COMMAND = "use";
 const WORKFLOW_SETUP_STEP = "onboarding";
@@ -719,7 +720,7 @@ export function checkRepo(repoRoot, options = {}) {
     tools: {
       git: { available: true },
       node: runtime,
-      pulse_runtime_helper: { available: true, command: "node {{scripts_path}}/pulse_status.mjs --repo-root <repo> --json" },
+      pulse_runtime_helper: { available: true, command: "pulse-work status --repo-root <repo> --json" },
     },
     resumeOwner: options.resumeOwner,
   });
@@ -815,7 +816,7 @@ export function applyRepo(repoRoot, _allowCompactPromptReplace, options = {}) {
     tools: {
       git: { available: true },
       node: runtime,
-      pulse_runtime_helper: { available: true, command: "node {{scripts_path}}/pulse_status.mjs --repo-root <repo> --json" },
+      pulse_runtime_helper: { available: true, command: "pulse-work status --repo-root <repo> --json" },
     },
     resumeOwner: options.resumeOwner,
   });
@@ -904,7 +905,7 @@ export function applyRepo(repoRoot, _allowCompactPromptReplace, options = {}) {
 // Compact prompt draft, intentionally not installed by onboarding:
 // MANDATORY: Pulse context compaction recovery.
 // STOP. Before doing anything else: read AGENTS.md completely.
-// If available, run the plugin-owned `pulse_status.mjs --repo-root <repo> --json` helper for a quick Pulse status snapshot.
+// If `pulse-work` is available on PATH, run `pulse-work status --repo-root <repo> --json` for a quick Pulse status snapshot.
 // Read .pulse/runtime/tooling-status.json, .pulse/runtime/state.json, and .pulse/runtime/STATE.md if they exist.
 // Read .pulse/runtime/handoffs/manifest.json and any active owner handoff you are resuming.
 // Re-open the active work content before more planning or edits.
@@ -1041,6 +1042,6 @@ export function main(argv = process.argv.slice(2)) {
   return payload.status === "FAIL" ? 1 : 0;
 }
 
-if (process.argv[1] && path.resolve(process.argv[1]) === SCRIPT_PATH) {
+if (isDirectExecution(import.meta.url)) {
   process.exitCode = main();
 }

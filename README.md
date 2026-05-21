@@ -77,7 +77,7 @@ Codex reads the marketplace name from [`.agents/plugins/marketplace.json`](.agen
 
 ### After Install
 
-Start with **`pulse:workflow use`** in the target repo to initialize `.pulse/runtime` and `.pulse/workgraph`; canonical runtime helpers run from `{{scripts_path}}`.
+Start with **`pulse:workflow use`** in the target repo to initialize `.pulse/runtime` and `.pulse/workgraph`. Use the installed `pulse-work` runtime CLI for status, readiness, and reservation operations only when your runtime explicitly exposes it.
 
 ## Project Docs
 
@@ -92,7 +92,6 @@ When public docs or `pulse:workflow` router metadata change:
 
 ```bash
 bash scripts/check-markdown-links.sh
-bash scripts/sync-skills.sh --dry-run
 ```
 
 ## Contributing

@@ -8,8 +8,9 @@ This is the shortest concrete example of a standard Pulse v2 run.
 
 ## The Flow
 
-1. `/pulse onboard`
-   - checks runtime readiness and bootstraps `.pulse/runtime` and `.pulse/workgraph`
+1. `/pulse use`
+   - is the normal session-entry command
+   - bootstraps `.pulse/runtime` and `.pulse/workgraph` when needed, then restores current Pulse context
    - confirms whether the repo can run swarm, single-worker, planning-only, or blocked
 
 2. `/pulse explore`
@@ -39,10 +40,10 @@ This is the shortest concrete example of a standard Pulse v2 run.
 
 ## Quick Scout
 
-Before resuming or planning deeper work on an onboarded repo:
+Before resuming or planning deeper work on an onboarded repo, run `pulse-work status --repo-root <repo> --json` when `pulse-work` is available on `PATH`.
 
 ```bash
-node {{scripts_path}}/pulse_status.mjs --json
+pulse-work status --repo-root <repo> --json
 ```
 
 Use the scout output to decide which artifacts to open next.

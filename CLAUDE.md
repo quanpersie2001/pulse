@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What This Repo Is
 
-Pulse is a packaged skill plugin for Claude Code and Codex. Its public workflow surface is a single router skill: `pulse:workflow`. Runtime operations are handled by the `pulse-work` CLI and repo-local Node helpers.
+Pulse is a packaged skill plugin for Claude Code and Codex. Its public workflow surface is a single router skill: `pulse:workflow`. Runtime operations are handled by the installed `pulse-work` runtime CLI and repo-local Node helpers.
 
 ## Repository Layout
 
@@ -13,7 +13,7 @@ Pulse is a packaged skill plugin for Claude Code and Codex. Its public workflow 
 - `.claude-plugin/plugin.json` — Claude plugin manifest
 - `.mcp.json` — packaged MCP manifest for shared runtime servers
 - `.agents/plugins/marketplace.json` — Codex marketplace metadata
-- `scripts/sync-skills.sh` — raw skill mirror helper for agents/Claude compatibility
+- `scripts/check-markdown-links.sh` — markdown link verification helper
 - `AGENTS.md` — operator workflow rules
 - `references/` — upstream/pedagogical material; not part of the shipped plugin contract
 
@@ -23,7 +23,7 @@ Pulse is a packaged skill plugin for Claude Code and Codex. Its public workflow 
 |------|-----|---------|
 | Pulse Router | `pulse:workflow` | User-facing workflow entrypoint |
 | Pulse Runtime CLI | `pulse-work` | Workgraph/runtime metadata mutations |
-| Scout | `node {{scripts_path}}/pulse_status.mjs --json` | Read-only runtime orientation |
+| Scout | `pulse-work status --repo-root <repo> --json` | Read-only runtime orientation |
 | Git | `git` | Version control |
 | Native swarm adapters | — | Claude Code teammates or Codex subagents |
 | GitNexus | `gitnexus` | Optional graph-backed codebase intelligence |
@@ -33,8 +33,10 @@ Pulse is a packaged skill plugin for Claude Code and Codex. Its public workflow 
 The core workflow is a gated, linear pipeline:
 
 ```
-pulse:workflow onboard → pulse:workflow explore → pulse:workflow plan → pulse:workflow validate → pulse:workflow swarm or pulse:workflow execute → pulse:workflow review → pulse:workflow compound
+pulse:workflow use → pulse:workflow explore → pulse:workflow plan → pulse:workflow validate → pulse:workflow swarm or pulse:workflow execute → pulse:workflow review → pulse:workflow compound
 ```
+
+`pulse:workflow use` is the normal session-entry command. It runs onboarding/bootstrap behavior when needed, then restores current Pulse context before downstream workflow work.
 
 Four human gates control progression:
 - **GATE 1** (after explore): Approve locked decision context.
@@ -77,7 +79,7 @@ Pulse has automated coverage for onboarding/runtime control-plane behavior in `s
 ```bash
 git status
 # edit files
-node {{scripts_path}}/pulse_status.mjs --json
+pulse-work status --repo-root <repo> --json
 pulse-work ready --json
 git add <files>
 git commit -m "..."
@@ -87,7 +89,7 @@ git push
 <!-- gitnexus:start -->
 # GitNexus — Code Intelligence
 
-This project is indexed by GitNexus as **pulse** (3444 symbols, 5007 relationships, 206 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
+This project is indexed by GitNexus as **pulse** (3380 symbols, 4924 relationships, 204 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
 
 > If any GitNexus tool warns the index is stale, run `npx gitnexus analyze` in terminal first.
 

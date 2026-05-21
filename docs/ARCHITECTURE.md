@@ -4,13 +4,13 @@ This document explains Pulse v2 as a single public router skill with a separate 
 
 ## In One Sentence
 
-Pulse is a repo-local workflow system where `/pulse` defines user-facing flow, `pulse-work` manages canonical runtime metadata, and approval gates prevent unsafe execution.
+Pulse is a repo-local workflow system where `/pulse` defines user-facing flow, `pulse-work` manages canonical metadata, and approval gates prevent unsafe execution.
 
 ## Mental Model
 
 Pulse has four cooperating layers:
 
-1. **Router contract**: `skills/pulse/SKILL.md` and `skills/pulse/commands/*`.
+1. **Router contract**: `skills/workflow/SKILL.md` and `skills/workflow/references/*`.
 2. **Runtime control plane**: `.pulse/runtime/` for state, handoffs, and reservations.
 3. **Workgraph plane**: `.pulse/workgraph/items.jsonl` plus derived views.
 4. **Work content plane**: `works/` artifacts and verification evidence.
@@ -19,7 +19,7 @@ Pulse has four cooperating layers:
 
 ```mermaid
 flowchart TD
-    OB["/pulse onboard"] --> EX["/pulse explore"]
+    US["/pulse use"] --> EX["/pulse explore"]
     EX -->|Gate 1| PL["/pulse plan"]
     PL -->|Gate 2| VA["/pulse validate"]
     VA -->|Gate 3| SW["/pulse swarm"]
@@ -33,7 +33,8 @@ flowchart TD
 
 | Command | Responsibility |
 | --- | --- |
-| `/pulse onboard` | Bootstrap runtime and readiness |
+| `/pulse use` | Normal session entry; bootstraps readiness when needed and restores context |
+| `/pulse onboard` | Explicit bootstrap/remediation entrypoint |
 | `/pulse explore` | Lock decisions and context |
 | `/pulse brainstorm` | Shape options before planning |
 | `/pulse plan` | Select shape and current-work contract |
@@ -51,17 +52,17 @@ flowchart TD
 ### User-facing routing
 
 - `/pulse ...` is the only public workflow surface.
-- Router behavior is declared in `skills/pulse/SKILL.md`.
+- Router behavior is declared in `skills/workflow/SKILL.md`.
 
 ### Runtime mutation surface
 
-- `pulse-work ...` mutates workgraph metadata.
+- `pulse-work ...` mutates workgraph metadata when the active runtime explicitly exposes the installed CLI.
 - Canonical metadata source: `.pulse/workgraph/items.jsonl`.
 
 ### State and scout
 
 - Canonical runtime state: `.pulse/runtime/*`.
-- Scout entrypoint: `node {{scripts_path}}/pulse_status.mjs --json`.
+- Scout entrypoint: `pulse-work status --repo-root <repo> --json`.
 
 ## Canonical Planes and Key Files
 

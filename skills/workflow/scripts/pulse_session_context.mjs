@@ -39,10 +39,10 @@ export async function readHookPayload(stream = process.stdin) {
 
 function readPulseSkillText() {
   const candidates = [
+    path.resolve(SCRIPT_DIR, "..", "SKILL.md"),
     process.env.CLAUDE_PLUGIN_ROOT
-      ? path.join(process.env.CLAUDE_PLUGIN_ROOT, "skills", "pulse", "SKILL.md")
+      ? path.join(process.env.CLAUDE_PLUGIN_ROOT, "skills", "workflow", "SKILL.md")
       : "",
-    path.resolve(SCRIPT_DIR, "..", "..", "SKILL.md"),
   ].filter(Boolean);
 
   for (const candidate of candidates) {
@@ -145,7 +145,7 @@ export async function collectPulseSessionStartNotes(repoRoot, options = {}) {
       syncPulseRuntimeArtifacts(repoRoot);
     }
     notes.push(
-      "Pulse is installed for this repo. Read AGENTS.md, then run pulse:workflow use or the plugin-owned pulse_status.mjs helper before substantive work.",
+      "Pulse is installed for this repo. Read AGENTS.md, then run pulse:workflow use before substantive work. If `pulse-work` is available on PATH, you can run `pulse-work status --repo-root <repo> --json` afterward for a scout snapshot.",
     );
 
     try {
@@ -153,7 +153,7 @@ export async function collectPulseSessionStartNotes(repoRoot, options = {}) {
       notes.push(buildPulseSessionPostureSummary(status));
     } catch {
       notes.push(
-        "Pulse session posture could not be loaded from runtime artifacts; run the plugin-owned pulse_status.mjs helper to refresh and inspect current handoff/next-step context.",
+        "Pulse session posture could not be loaded from runtime artifacts; rerun pulse:workflow use to re-establish session context. If `pulse-work` is available on PATH, run `pulse-work status --repo-root <repo> --json` afterward to inspect current handoff/next-step context.",
       );
     }
   } else {
