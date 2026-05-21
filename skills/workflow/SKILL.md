@@ -1,5 +1,5 @@
 ---
-name: pulse:workflow
+name: workflow
 description: >-
   Single public Pulse router. Use when the user wants to run a Pulse workflow
   through `pulse:workflow <command>`.

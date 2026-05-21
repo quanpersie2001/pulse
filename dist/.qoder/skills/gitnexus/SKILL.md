@@ -30,7 +30,7 @@ Do not start by guessing CLI subcommands or assuming GitNexus is configured in t
 Run:
 
 ```bash
-node .qoder/skills/pulse:workflow/scripts/pulse.mjs status --repo-root <repo> --json
+node .qoder/skills/workflow/scripts/pulse.mjs status --repo-root <repo> --json
 ```
 
 Use the scout output as the source of truth for this repo/session:

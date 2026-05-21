@@ -7,7 +7,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { buildSkills } from "./build-skills.mjs";
-import { getPulseCommand, PROVIDERS } from "./lib/providers.mjs";
+import { getPulseCommand, PROVIDERS, WORKFLOW_SKILL_NAME } from "./lib/providers.mjs";
 import {
   assertNoUnresolvedRuntimePlaceholders,
   findUnresolvedRuntimePlaceholders,
@@ -43,6 +43,14 @@ test("Claude and Codex plugin manifests ship the same skills", () => {
   assert.deepEqual(codexSkills, claudeSkills);
 });
 
+test("providers render workflow skill under its normal skill name", () => {
+  assert.equal(WORKFLOW_SKILL_NAME, "workflow");
+  for (const provider of PROVIDERS) {
+    assert.deepEqual(Object.keys(provider), ["name", "configDir", "skillsRoot"], provider.name);
+    assert.equal(getPulseCommand(provider).includes("/skills/workflow/scripts/pulse.mjs"), true, provider.name);
+  }
+});
+
 test("buildSkills renders provider skill outputs without runtime placeholders", () => {
   assert.equal(fs.existsSync(path.join(REPO_ROOT, "scripts", "sync-skills.sh")), false);
 
@@ -53,7 +61,7 @@ test("buildSkills renders provider skill outputs without runtime placeholders", 
       DIST_DIR,
       provider.configDir,
       "skills",
-      provider.workflowSkillDir,
+      WORKFLOW_SKILL_NAME,
       "scripts",
       "pulse.mjs",
     );
@@ -114,9 +122,9 @@ test("representative rendered docs contain concrete runtime commands", () => {
   for (const providerName of ["claude-code", "agents", "codex"]) {
     const provider = PROVIDERS.find((entry) => entry.name === providerName);
     const pulseCommand = getPulseCommand(provider);
-    const routerOverview = path.join(DIST_DIR, provider.configDir, "skills", provider.workflowSkillDir, "SKILL.md");
+    const routerOverview = path.join(DIST_DIR, provider.configDir, "skills", WORKFLOW_SKILL_NAME, "SKILL.md");
     const commandDocs = [
-      path.join(DIST_DIR, provider.configDir, "skills", provider.workflowSkillDir, "references", "execute", "command.md"),
+      path.join(DIST_DIR, provider.configDir, "skills", WORKFLOW_SKILL_NAME, "references", "execute", "command.md"),
       path.join(DIST_DIR, provider.configDir, "skills", "gitnexus", "SKILL.md"),
     ];
 
