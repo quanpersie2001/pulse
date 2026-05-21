@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 
 import fs from "node:fs";
-import path from "node:path";
+
+import { ensureParent, readJsonIfExists, readTextIfExists } from "./core/fs.mjs";
 import { getPulsePaths, resolveRepoRoot as resolveRepoRootFromPaths } from "./pulse_paths.mjs";
 
 export const STATE_SCHEMA_VERSION = "1.0";
@@ -10,24 +11,8 @@ function utcNow() {
   return new Date().toISOString();
 }
 
-function ensureParent(filePath) {
-  fs.mkdirSync(path.dirname(filePath), { recursive: true });
-}
-
-export function fileTextIfExists(filePath) {
-  return fs.existsSync(filePath) ? fs.readFileSync(filePath, "utf8") : "";
-}
-
-export function readJsonIfExists(filePath) {
-  if (!fs.existsSync(filePath)) {
-    return null;
-  }
-  try {
-    return JSON.parse(fs.readFileSync(filePath, "utf8"));
-  } catch {
-    return null;
-  }
-}
+export const fileTextIfExists = readTextIfExists;
+export { readJsonIfExists };
 
 export function resolveRepoRoot(explicitRoot, startFrom = process.cwd(), env = process.env) {
   return resolveRepoRootFromPaths({

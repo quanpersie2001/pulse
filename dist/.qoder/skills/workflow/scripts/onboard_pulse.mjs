@@ -11,6 +11,18 @@
 
 import fs from "node:fs";
 import path from "node:path";
+
+import { assertBareBooleanOptions, assertKnownOptions, parseCliArgs as parseSharedCliArgs } from "./cli/args.mjs";
+import { writeJson } from "./cli/io.mjs";
+import {
+  copyPathIfExists,
+  ensureDirectory,
+  ensureParent,
+  listDirectoryEntries,
+  movePathIfExists,
+  readJsonIfExists,
+  readTextIfExists,
+} from "./core/fs.mjs";
 import {
   getPluginRoot,
   getPulseEntrypointPath,
@@ -926,57 +938,12 @@ function readTemplate() {
   return `${fs.readFileSync(AGENTS_TEMPLATE_PATH, "utf8").replace(/\s*$/, "")}\n`;
 }
 
-function readTextIfExists(filePath) {
-  return fs.existsSync(filePath) ? fs.readFileSync(filePath, "utf8") : "";
-}
-
-function readJsonIfExists(filePath) {
-  if (!fs.existsSync(filePath)) {
-    return null;
-  }
-  try {
-    return JSON.parse(fs.readFileSync(filePath, "utf8"));
-  } catch {
-    return null;
-  }
-}
-
-function ensureParent(filePath) {
-  fs.mkdirSync(path.dirname(filePath), { recursive: true });
-}
-
-function ensureDirectory(dirPath) {
-  fs.mkdirSync(dirPath, { recursive: true });
-}
-
-function movePathIfExists(sourcePath, targetPath) {
-  if (!fs.existsSync(sourcePath)) {
-    return false;
-  }
-  ensureParent(targetPath);
-  fs.renameSync(sourcePath, targetPath);
-  return true;
-}
-
-function listDirectoryEntries(dirPath) {
-  return fs.existsSync(dirPath) ? fs.readdirSync(dirPath) : [];
-}
-
 function isBackupEntry(name) {
   return /^backup-/.test(name);
 }
 
 function backupStamp() {
   return utcNow().replace(/[:.]/g, "-");
-}
-
-function copyPathIfExists(sourcePath, targetPath) {
-  if (!fs.existsSync(sourcePath)) {
-    return false;
-  }
-  ensureParent(targetPath);
-  fs.cpSync(sourcePath, targetPath, { recursive: true, force: true });
-  return true;
 }
 
 /**
@@ -987,50 +954,29 @@ function copyPathIfExists(sourcePath, targetPath) {
  * Parse onboard CLI arguments.
  */
 function parseCliArgs(argv) {
-  const args = {
-    repoRoot: undefined,
-    apply: false,
-    resumeOwner: "",
-  };
-
-  for (let index = 0; index < argv.length; index += 1) {
-    const arg = argv[index];
-    if (arg === "--repo-root") {
-      args.repoRoot = argv[index + 1];
-      index += 1;
-      continue;
-    }
-    if (arg.startsWith("--repo-root=")) {
-      args.repoRoot = arg.slice("--repo-root=".length);
-      continue;
-    }
-    if (arg === "--apply") {
-      args.apply = true;
-      continue;
-    }
-    if (arg === "--resume-owner") {
-      args.resumeOwner = argv[index + 1] || "";
-      index += 1;
-      continue;
-    }
-    if (arg.startsWith("--resume-owner=")) {
-      args.resumeOwner = arg.slice("--resume-owner=".length);
-      continue;
-    }
-    if (arg === "--help" || arg === "-h") {
-      process.stdout.write(
-        [
-          "Usage: onboard_pulse.mjs [--repo-root <path>] [--apply] [--resume-owner <owner_id>]",
-          "",
-          "Checks or applies pulse:workflow use readiness and session loading.",
-        ].join("\n"),
-      );
-      process.exit(0);
-    }
-    throw new Error(`Unknown argument: ${arg}`);
+  if (argv.includes("--help") || argv.includes("-h")) {
+    process.stdout.write(
+      [
+        "Usage: onboard_pulse.mjs [--repo-root <path>] [--apply] [--resume-owner <owner_id>]",
+        "",
+        "Checks or applies pulse:workflow use readiness and session loading.",
+      ].join("\n"),
+    );
+    process.exit(0);
   }
 
-  return args;
+  const parsed = parseSharedCliArgs(argv);
+  assertKnownOptions(parsed, ["repo-root", "apply", "resume-owner"]);
+  assertBareBooleanOptions(parsed, ["apply"]);
+  if (parsed.positionals.length > 0) {
+    throw new Error(`Unknown argument: ${parsed.positionals[0]}`);
+  }
+
+  return {
+    repoRoot: parsed.string("repo-root", undefined),
+    apply: parsed.has("apply"),
+    resumeOwner: parsed.string("resume-owner"),
+  };
 }
 
 /**
@@ -1043,7 +989,7 @@ export function main(argv = process.argv.slice(2)) {
     ? applyRepo(repoRoot, false, { resumeOwner: args.resumeOwner })
     : checkRepo(repoRoot, { resumeOwner: args.resumeOwner });
 
-  process.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
+  writeJson(payload);
   return payload.status === "FAIL" ? 1 : 0;
 }
 

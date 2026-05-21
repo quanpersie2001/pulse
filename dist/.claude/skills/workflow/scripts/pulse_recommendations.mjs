@@ -1,11 +1,5 @@
-function firstNonEmptyString(...values) {
-  for (const value of values) {
-    if (typeof value === "string" && value.trim()) {
-      return value.trim();
-    }
-  }
-  return "";
-}
+import { normalizeWorkflowCommand } from "./core/commands.mjs";
+import { firstNonEmptyString } from "./core/strings.mjs";
 
 export function normalizeNextCommandSurface(value) {
   const normalized = firstNonEmptyString(value);
@@ -13,29 +7,13 @@ export function normalizeNextCommandSurface(value) {
     return "";
   }
 
-  const validCommands = new Set([
-    "use",
-    "explore",
-    "brainstorm",
-    "plan",
-    "validate",
-    "swarm",
-    "execute",
-    "review",
-    "compound",
-  ]);
-
-  if (normalized.startsWith("pulse:workflow ")) {
-    const command = normalized.slice("pulse:workflow ".length).trim();
-    return validCommands.has(command) ? normalized : "";
+  const workflowCommand = normalizeWorkflowCommand(normalized);
+  if (workflowCommand) {
+    return workflowCommand;
   }
 
   if (normalized.startsWith("pulse:")) {
     return "";
-  }
-
-  if (validCommands.has(normalized)) {
-    return `pulse:workflow ${normalized}`;
   }
 
   return normalized;

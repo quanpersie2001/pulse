@@ -13,51 +13,37 @@ import { syncPulseRuntimeArtifacts } from "./pulse_runtime_sync.mjs";
 import { readPulseStatus } from "./pulse_status_model.mjs";
 import { renderPulseStatus } from "./pulse_status_render.mjs";
 import { resolveRepoRoot } from "./pulse_paths.mjs";
+import { assertBareBooleanOptions, assertKnownOptions, parseCliArgs as parseSharedCliArgs } from "./cli/args.mjs";
+import { writePayload } from "./cli/io.mjs";
 import { isDirectExecution } from "./cli_execution.mjs";
 
 function parseCliArgs(argv) {
-  const args = {
-    repoRoot: undefined,
-    json: false,
-    command: "status",
-    sync: false,
-  };
-
-  for (let index = 0; index < argv.length; index += 1) {
-    const arg = argv[index];
-    if (arg === "--repo-root") {
-      args.repoRoot = argv[index + 1];
-      index += 1;
-      continue;
-    }
-    if (arg.startsWith("--repo-root=")) {
-      args.repoRoot = arg.slice("--repo-root=".length);
-      continue;
-    }
-    if (arg === "--json") {
-      args.json = true;
-      continue;
-    }
-    if (arg === "--sync") {
-      args.sync = true;
-      continue;
-    }
-    if (arg === "--help" || arg === "-h") {
-      process.stdout.write(
-        [
-          "Usage:",
-          "  pulse_status.mjs [--repo-root <path>] [--json] [--sync]",
-          "",
-          "Shows a non-mutating Pulse status snapshot.",
-          "Use --sync to refresh persisted runtime artifacts before rendering status.",
-        ].join("\n"),
-      );
-      process.exit(0);
-    }
-    throw new Error(`Unknown argument: ${arg}`);
+  if (argv.includes("--help") || argv.includes("-h")) {
+    process.stdout.write(
+      [
+        "Usage:",
+        "  pulse_status.mjs [--repo-root <path>] [--json] [--sync]",
+        "",
+        "Shows a non-mutating Pulse status snapshot.",
+        "Use --sync to refresh persisted runtime artifacts before rendering status.",
+      ].join("\n"),
+    );
+    process.exit(0);
   }
 
-  return args;
+  const parsed = parseSharedCliArgs(argv);
+  assertKnownOptions(parsed, ["repo-root", "json", "sync"]);
+  assertBareBooleanOptions(parsed, ["json", "sync"]);
+  if (parsed.positionals.length > 0) {
+    throw new Error(`Unknown argument: ${parsed.positionals[0]}`);
+  }
+
+  return {
+    repoRoot: parsed.string("repo-root", undefined),
+    json: parsed.has("json"),
+    command: "status",
+    sync: parsed.has("sync"),
+  };
 }
 
 export async function main(argv = process.argv.slice(2)) {
@@ -69,9 +55,7 @@ export async function main(argv = process.argv.slice(2)) {
   }
 
   const status = await readPulseStatus(repoRoot);
-  process.stdout.write(
-    args.json ? `${JSON.stringify(status, null, 2)}\n` : `${renderPulseStatus(status)}\n`,
-  );
+  writePayload(status, { json: args.json, render: renderPulseStatus });
   return 0;
 }
 

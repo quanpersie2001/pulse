@@ -10,6 +10,8 @@
 import fs from "node:fs";
 import path from "node:path";
 
+import { ensureParent } from "./core/fs.mjs";
+import { normalizeSlashPath, stripLeadingDotSlash } from "./core/strings.mjs";
 import { getPulsePaths } from "./pulse_paths.mjs";
 
 export const RESERVATION_SCHEMA_VERSION = "1.0";
@@ -24,14 +26,6 @@ function utcNow() {
 
 function sleepMs(ms) {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
-}
-
-function normalizeSlashPath(value) {
-  return String(value || "").replace(/\\/g, "/");
-}
-
-function stripLeadingDotSlash(value) {
-  return normalizeSlashPath(value).replace(/^\.\/+/, "");
 }
 
 function hasGlobMagic(value) {
@@ -135,10 +129,6 @@ export function reservationPatternsOverlap(leftPattern, rightPattern) {
   }
 
   return leftPrefix.startsWith(rightPrefix) || rightPrefix.startsWith(leftPrefix);
-}
-
-function ensureParent(filePath) {
-  fs.mkdirSync(path.dirname(filePath), { recursive: true });
 }
 
 function buildEmptyReservationStore() {

@@ -11,29 +11,14 @@
 
 import fs from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 
-import { resolveRepoRoot } from "./pulse_paths.mjs";
-
-function firstNonEmptyString(...values) {
-  for (const value of values) {
-    if (typeof value === "string" && value.trim()) {
-      return value.trim();
-    }
-  }
-  return "";
-}
-
-function readJsonIfExistsSafe(filePath) {
-  if (!fs.existsSync(filePath)) {
-    return null;
-  }
-  try {
-    return JSON.parse(fs.readFileSync(filePath, "utf8"));
-  } catch {
-    return null;
-  }
-}
+import { assertBareBooleanOptions, assertKnownOptions, parseCliArgs as parseSharedCliArgs } from "./cli/args.mjs";
+import { writeJson, writeText } from "./cli/io.mjs";
+import { isDirectExecution } from "./cli_execution.mjs";
+import { normalizeWorkflowCommand } from "./core/commands.mjs";
+import { readJsonIfExists } from "./core/fs.mjs";
+import { resolveRepoRoot, resolveSafeRepoRelativePath } from "./core/paths.mjs";
+import { firstNonEmptyString, uniqueStrings } from "./core/strings.mjs";
 
 function parseJsonSafe(text) {
   try {
@@ -41,69 +26,6 @@ function parseJsonSafe(text) {
   } catch {
     return null;
   }
-}
-
-function normalizeWorkflowCommand(value) {
-  const normalized = firstNonEmptyString(value);
-  if (!normalized) {
-    return "";
-  }
-
-  const validCommands = new Set([
-    "use",
-    "explore",
-    "brainstorm",
-    "plan",
-    "validate",
-    "swarm",
-    "execute",
-    "review",
-    "compound",
-  ]);
-
-  if (normalized.startsWith("pulse:workflow ")) {
-    const command = normalized.slice("pulse:workflow ".length).trim();
-    return validCommands.has(command) ? normalized : "";
-  }
-  if (normalized.startsWith("pulse:")) {
-    return "";
-  }
-  return validCommands.has(normalized) ? `pulse:workflow ${normalized}` : "";
-}
-
-function isSafeSessionRelativePath(relativePath) {
-  const candidate = String(relativePath || "").replace(/\\/g, "/").trim();
-  if (!candidate || candidate.startsWith("/") || candidate.includes("..") || candidate.includes("%2e%2e") || candidate.includes("%2E%2E")) {
-    return false;
-  }
-  const normalized = path.posix.normalize(candidate);
-  if (normalized !== candidate) {
-    return false;
-  }
-  return (
-    normalized === "AGENTS.md" ||
-    normalized.startsWith(".pulse/runtime/handoffs/") ||
-    normalized.startsWith(".pulse/memory/") ||
-    normalized.startsWith("works/") ||
-    normalized.startsWith("docs/")
-  );
-}
-
-function resolveSafeSessionPath(repoRoot, relativePath) {
-  const candidate = String(relativePath || "").replace(/\\/g, "/").trim();
-  if (!isSafeSessionRelativePath(candidate)) {
-    return null;
-  }
-  const absolute = path.resolve(repoRoot, ...candidate.split("/"));
-  const root = path.resolve(repoRoot);
-  if (absolute !== root && !absolute.startsWith(`${root}${path.sep}`)) {
-    return null;
-  }
-  return { relative: candidate, absolute };
-}
-
-function uniqueStrings(values) {
-  return [...new Set((values || []).filter((value) => typeof value === "string" && value.trim()).map((value) => value.trim()))];
 }
 
 function readWorkgraphItemsSafe(repoRoot) {
@@ -174,7 +96,7 @@ function validateSessionFilePointers(repoRoot, paths) {
   const rejected = [];
 
   for (const relativePath of uniqueStrings(paths)) {
-    const resolved = resolveSafeSessionPath(repoRoot, relativePath);
+    const resolved = resolveSafeRepoRelativePath(repoRoot, relativePath);
     if (!resolved) {
       rejected.push(relativePath);
       continue;
@@ -203,13 +125,11 @@ function mapResumeOptions(activeHandoffs) {
   }));
 }
 
-const SCRIPT_PATH = fileURLToPath(import.meta.url);
-
 export function buildSessionLoad(repoRoot, options = {}) {
-  const state = readJsonIfExistsSafe(path.join(repoRoot, ".pulse", "runtime", "state.json")) || {};
-  const toolingStatus = readJsonIfExistsSafe(path.join(repoRoot, ".pulse", "runtime", "tooling-status.json")) || {};
-  const handoffManifest = readJsonIfExistsSafe(path.join(repoRoot, ".pulse", "runtime", "handoffs", "manifest.json")) || {};
-  const reservations = readJsonIfExistsSafe(path.join(repoRoot, ".pulse", "runtime", "reservations.json")) || {};
+  const state = readJsonIfExists(path.join(repoRoot, ".pulse", "runtime", "state.json")) || {};
+  const toolingStatus = readJsonIfExists(path.join(repoRoot, ".pulse", "runtime", "tooling-status.json")) || {};
+  const handoffManifest = readJsonIfExists(path.join(repoRoot, ".pulse", "runtime", "handoffs", "manifest.json")) || {};
+  const reservations = readJsonIfExists(path.join(repoRoot, ".pulse", "runtime", "reservations.json")) || {};
 
   const activeHandoffs = Array.isArray(handoffManifest.active) ? handoffManifest.active : [];
   const activeReservations = Array.isArray(reservations.reservations)
@@ -224,9 +144,9 @@ export function buildSessionLoad(repoRoot, options = {}) {
       : null;
   const requiresSelection = activeHandoffs.length > 1 && !selectedEntry;
   const selectedHandoffPath = selectedEntry?.path || "";
-  const selectedHandoffResolved = selectedHandoffPath ? resolveSafeSessionPath(repoRoot, selectedHandoffPath) : null;
+  const selectedHandoffResolved = selectedHandoffPath ? resolveSafeRepoRelativePath(repoRoot, selectedHandoffPath) : null;
   const selectedHandoff = selectedHandoffResolved && fs.existsSync(selectedHandoffResolved.absolute)
-    ? readJsonIfExistsSafe(selectedHandoffResolved.absolute)
+    ? readJsonIfExists(selectedHandoffResolved.absolute)
     : null;
 
   const activeContext = {
@@ -330,50 +250,29 @@ export function buildSessionLoad(repoRoot, options = {}) {
 }
 
 function parseCliArgs(argv) {
-  const args = {
-    repoRoot: undefined,
-    resumeOwner: "",
-    json: false,
-  };
-
-  for (let index = 0; index < argv.length; index += 1) {
-    const arg = argv[index];
-    if (arg === "--repo-root") {
-      args.repoRoot = argv[index + 1];
-      index += 1;
-      continue;
-    }
-    if (arg.startsWith("--repo-root=")) {
-      args.repoRoot = arg.slice("--repo-root=".length);
-      continue;
-    }
-    if (arg === "--resume-owner") {
-      args.resumeOwner = argv[index + 1] || "";
-      index += 1;
-      continue;
-    }
-    if (arg.startsWith("--resume-owner=")) {
-      args.resumeOwner = arg.slice("--resume-owner=".length);
-      continue;
-    }
-    if (arg === "--json") {
-      args.json = true;
-      continue;
-    }
-    if (arg === "--help" || arg === "-h") {
-      process.stdout.write(
-        [
-          "Usage: pulse_session_load.mjs [--repo-root <path>] [--resume-owner <owner_id>] [--json]",
-          "",
-          "Loads Pulse session context from runtime pointers.",
-        ].join("\n"),
-      );
-      process.exit(0);
-    }
-    throw new Error(`Unknown argument: ${arg}`);
+  if (argv.includes("--help") || argv.includes("-h")) {
+    process.stdout.write(
+      [
+        "Usage: pulse_session_load.mjs [--repo-root <path>] [--resume-owner <owner_id>] [--json]",
+        "",
+        "Loads Pulse session context from runtime pointers.",
+      ].join("\n"),
+    );
+    process.exit(0);
   }
 
-  return args;
+  const parsed = parseSharedCliArgs(argv);
+  assertKnownOptions(parsed, ["repo-root", "resume-owner", "json"]);
+  assertBareBooleanOptions(parsed, ["json"]);
+  if (parsed.positionals.length > 0) {
+    throw new Error(`Unknown argument: ${parsed.positionals[0]}`);
+  }
+
+  return {
+    repoRoot: parsed.string("repo-root", undefined),
+    resumeOwner: parsed.string("resume-owner"),
+    json: parsed.has("json"),
+  };
 }
 
 export function main(argv = process.argv.slice(2), env = process.env, cwd = process.cwd()) {
@@ -382,16 +281,14 @@ export function main(argv = process.argv.slice(2), env = process.env, cwd = proc
   const payload = buildSessionLoad(repoRoot, { resumeOwner: args.resumeOwner });
 
   if (args.json) {
-    process.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
+    writeJson(payload);
   } else {
-    process.stdout.write(`${payload.summary}\n`);
-    process.stdout.write(`posture: ${payload.posture}\n`);
-    process.stdout.write(`next_command: ${payload.next_command}\n`);
+    writeText([payload.summary, `posture: ${payload.posture}`, `next_command: ${payload.next_command}`].join("\n"));
   }
 
   return 0;
 }
 
-if (process.argv[1] && path.resolve(process.argv[1]) === SCRIPT_PATH) {
+if (isDirectExecution(import.meta.url)) {
   process.exitCode = main();
 }

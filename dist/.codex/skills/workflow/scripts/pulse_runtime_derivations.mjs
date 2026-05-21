@@ -1,3 +1,4 @@
+import { firstNonEmptyString } from "./core/strings.mjs";
 import {
   inferGateNextAction,
   inferGateNextSkillRecommended,
@@ -8,15 +9,6 @@ export const RUNTIME_SNAPSHOT_SCHEMA_VERSION = "1.0";
 
 function utcNow() {
   return new Date().toISOString();
-}
-
-function firstNonEmptyString(...values) {
-  for (const value of values) {
-    if (typeof value === "string" && value.trim()) {
-      return value.trim();
-    }
-  }
-  return "";
 }
 
 function normalizeFeaturePointer(value) {

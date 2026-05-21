@@ -9,11 +9,10 @@
  * Repo root rule: Uses shared resolver from pulse_paths.mjs.
  */
 
-import fs from "node:fs";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
-
 import { resolveRepoRoot } from "./pulse_paths.mjs";
+import { assertBareBooleanOptions, assertKnownOptions, parseCliArgs as parseSharedCliArgs } from "./cli/args.mjs";
+import { writePayload } from "./cli/io.mjs";
+import { isDirectExecution } from "./cli_execution.mjs";
 import {
   RESERVATION_SCHEMA_VERSION,
   ensureReservationStore,
@@ -43,122 +42,51 @@ export {
 };
 
 function parseArgs(argv) {
-  const args = {
-    command: "",
-    repoRoot: undefined,
-    agent: "",
-    itemId: "",
-    ttlSeconds: null,
-    note: "",
-    paths: [],
-    ids: [],
-    activeOnly: false,
-    json: false,
-    status: "",
-  };
-
-  for (let index = 0; index < argv.length; index += 1) {
-    const arg = argv[index];
-    if (!args.command && !arg.startsWith("--")) {
-      args.command = arg;
-      continue;
-    }
-    if (arg === "--repo-root") {
-      args.repoRoot = argv[index + 1];
-      index += 1;
-      continue;
-    }
-    if (arg.startsWith("--repo-root=")) {
-      args.repoRoot = arg.slice("--repo-root=".length);
-      continue;
-    }
-    if (arg === "--agent") {
-      args.agent = argv[index + 1] || "";
-      index += 1;
-      continue;
-    }
-    if (arg.startsWith("--agent=")) {
-      args.agent = arg.slice("--agent=".length);
-      continue;
-    }
-    if (arg === "--item") {
-      args.itemId = argv[index + 1] || "";
-      index += 1;
-      continue;
-    }
-    if (arg.startsWith("--item=")) {
-      args.itemId = arg.slice("--item=".length);
-      continue;
-    }
-    if (arg === "--ttl") {
-      args.ttlSeconds = Number.parseInt(argv[index + 1] || "", 10);
-      index += 1;
-      continue;
-    }
-    if (arg.startsWith("--ttl=")) {
-      args.ttlSeconds = Number.parseInt(arg.slice("--ttl=".length), 10);
-      continue;
-    }
-    if (arg === "--note") {
-      args.note = argv[index + 1] || "";
-      index += 1;
-      continue;
-    }
-    if (arg.startsWith("--note=")) {
-      args.note = arg.slice("--note=".length);
-      continue;
-    }
-    if (arg === "--path" || arg === "--paths") {
-      args.paths.push(argv[index + 1] || "");
-      index += 1;
-      continue;
-    }
-    if (arg.startsWith("--path=") || arg.startsWith("--paths=")) {
-      args.paths.push(arg.split("=")[1] || "");
-      continue;
-    }
-    if (arg === "--id") {
-      args.ids.push(argv[index + 1] || "");
-      index += 1;
-      continue;
-    }
-    if (arg.startsWith("--id=")) {
-      args.ids.push(arg.slice("--id=".length));
-      continue;
-    }
-    if (arg === "--active-only") {
-      args.activeOnly = true;
-      continue;
-    }
-    if (arg === "--json") {
-      args.json = true;
-      continue;
-    }
-    if (arg === "--status") {
-      args.status = argv[index + 1] || "";
-      index += 1;
-      continue;
-    }
-    if (arg.startsWith("--status=")) {
-      args.status = arg.slice("--status=".length);
-      continue;
-    }
-    if (arg === "--help" || arg === "-h") {
-      process.stdout.write(
-        [
-          "Usage:",
-          "  node pulse_reservations.mjs --repo-root <repo> reserve --agent <name> [--item <id>] --path <glob> [--ttl <seconds>] [--note <text>] [--json]",
-          "  node pulse_reservations.mjs --repo-root <repo> release --agent <name> [--item <id>] [--path <glob>] [--id <reservation-id>] [--json]",
-          "  node pulse_reservations.mjs --repo-root <repo> list [--active-only] [--agent <name>] [--path <glob>] [--status active|released|expired] [--json]",
-          "  node pulse_reservations.mjs --repo-root <repo> sweep [--json]",
-        ].join("\n"),
-      );
-      process.exit(0);
-    }
-    throw new Error(`Unknown argument: ${arg}`);
+  if (argv.includes("--help") || argv.includes("-h")) {
+    process.stdout.write(
+      [
+        "Usage:",
+        "  node pulse_reservations.mjs --repo-root <repo> reserve --agent <name> [--item <id>] --path <glob> [--ttl <seconds>] [--note <text>] [--json]",
+        "  node pulse_reservations.mjs --repo-root <repo> release --agent <name> [--item <id>] [--path <glob>] [--id <reservation-id>] [--json]",
+        "  node pulse_reservations.mjs --repo-root <repo> list [--active-only] [--agent <name>] [--path <glob>] [--status active|released|expired] [--json]",
+        "  node pulse_reservations.mjs --repo-root <repo> sweep [--json]",
+      ].join("\n"),
+    );
+    process.exit(0);
   }
 
-  return args;
+  const parsed = parseSharedCliArgs(argv);
+  assertKnownOptions(parsed, [
+    "repo-root",
+    "agent",
+    "item",
+    "ttl",
+    "note",
+    "path",
+    "paths",
+    "id",
+    "active-only",
+    "json",
+    "status",
+  ]);
+  assertBareBooleanOptions(parsed, ["active-only", "json"]);
+  if (parsed.positionals.length > 1) {
+    throw new Error(`Unknown argument: ${parsed.positionals[1]}`);
+  }
+
+  return {
+    command: parsed.positionals[0] || "",
+    repoRoot: parsed.string("repo-root", undefined),
+    agent: parsed.string("agent"),
+    itemId: parsed.string("item"),
+    ttlSeconds: parsed.has("ttl") ? Number.parseInt(parsed.string("ttl"), 10) : null,
+    note: parsed.string("note"),
+    paths: [...parsed.list("path"), ...parsed.list("paths")],
+    ids: parsed.list("id"),
+    activeOnly: parsed.has("active-only"),
+    json: parsed.has("json"),
+    status: parsed.string("status"),
+  };
 }
 
 function renderText(result) {
@@ -251,28 +179,10 @@ export function main(argv = process.argv.slice(2)) {
       );
   }
 
-  process.stdout.write(args.json ? `${JSON.stringify(result, null, 2)}\n` : `${renderText(result)}\n`);
+  writePayload(result, { json: args.json, render: renderText });
   return 0;
 }
 
-function isDirectExecution() {
-  if (!process.argv[1]) {
-    return false;
-  }
-
-  const argvPath = path.resolve(process.argv[1]);
-  const selfPath = fileURLToPath(import.meta.url);
-  if (argvPath === selfPath) {
-    return true;
-  }
-
-  try {
-    return fs.realpathSync.native(argvPath) === fs.realpathSync.native(selfPath);
-  } catch {
-    return false;
-  }
-}
-
-if (isDirectExecution()) {
+if (isDirectExecution(import.meta.url)) {
   process.exitCode = main();
 }

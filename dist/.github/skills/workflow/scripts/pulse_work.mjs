@@ -39,48 +39,12 @@ import {
 } from "./workgraph_validate.mjs";
 import { buildGraphView, deriveViewState } from "./workgraph_views.mjs";
 import { inspectLock, removeStaleLock } from "./workgraph_lock.mjs";
+import { parseCliArgs as parseArgv } from "./cli/args.mjs";
+import { writePayload } from "./cli/io.mjs";
 import { isDirectExecution } from "./cli_execution.mjs";
 
 function resolveRepoRoot(explicitRoot) {
   return resolveSharedRepoRoot({ explicitRoot });
-}
-
-function parseArgv(argv) {
-  const parsed = {
-    options: new Map(),
-    positionals: [],
-  };
-
-  for (let index = 0; index < argv.length; index += 1) {
-    const token = argv[index];
-    if (!token.startsWith("--")) {
-      parsed.positionals.push(token);
-      continue;
-    }
-
-    const [flagName, inlineValue] = token.slice(2).split("=", 2);
-    let value = inlineValue;
-    if (value === undefined) {
-      const next = argv[index + 1];
-      if (next && !next.startsWith("--")) {
-        value = next;
-        index += 1;
-      } else {
-        value = true;
-      }
-    }
-
-    const current = parsed.options.get(flagName);
-    if (current === undefined) {
-      parsed.options.set(flagName, value);
-    } else if (Array.isArray(current)) {
-      current.push(value);
-    } else {
-      parsed.options.set(flagName, [current, value]);
-    }
-  }
-
-  return parsed;
 }
 
 function takeOption(parsed, name, fallback = undefined) {
@@ -698,7 +662,7 @@ export async function main(argv = process.argv.slice(2)) {
 
   try {
     const result = await dispatchCommand(repoRoot, parsed);
-    process.stdout.write(asJson ? `${JSON.stringify(result, null, 2)}\n` : `${renderHumanSummary(result)}\n`);
+    writePayload(result, { json: asJson, render: renderHumanSummary });
     return result.ok === false ? 1 : 0;
   } catch (error) {
     const payload = {
@@ -706,7 +670,7 @@ export async function main(argv = process.argv.slice(2)) {
       error: error.message,
       issues: error.issues || [],
     };
-    process.stdout.write(asJson ? `${JSON.stringify(payload, null, 2)}\n` : `Error: ${error.message}\n`);
+    writePayload(payload, { json: asJson, render: () => `Error: ${error.message}` });
     return 1;
   }
 }

@@ -1,18 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
 
-function fileTextIfExists(filePath) {
-  return fs.existsSync(filePath) ? fs.readFileSync(filePath, "utf8") : "";
-}
-
-function firstNonEmptyString(...values) {
-  for (const value of values) {
-    if (typeof value === "string" && value.trim()) {
-      return value.trim();
-    }
-  }
-  return "";
-}
+import { readTextIfExists as fileTextIfExists } from "./core/fs.mjs";
+import { firstNonEmptyString } from "./core/strings.mjs";
 
 function listDirectoryFiles(dirPath) {
   if (!fs.existsSync(dirPath)) {

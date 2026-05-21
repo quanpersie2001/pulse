@@ -3,6 +3,7 @@
 import fs from "node:fs";
 import path from "node:path";
 
+import { firstNonEmptyString } from "./core/strings.mjs";
 import {
   getPulseEntrypointPath,
   getScriptDir,
@@ -65,15 +66,6 @@ function buildPulseBootstrapBlock() {
     skillText,
     "</EXTREMELY_IMPORTANT>",
   ].join("\n");
-}
-
-function firstNonEmptyString(...values) {
-  for (const value of values) {
-    if (typeof value === "string" && value.trim()) {
-      return value.trim();
-    }
-  }
-  return "";
 }
 
 function buildPulseSessionPostureSummary(status) {

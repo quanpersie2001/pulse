@@ -2,6 +2,10 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
+import {
+  writeJsonAtomic,
+  writeTextAtomic,
+} from "./core/fs.mjs";
 import { acquireWriteLock, releaseWriteLock } from "./workgraph_lock.mjs";
 import {
   ITEM_KIND_VALUES,
@@ -154,16 +158,7 @@ export function readJsonIfExists(filePath) {
   return JSON.parse(fs.readFileSync(filePath, "utf8"));
 }
 
-export function writeTextAtomic(filePath, text) {
-  const tempPath = `${filePath}.${process.pid}.${Date.now()}.${Math.random().toString(16).slice(2)}.tmp`;
-  fs.mkdirSync(path.dirname(filePath), { recursive: true });
-  fs.writeFileSync(tempPath, text, "utf8");
-  fs.renameSync(tempPath, filePath);
-}
-
-export function writeJsonAtomic(filePath, value) {
-  writeTextAtomic(filePath, `${JSON.stringify(value, null, 2)}\n`);
-}
+export { writeJsonAtomic, writeTextAtomic };
 
 export function writeItems(repoRoot, items) {
   const paths = ensureWorkgraphFilesystem(repoRoot);
