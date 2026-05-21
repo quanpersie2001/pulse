@@ -40,11 +40,11 @@ import {
 import { buildGraphView, deriveViewState } from "./workgraph_views.mjs";
 import { inspectLock, removeStaleLock } from "./workgraph_lock.mjs";
 import { parseCliArgs as parseArgv } from "./cli/args.mjs";
-import { writePayload } from "./cli/io.mjs";
+import { normalizeIo, writePayload } from "./cli/io.mjs";
 import { isDirectExecution } from "./cli_execution.mjs";
 
-function resolveRepoRoot(explicitRoot) {
-  return resolveSharedRepoRoot({ explicitRoot });
+function resolveRepoRoot(explicitRoot, env = process.env, cwd = process.cwd()) {
+  return resolveSharedRepoRoot({ explicitRoot, env, cwd });
 }
 
 function takeOption(parsed, name, fallback = undefined) {
@@ -632,10 +632,11 @@ async function dispatchCommand(repoRoot, parsed) {
   }
 }
 
-export async function main(argv = process.argv.slice(2)) {
+export async function main(argv = process.argv.slice(2), context = {}) {
+  const io = normalizeIo(context.io);
   if (argv.includes("--help") || argv.includes("-h")) {
-    process.stdout.write(
-      [
+    io.stdout.write(
+      `${[
         "Usage: pulse_work.mjs <command> [options]",
         "",
         "Commands:",
@@ -651,18 +652,18 @@ export async function main(argv = process.argv.slice(2)) {
         "  children <id>",
         "  graph",
         "  doctor [--fix]",
-      ].join("\n"),
+      ].join("\n")}\n`,
     );
     return 0;
   }
 
   const parsed = parseArgv(argv);
-  const repoRoot = resolveRepoRoot(normalizeNullableString(takeOption(parsed, "repo-root")));
+  const repoRoot = resolveRepoRoot(normalizeNullableString(takeOption(parsed, "repo-root")), context.env, context.cwd);
   const asJson = takeBooleanOption(parsed, "json");
 
   try {
     const result = await dispatchCommand(repoRoot, parsed);
-    writePayload(result, { json: asJson, render: renderHumanSummary });
+    writePayload(result, { json: asJson, render: renderHumanSummary, output: io.stdout });
     return result.ok === false ? 1 : 0;
   } catch (error) {
     const payload = {
@@ -670,7 +671,7 @@ export async function main(argv = process.argv.slice(2)) {
       error: error.message,
       issues: error.issues || [],
     };
-    writePayload(payload, { json: asJson, render: () => `Error: ${error.message}` });
+    writePayload(payload, { json: asJson, render: () => `Error: ${error.message}`, output: io.stdout });
     return 1;
   }
 }

@@ -13,7 +13,7 @@ import fs from "node:fs";
 import path from "node:path";
 
 import { assertBareBooleanOptions, assertKnownOptions, parseCliArgs as parseSharedCliArgs } from "./cli/args.mjs";
-import { writeJson } from "./cli/io.mjs";
+import { normalizeIo, writeJson } from "./cli/io.mjs";
 import {
   copyPathIfExists,
   ensureDirectory,
@@ -953,21 +953,21 @@ function backupStamp() {
 /**
  * Parse onboard CLI arguments.
  */
-function parseCliArgs(argv) {
+function parseCliArgs(argv, io = normalizeIo()) {
   if (argv.includes("--help") || argv.includes("-h")) {
-    process.stdout.write(
-      [
-        "Usage: onboard_pulse.mjs [--repo-root <path>] [--apply] [--resume-owner <owner_id>]",
+    io.stdout.write(
+      `${[
+        "Usage: onboard_pulse.mjs [--repo-root <path>] [--apply] [--resume-owner <owner_id>] [--json]",
         "",
         "Checks or applies pulse:workflow use readiness and session loading.",
-      ].join("\n"),
+      ].join("\n")}\n`,
     );
-    process.exit(0);
+    return null;
   }
 
   const parsed = parseSharedCliArgs(argv);
-  assertKnownOptions(parsed, ["repo-root", "apply", "resume-owner"]);
-  assertBareBooleanOptions(parsed, ["apply"]);
+  assertKnownOptions(parsed, ["repo-root", "apply", "resume-owner", "json"]);
+  assertBareBooleanOptions(parsed, ["apply", "json"]);
   if (parsed.positionals.length > 0) {
     throw new Error(`Unknown argument: ${parsed.positionals[0]}`);
   }
@@ -982,14 +982,18 @@ function parseCliArgs(argv) {
 /**
  * Run the onboard CLI and print the JSON payload.
  */
-export function main(argv = process.argv.slice(2)) {
-  const args = parseCliArgs(argv);
-  const repoRoot = resolveRepoRoot(args.repoRoot);
+export function main(argv = process.argv.slice(2), context = {}) {
+  const io = normalizeIo(context.io);
+  const args = parseCliArgs(argv, io);
+  if (!args) {
+    return 0;
+  }
+  const repoRoot = resolveRepoRoot(args.repoRoot, context.env, context.cwd);
   const payload = args.apply
     ? applyRepo(repoRoot, false, { resumeOwner: args.resumeOwner })
     : checkRepo(repoRoot, { resumeOwner: args.resumeOwner });
 
-  writeJson(payload);
+  writeJson(payload, io.stdout);
   return payload.status === "FAIL" ? 1 : 0;
 }
 

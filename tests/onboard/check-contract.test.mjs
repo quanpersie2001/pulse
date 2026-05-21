@@ -7,6 +7,7 @@ import path from "node:path";
 
 import { applyRepo, checkRepo } from "../../skills/workflow/scripts/onboard_pulse.mjs";
 import { cleanupTempRepo, mkTempRepo } from "../helpers/temp-repo.mjs";
+import { parseJsonOutput, spawnPulse } from "../helpers/spawn-pulse.mjs";
 
 test("checkRepo/applyRepo expose FAIL->PASS readiness without optional external CLI blockers", () => {
   const root = mkTempRepo("pulse-onboard-routing-");
@@ -56,6 +57,25 @@ test("passive archive docs do not trigger active routing drift warnings", () => 
     assert.equal(checked.status, "PASS");
     const serializedWarnings = JSON.stringify(checked.warnings || []);
     assert.doesNotMatch(serializedWarnings, /preflight|using-pulse|dream/i);
+  } finally {
+    cleanupTempRepo(root);
+  }
+});
+
+test("pulse router exposes onboard check and apply", () => {
+  const root = mkTempRepo("pulse-onboard-routing-");
+  try {
+    const initialCheck = spawnPulse(["onboard", "check", "--repo-root", root, "--json"]);
+    assert.equal(initialCheck.status, 1);
+    assert.equal(parseJsonOutput(initialCheck).status, "FAIL");
+
+    const applied = spawnPulse(["onboard", "apply", "--repo-root", root, "--json"]);
+    assert.equal(applied.status, 0, applied.stderr);
+    assert.equal(parseJsonOutput(applied).status, "PASS");
+
+    const finalCheck = spawnPulse(["onboard", "check", "--repo-root", root, "--json"]);
+    assert.equal(finalCheck.status, 0, finalCheck.stderr);
+    assert.equal(parseJsonOutput(finalCheck).status, "PASS");
   } finally {
     cleanupTempRepo(root);
   }

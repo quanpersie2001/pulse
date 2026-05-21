@@ -13,7 +13,7 @@ import fs from "node:fs";
 import path from "node:path";
 
 import { assertBareBooleanOptions, assertKnownOptions, parseCliArgs as parseSharedCliArgs } from "./cli/args.mjs";
-import { writeJson, writeText } from "./cli/io.mjs";
+import { normalizeIo, writeJson, writeText } from "./cli/io.mjs";
 import { isDirectExecution } from "./cli_execution.mjs";
 import { normalizeWorkflowCommand } from "./core/commands.mjs";
 import { readJsonIfExists } from "./core/fs.mjs";
@@ -249,16 +249,16 @@ export function buildSessionLoad(repoRoot, options = {}) {
   };
 }
 
-function parseCliArgs(argv) {
+function parseCliArgs(argv, io = normalizeIo()) {
   if (argv.includes("--help") || argv.includes("-h")) {
-    process.stdout.write(
-      [
+    io.stdout.write(
+      `${[
         "Usage: pulse_session_load.mjs [--repo-root <path>] [--resume-owner <owner_id>] [--json]",
         "",
         "Loads Pulse session context from runtime pointers.",
-      ].join("\n"),
+      ].join("\n")}\n`,
     );
-    process.exit(0);
+    return null;
   }
 
   const parsed = parseSharedCliArgs(argv);
@@ -275,15 +275,22 @@ function parseCliArgs(argv) {
   };
 }
 
-export function main(argv = process.argv.slice(2), env = process.env, cwd = process.cwd()) {
-  const args = parseCliArgs(argv);
-  const repoRoot = resolveRepoRoot({ explicitRoot: args.repoRoot, env, cwd });
+export function main(argv = process.argv.slice(2), contextOrEnv = {}, cwd = process.cwd()) {
+  const context = contextOrEnv && (contextOrEnv.io || contextOrEnv.env || contextOrEnv.cwd)
+    ? contextOrEnv
+    : { env: contextOrEnv, cwd };
+  const io = normalizeIo(context.io);
+  const args = parseCliArgs(argv, io);
+  if (!args) {
+    return 0;
+  }
+  const repoRoot = resolveRepoRoot({ explicitRoot: args.repoRoot, env: context.env, cwd: context.cwd });
   const payload = buildSessionLoad(repoRoot, { resumeOwner: args.resumeOwner });
 
   if (args.json) {
-    writeJson(payload);
+    writeJson(payload, io.stdout);
   } else {
-    writeText([payload.summary, `posture: ${payload.posture}`, `next_command: ${payload.next_command}`].join("\n"));
+    writeText([payload.summary, `posture: ${payload.posture}`, `next_command: ${payload.next_command}`].join("\n"), io.stdout);
   }
 
   return 0;

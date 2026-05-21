@@ -13,6 +13,14 @@ export function spawnPulse(args = [], options = {}) {
   });
 }
 
+export function spawnWorkflowScript(scriptPath, args = [], options = {}) {
+  return spawnSync(process.execPath, [scriptPath, ...args], {
+    cwd: options.cwd ?? REPO_ROOT,
+    env: { ...process.env, ...(options.env ?? {}) },
+    encoding: "utf8",
+  });
+}
+
 export function parseJsonOutput(result) {
   return JSON.parse(result.stdout);
 }

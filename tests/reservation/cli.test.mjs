@@ -14,6 +14,7 @@ import {
 } from "../../skills/workflow/scripts/pulse_reservations.mjs";
 import { captureStdout } from "../helpers/capture-stdout.mjs";
 import { cleanupTempRepo, mkTempRepo } from "../helpers/temp-repo.mjs";
+import { parseJsonOutput, spawnPulse } from "../helpers/spawn-pulse.mjs";
 
 test("reservation module reserve/list/release lifecycle works with repo-root", () => {
   const root = mkTempRepo("pulse-reservations-runtime-");
@@ -108,6 +109,49 @@ test("CLI main falls back to cwd when repo root is not passed", () => {
     assert.equal(fs.existsSync(path.join(root, ".pulse", "runtime", "reservations.json")), false);
   } finally {
     process.chdir(originalCwd);
+    cleanupTempRepo(root);
+  }
+});
+
+test("pulse router exposes reservation reserve/list/release lifecycle", () => {
+  const root = mkTempRepo("pulse-reservations-runtime-");
+  try {
+    const reserved = spawnPulse([
+      "reservation",
+      "reserve",
+      "--repo-root",
+      root,
+      "--agent",
+      "agent-router",
+      "--item",
+      "S-router",
+      "--path",
+      "skills/workflow/**",
+      "--json",
+    ]);
+    assert.equal(reserved.status, 0, reserved.stderr);
+    const reservedPayload = parseJsonOutput(reserved);
+    assert.equal(reservedPayload.ok, true);
+    assert.equal(reservedPayload.reservation.agent, "agent-router");
+
+    const listed = spawnPulse(["reservation", "list", "--repo-root", root, "--active-only", "--json"]);
+    assert.equal(listed.status, 0, listed.stderr);
+    const listedPayload = parseJsonOutput(listed);
+    assert.equal(listedPayload.reservations.length, 1);
+    assert.equal(listedPayload.reservations[0].agent, "agent-router");
+
+    const released = spawnPulse([
+      "reservation",
+      "release",
+      "--repo-root",
+      root,
+      "--agent",
+      "agent-router",
+      "--json",
+    ]);
+    assert.equal(released.status, 0, released.stderr);
+    assert.equal(parseJsonOutput(released).released_count, 1);
+  } finally {
     cleanupTempRepo(root);
   }
 });

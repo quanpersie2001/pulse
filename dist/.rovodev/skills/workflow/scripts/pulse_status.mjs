@@ -14,21 +14,21 @@ import { readPulseStatus } from "./pulse_status_model.mjs";
 import { renderPulseStatus } from "./pulse_status_render.mjs";
 import { resolveRepoRoot } from "./pulse_paths.mjs";
 import { assertBareBooleanOptions, assertKnownOptions, parseCliArgs as parseSharedCliArgs } from "./cli/args.mjs";
-import { writePayload } from "./cli/io.mjs";
+import { normalizeIo, writePayload } from "./cli/io.mjs";
 import { isDirectExecution } from "./cli_execution.mjs";
 
-function parseCliArgs(argv) {
+function parseCliArgs(argv, io = normalizeIo()) {
   if (argv.includes("--help") || argv.includes("-h")) {
-    process.stdout.write(
-      [
+    io.stdout.write(
+      `${[
         "Usage:",
         "  pulse_status.mjs [--repo-root <path>] [--json] [--sync]",
         "",
         "Shows a non-mutating Pulse status snapshot.",
         "Use --sync to refresh persisted runtime artifacts before rendering status.",
-      ].join("\n"),
+      ].join("\n")}\n`,
     );
-    process.exit(0);
+    return null;
   }
 
   const parsed = parseSharedCliArgs(argv);
@@ -46,16 +46,20 @@ function parseCliArgs(argv) {
   };
 }
 
-export async function main(argv = process.argv.slice(2)) {
-  const args = parseCliArgs(argv);
-  const repoRoot = resolveRepoRoot({ explicitRoot: args.repoRoot });
+export async function main(argv = process.argv.slice(2), context = {}) {
+  const io = normalizeIo(context.io);
+  const args = parseCliArgs(argv, io);
+  if (!args) {
+    return 0;
+  }
+  const repoRoot = resolveRepoRoot({ explicitRoot: args.repoRoot, env: context.env, cwd: context.cwd });
 
   if (args.sync) {
     syncPulseRuntimeArtifacts(repoRoot);
   }
 
   const status = await readPulseStatus(repoRoot);
-  writePayload(status, { json: args.json, render: renderPulseStatus });
+  writePayload(status, { json: args.json, render: renderPulseStatus, output: io.stdout });
   return 0;
 }
 

@@ -11,7 +11,7 @@
 
 import { resolveRepoRoot } from "./pulse_paths.mjs";
 import { assertBareBooleanOptions, assertKnownOptions, parseCliArgs as parseSharedCliArgs } from "./cli/args.mjs";
-import { writePayload } from "./cli/io.mjs";
+import { normalizeIo, writePayload } from "./cli/io.mjs";
 import { isDirectExecution } from "./cli_execution.mjs";
 import {
   RESERVATION_SCHEMA_VERSION,
@@ -41,18 +41,18 @@ export {
   sweepExpiredReservations,
 };
 
-function parseArgs(argv) {
+function parseArgs(argv, io = normalizeIo()) {
   if (argv.includes("--help") || argv.includes("-h")) {
-    process.stdout.write(
-      [
+    io.stdout.write(
+      `${[
         "Usage:",
         "  node pulse_reservations.mjs --repo-root <repo> reserve --agent <name> [--item <id>] --path <glob> [--ttl <seconds>] [--note <text>] [--json]",
         "  node pulse_reservations.mjs --repo-root <repo> release --agent <name> [--item <id>] [--path <glob>] [--id <reservation-id>] [--json]",
         "  node pulse_reservations.mjs --repo-root <repo> list [--active-only] [--agent <name>] [--path <glob>] [--status active|released|expired] [--json]",
         "  node pulse_reservations.mjs --repo-root <repo> sweep [--json]",
-      ].join("\n"),
+      ].join("\n")}\n`,
     );
-    process.exit(0);
+    return null;
   }
 
   const parsed = parseSharedCliArgs(argv);
@@ -138,9 +138,13 @@ function renderText(result) {
   return JSON.stringify(result, null, 2);
 }
 
-export function main(argv = process.argv.slice(2)) {
-  const args = parseArgs(argv);
-  const repoRoot = resolveRepoRoot({ explicitRoot: args.repoRoot });
+export function main(argv = process.argv.slice(2), context = {}) {
+  const io = normalizeIo(context.io);
+  const args = parseArgs(argv, io);
+  if (!args) {
+    return 0;
+  }
+  const repoRoot = resolveRepoRoot({ explicitRoot: args.repoRoot, env: context.env, cwd: context.cwd });
   let result;
 
   switch (args.command) {
@@ -179,7 +183,7 @@ export function main(argv = process.argv.slice(2)) {
       );
   }
 
-  writePayload(result, { json: args.json, render: renderText });
+  writePayload(result, { json: args.json, render: renderText, output: io.stdout });
   return 0;
 }
 

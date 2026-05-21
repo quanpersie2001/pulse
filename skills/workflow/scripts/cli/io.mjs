@@ -1,3 +1,10 @@
+export function normalizeIo(io = {}) {
+  return {
+    stdout: io.stdout ?? process.stdout,
+    stderr: io.stderr ?? process.stderr,
+  };
+}
+
 export function writeJson(value, output = process.stdout) {
   output.write(`${JSON.stringify(value, null, 2)}\n`);
 }

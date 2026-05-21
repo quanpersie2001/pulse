@@ -7,6 +7,7 @@ import path from "node:path";
 
 import { applyRepo, checkRepo } from "../../skills/workflow/scripts/onboard_pulse.mjs";
 import { cleanupTempRepo, mkTempRepo } from "../helpers/temp-repo.mjs";
+import { parseJsonOutput, spawnPulse } from "../helpers/spawn-pulse.mjs";
 
 test("session_load auto-loads a single handoff while next_command remains canonical", () => {
   const root = mkTempRepo("pulse-onboard-routing-");
@@ -105,6 +106,39 @@ test("session_load requires selection for multiple handoffs and rejects unsafe r
     const selected = checkRepo(root, { resumeOwner: "owner-a" }).details.tooling_status_preview.session_load;
     assert.equal(selected.selected_handoff.owner_id, "owner-a");
     assert.ok(selected.rejected_paths.includes("../escape.md"));
+  } finally {
+    cleanupTempRepo(root);
+  }
+});
+
+test("pulse router exposes session-load with repo-root and resume-owner", () => {
+  const root = mkTempRepo("pulse-onboard-routing-");
+  try {
+    applyRepo(root, false);
+
+    const handoffsDir = path.join(root, ".pulse", "runtime", "handoffs");
+    fs.writeFileSync(
+      path.join(handoffsDir, "owner-a.json"),
+      `${JSON.stringify({ owner_id: "owner-a", summary: "a" }, null, 2)}\n`,
+      "utf8",
+    );
+    fs.writeFileSync(
+      path.join(handoffsDir, "manifest.json"),
+      `${JSON.stringify({
+        schema_version: "1.0",
+        active: [
+          { owner_id: "owner-a", owner_type: "workflow_command", surface: "pulse:workflow", active_command: "plan", path: ".pulse/runtime/handoffs/owner-a.json", summary: "a" },
+        ],
+      }, null, 2)}\n`,
+      "utf8",
+    );
+
+    const result = spawnPulse(["session-load", "--repo-root", root, "--resume-owner", "owner-a", "--json"]);
+    assert.equal(result.status, 0, result.stderr);
+
+    const payload = parseJsonOutput(result);
+    assert.equal(payload.selected_handoff.owner_id, "owner-a");
+    assert.equal(typeof payload.next_command, "string");
   } finally {
     cleanupTempRepo(root);
   }
