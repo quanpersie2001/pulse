@@ -3,8 +3,6 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-
-import { isDirectExecution } from "../skills/workflow/scripts/cli_execution.mjs";
 import { getPulseCommand, PROVIDERS } from "./lib/providers.mjs";
 import {
   assertNoUnresolvedRuntimePlaceholders,
@@ -34,6 +32,17 @@ const TEXT_EXTENSIONS = new Set([
 ]);
 const TEXT_FILENAMES = new Set(["SKILL.md"]);
 const EXCLUDED_DIRS = new Set(["tests"]);
+
+function isDirectExecution(metaUrl, entryPath = process.argv[1]) {
+  if (!entryPath) {
+    return false;
+  }
+  try {
+    return fs.realpathSync(fileURLToPath(metaUrl)) === fs.realpathSync(entryPath);
+  } catch {
+    return false;
+  }
+}
 
 function readJson(filePath) {
   return JSON.parse(fs.readFileSync(filePath, "utf8"));

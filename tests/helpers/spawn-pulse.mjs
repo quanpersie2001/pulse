@@ -5,20 +5,16 @@ import { REPO_ROOT } from "./fixtures.mjs";
 
 export const PULSE_PATH = path.join(REPO_ROOT, "skills", "workflow", "scripts", "pulse.mjs");
 
-export function spawnPulse(args = [], options = {}) {
-  return spawnSync(process.execPath, [PULSE_PATH, ...args], {
+export function spawnNodeScript(scriptPath, args = [], options = {}) {
+  return spawnSync(process.execPath, [scriptPath, ...args], {
     cwd: options.cwd ?? REPO_ROOT,
     env: { ...process.env, ...(options.env ?? {}) },
     encoding: "utf8",
   });
 }
 
-export function spawnWorkflowScript(scriptPath, args = [], options = {}) {
-  return spawnSync(process.execPath, [scriptPath, ...args], {
-    cwd: options.cwd ?? REPO_ROOT,
-    env: { ...process.env, ...(options.env ?? {}) },
-    encoding: "utf8",
-  });
+export function spawnPulse(args = [], options = {}) {
+  return spawnNodeScript(options.pulsePath ?? PULSE_PATH, args, options);
 }
 
 export function parseJsonOutput(result) {

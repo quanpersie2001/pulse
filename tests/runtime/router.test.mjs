@@ -2,17 +2,12 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
+import fs from "node:fs";
 import path from "node:path";
 import { REPO_ROOT } from "../helpers/fixtures.mjs";
 import { importModuleInNode } from "../helpers/import-module.mjs";
 import { cleanupTempRepo, mkTempRepo } from "../helpers/temp-repo.mjs";
-import { parseJsonOutput, PULSE_PATH, spawnPulse, spawnWorkflowScript } from "../helpers/spawn-pulse.mjs";
-
-const CLI_DIR = path.join(REPO_ROOT, "skills", "workflow", "scripts", "cli");
-
-function runAdapter(scriptName, args, root) {
-  return spawnWorkflowScript(path.join(CLI_DIR, scriptName), args, { env: { PULSE_REPO_ROOT: root } });
-}
+import { parseJsonOutput, PULSE_PATH, spawnPulse } from "../helpers/spawn-pulse.mjs";
 
 test("importing pulse router does not execute main", () => {
   const root = mkTempRepo("pulse-router-runtime-");
@@ -45,34 +40,23 @@ test("pulse router renders global and command help", () => {
   assert.match(commandHelpResult.stdout, /session-load \[--repo-root <repo>\]/);
 });
 
-test("cli adapters execute directly", () => {
+test("pulse router executes through direct and symlinked entrypoints", () => {
   const root = mkTempRepo("pulse-router-runtime-");
+  const tempScriptRoot = mkTempRepo("pulse-router-runtime-");
   try {
-    const statusResult = runAdapter("status.mjs", ["--repo-root", root, "--json"], root);
-    assert.equal(statusResult.status, 0, statusResult.stderr);
-    assert.equal(JSON.parse(statusResult.stdout).repo_root, root);
+    const symlinkPath = path.join(tempScriptRoot, "pulse_symlink.mjs");
+    fs.symlinkSync(PULSE_PATH, symlinkPath);
 
-    const readyResult = runAdapter("ready.mjs", ["--repo-root", root, "--json"], root);
-    assert.equal(readyResult.status, 0, readyResult.stderr);
-    assert.equal(JSON.parse(readyResult.stdout).command, "ready");
+    const directResult = spawnPulse(["status", "--repo-root", root, "--json"]);
+    assert.equal(directResult.status, 0, directResult.stderr);
+    assert.equal(parseJsonOutput(directResult).repo_root, root);
 
-    const reservationResult = runAdapter("reservation.mjs", ["list", "--repo-root", root, "--json"], root);
-    assert.equal(reservationResult.status, 0, reservationResult.stderr);
-    assert.equal(Array.isArray(JSON.parse(reservationResult.stdout).reservations), true);
-
-    const sessionLoadResult = runAdapter("session-load.mjs", ["--repo-root", root, "--json"], root);
-    assert.equal(sessionLoadResult.status, 0, sessionLoadResult.stderr);
-    assert.equal(typeof JSON.parse(sessionLoadResult.stdout).posture, "string");
-
-    const onboardResult = runAdapter("onboard.mjs", ["apply", "--repo-root", root, "--json"], root);
-    assert.equal(onboardResult.status, 0, onboardResult.stderr);
-    assert.equal(JSON.parse(onboardResult.stdout).status, "PASS");
-
-    const workgraphResult = runAdapter("workgraph.mjs", ["list", "--repo-root", root, "--json"], root);
-    assert.equal(workgraphResult.status, 0, workgraphResult.stderr);
-    assert.equal(JSON.parse(workgraphResult.stdout).command, "list");
+    const symlinkResult = spawnPulse(["status", "--repo-root", root, "--json"], { pulsePath: symlinkPath });
+    assert.equal(symlinkResult.status, 0, symlinkResult.stderr);
+    assert.equal(parseJsonOutput(symlinkResult).repo_root, root);
   } finally {
     cleanupTempRepo(root);
+    cleanupTempRepo(tempScriptRoot);
   }
 });
 

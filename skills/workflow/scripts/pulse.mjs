@@ -1,7 +1,20 @@
 #!/usr/bin/env node
 
+import fs from "node:fs";
+import { fileURLToPath } from "node:url";
+
 import { normalizeIo } from "./cli/io.mjs";
-import { isDirectExecution } from "./cli_execution.mjs";
+
+function isDirectExecution(metaUrl, entryPath = process.argv[1]) {
+  if (!entryPath) {
+    return false;
+  }
+  try {
+    return fs.realpathSync(fileURLToPath(metaUrl)) === fs.realpathSync(entryPath);
+  } catch {
+    return false;
+  }
+}
 
 const COMMANDS = {
   status: {

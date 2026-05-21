@@ -15,14 +15,13 @@ import { renderPulseStatus } from "./pulse_status_render.mjs";
 import { resolveRepoRoot } from "./pulse_paths.mjs";
 import { assertBareBooleanOptions, assertKnownOptions, parseCliArgs as parseSharedCliArgs } from "./cli/args.mjs";
 import { normalizeIo, writePayload } from "./cli/io.mjs";
-import { isDirectExecution } from "./cli_execution.mjs";
 
 function parseCliArgs(argv, io = normalizeIo()) {
   if (argv.includes("--help") || argv.includes("-h")) {
     io.stdout.write(
       `${[
         "Usage:",
-        "  pulse_status.mjs [--repo-root <path>] [--json] [--sync]",
+        "  pulse.mjs status [--repo-root <path>] [--json] [--sync]",
         "",
         "Shows a non-mutating Pulse status snapshot.",
         "Use --sync to refresh persisted runtime artifacts before rendering status.",
@@ -63,6 +62,3 @@ export async function main(argv = process.argv.slice(2), context = {}) {
   return 0;
 }
 
-if (isDirectExecution(import.meta.url)) {
-  process.exitCode = await main();
-}

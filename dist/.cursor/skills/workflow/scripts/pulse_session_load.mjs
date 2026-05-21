@@ -14,7 +14,6 @@ import path from "node:path";
 
 import { assertBareBooleanOptions, assertKnownOptions, parseCliArgs as parseSharedCliArgs } from "./cli/args.mjs";
 import { normalizeIo, writeJson, writeText } from "./cli/io.mjs";
-import { isDirectExecution } from "./cli_execution.mjs";
 import { normalizeWorkflowCommand } from "./core/commands.mjs";
 import { readJsonIfExists } from "./core/fs.mjs";
 import { resolveRepoRoot, resolveSafeRepoRelativePath } from "./core/paths.mjs";
@@ -253,7 +252,7 @@ function parseCliArgs(argv, io = normalizeIo()) {
   if (argv.includes("--help") || argv.includes("-h")) {
     io.stdout.write(
       `${[
-        "Usage: pulse_session_load.mjs [--repo-root <path>] [--resume-owner <owner_id>] [--json]",
+        "Usage: pulse.mjs session-load [--repo-root <path>] [--resume-owner <owner_id>] [--json]",
         "",
         "Loads Pulse session context from runtime pointers.",
       ].join("\n")}\n`,
@@ -296,6 +295,3 @@ export function main(argv = process.argv.slice(2), contextOrEnv = {}, cwd = proc
   return 0;
 }
 
-if (isDirectExecution(import.meta.url)) {
-  process.exitCode = main();
-}

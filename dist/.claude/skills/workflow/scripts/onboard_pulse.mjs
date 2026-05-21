@@ -45,7 +45,6 @@ import {
   writeViews,
 } from "./workgraph_store.mjs";
 import { buildSessionLoad } from "./pulse_session_load.mjs";
-import { isDirectExecution } from "./cli_execution.mjs";
 
 const SCRIPT_DIR = getScriptDir(import.meta.url);
 const WORKFLOW_SKILL_DIR = getWorkflowSkillDir(SCRIPT_DIR);
@@ -957,7 +956,7 @@ function parseCliArgs(argv, io = normalizeIo()) {
   if (argv.includes("--help") || argv.includes("-h")) {
     io.stdout.write(
       `${[
-        "Usage: onboard_pulse.mjs [--repo-root <path>] [--apply] [--resume-owner <owner_id>] [--json]",
+        "Usage: pulse.mjs onboard <check|apply> [--repo-root <path>] [--resume-owner <owner_id>] [--json]",
         "",
         "Checks or applies pulse:workflow use readiness and session loading.",
       ].join("\n")}\n`,
@@ -997,6 +996,3 @@ export function main(argv = process.argv.slice(2), context = {}) {
   return payload.status === "FAIL" ? 1 : 0;
 }
 
-if (isDirectExecution(import.meta.url)) {
-  process.exitCode = main();
-}

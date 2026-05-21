@@ -41,7 +41,6 @@ import { buildGraphView, deriveViewState } from "./workgraph_views.mjs";
 import { inspectLock, removeStaleLock } from "./workgraph_lock.mjs";
 import { parseCliArgs as parseArgv } from "./cli/args.mjs";
 import { normalizeIo, writePayload } from "./cli/io.mjs";
-import { isDirectExecution } from "./cli_execution.mjs";
 
 function resolveRepoRoot(explicitRoot, env = process.env, cwd = process.cwd()) {
   return resolveSharedRepoRoot({ explicitRoot, env, cwd });
@@ -147,7 +146,7 @@ function renderHumanSummary(result) {
 
   if (result.command === "help") {
     return [
-      "Usage: pulse_work.mjs <command> [options]",
+      "Usage: pulse.mjs workgraph <command> [options]",
       "",
       ...result.commands.map((commandName) => `  ${commandName}`),
     ].join("\n");
@@ -637,7 +636,7 @@ export async function main(argv = process.argv.slice(2), context = {}) {
   if (argv.includes("--help") || argv.includes("-h")) {
     io.stdout.write(
       `${[
-        "Usage: pulse_work.mjs <command> [options]",
+        "Usage: pulse.mjs workgraph <command> [options]",
         "",
         "Commands:",
         "  create --kind <kind> --title <title> [--parent <id>]",
@@ -676,6 +675,3 @@ export async function main(argv = process.argv.slice(2), context = {}) {
   }
 }
 
-if (isDirectExecution(import.meta.url)) {
-  process.exitCode = await main();
-}

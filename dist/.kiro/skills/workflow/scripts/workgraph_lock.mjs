@@ -80,7 +80,7 @@ export function acquireWriteLock(lockPath, command) {
     const details = inspectLock(lockPath);
     if (details.stale) {
       throw new Error(
-        `Workgraph lock exists but is stale at ${lockPath}. Run pulse_work.mjs doctor --fix to clear it.`,
+        `Workgraph lock exists but is stale at ${lockPath}. Run pulse.mjs workgraph doctor --fix to clear it.`,
       );
     }
 

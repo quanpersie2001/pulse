@@ -4,10 +4,6 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
-import { execFileSync } from "node:child_process";
-import { pathToFileURL } from "node:url";
-
-import { isDirectExecution } from "../../skills/workflow/scripts/cli_execution.mjs";
 import { main as pulseWorkMain } from "../../skills/workflow/scripts/pulse_work.mjs";
 import { captureStdoutAsync } from "../helpers/capture-stdout.mjs";
 import { importModuleInNode } from "../helpers/import-module.mjs";
@@ -116,21 +112,6 @@ test("pulse_work.mjs resolves git root from nested cwd", async () => {
   }
 });
 
-test("isDirectExecution returns true for direct and symlinked entrypoints", () => {
-  const root = mkTempRepo("pulse_work.mjs-runtime-");
-  try {
-    const scriptPath = path.join(SCRIPTS_DIR, "pulse_status.mjs");
-    const symlinkPath = path.join(root, "pulse_status_symlink.mjs");
-    fs.symlinkSync(scriptPath, symlinkPath);
-
-    assert.equal(isDirectExecution(pathToFileURL(scriptPath).href, scriptPath), true);
-    assert.equal(isDirectExecution(pathToFileURL(scriptPath).href, symlinkPath), true);
-    assert.equal(isDirectExecution(pathToFileURL(scriptPath).href, path.join(root, "other.mjs")), false);
-  } finally {
-    cleanupTempRepo(root);
-  }
-});
-
 test("importing CLI modules does not execute their mains", () => {
   const root = mkTempRepo("pulse_work.mjs-runtime-");
   try {
@@ -149,36 +130,6 @@ test("importing CLI modules does not execute their mains", () => {
     }
   } finally {
     cleanupTempRepo(root);
-  }
-});
-
-test("pulse_status runs through direct and symlinked execution", () => {
-  const root = mkTempRepo("pulse_work.mjs-runtime-");
-  const tempScriptRoot = mkTempRepo("pulse_work.mjs-runtime-");
-  try {
-    const scriptPath = path.join(SCRIPTS_DIR, "pulse_status.mjs");
-    const symlinkPath = path.join(tempScriptRoot, "pulse_status_symlink.mjs");
-    fs.symlinkSync(scriptPath, symlinkPath);
-
-    const directOutput = execFileSync(process.execPath, [scriptPath, "--repo-root", root, "--json"], {
-      cwd: REPO_ROOT,
-      encoding: "utf8",
-    });
-    const symlinkOutput = execFileSync(process.execPath, [symlinkPath, "--repo-root", root, "--json"], {
-      cwd: REPO_ROOT,
-      encoding: "utf8",
-    });
-
-    const directPayload = JSON.parse(directOutput);
-    const symlinkPayload = JSON.parse(symlinkOutput);
-
-    assert.ok(directPayload.session_load);
-    assert.ok(symlinkPayload.session_load);
-    assert.equal(typeof directPayload.session_load.posture, "string");
-    assert.equal(symlinkPayload.session_load.posture, directPayload.session_load.posture);
-  } finally {
-    cleanupTempRepo(root);
-    cleanupTempRepo(tempScriptRoot);
   }
 });
 

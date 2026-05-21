@@ -428,10 +428,10 @@ export function assertValidGenericStatusTransition(previousItem, nextStatus) {
     throw new Error(`Unsupported status: ${nextStatus}`);
   }
   if (nextStatus === "CLOSED") {
-    throw new Error("Use pulse_work.mjs close instead of update --status CLOSED.");
+    throw new Error("Use pulse.mjs workgraph close instead of update --status CLOSED.");
   }
   if (previousItem.status === "CLOSED") {
-    throw new Error("Use pulse_work.mjs reopen to leave CLOSED state.");
+    throw new Error("Use pulse.mjs workgraph reopen to leave CLOSED state.");
   }
 
   const allowed = GENERIC_STATUS_TRANSITIONS[previousItem.status] || new Set();

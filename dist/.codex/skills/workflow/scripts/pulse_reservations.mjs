@@ -12,7 +12,6 @@
 import { resolveRepoRoot } from "./pulse_paths.mjs";
 import { assertBareBooleanOptions, assertKnownOptions, parseCliArgs as parseSharedCliArgs } from "./cli/args.mjs";
 import { normalizeIo, writePayload } from "./cli/io.mjs";
-import { isDirectExecution } from "./cli_execution.mjs";
 import {
   RESERVATION_SCHEMA_VERSION,
   ensureReservationStore,
@@ -46,10 +45,10 @@ function parseArgs(argv, io = normalizeIo()) {
     io.stdout.write(
       `${[
         "Usage:",
-        "  node pulse_reservations.mjs --repo-root <repo> reserve --agent <name> [--item <id>] --path <glob> [--ttl <seconds>] [--note <text>] [--json]",
-        "  node pulse_reservations.mjs --repo-root <repo> release --agent <name> [--item <id>] [--path <glob>] [--id <reservation-id>] [--json]",
-        "  node pulse_reservations.mjs --repo-root <repo> list [--active-only] [--agent <name>] [--path <glob>] [--status active|released|expired] [--json]",
-        "  node pulse_reservations.mjs --repo-root <repo> sweep [--json]",
+        "  pulse.mjs reservation reserve --repo-root <repo> --agent <name> [--item <id>] --path <glob> [--ttl <seconds>] [--note <text>] [--json]",
+        "  pulse.mjs reservation release --repo-root <repo> --agent <name> [--item <id>] [--path <glob>] [--id <reservation-id>] [--json]",
+        "  pulse.mjs reservation list --repo-root <repo> [--active-only] [--agent <name>] [--path <glob>] [--status active|released|expired] [--json]",
+        "  pulse.mjs reservation sweep --repo-root <repo> [--json]",
       ].join("\n")}\n`,
     );
     return null;
@@ -187,6 +186,3 @@ export function main(argv = process.argv.slice(2), context = {}) {
   return 0;
 }
 
-if (isDirectExecution(import.meta.url)) {
-  process.exitCode = main();
-}
