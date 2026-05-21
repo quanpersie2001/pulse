@@ -1,8 +1,8 @@
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 
 import {
+  readJsonIfExists,
   writeJsonAtomic,
   writeTextAtomic,
 } from "./core/fs.mjs";
@@ -151,14 +151,7 @@ export function loadItems(repoRoot) {
   return parseItemsText(fs.readFileSync(paths.itemsPath, "utf8"));
 }
 
-export function readJsonIfExists(filePath) {
-  if (!fs.existsSync(filePath)) {
-    return null;
-  }
-  return JSON.parse(fs.readFileSync(filePath, "utf8"));
-}
-
-export { writeJsonAtomic, writeTextAtomic };
+export { readJsonIfExists, writeJsonAtomic, writeTextAtomic };
 
 export function writeItems(repoRoot, items) {
   const paths = ensureWorkgraphFilesystem(repoRoot);

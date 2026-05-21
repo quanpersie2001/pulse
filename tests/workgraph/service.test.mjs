@@ -3,6 +3,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 
 import {
@@ -18,6 +19,7 @@ import {
   showItem,
   updateItem,
 } from "../../skills/workflow/scripts/workgraph/service.mjs";
+import { getWorkgraphPaths } from "../../skills/workflow/scripts/workgraph_store.mjs";
 import { cleanupTempRepo, mkTempRepo } from "../helpers/temp-repo.mjs";
 
 async function createStoryWithTask(root) {
@@ -106,6 +108,26 @@ test("workgraph service closes, reopens, graphs, and doctors directly", async ()
     const doctorPayload = await doctor(root);
     assert.equal(doctorPayload.command, "doctor");
     assert.equal(Array.isArray(doctorPayload.issues), true);
+  } finally {
+    cleanupTempRepo(root);
+  }
+});
+
+test("workgraph doctor reports and fixes stale shared locks", async () => {
+  const root = mkTempRepo("pulse-workgraph-service-");
+  try {
+    const paths = getWorkgraphPaths(root);
+    fs.mkdirSync(path.dirname(paths.lockPath), { recursive: true });
+    fs.writeFileSync(paths.lockPath, JSON.stringify({ pid: -1, hostname: os.hostname() }), "utf8");
+
+    const report = await doctor(root);
+    assert.equal(report.ok, false);
+    assert.equal(report.issues.some((issue) => issue.code === "stale_lock"), true);
+    assert.equal(fs.existsSync(paths.lockPath), true);
+
+    const fixed = await doctor(root, { fix: true });
+    assert.equal(fixed.fixed_actions.includes("remove_stale_lock"), true);
+    assert.equal(fs.existsSync(paths.lockPath), false);
   } finally {
     cleanupTempRepo(root);
   }

@@ -10,7 +10,8 @@
 import fs from "node:fs";
 import path from "node:path";
 
-import { ensureParent } from "./core/fs.mjs";
+import { acquireJsonFileLock, releaseJsonFileLock } from "./core/lock.mjs";
+import { readJsonIfExists, writeJsonAtomic } from "./core/fs.mjs";
 import { normalizeSlashPath, stripLeadingDotSlash } from "./core/strings.mjs";
 import { getPulsePaths } from "./pulse_paths.mjs";
 
@@ -22,10 +23,6 @@ const WILDCARD_PATTERN = "**";
 
 function utcNow() {
   return new Date().toISOString();
-}
-
-function sleepMs(ms) {
-  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 }
 
 function hasGlobMagic(value) {
@@ -199,26 +196,11 @@ export function getReservationsPath(repoRoot) {
 }
 
 export function readReservationStore(repoRoot) {
-  const reservationsPath = getReservationsPath(repoRoot);
-  if (!fs.existsSync(reservationsPath)) {
-    return buildEmptyReservationStore();
-  }
-
-  try {
-    return normalizeReservationStore(JSON.parse(fs.readFileSync(reservationsPath, "utf8")));
-  } catch {
-    return buildEmptyReservationStore();
-  }
+  return normalizeReservationStore(readJsonIfExists(getReservationsPath(repoRoot)));
 }
 
 function writeReservationStore(repoRoot, store) {
-  const reservationsPath = getReservationsPath(repoRoot);
-  ensureParent(reservationsPath);
-  fs.writeFileSync(
-    reservationsPath,
-    `${JSON.stringify(normalizeReservationStore(store), null, 2)}\n`,
-    "utf8",
-  );
+  writeJsonAtomic(getReservationsPath(repoRoot), normalizeReservationStore(store));
 }
 
 export function ensureReservationStore(repoRoot) {
@@ -234,45 +216,18 @@ function getLockPath(repoRoot) {
 }
 
 function withReservationLock(repoRoot, mutator) {
-  const lockPath = getLockPath(repoRoot);
-  ensureParent(lockPath);
-  const deadline = Date.now() + LOCK_TIMEOUT_MS;
-
-  while (true) {
-    try {
-      const fd = fs.openSync(lockPath, "wx");
-      fs.writeFileSync(fd, JSON.stringify({ pid: process.pid, created_at: utcNow() }), "utf8");
-      fs.closeSync(fd);
-      break;
-    } catch (error) {
-      if (error?.code !== "EEXIST") {
-        throw error;
-      }
-
-      let stale = false;
-      try {
-        const stats = fs.statSync(lockPath);
-        stale = Date.now() - stats.mtimeMs > DEFAULT_LOCK_STALE_MS;
-      } catch {
-        stale = true;
-      }
-
-      if (stale) {
-        fs.rmSync(lockPath, { force: true });
-        continue;
-      }
-
-      if (Date.now() >= deadline) {
-        throw new Error("Timed out waiting for reservation lock.");
-      }
-      sleepMs(LOCK_RETRY_MS);
-    }
-  }
+  const lock = acquireJsonFileLock(getLockPath(repoRoot), {
+    staleMs: DEFAULT_LOCK_STALE_MS,
+    timeoutMs: LOCK_TIMEOUT_MS,
+    retryMs: LOCK_RETRY_MS,
+    command: "reservation store mutation",
+    timeoutMessage: "Timed out waiting for reservation lock.",
+  });
 
   try {
     return mutator();
   } finally {
-    fs.rmSync(lockPath, { force: true });
+    releaseJsonFileLock(lock);
   }
 }
 
