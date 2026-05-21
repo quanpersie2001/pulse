@@ -9,15 +9,11 @@
  * Repo root rule: Uses shared resolver from pulse_paths.mjs.
  */
 
-import path from "node:path";
-import { fileURLToPath } from "node:url";
-
 import { syncPulseRuntimeArtifacts } from "./pulse_runtime_sync.mjs";
 import { readPulseStatus } from "./pulse_status_model.mjs";
 import { renderPulseStatus } from "./pulse_status_render.mjs";
 import { resolveRepoRoot } from "./pulse_paths.mjs";
-
-const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
+import { isDirectExecution } from "./cli_execution.mjs";
 
 function parseCliArgs(argv) {
   const args = {
@@ -66,8 +62,7 @@ function parseCliArgs(argv) {
 
 export async function main(argv = process.argv.slice(2)) {
   const args = parseCliArgs(argv);
-  const repoRoot = resolveRepoRoot(args.repoRoot);
-
+  const repoRoot = resolveRepoRoot({ explicitRoot: args.repoRoot });
 
   if (args.sync) {
     syncPulseRuntimeArtifacts(repoRoot);
@@ -80,6 +75,6 @@ export async function main(argv = process.argv.slice(2)) {
   return 0;
 }
 
-if (process.argv[1]) {
+if (isDirectExecution(import.meta.url)) {
   process.exitCode = await main();
 }
