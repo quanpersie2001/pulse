@@ -4,6 +4,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
+import { main as workgraphMain } from "../../skills/workflow/scripts/cli/workgraph.mjs";
 import { main as pulseWorkMain } from "../../skills/workflow/scripts/pulse_work.mjs";
 import { captureStdoutAsync } from "../helpers/capture-stdout.mjs";
 import { importModuleInNode } from "../helpers/import-module.mjs";
@@ -13,7 +14,7 @@ import { parseJsonOutput, spawnPulse } from "../helpers/spawn-pulse.mjs";
 
 const SCRIPTS_DIR = path.join(REPO_ROOT, "skills", "workflow", "scripts");
 
-test("pulse_work.mjs prefers --repo-root over env and cwd", async () => {
+test("cli/workgraph.mjs prefers --repo-root over env and cwd", async () => {
   const explicitRoot = mkTempRepo("pulse_work.mjs-runtime-");
   const envRoot = mkTempRepo("pulse_work.mjs-runtime-");
   const cwdRoot = mkTempRepo("pulse_work.mjs-runtime-");
@@ -25,7 +26,7 @@ test("pulse_work.mjs prefers --repo-root over env and cwd", async () => {
     process.chdir(cwdRoot);
 
     const call = await captureStdoutAsync(() =>
-      pulseWorkMain(["--repo-root", explicitRoot, "list", "--json"]),
+      workgraphMain(["--repo-root", explicitRoot, "list", "--json"]),
     );
 
     assert.equal(call.returnValue, 0);
@@ -49,7 +50,7 @@ test("pulse_work.mjs prefers --repo-root over env and cwd", async () => {
   }
 });
 
-test("pulse_work.mjs uses PULSE_REPO_ROOT when --repo-root is not provided", async () => {
+test("cli/workgraph.mjs uses PULSE_REPO_ROOT when --repo-root is not provided", async () => {
   const envRoot = mkTempRepo("pulse_work.mjs-runtime-");
   const cwdRoot = mkTempRepo("pulse_work.mjs-runtime-");
   const originalCwd = process.cwd();
@@ -59,7 +60,7 @@ test("pulse_work.mjs uses PULSE_REPO_ROOT when --repo-root is not provided", asy
     process.env.PULSE_REPO_ROOT = envRoot;
     process.chdir(cwdRoot);
 
-    const call = await captureStdoutAsync(() => pulseWorkMain(["list", "--json"]));
+    const call = await captureStdoutAsync(() => workgraphMain(["list", "--json"]));
     assert.equal(call.returnValue, 0);
 
     const payload = JSON.parse(call.output);
@@ -80,7 +81,7 @@ test("pulse_work.mjs uses PULSE_REPO_ROOT when --repo-root is not provided", asy
   }
 });
 
-test("pulse_work.mjs resolves git root from nested cwd", async () => {
+test("cli/workgraph.mjs resolves git root from nested cwd", async () => {
   const gitRoot = mkTempRepo("pulse_work.mjs-runtime-");
   const originalCwd = process.cwd();
   const previousEnv = process.env.PULSE_REPO_ROOT;
@@ -92,7 +93,7 @@ test("pulse_work.mjs resolves git root from nested cwd", async () => {
     fs.mkdirSync(nested, { recursive: true });
     process.chdir(nested);
 
-    const call = await captureStdoutAsync(() => pulseWorkMain(["list", "--json"]));
+    const call = await captureStdoutAsync(() => workgraphMain(["list", "--json"]));
     assert.equal(call.returnValue, 0);
 
     const payload = JSON.parse(call.output);
@@ -109,6 +110,49 @@ test("pulse_work.mjs resolves git root from nested cwd", async () => {
       process.env.PULSE_REPO_ROOT = previousEnv;
     }
     cleanupTempRepo(gitRoot);
+  }
+});
+
+test("cli/workgraph.mjs rejects unknown flags, valued booleans, and extra positionals", async () => {
+  const root = mkTempRepo("pulse_work.mjs-runtime-");
+  try {
+    const unknownFlag = await captureStdoutAsync(() =>
+      workgraphMain(["--repo-root", root, "list", "--statuz", "OPEN", "--json"]),
+    );
+    assert.equal(unknownFlag.returnValue, 1);
+    assert.match(JSON.parse(unknownFlag.output).error, /Unknown argument: --statuz/);
+
+    const valuedBoolean = await captureStdoutAsync(() =>
+      workgraphMain(["--repo-root", root, "list", "--json=false"]),
+    );
+    assert.equal(valuedBoolean.returnValue, 1);
+    assert.match(valuedBoolean.output, /Unknown argument: --json=false/);
+
+    const extraPositional = await captureStdoutAsync(() =>
+      workgraphMain(["--repo-root", root, "list", "extra", "--json"]),
+    );
+    assert.equal(extraPositional.returnValue, 1);
+    assert.match(JSON.parse(extraPositional.output).error, /Unknown argument: extra/);
+
+    const listFix = await captureStdoutAsync(() =>
+      workgraphMain(["--repo-root", root, "list", "--fix", "--json"]),
+    );
+    assert.equal(listFix.returnValue, 1);
+    assert.match(JSON.parse(listFix.output).error, /Unknown argument: --fix/);
+
+    const readyKind = await captureStdoutAsync(() =>
+      workgraphMain(["--repo-root", root, "ready", "--kind", "EPIC", "--json"]),
+    );
+    assert.equal(readyKind.returnValue, 1);
+    assert.match(JSON.parse(readyKind.output).error, /Unknown argument: --kind/);
+
+    const createStatus = await captureStdoutAsync(() =>
+      workgraphMain(["--repo-root", root, "create", "--kind", "EPIC", "--title", "Bad flag", "--status", "OPEN", "--json"]),
+    );
+    assert.equal(createStatus.returnValue, 1);
+    assert.match(JSON.parse(createStatus.output).error, /Unknown argument: --status/);
+  } finally {
+    cleanupTempRepo(root);
   }
 });
 
