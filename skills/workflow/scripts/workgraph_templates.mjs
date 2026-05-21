@@ -1,21 +1,16 @@
 import fs from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 
+import { getScriptDir, getWorkflowWorksTemplateDir } from "./pulse_package_paths.mjs";
 import { moveItemDirectory, toFilesystemPath } from "./workgraph_paths.mjs";
 
-const MODULE_DIR = path.dirname(fileURLToPath(import.meta.url));
-const TEMPLATE_DIR_CANDIDATES = [
-  path.resolve(MODULE_DIR, "..", "..", "templates", "works"),
-  path.resolve(MODULE_DIR, "templates", "works"),
-];
+const TEMPLATE_DIR = getWorkflowWorksTemplateDir(getScriptDir(import.meta.url));
 
 function resolveTemplateDir() {
-  const templateDir = TEMPLATE_DIR_CANDIDATES.find((candidate) => fs.existsSync(candidate));
-  if (!templateDir) {
-    throw new Error(`Unable to locate work templates near ${MODULE_DIR}.`);
+  if (!fs.existsSync(TEMPLATE_DIR)) {
+    throw new Error(`Unable to locate work templates at ${TEMPLATE_DIR}.`);
   }
-  return templateDir;
+  return TEMPLATE_DIR;
 }
 
 function readTemplateFile(name) {

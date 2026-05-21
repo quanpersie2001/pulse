@@ -190,7 +190,9 @@ test("session-start context helper aligns with runtime session routing outputs",
 
 test("bootstrap session context loads the workflow skill source", async () => {
   const root = mkRoot();
+  const previousPluginRoot = process.env.CLAUDE_PLUGIN_ROOT;
   try {
+    process.env.CLAUDE_PLUGIN_ROOT = path.join(root, "missing-plugin-root");
     const context = await buildPulseSessionStartContext(root, {
       includeBootstrapSkill: true,
       syncRuntimeArtifactsIfOnboarded: false,
@@ -200,6 +202,11 @@ test("bootstrap session context loads the workflow skill source", async () => {
     assert.match(context, /- `\{\{pulse_command\}\} \.\.\.` reads and coordinates runtime state through the installed workflow skill\./);
     assert.doesNotMatch(context, /\{\{pulse_command\}\} status/);
   } finally {
+    if (previousPluginRoot === undefined) {
+      delete process.env.CLAUDE_PLUGIN_ROOT;
+    } else {
+      process.env.CLAUDE_PLUGIN_ROOT = previousPluginRoot;
+    }
     fs.rmSync(root, { recursive: true, force: true });
   }
 });

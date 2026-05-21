@@ -2,16 +2,20 @@
 
 import fs from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 
+import {
+  getPulseEntrypointPath,
+  getScriptDir,
+  getWorkflowSkillPath,
+} from "./pulse_package_paths.mjs";
 import { syncPulseRuntimeArtifacts } from "./pulse_runtime_sync.mjs";
 import { readGitNexusReadiness } from "./pulse_gitnexus_readiness.mjs";
 import { readPulseStatus } from "./pulse_status_model.mjs";
 
-const SCRIPT_PATH = fileURLToPath(import.meta.url);
-const SCRIPT_DIR = path.dirname(SCRIPT_PATH);
-const PULSE_ENTRYPOINT_PATH = path.join(SCRIPT_DIR, "pulse.mjs");
+const SCRIPT_DIR = getScriptDir(import.meta.url);
+const PULSE_ENTRYPOINT_PATH = getPulseEntrypointPath(SCRIPT_DIR);
 const PULSE_COMMAND = `node ${JSON.stringify(PULSE_ENTRYPOINT_PATH)}`;
+const WORKFLOW_SKILL_PATH = getWorkflowSkillPath(SCRIPT_DIR);
 
 export function findPulseRepoRoot(start) {
   let candidate = path.resolve(start || ".");
@@ -40,20 +44,10 @@ export async function readHookPayload(stream = process.stdin) {
 }
 
 function readPulseSkillText() {
-  const candidates = [
-    path.resolve(SCRIPT_DIR, "..", "SKILL.md"),
-    process.env.CLAUDE_PLUGIN_ROOT
-      ? path.join(process.env.CLAUDE_PLUGIN_ROOT, "skills", "workflow", "SKILL.md")
-      : "",
-  ].filter(Boolean);
-
-  for (const candidate of candidates) {
-    if (fs.existsSync(candidate)) {
-      return fs.readFileSync(candidate, "utf8").trim();
-    }
+  if (!fs.existsSync(WORKFLOW_SKILL_PATH)) {
+    return "";
   }
-
-  return "";
+  return fs.readFileSync(WORKFLOW_SKILL_PATH, "utf8").trim();
 }
 
 function buildPulseBootstrapBlock() {

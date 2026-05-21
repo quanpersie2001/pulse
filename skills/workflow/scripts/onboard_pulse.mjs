@@ -11,8 +11,12 @@
 
 import fs from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
-
+import {
+  getPluginRoot,
+  getPulseEntrypointPath,
+  getScriptDir,
+  getWorkflowSkillDir,
+} from "./pulse_package_paths.mjs";
 import {
   buildDefaultState,
   normalizePulseState,
@@ -31,14 +35,13 @@ import {
 import { buildSessionLoad } from "./pulse_session_load.mjs";
 import { isDirectExecution } from "./cli_execution.mjs";
 
-const SCRIPT_PATH = fileURLToPath(import.meta.url);
-const SCRIPT_DIR = path.dirname(SCRIPT_PATH);
-const WORKFLOW_SKILL_DIR = path.resolve(SCRIPT_DIR, "..");
-const PLUGIN_ROOT = path.resolve(WORKFLOW_SKILL_DIR, "..", "..");
+const SCRIPT_DIR = getScriptDir(import.meta.url);
+const WORKFLOW_SKILL_DIR = getWorkflowSkillDir(SCRIPT_DIR);
+const PLUGIN_ROOT = getPluginRoot(SCRIPT_DIR);
 const HARNESS_BACKLOG_TEMPLATE_PATH = path.join(WORKFLOW_SKILL_DIR, "templates", "HARNESS_BACKLOG.md");
 const PLUGIN_MANIFEST_PATH = path.join(PLUGIN_ROOT, ".codex-plugin", "plugin.json");
 const AGENTS_TEMPLATE_PATH = path.join(PLUGIN_ROOT, "AGENTS.template.md");
-const PULSE_ENTRYPOINT_PATH = path.join(SCRIPT_DIR, "pulse.mjs");
+const PULSE_ENTRYPOINT_PATH = getPulseEntrypointPath(SCRIPT_DIR);
 const PULSE_COMMAND = `node ${JSON.stringify(PULSE_ENTRYPOINT_PATH)}`;
 const ONBOARDING_SCHEMA_VERSION = "1.0";
 const WORKFLOW_COMMAND = "use";
