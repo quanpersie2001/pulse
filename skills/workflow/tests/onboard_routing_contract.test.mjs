@@ -11,9 +11,30 @@ import {
   buildPulseSessionStartContext,
   collectPulseSessionStartNotes,
 } from "../scripts/pulse_session_context.mjs";
+import { assertNoUnresolvedRuntimePlaceholders } from "../../../scripts/lib/render-pulse-placeholders.mjs";
+
+const LEGACY_RUNTIME_COMMAND_PATTERN = /pulse-work status --repo-root <repo> --json/;
 
 function mkRoot() {
   return fs.mkdtempSync(path.join(os.tmpdir(), "pulse-onboard-routing-"));
+}
+
+function assertNoRuntimeArtifactLeaks(root) {
+  const stack = [root];
+  while (stack.length > 0) {
+    const current = stack.pop();
+    for (const entry of fs.readdirSync(current, { withFileTypes: true })) {
+      const entryPath = path.join(current, entry.name);
+      if (entry.isDirectory()) {
+        stack.push(entryPath);
+        continue;
+      }
+      const content = fs.readFileSync(entryPath, "utf8");
+      const relativePath = path.relative(root, entryPath);
+      assertNoUnresolvedRuntimePlaceholders(content, relativePath);
+      assert.doesNotMatch(content, LEGACY_RUNTIME_COMMAND_PATTERN, relativePath);
+    }
+  }
 }
 
 test("resolveRepoRoot respects explicitRoot over PULSE_REPO_ROOT and cwd", () => {
@@ -125,6 +146,7 @@ test("applyRepo writes session-aware tooling status and runtime state mirrors", 
     assert.ok(state.next_command_recommended.length > 0);
     assert.ok(state.session_load);
     assert.equal(state.session_load.posture, "fresh");
+    assertNoRuntimeArtifactLeaks(path.join(root, ".pulse"));
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
