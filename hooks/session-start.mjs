@@ -5,6 +5,16 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 const SCRIPT_PATH = fileURLToPath(import.meta.url);
+const INSTALLED_SESSION_CONTEXT_PATH = path.join(
+  path.dirname(SCRIPT_PATH),
+  "..",
+  "skills",
+  "workflow",
+  "scripts",
+  "runtime",
+  "session-context.mjs",
+);
+const COMPAT_SESSION_CONTEXT_ENV = "PULSE_SESSION_START_COMPAT_SCRIPTS";
 
 function findRepoRoot(start) {
   let candidate = path.resolve(start || ".");
@@ -35,22 +45,31 @@ async function readHookPayload(stream = process.stdin) {
   return JSON.parse(raw || "{}");
 }
 
-async function loadSessionContext(repoRoot) {
-  const modulePath = path.join(repoRoot, ".pulse", "scripts", "pulse_session_context.mjs");
-  if (!fs.existsSync(modulePath)) {
-    throw new Error("Pulse session context helper not found.");
+function shouldLoadRepoLocalSessionContext(env = process.env) {
+  return env[COMPAT_SESSION_CONTEXT_ENV] === "1";
+}
+
+async function loadSessionContext(repoRoot, options = {}) {
+  if (options.compatSessionScripts) {
+    const modulePath = path.join(repoRoot, ".pulse", "scripts", "pulse_session_context.mjs");
+    return {
+      includeBootstrapSkill: false,
+      module: await import(pathToFileURL(modulePath).href),
+    };
   }
 
   return {
-    includeBootstrapSkill: false,
-    module: await import(pathToFileURL(modulePath).href),
+    includeBootstrapSkill: true,
+    module: await import(pathToFileURL(INSTALLED_SESSION_CONTEXT_PATH).href),
   };
 }
 
 export async function main() {
   const payload = await readHookPayload();
   const repoRoot = findRepoRoot(payload.cwd || process.cwd());
-  const { includeBootstrapSkill, module } = await loadSessionContext(repoRoot);
+  const { includeBootstrapSkill, module } = await loadSessionContext(repoRoot, {
+    compatSessionScripts: shouldLoadRepoLocalSessionContext(),
+  });
   const { buildPulseSessionStartContext } = module;
   const additionalContext = await buildPulseSessionStartContext(repoRoot, {
     includeBootstrapSkill,

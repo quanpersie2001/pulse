@@ -9,7 +9,7 @@ import { applyRepo } from "../../skills/workflow/scripts/onboard/apply.mjs";
 import {
   buildPulseSessionStartContext,
   collectPulseSessionStartNotes,
-} from "../../skills/workflow/scripts/pulse_session_context.mjs";
+} from "../../skills/workflow/scripts/runtime/session-context.mjs";
 import { cleanupTempRepo, mkTempRepo } from "../helpers/temp-repo.mjs";
 
 test("session-start context helper aligns with runtime session routing outputs", async () => {
