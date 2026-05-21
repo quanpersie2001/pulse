@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What This Repo Is
 
-Pulse is a packaged skill plugin for Claude Code and Codex. Its public workflow surface is a single router skill: `pulse:workflow`. Runtime operations are handled by the installed `pulse-work` runtime CLI and repo-local Node helpers.
+Pulse is a packaged skill plugin for Claude Code and Codex. Its public workflow surface is a single router skill: `pulse:workflow`. Runtime reads and reservations use the rendered `{{pulse_command}}` command from the installed workflow skill.
 
 ## Repository Layout
 
@@ -22,8 +22,8 @@ Pulse is a packaged skill plugin for Claude Code and Codex. Its public workflow 
 | Tool | CLI | Purpose |
 |------|-----|---------|
 | Pulse Router | `pulse:workflow` | User-facing workflow entrypoint |
-| Pulse Runtime CLI | `pulse-work` | Workgraph/runtime metadata mutations |
-| Scout | `pulse-work status --repo-root <repo> --json` | Read-only runtime orientation |
+| Pulse Runtime | `{{pulse_command}}` | Runtime status, readiness, and reservation coordination |
+| Scout | `{{pulse_command}} status --repo-root <repo> --json` | Read-only runtime orientation |
 | Git | `git` | Version control |
 | Native swarm adapters | — | Claude Code teammates or Codex subagents |
 | GitNexus | `gitnexus` | Optional graph-backed codebase intelligence |
@@ -79,8 +79,8 @@ Pulse has automated coverage for onboarding/runtime control-plane behavior in `s
 ```bash
 git status
 # edit files
-pulse-work status --repo-root <repo> --json
-pulse-work ready --json
+{{pulse_command}} status --repo-root <repo> --json
+{{pulse_command}} ready --repo-root <repo> --json
 git add <files>
 git commit -m "..."
 git push
@@ -89,7 +89,7 @@ git push
 <!-- gitnexus:start -->
 # GitNexus — Code Intelligence
 
-This project is indexed by GitNexus as **pulse** (3380 symbols, 4924 relationships, 204 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
+This project is indexed by GitNexus as **pulse** (3444 symbols, 5038 relationships, 209 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
 
 > If any GitNexus tool warns the index is stale, run `npx gitnexus analyze` in terminal first.
 

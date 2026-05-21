@@ -1,6 +1,6 @@
 {
   "name": "pulse",
-  "description": "Pulse: one `pulse:workflow` workflow router plus standalone utility skills, with the `pulse-work` runtime CLI for planned, validated, reviewable software delivery",
+  "description": "Pulse: one `pulse:workflow` workflow router plus standalone utility skills for planned, validated, reviewable software delivery",
   "version": "3.5.3",
   "author": {
     "name": "quanpersie2001",

@@ -40,22 +40,21 @@ This is the shortest concrete example of a standard Pulse v2 run.
 
 ## Quick Scout
 
-Before resuming or planning deeper work on an onboarded repo, run `pulse-work status --repo-root <repo> --json` when `pulse-work` is available on `PATH`.
+Before resuming or planning deeper work on an onboarded repo, run the rendered runtime scout command.
 
 ```bash
-pulse-work status --repo-root <repo> --json
+{{pulse_command}} status --repo-root <repo> --json
 ```
 
 Use the scout output to decide which artifacts to open next.
 
-## Runtime Workgraph Commands
+## Runtime Commands
 
-Use `pulse-work` for runtime metadata operations:
+Use `{{pulse_command}}` for readiness and reservation operations:
 
 ```bash
-pulse-work ready --json
-pulse-work show <ID> --json
-pulse-work create --kind TASK --title "..." --parent <ID>
+{{pulse_command}} ready --repo-root <repo> --json
+{{pulse_command}} reservation list --repo-root <repo> --active-only --json
 ```
 
 ## Core Promise

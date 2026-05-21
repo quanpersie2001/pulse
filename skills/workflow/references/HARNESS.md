@@ -60,7 +60,7 @@ An operator using the harness should expect Pulse to:
 ## Router and runtime boundary
 
 - `pulse:workflow ...` chooses the workflow move
-- `pulse-work ...` mutates workgraph state
+- `{{pulse_command}} ...` reads readiness and coordinates runtime reservations
 
 The harness must make that boundary obvious to operators.
 

@@ -4,7 +4,7 @@ This document explains Pulse v2 as a single public router skill with a separate 
 
 ## In One Sentence
 
-Pulse is a repo-local workflow system where `/pulse` defines user-facing flow, `pulse-work` manages canonical metadata, and approval gates prevent unsafe execution.
+Pulse is a repo-local workflow system where `pulse:workflow` defines user-facing flow, `{{pulse_command}}` reads and coordinates runtime state, and approval gates prevent unsafe execution.
 
 ## Mental Model
 
@@ -56,13 +56,13 @@ flowchart TD
 
 ### Runtime mutation surface
 
-- `pulse-work ...` mutates workgraph metadata when the active runtime explicitly exposes the installed CLI.
+- `{{pulse_command}} ...` exposes runtime status, readiness, and reservations through the installed workflow skill.
 - Canonical metadata source: `.pulse/workgraph/items.jsonl`.
 
 ### State and scout
 
 - Canonical runtime state: `.pulse/runtime/*`.
-- Scout entrypoint: `pulse-work status --repo-root <repo> --json`.
+- Scout entrypoint: `{{pulse_command}} status --repo-root <repo> --json`.
 
 ## Canonical Planes and Key Files
 
@@ -80,10 +80,10 @@ flowchart TD
 
 ## Coordination Model
 
-- Use `pulse-work ready --json` to surface ready work.
+- Use `{{pulse_command}} ready --repo-root <repo> --json` to surface ready work.
 - Use runtime reservations to prevent edit collisions in swarm mode.
 - Keep `state.json` and `STATE.md` aligned during transitions.
 
 ## What Architecture Intentionally Excludes
 
-This architecture defines `/pulse`, `pulse-work`, `.pulse/runtime`, and `.pulse/workgraph` as the active operational contract.
+This architecture defines `pulse:workflow`, `{{pulse_command}}`, `.pulse/runtime`, and `.pulse/workgraph` as the active operational contract.

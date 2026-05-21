@@ -4,7 +4,7 @@ Read this file at every session start. Re-read after context compaction.
 
 ## What is Pulse?
 
-Pulse is a validate-first, docs-first workflow system with a single public skill router: **`pulse:workflow`**. Runtime metadata and workgraph mutations are handled by **`pulse-work`**.
+Pulse is a validate-first, docs-first workflow system with a single public skill router: **`pulse:workflow`**. Runtime reads and reservations use the rendered **`{{pulse_command}}`** command from the installed workflow skill.
 
 ## What Pulse Is / Is Not
 
@@ -27,7 +27,7 @@ Pulse is not:
 - current-work artifact — execution-ready contract for active delivery slice.
 - work item — one unit of execution in the canonical workgraph.
 - handoff — pause/resume contract for the next actor.
-- `pulse_status` — read-only runtime scout.
+- `{{pulse_command}} status` — read-only runtime scout.
 
 ## Public Router Commands
 
@@ -59,9 +59,9 @@ pulse:workflow use → pulse:workflow brainstorm (optional) → pulse:workflow e
 ## Core Runtime Tools
 
 - `pulse:workflow` — user-facing workflow router
-- `pulse-work` — runtime CLI for workgraph metadata operations
-- `node skills/workflow/scripts/pulse_status.mjs --repo-root <repo> --json` — scout orientation
-- `node skills/workflow/scripts/pulse_reservations.mjs --repo-root <repo> ... --json` — local reservation coordination
+- `{{pulse_command}} status --repo-root <repo> --json` — scout orientation
+- `{{pulse_command}} ready --repo-root <repo> --json` — ready work inspection
+- `{{pulse_command}} reservation ... --repo-root <repo> --json` — reservation coordination
 - native swarm adapters — Claude teammates/Codex subagents
 
 ## Packaged Standalone Utility Skills
@@ -108,7 +108,7 @@ works/
 ### Start a fresh run
 
 1. Run `pulse:workflow use`.
-2. Run `node skills/workflow/scripts/pulse_status.mjs --repo-root <repo> --json`.
+2. Run `{{pulse_command}} status --repo-root <repo> --json`.
 3. Open only the artifacts scout points to.
 
 ### Resume safely
@@ -126,9 +126,8 @@ works/
 ### Runtime workgraph quick reads
 
 ```bash
-pulse-work ready --json
-pulse-work show <ID> --json
-pulse-work graph --json
+{{pulse_command}} ready --repo-root <repo> --json
+{{pulse_command}} reservation list --repo-root <repo> --active-only --json
 ```
 
 ## Landing the Plane (Session Completion)
@@ -147,7 +146,7 @@ CASS (`cass`) and cass-memory (`cm`) are optional accelerators for transcript se
 <!-- gitnexus:start -->
 # GitNexus — Code Intelligence
 
-This project is indexed by GitNexus as **pulse** (3444 symbols, 5007 relationships, 206 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
+This project is indexed by GitNexus as **pulse** (3444 symbols, 5038 relationships, 209 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
 
 > If any GitNexus tool warns the index is stale, run `npx gitnexus analyze` in terminal first.
 

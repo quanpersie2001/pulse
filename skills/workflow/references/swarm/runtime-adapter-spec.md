@@ -27,8 +27,8 @@ Adapter must support:
 
 ## Invariants across adapters
 
-- ready work selected from `pulse-work ready --json`
-- graph truth from `pulse-work graph --json`
-- reservation layer from plugin-owned `pulse_reservations.mjs` or the public `pulse-work` surface
+- ready work selected from `{{pulse_command}} ready --repo-root <repo> --json`
+- graph truth from `.pulse/workgraph/views/graph.json`
+- reservation layer from `{{pulse_command}} reservation ... --repo-root <repo> --json`
 - owner-scoped handoffs in `.pulse/runtime/handoffs/`
 - one shared-branch commit slot at a time

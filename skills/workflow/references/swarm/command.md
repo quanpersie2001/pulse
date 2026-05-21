@@ -50,15 +50,10 @@ Readiness -> Surface Init -> Spawn -> Tend Loop -> Pause or Complete
 2. Inspect executable readiness:
 
 ```bash
-pulse-work ready --json
+{{pulse_command}} ready --repo-root <repo> --json
 ```
 
-3. Inspect full graph posture for active epic/story:
-
-```bash
-pulse-work graph --json
-```
-
+3. Inspect full graph posture for active epic/story from `.pulse/workgraph/views/graph.json`.
 4. Update `.pulse/runtime/state.json` and `.pulse/runtime/STATE.md` with active coordinator intent.
 
 Hard stop if approval/slice boundaries conflict across artifacts/state.
@@ -89,24 +84,24 @@ Provide each worker:
 - `active_story_id` or slice scope
 - optional `startup_hint`
 
-Do not pre-assign permanent tracks. Workers self-route from live `pulse-work ready` output after startup checks.
+Do not pre-assign permanent tracks. Workers self-route from live `{{pulse_command}} ready --repo-root <repo> --json` output after startup checks.
 
 Immediately register each worker in `.pulse/runtime/STATE.md` under `## Active Workers`.
 
 ### Phase 4 — Tend loop (continuous while actionable work exists)
 
-Stay in tending mode while any worker is active, blocked, expected to report, or while `pulse-work ready` still returns executable work.
+Stay in tending mode while any worker is active, blocked, expected to report, or while `{{pulse_command}} ready --repo-root <repo> --json` still returns executable work.
 
 Each cycle must:
 
 1. Process new worker events and validate required fields.
 2. Update worker status in `.pulse/runtime/STATE.md`.
 3. Respond immediately to blockers/conflicts.
-4. Re-check `pulse-work ready --json` and `pulse-work graph --json` after significant transitions.
+4. Re-check `{{pulse_command}} ready --repo-root <repo> --json` and active workgraph posture after significant transitions.
 5. Refresh reservation posture when conflicts or stalled workers appear:
 
 ```bash
-node {{scripts_path}}/pulse_reservations.mjs --repo-root <repo> list --active-only --json
+{{pulse_command}} reservation list --repo-root <repo> --active-only --json
 ```
 
 6. Enforce one active commit slot on shared branch at a time.
@@ -119,7 +114,7 @@ If a required field is missing, request corrected event payload and do not infer
 
 Coordinator must verify, per event:
 
-- item transition is valid in `pulse-work`
+- item transition is valid in the active workgraph metadata
 - reservation ownership is safe before overlapping edits
 - commit slot is granted before any worker commits
 

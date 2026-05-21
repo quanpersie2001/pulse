@@ -68,11 +68,32 @@ test("buildSkills renders provider skill outputs without runtime placeholders", 
   }
 });
 
-test("runtime-facing docs avoid unresolved legacy runtime placeholders", () => {
+test("runtime-facing source docs use the semantic runtime command placeholder", () => {
   const activeDocs = [
     "AGENTS.template.md",
+    "AGENTS.md",
     "CLAUDE.md",
     "CONTRIBUTING.md",
+    "README.md",
+    "docs/ARCHITECTURE.md",
+    "docs/examples/golden-path.md",
+    "skills/gitnexus/SKILL.md",
+    "skills/workflow/SKILL.md",
+    "skills/workflow/references/execute/command.md",
+    "skills/workflow/references/swarm/command.md",
+    "skills/workflow/references/swarm/runtime-adapter-spec.md",
+    "skills/workflow/references/use/command.md",
+    "skills/workflow/references/use/readiness.md",
+  ];
+
+  for (const relativePath of activeDocs) {
+    const content = fs.readFileSync(path.join(REPO_ROOT, relativePath), "utf8");
+    assert.doesNotMatch(content, /\{\{scripts_path\}\}|\{\{skills_path\}\}|pulse_status\.mjs|pulse_reservations\.mjs/, relativePath);
+  }
+
+  const runtimeSourceDocs = [
+    "AGENTS.template.md",
+    "CLAUDE.md",
     "README.md",
     "docs/ARCHITECTURE.md",
     "docs/examples/golden-path.md",
@@ -81,14 +102,33 @@ test("runtime-facing docs avoid unresolved legacy runtime placeholders", () => {
     "skills/workflow/references/swarm/command.md",
   ];
 
-  for (const relativePath of activeDocs) {
+  for (const relativePath of runtimeSourceDocs) {
     const content = fs.readFileSync(path.join(REPO_ROOT, relativePath), "utf8");
-    assert.doesNotMatch(content, /\{\{scripts_path\}\}|\{\{skills_path\}\}/, relativePath);
+    assert.match(content, /\{\{pulse_command\}\}/, relativePath);
   }
+});
 
-  const gitNexusSkill = fs.readFileSync(path.join(REPO_ROOT, "skills", "gitnexus", "SKILL.md"), "utf8");
-  assert.match(gitNexusSkill, /pulse-work status --repo-root <repo> --json/);
-  assert.doesNotMatch(gitNexusSkill, /pulse_status\.mjs/);
+test("representative rendered docs contain concrete runtime commands", () => {
+  buildSkills();
+
+  for (const providerName of ["claude-code", "agents", "codex"]) {
+    const provider = PROVIDERS.find((entry) => entry.name === providerName);
+    const pulseCommand = getPulseCommand(provider);
+    const routerOverview = path.join(DIST_DIR, provider.configDir, "skills", provider.workflowSkillDir, "SKILL.md");
+    const commandDocs = [
+      path.join(DIST_DIR, provider.configDir, "skills", provider.workflowSkillDir, "references", "execute", "command.md"),
+      path.join(DIST_DIR, provider.configDir, "skills", "gitnexus", "SKILL.md"),
+    ];
+
+    const escapedPulseCommand = pulseCommand.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    assert.match(fs.readFileSync(routerOverview, "utf8"), new RegExp(escapedPulseCommand), routerOverview);
+
+    for (const docPath of commandDocs) {
+      const content = fs.readFileSync(docPath, "utf8");
+      assert.match(content, new RegExp(`${escapedPulseCommand} (status|ready|reservation)`), docPath);
+      assert.doesNotMatch(content, /\{\{pulse_command\}\}/, docPath);
+    }
+  }
 });
 
 test("runtime placeholder renderer replaces only supported source placeholder", () => {

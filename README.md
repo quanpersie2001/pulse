@@ -26,7 +26,7 @@
 
 Pulse ships one public workflow router skill, **`pulse:workflow`**, plus packaged standalone utility skills outside that router.
 
-Workflow subcommands are: onboard, explore, brainstorm, plan, validate, swarm, execute, review, and compound. Runtime mutations are handled by the separate CLI **`pulse-work`**, with canonical state in **`.pulse/runtime/`** and canonical metadata in **`.pulse/workgraph/items.jsonl`**.
+Workflow subcommands are: onboard, explore, brainstorm, plan, validate, swarm, execute, review, and compound. Runtime status, readiness, and reservations run through **`{{pulse_command}}`**, which renders to provider-specific `node <provider-skills-root>/pulse:workflow/scripts/pulse.mjs ...` commands. Canonical state lives in **`.pulse/runtime/`** and canonical metadata in **`.pulse/workgraph/items.jsonl`**.
 
 Standalone utility skills remain packaged separately for focused non-router tasks: `architecture-rescue`, `systematic-debug-fix`, `dev-note`, `dev-note-distil`, `prompt-leverage`, and `gitnexus`.
 
@@ -55,7 +55,7 @@ Standalone utility skills remain packaged separately for focused non-router task
 | --- | --- |
 | Requirements drift in chat | Lock decisions in context artifacts |
 | Plans are plausible but brittle | Validate before execution |
-| Parallel workers collide | Coordinate through `pulse-work` + reservations |
+| Parallel workers collide | Coordinate through rendered `pulse.mjs reservation` commands |
 | Work is hard to audit later | Preserve artifacts, evidence, and review trail |
 
 ## Installation
@@ -77,7 +77,7 @@ Codex reads the marketplace name from [`.agents/plugins/marketplace.json`](.agen
 
 ### After Install
 
-Start with **`pulse:workflow use`** in the target repo to initialize `.pulse/runtime` and `.pulse/workgraph`. Use the installed `pulse-work` runtime CLI for status, readiness, and reservation operations only when your runtime explicitly exposes it.
+Start with **`pulse:workflow use`** in the target repo to initialize `.pulse/runtime` and `.pulse/workgraph`. Installed skill docs render `{{pulse_command}}` to concrete `node <provider-skills-root>/pulse:workflow/scripts/pulse.mjs ...` commands for status, readiness, and reservation operations.
 
 ## Project Docs
 

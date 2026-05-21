@@ -21,7 +21,7 @@ metadata:
 
 Codebase intelligence support skill for Pulse.
 
-If preflight readiness is missing, stale, or blocked (check `.pulse/tooling-status.json`), stop and invoke `pulse:using-pulse` first.
+If preflight readiness is missing, stale, or blocked (check `.pulse/runtime/tooling-status.json`), stop and invoke `pulse:workflow use` first.
 
 ## Start With The Repo Scout
 
@@ -30,7 +30,7 @@ Do not start by guessing CLI subcommands or assuming GitNexus is configured in t
 Run:
 
 ```bash
-node {{scripts_path}}/pulse_status.mjs --repo-root <repo> --json
+{{pulse_command}} status --repo-root <repo> --json
 ```
 
 Use the scout output as the source of truth for this repo/session:

@@ -60,12 +60,12 @@ See `approval-gates.md` for the gate details.
 
 Use the router to decide **what workflow move should happen next**.
 
-Use `pulse-work` to mutate canonical workgraph state once the runtime exists.
+Use `{{pulse_command}}` to inspect readiness and coordinate runtime reservations once the runtime exists.
 
 Examples:
 
 - `pulse:workflow plan` decides the shape of work.
-- `pulse-work create` will eventually create work items in the workgraph.
+- `{{pulse_command}} ready --repo-root <repo> --json` surfaces executable work.
 
 The router is conversational and decision-oriented.
 The runtime is mechanical and state-oriented.

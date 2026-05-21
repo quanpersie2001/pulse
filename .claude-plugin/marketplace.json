@@ -1,6 +1,6 @@
 {
   "name": "pulse-dev",
-  "description": "Development marketplace for the Pulse `/pulse` router and `pulse-work` runtime",
+  "description": "Development marketplace for the Pulse `pulse:workflow` router",
   "owner": {
     "name": "quanpersie2001",
     "url": "https://github.com/quanpersie2001"
@@ -8,7 +8,7 @@
   "plugins": [
     {
       "name": "pulse",
-      "description": "Pulse: single `/pulse` workflow router with the `pulse-work` runtime CLI for planned, validated, reviewable software delivery",
+      "description": "Pulse: single `pulse:workflow` router for planned, validated, reviewable software delivery",
       "version": "3.5.3",
       "source": "./",
       "author": {

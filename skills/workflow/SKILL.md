@@ -14,10 +14,10 @@ metadata:
 `pulse:workflow` is the single public workflow entrypoint for Pulse.
 
 It owns command routing for the Pulse workflow surface.
-It does **not** replace the runtime CLI.
+It does **not** replace the rendered runtime command.
 
 - `pulse:workflow ...` chooses the workflow move.
-- `pulse-work ...` mutates runtime and workgraph state.
+- `{{pulse_command}} ...` reads and coordinates runtime state through the installed workflow skill.
 
 ## Setup before routing
 
@@ -59,7 +59,7 @@ The runtime owns canonical mutable state.
 | Surface | Responsibility |
 | --- | --- |
 | `pulse:workflow` | choose the workflow move, load command guidance, preserve gate discipline |
-| `pulse-work` | manipulate workgraph items and runtime state once the runtime layer is in place |
+| `{{pulse_command}}` | inspect readiness and coordinate reservations through the installed workflow runtime |
 | `references/<command>/command.md` | command-specific behavioral entrypoint |
 | `references/shared/*.md` | cross-cutting workflow contracts |
 

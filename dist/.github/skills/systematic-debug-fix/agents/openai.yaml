@@ -1,0 +1,4 @@
+interface:
+  display_name: "Systematic Debug Fix"
+  short_description: "Find root cause, fix, and lock down regressions"
+  default_prompt: "Use $systematic-debug-fix to investigate the bug, fix it methodically, and add regression coverage."

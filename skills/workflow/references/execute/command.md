@@ -53,7 +53,7 @@ Treat `startup_hint` as a hint, not a silent permanent assignment. Re-check live
 ### 1b. Read project context (in this order)
 
 1. `AGENTS.md`
-2. if available: `node {{scripts_path}}/pulse_status.mjs --repo-root <repo> --json`
+2. `{{pulse_command}} status --repo-root <repo> --json`
 3. `.pulse/runtime/state.json`
 4. `.pulse/runtime/STATE.md`
 5. active current-slice artifacts under `works/` (from runtime state and selected item contract)
@@ -69,7 +69,7 @@ Before selecting work, post `[ONLINE]` on the active coordination surface includ
 - `runtime_identity`
 - `AGENTS.md: read`
 - `pulse:workflow execute: loaded`
-- `Next step: pulse-work ready --json`
+- `Next step: {{pulse_command}} ready --repo-root <repo> --json`
 
 Do not claim work before this startup report.
 
@@ -126,7 +126,7 @@ Check active coordination surface for:
 Then inspect live ready queue:
 
 ```bash
-pulse-work ready --json
+{{pulse_command}} ready --repo-root <repo> --json
 ```
 
 Select the highest-priority ready item that:
@@ -141,9 +141,7 @@ If coordinator/swarm suggests an item, treat it as a hint or rescue instruction.
 
 ### Read item contract fully
 
-```bash
-pulse-work show <item-id> --json
-```
+Read the selected item contract from the active workgraph metadata before claiming it.
 
 Minimum fields to confirm:
 
@@ -180,7 +178,7 @@ If item touches interfaces, ownership boundaries, or high-risk constraints, also
 In worker mode, reserve all declared paths before editing:
 
 ```bash
-node {{scripts_path}}/pulse_reservations.mjs --repo-root <repo> reserve --agent <runtime_identity> --item <item-id> --path "src/foo.ts" --path "src/bar.ts" --json
+{{pulse_command}} reservation reserve --repo-root <repo> --agent <runtime_identity> --item <item-id> --path "src/foo.ts" --path "src/bar.ts" --json
 ```
 
 In standalone mode there is no cross-worker race, but declared scope remains a hard boundary.
@@ -305,9 +303,7 @@ Before close, confirm all true:
 
 ### 6b. Close item
 
-```bash
-pulse-work close <item-id> --json
-```
+Close the completed item through the active workgraph mutation surface only after verification evidence is complete.
 
 ### 6c. Atomic commit via coordinator-owned queue (worker mode)
 
@@ -334,7 +330,7 @@ In standalone mode, use same one-item commit format only when no active swarm co
 ### 6d. Release reservations (worker mode)
 
 ```bash
-node {{scripts_path}}/pulse_reservations.mjs --repo-root <repo> release --agent <runtime_identity> --json
+{{pulse_command}} reservation release --repo-root <repo> --agent <runtime_identity> --json
 ```
 
 Release before completion report so others can acquire files immediately.
@@ -370,9 +366,9 @@ If context compaction/summarization is detected, stop immediately and re-read be
 
 1. `AGENTS.md`
 2. `.pulse/runtime/state.json`
-3. current item contract: `pulse-work show <item-id> --json`
+3. current item contract from the active workgraph metadata
 4. required current-slice artifacts under `works/`
-5. active reservations: `node {{scripts_path}}/pulse_reservations.mjs --repo-root <repo> list --active-only --json`
+5. active reservations: `{{pulse_command}} reservation list --repo-root <repo> --active-only --json`
 6. latest coordinator updates on active coordination surface
 
 Resume only after all applicable reads complete.
@@ -401,12 +397,12 @@ Stop and reassess if you notice:
 
 | Action | Call |
 |---|---|
-| List ready items | `pulse-work ready --json` |
-| Read item contract | `pulse-work show <item-id> --json` |
-| Reserve scope | `node {{scripts_path}}/pulse_reservations.mjs --repo-root <repo> reserve --agent <runtime_identity> --item <item-id> --path "..." --json` |
-| Release scope | `node {{scripts_path}}/pulse_reservations.mjs --repo-root <repo> release --agent <runtime_identity> --json` |
-| List active reservations | `node {{scripts_path}}/pulse_reservations.mjs --repo-root <repo> list --active-only --json` |
-| Close item | `pulse-work close <item-id> --json` |
+| List ready items | `{{pulse_command}} ready --repo-root <repo> --json` |
+| Read item contract | active workgraph metadata |
+| Reserve scope | `{{pulse_command}} reservation reserve --repo-root <repo> --agent <runtime_identity> --item <item-id> --path "..." --json` |
+| Release scope | `{{pulse_command}} reservation release --repo-root <repo> --agent <runtime_identity> --json` |
+| List active reservations | `{{pulse_command}} reservation list --repo-root <repo> --active-only --json` |
+| Close item | active workgraph mutation surface |
 | Report lifecycle events | active coordination surface (`[ONLINE]`, `[DONE]`, `[BLOCKED]`, `[FILE CONFLICT]`, `[HANDOFF]`) |
 
 ## Inputs from `pulse:workflow swarm` (worker mode)

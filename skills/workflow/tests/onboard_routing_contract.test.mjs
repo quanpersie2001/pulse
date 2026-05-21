@@ -7,7 +7,10 @@ import os from "node:os";
 import path from "node:path";
 
 import { checkRepo, applyRepo, resolveRepoRoot } from "../scripts/onboard_pulse.mjs";
-import { collectPulseSessionStartNotes } from "../scripts/pulse_session_context.mjs";
+import {
+  buildPulseSessionStartContext,
+  collectPulseSessionStartNotes,
+} from "../scripts/pulse_session_context.mjs";
 
 function mkRoot() {
   return fs.mkdtempSync(path.join(os.tmpdir(), "pulse-onboard-routing-"));
@@ -104,6 +107,8 @@ test("applyRepo writes session-aware tooling status and runtime state mirrors", 
     assert.ok(toolingStatus.session.posture);
     assert.ok(Object.prototype.hasOwnProperty.call(toolingStatus.session, "scout_findings"));
     assert.ok(Object.prototype.hasOwnProperty.call(toolingStatus.session, "resume_options"));
+    assert.match(toolingStatus.tools.pulse_runtime_helper.command, /^node .+pulse\.mjs"? status --repo-root <repo> --json$/);
+    assert.doesNotMatch(toolingStatus.tools.pulse_runtime_helper.command, /\{\{pulse_command\}\}|\{\{scripts_path\}\}|\{\{skills_path\}\}/);
     assert.ok(typeof toolingStatus.next_command === "string");
     assert.ok(toolingStatus.next_command.length > 0);
     assert.ok(toolingStatus.session_load);
@@ -156,6 +161,22 @@ test("session-start context helper aligns with runtime session routing outputs",
     assert.match(joined, /Pulse is installed for this repo\./);
     assert.match(joined, /Pulse session posture:/);
     assert.match(joined, /Recommended next workflow command: pulse:workflow /);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("bootstrap session context loads the workflow skill source", async () => {
+  const root = mkRoot();
+  try {
+    const context = await buildPulseSessionStartContext(root, {
+      includeBootstrapSkill: true,
+      syncRuntimeArtifactsIfOnboarded: false,
+    });
+
+    assert.match(context, /# `pulse:workflow`/);
+    assert.match(context, /- `\{\{pulse_command\}\} \.\.\.` reads and coordinates runtime state through the installed workflow skill\./);
+    assert.doesNotMatch(context, /\{\{pulse_command\}\} status/);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }

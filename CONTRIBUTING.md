@@ -40,7 +40,7 @@ skills/workflow/
 └── scripts/
 ```
 
-Runtime metadata operations are exposed via the installed `pulse-work` CLI when the active runtime explicitly exposes it. Canonical state lives in:
+Runtime status, readiness, and reservation operations use the rendered `{{pulse_command}}` command from the installed workflow skill. Canonical state lives in:
 
 - `.pulse/runtime/`
 - `.pulse/workgraph/items.jsonl`
@@ -97,14 +97,13 @@ Pulse is documented and operated as one router with subcommands:
 - `prompt-leverage`
 - `gitnexus`
 
-### Runtime CLI
+### Runtime command
 
-Use `pulse-work` for workgraph operations, for example:
+Use `{{pulse_command}}` for status, readiness, and reservations, for example:
 
 ```bash
-pulse-work ready --json
-pulse-work show <ID> --json
-pulse-work create --kind TASK --title "..." --parent <ID>
+{{pulse_command}} ready --repo-root <repo> --json
+{{pulse_command}} reservation list --repo-root <repo> --active-only --json
 ```
 
 ## Adding or Changing Router Commands
@@ -132,8 +131,8 @@ For runtime changes, verify:
 
 - `pulse:workflow use` initializes expected `.pulse/runtime` and `.pulse/workgraph` layout when needed and restores session context.
 - `pulse:workflow onboard` still performs explicit bootstrap/remediation correctly when invoked directly.
-- `pulse-work status --repo-root <repo> --json` returns valid scout state.
-- `pulse-work` commands produce expected JSON/human outputs.
+- `{{pulse_command}} status --repo-root <repo> --json` returns valid scout state.
+- `{{pulse_command}} ready --repo-root <repo> --json` and reservation commands produce expected JSON outputs.
 
 ## Documentation Rules
 
