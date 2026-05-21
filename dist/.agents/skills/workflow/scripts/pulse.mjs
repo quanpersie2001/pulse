@@ -4,15 +4,15 @@ import { isDirectExecution } from "./cli_execution.mjs";
 
 const COMMAND_HANDLERS = {
   status: async (argv) => {
-    const { main } = await import("./pulse_status.mjs");
+    const { main } = await import("./cli/status.mjs");
     return main(argv);
   },
   ready: async (argv) => {
-    const { main } = await import("./pulse_work.mjs");
+    const { main } = await import("./cli/ready.mjs");
     return main(["ready", ...argv]);
   },
   reservation: async (argv) => {
-    const { main } = await import("./pulse_reservations.mjs");
+    const { main } = await import("./cli/reservation.mjs");
     return main(argv);
   },
 };

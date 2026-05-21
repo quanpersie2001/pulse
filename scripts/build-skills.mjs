@@ -68,7 +68,7 @@ function parseSkillName(skillDir) {
   return match[1].trim().replace(/^['"]|['"]$/g, "");
 }
 
-function shouldTreatAsText(filePath) {
+export function shouldTreatAsText(filePath) {
   return TEXT_EXTENSIONS.has(path.extname(filePath)) || TEXT_FILENAMES.has(path.basename(filePath));
 }
 

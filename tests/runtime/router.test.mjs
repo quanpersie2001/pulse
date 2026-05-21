@@ -2,6 +2,9 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
+import path from "node:path";
+import { spawnSync } from "node:child_process";
+
 import { REPO_ROOT } from "../helpers/fixtures.mjs";
 import { importModuleInNode } from "../helpers/import-module.mjs";
 import { cleanupTempRepo, mkTempRepo } from "../helpers/temp-repo.mjs";
@@ -27,6 +30,39 @@ test("pulse router renders help", () => {
   assert.match(result.stdout, /status/);
   assert.match(result.stdout, /ready/);
   assert.match(result.stdout, /reservation/);
+});
+
+test("cli adapters execute directly", () => {
+  const root = mkTempRepo("pulse-router-runtime-");
+  try {
+    const statusAdapter = path.join(REPO_ROOT, "skills", "workflow", "scripts", "cli", "status.mjs");
+    const readyAdapter = path.join(REPO_ROOT, "skills", "workflow", "scripts", "cli", "ready.mjs");
+    const reservationAdapter = path.join(REPO_ROOT, "skills", "workflow", "scripts", "cli", "reservation.mjs");
+
+    const statusResult = spawnSync(process.execPath, [statusAdapter, "--repo-root", root, "--json"], {
+      cwd: REPO_ROOT,
+      encoding: "utf8",
+    });
+    assert.equal(statusResult.status, 0, statusResult.stderr);
+    assert.equal(JSON.parse(statusResult.stdout).repo_root, root);
+
+    const readyResult = spawnSync(process.execPath, [readyAdapter, "--repo-root", root, "--json"], {
+      cwd: REPO_ROOT,
+      encoding: "utf8",
+    });
+    assert.equal(readyResult.status, 0, readyResult.stderr);
+    assert.equal(JSON.parse(readyResult.stdout).command, "ready");
+
+    const reservationResult = spawnSync(
+      process.execPath,
+      [reservationAdapter, "list", "--repo-root", root, "--json"],
+      { cwd: REPO_ROOT, encoding: "utf8" },
+    );
+    assert.equal(reservationResult.status, 0, reservationResult.stderr);
+    assert.equal(Array.isArray(JSON.parse(reservationResult.stdout).reservations), true);
+  } finally {
+    cleanupTempRepo(root);
+  }
 });
 
 test("pulse router delegates status, ready, and reservation list", () => {

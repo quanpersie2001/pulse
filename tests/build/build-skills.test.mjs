@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 
-import { buildSkills } from "../../scripts/build-skills.mjs";
+import { buildSkills, shouldTreatAsText } from "../../scripts/build-skills.mjs";
 import { getPulseCommand, PROVIDERS, WORKFLOW_SKILL_NAME } from "../../scripts/lib/providers.mjs";
 import {
   assertNoUnresolvedRuntimePlaceholders,
@@ -27,7 +27,7 @@ function collectFiles(root) {
     const entryPath = path.join(root, entry.name);
     if (entry.isDirectory()) {
       files.push(...collectFiles(entryPath));
-    } else if (entry.isFile()) {
+    } else if (entry.isFile() && shouldTreatAsText(entryPath)) {
       files.push(entryPath);
     }
   }
@@ -64,15 +64,18 @@ test("buildSkills renders provider skill outputs without runtime placeholders", 
   ensureSkillsBuilt();
 
   for (const provider of PROVIDERS) {
-    const workflowRuntime = path.join(
+    const workflowScripts = path.join(
       DIST_DIR,
       provider.configDir,
       "skills",
       WORKFLOW_SKILL_NAME,
       "scripts",
-      "pulse.mjs",
     );
-    assert.equal(fs.existsSync(workflowRuntime), true, provider.name);
+    assert.equal(fs.existsSync(path.join(workflowScripts, "pulse.mjs")), true, provider.name);
+    assert.equal(fs.existsSync(path.join(workflowScripts, "cli", "status.mjs")), true, provider.name);
+    assert.equal(fs.existsSync(path.join(workflowScripts, "runtime", "read-model.mjs")), true, provider.name);
+    assert.equal(fs.existsSync(path.join(workflowScripts, "workgraph", "model.mjs")), true, provider.name);
+    assert.equal(fs.existsSync(path.join(workflowScripts, "metadata", "command-metadata.json")), true, provider.name);
   }
 
   for (const filePath of collectFiles(DIST_DIR)) {
