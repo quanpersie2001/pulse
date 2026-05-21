@@ -9,10 +9,7 @@ import {
   resolveRepoRoot,
   normalizePulseState,
 } from "./pulse_state.mjs";
-import {
-  ensureReservationStore,
-  summarizeReservationStatusForState,
-} from "./pulse_reservation_store.mjs";
+import { summarizeReservationStatusForState } from "./pulse_reservation_store.mjs";
 import { summarizeHandoffManifest } from "./pulse_handoffs.mjs";
 import {
   buildCurrentFeatureRecord,
@@ -21,14 +18,13 @@ import {
   summarizeRuntimeSnapshot,
 } from "./pulse_runtime_derivations.mjs";
 
-function deriveAndPersistRuntimeArtifacts(repoRoot) {
+function buildPulseRuntimeArtifacts(repoRoot) {
   const paths = getPulseStatePaths(repoRoot);
   const stateJson = readJsonIfExists(paths.stateJson);
   const stateMarkdownText = fileTextIfExists(paths.stateMarkdown);
   const stateMarkdown = parseLooseKeyValueMarkdown(stateMarkdownText);
   const toolingStatus = readJsonIfExists(paths.toolingStatus);
   const handoffManifest = readJsonIfExists(paths.handoffManifest);
-  ensureReservationStore(repoRoot);
 
   const draftStatus = {
     repo_root: repoRoot,
@@ -42,7 +38,7 @@ function deriveAndPersistRuntimeArtifacts(repoRoot) {
       status: typeof toolingStatus?.status === "string" ? toolingStatus.status : "",
       requested_mode: typeof toolingStatus?.requested_mode === "string" ? toolingStatus.requested_mode : "",
       recommended_mode: typeof toolingStatus?.recommended_mode === "string" ? toolingStatus.recommended_mode : "",
-      next_skill: typeof toolingStatus?.next_skill === "string" ? toolingStatus.next_skill : "",
+      next_command: typeof toolingStatus?.next_command === "string" ? toolingStatus.next_command : "",
       blockers: Array.isArray(toolingStatus?.blockers) ? toolingStatus.blockers : [],
     },
     state_json: {
@@ -77,7 +73,7 @@ function deriveAndPersistRuntimeArtifacts(repoRoot) {
   };
 }
 
-export function syncPulseRuntimeArtifacts(repoRoot) {
+export function derivePulseRuntimeArtifacts(repoRoot) {
   const normalizedRoot = resolveRepoRoot(repoRoot);
-  return deriveAndPersistRuntimeArtifacts(normalizedRoot);
+  return buildPulseRuntimeArtifacts(normalizedRoot);
 }

@@ -19,7 +19,7 @@ export function normalizeNextCommandSurface(value) {
   return normalized;
 }
 
-export function inferWorkShapeNextSkillRecommended(status) {
+export function inferWorkShapeNextCommand(status) {
   const workShapeStatus = firstNonEmptyString(
     status.state_markdown?.work_shape_status,
     status.state_json?.work_shape_status,
@@ -75,18 +75,18 @@ export function inferWorkShapeNextSkillRecommended(status) {
   return "";
 }
 
-export function inferGateNextSkillRecommended(status, gate, gateStatus) {
+export function inferGateNextCommand(status, gate, gateStatus) {
   const explicit = firstNonEmptyString(
-    status.state_markdown?.next_skill_recommended,
-    status.state_json?.next_skill_recommended,
-    status.current_feature?.next_skill_recommended,
-    status.runtime_snapshot?.next_skill_recommended,
+    status.state_markdown?.next_command,
+    status.state_json?.next_command,
+    status.current_feature?.next_command,
+    status.runtime_snapshot?.next_command,
   );
   if (explicit) {
     return normalizeNextCommandSurface(explicit);
   }
 
-  const workShapeNext = inferWorkShapeNextSkillRecommended(status);
+  const workShapeNext = inferWorkShapeNextCommand(status);
   if (workShapeNext) {
     return workShapeNext;
   }
@@ -118,7 +118,7 @@ export function inferGateNextSkillRecommended(status, gate, gateStatus) {
   return "";
 }
 
-export function inferGateNextAction(status, gateStatus, nextSkillRecommended) {
+export function inferGateNextAction(status, gateStatus, nextCommand) {
   const explicit = firstNonEmptyString(
     status.state_markdown?.next_action,
     status.state_json?.next_action,
@@ -128,7 +128,7 @@ export function inferGateNextAction(status, gateStatus, nextSkillRecommended) {
   if (explicit) {
     return explicit;
   }
-  if (gateStatus === "approved" && nextSkillRecommended) {
+  if (gateStatus === "approved" && nextCommand) {
     return "manual_invoke";
   }
   return "";
@@ -199,15 +199,17 @@ export function buildRecommendedActions(status) {
     status.current_feature?.next_action,
     status.state_json?.next_action,
   );
-  const nextSkillRecommended = normalizeNextCommandSurface(firstNonEmptyString(
-    status.runtime_snapshot?.next_skill_recommended,
-    status.current_feature?.next_skill_recommended,
-    status.state_json?.next_skill_recommended,
+  const nextCommand = normalizeNextCommandSurface(firstNonEmptyString(
+    status.runtime_snapshot?.next_command,
+    status.current_feature?.next_command,
+    status.state_json?.next_command,
+    status.tooling_status?.next_command,
+    status.session_load?.next_command,
   ));
 
-  if (nextAction === "manual_invoke" && nextSkillRecommended) {
-    const actions = [`Gate cleared. Manually invoke ${nextSkillRecommended} when ready.`];
-    actions.push("You can clear chat context or switch to a stronger model before invoking the recommended next skill.");
+  if (nextAction === "manual_invoke" && nextCommand) {
+    const actions = [`Gate cleared. Manually invoke ${nextCommand} when ready.`];
+    actions.push("You can clear chat context or switch to a stronger model before invoking the recommended next command.");
     if (recallPack.length > 0) {
       actions.push("Before planning or debugging, consult the targeted recall pack instead of grepping the whole memory plane.");
     }
@@ -229,8 +231,9 @@ export function buildRecommendedActions(status) {
     return actions;
   }
 
-  if (status.tooling_status.next_skill) {
-    const actions = [`Next command suggestion: ${normalizeNextCommandSurface(status.tooling_status.next_skill)}.`];
+  const toolingStatusNextCommand = normalizeNextCommandSurface(status.tooling_status?.next_command);
+  if (toolingStatusNextCommand) {
+    const actions = [`Next command suggestion: ${toolingStatusNextCommand}.`];
     if (recallPack.length > 0) {
       actions.push("Before planning or debugging, consult the targeted recall pack instead of grepping the whole memory plane.");
     }

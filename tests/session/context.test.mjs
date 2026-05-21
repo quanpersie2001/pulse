@@ -2,6 +2,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
+import fs from "node:fs";
 import path from "node:path";
 
 import { applyRepo } from "../../skills/workflow/scripts/onboard_pulse.mjs";
@@ -22,6 +23,31 @@ test("session-start context helper aligns with runtime session routing outputs",
     assert.match(joined, /Pulse is installed for this repo\./);
     assert.match(joined, /Pulse session posture:/);
     assert.match(joined, /Recommended next workflow command: pulse:workflow /);
+  } finally {
+    cleanupTempRepo(root);
+  }
+});
+
+test("session-start notes prefer gate-derived next_command over session-load default", async () => {
+  const root = mkTempRepo("pulse-onboard-routing-");
+  try {
+    const runtimeDir = path.join(root, ".pulse", "runtime");
+    fs.mkdirSync(runtimeDir, { recursive: true });
+    fs.writeFileSync(path.join(runtimeDir, "onboarding.json"), `${JSON.stringify({ status: "complete" })}\n`, "utf8");
+    fs.writeFileSync(
+      path.join(runtimeDir, "STATE.md"),
+      [
+        "Gate: GATE 2",
+        "Gate status: approved",
+        "Work shape status: approved",
+        "Current work status: ready",
+      ].join("\n"),
+      "utf8",
+    );
+
+    const notes = await collectPulseSessionStartNotes(root);
+
+    assert.match(notes.join("\n"), /Recommended next workflow command: pulse:workflow validate\./);
   } finally {
     cleanupTempRepo(root);
   }

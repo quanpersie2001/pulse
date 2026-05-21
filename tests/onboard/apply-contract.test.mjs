@@ -73,8 +73,9 @@ test("applyRepo writes session-aware tooling status and runtime state mirrors", 
     assert.ok(Array.isArray(state.session.resume_options));
     assert.ok(typeof state.next_command === "string");
     assert.ok(state.next_command.length > 0);
-    assert.ok(typeof state.next_command_recommended === "string");
-    assert.ok(state.next_command_recommended.length > 0);
+    assert.equal(Object.prototype.hasOwnProperty.call(state, "next_command_recommended"), false);
+    assert.equal(Object.prototype.hasOwnProperty.call(state, "next_skill_recommended"), false);
+    assert.equal(Object.prototype.hasOwnProperty.call(state, "next_skill"), false);
     assert.ok(state.session_load);
     assert.equal(state.session_load.posture, "fresh");
     assertNoRuntimeArtifactLeaks(path.join(root, ".pulse"));

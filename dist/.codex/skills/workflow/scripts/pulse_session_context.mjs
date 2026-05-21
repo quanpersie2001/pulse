@@ -9,7 +9,6 @@ import {
   getScriptDir,
   getWorkflowSkillPath,
 } from "./pulse_package_paths.mjs";
-import { syncPulseRuntimeArtifacts } from "./pulse_runtime_sync.mjs";
 import { readGitNexusReadiness } from "./pulse_gitnexus_readiness.mjs";
 import { readPulseStatus } from "./pulse_status_model.mjs";
 
@@ -72,7 +71,7 @@ function buildPulseSessionPostureSummary(status) {
   const runtimeSnapshot = status?.runtime_snapshot || {};
   const currentFeature = status?.current_feature || {};
   const handoffManifest = status?.handoff_manifest || {};
-  const sessionLoad = status?.tooling_status?.session_load || runtimeSnapshot.session_load || {};
+  const sessionLoad = status?.session_load || {};
   const activeContext = sessionLoad.active_context || {};
 
   const phase = firstNonEmptyString(runtimeSnapshot.phase, currentFeature.phase, "idle");
@@ -90,13 +89,10 @@ function buildPulseSessionPostureSummary(status) {
   const gate = firstNonEmptyString(runtimeSnapshot.gate, currentFeature.gate, "(none)");
   const gateStatus = firstNonEmptyString(runtimeSnapshot.gate_status, currentFeature.gate_status);
   const nextCommand = firstNonEmptyString(
-    sessionLoad.next_command,
-    runtimeSnapshot.next_command_recommended,
     runtimeSnapshot.next_command,
-    currentFeature.next_skill_recommended,
-    runtimeSnapshot.next_skill_recommended,
+    currentFeature.next_command,
     status?.tooling_status?.next_command,
-    status?.tooling_status?.next_skill,
+    sessionLoad.next_command,
   );
 
   const activeHandoffs = Array.isArray(handoffManifest.active) ? handoffManifest.active : [];
@@ -122,16 +118,12 @@ function buildPulseSessionPostureSummary(status) {
   );
 }
 
-export async function collectPulseSessionStartNotes(repoRoot, options = {}) {
-  const { syncRuntimeArtifactsIfOnboarded = true } = options;
+export async function collectPulseSessionStartNotes(repoRoot, _options = {}) {
   const onboardingPath = path.join(repoRoot, ".pulse", "runtime", "onboarding.json");
   const criticalPatterns = path.join(repoRoot, ".pulse", "memory", "critical-patterns.md");
 
   const notes = [];
   if (fs.existsSync(onboardingPath)) {
-    if (syncRuntimeArtifactsIfOnboarded) {
-      syncPulseRuntimeArtifacts(repoRoot);
-    }
     notes.push(
       `Pulse is installed for this repo. Read AGENTS.md, then run pulse:workflow use before substantive work. For a scout snapshot, run \`${PULSE_COMMAND} status --repo-root <repo> --json\`.`,
     );
@@ -167,14 +159,9 @@ export async function collectPulseSessionStartNotes(repoRoot, options = {}) {
 }
 
 export async function buildPulseSessionStartContext(repoRoot, options = {}) {
-  const {
-    includeBootstrapSkill = false,
-    syncRuntimeArtifactsIfOnboarded = true,
-  } = options;
+  const { includeBootstrapSkill = false } = options;
 
-  const notes = await collectPulseSessionStartNotes(repoRoot, {
-    syncRuntimeArtifactsIfOnboarded,
-  });
+  const notes = await collectPulseSessionStartNotes(repoRoot, options);
 
   const sections = [];
   if (includeBootstrapSkill) {

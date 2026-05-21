@@ -16,7 +16,7 @@ import {
   parseLooseKeyValueMarkdown,
   readJsonIfExists,
 } from "./pulse_state.mjs";
-import { syncPulseRuntimeArtifacts } from "./pulse_runtime_sync.mjs";
+import { derivePulseRuntimeArtifacts } from "./pulse_runtime_sync.mjs";
 import { summarizeReservationStatusForState } from "./pulse_reservation_store.mjs";
 import { buildNextReads, buildRecommendedActions } from "./pulse_recommendations.mjs";
 import { summarizeMemoryRecall } from "./pulse_memory_recall.mjs";
@@ -46,7 +46,7 @@ export async function readPulseStatus(repoRoot) {
   const stateJson = readJsonIfExists(paths.stateJson);
   const stateMarkdownText = fileTextIfExists(paths.stateMarkdown);
   const stateMarkdown = parseLooseKeyValueMarkdown(stateMarkdownText);
-  const derivedRuntime = syncPulseRuntimeArtifacts(repoRoot);
+  const derivedRuntime = derivePulseRuntimeArtifacts(repoRoot);
   const handoffManifest = readJsonIfExists(paths.handoffManifest);
   const sessionLoad = buildSessionLoad(repoRoot);
 
@@ -83,7 +83,7 @@ export async function readPulseStatus(repoRoot) {
         typeof toolingStatus?.requested_mode === "string" ? toolingStatus.requested_mode : "",
       recommended_mode:
         typeof toolingStatus?.recommended_mode === "string" ? toolingStatus.recommended_mode : "",
-      next_skill: typeof toolingStatus?.next_skill === "string" ? toolingStatus.next_skill : "",
+      next_command: typeof toolingStatus?.next_command === "string" ? toolingStatus.next_command : "",
       blockers: Array.isArray(toolingStatus?.blockers) ? toolingStatus.blockers : [],
     },
     state_json: stateJsonSummary,

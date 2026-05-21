@@ -80,8 +80,8 @@ function renderOperatorSurfaceLines(status) {
     if (currentFeature.next_action) {
       lines.push(`  - next_action: ${currentFeature.next_action}`);
     }
-    if (currentFeature.next_skill_recommended) {
-      lines.push(`  - next_skill_recommended: ${currentFeature.next_skill_recommended}`);
+    if (currentFeature.next_command) {
+      lines.push(`  - next_command: ${currentFeature.next_command}`);
     }
     lines.push(`  - updated_at: ${currentFeature.updated_at || "(none)"}`);
   }
@@ -105,8 +105,8 @@ function renderOperatorSurfaceLines(status) {
     if (runtimeSnapshot.next_action) {
       lines.push(`  - next_action: ${runtimeSnapshot.next_action}`);
     }
-    if (runtimeSnapshot.next_skill_recommended) {
-      lines.push(`  - next_skill_recommended: ${runtimeSnapshot.next_skill_recommended}`);
+    if (runtimeSnapshot.next_command) {
+      lines.push(`  - next_command: ${runtimeSnapshot.next_command}`);
     }
     lines.push(`  - updated_at: ${runtimeSnapshot.updated_at || "(none)"}`);
   }

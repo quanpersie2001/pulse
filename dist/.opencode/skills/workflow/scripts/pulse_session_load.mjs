@@ -18,6 +18,7 @@ import { normalizeWorkflowCommand } from "./core/commands.mjs";
 import { readJsonIfExists } from "./core/fs.mjs";
 import { resolveRepoRoot, resolveSafeRepoRelativePath } from "./core/paths.mjs";
 import { firstNonEmptyString, uniqueStrings } from "./core/strings.mjs";
+import { normalizePulseState } from "./pulse_state.mjs";
 
 function parseJsonSafe(text) {
   try {
@@ -125,7 +126,7 @@ function mapResumeOptions(activeHandoffs) {
 }
 
 export function buildSessionLoad(repoRoot, options = {}) {
-  const state = readJsonIfExists(path.join(repoRoot, ".pulse", "runtime", "state.json")) || {};
+  const state = normalizePulseState(readJsonIfExists(path.join(repoRoot, ".pulse", "runtime", "state.json")) || {});
   const toolingStatus = readJsonIfExists(path.join(repoRoot, ".pulse", "runtime", "tooling-status.json")) || {};
   const handoffManifest = readJsonIfExists(path.join(repoRoot, ".pulse", "runtime", "handoffs", "manifest.json")) || {};
   const reservations = readJsonIfExists(path.join(repoRoot, ".pulse", "runtime", "reservations.json")) || {};
@@ -197,12 +198,8 @@ export function buildSessionLoad(repoRoot, options = {}) {
   const nextCommand =
     normalizeWorkflowCommand(selectedHandoff?.next_command) ||
     normalizeWorkflowCommand(selectedEntry?.next_command) ||
-    normalizeWorkflowCommand(state.next_command_recommended) ||
     normalizeWorkflowCommand(state.next_command) ||
-    normalizeWorkflowCommand(toolingStatus.next_command_recommended) ||
     normalizeWorkflowCommand(toolingStatus.next_command) ||
-    normalizeWorkflowCommand(state.next_skill_recommended) ||
-    normalizeWorkflowCommand(toolingStatus.next_skill) ||
     "pulse:workflow explore";
   const scoutFindings = [];
   if (activeHandoffs.length > 0) {

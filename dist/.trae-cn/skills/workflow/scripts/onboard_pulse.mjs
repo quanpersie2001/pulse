@@ -33,7 +33,6 @@ import {
   buildDefaultState,
   normalizePulseState,
 } from "./pulse_state.mjs";
-import { syncPulseRuntimeArtifacts } from "./pulse_runtime_sync.mjs";
 import {
   relativePosix,
   resolveRepoRoot as resolveRepoRootFromPaths,
@@ -856,8 +855,6 @@ export function applyRepo(repoRoot, _allowCompactPromptReplace, options = {}) {
     session_load: toolingStatusPayload.session_load,
     tooling_status: ".pulse/runtime/tooling-status.json",
     next_command: toolingStatusPayload.next_command || "pulse:workflow explore",
-    next_command_recommended: toolingStatusPayload.next_command || "pulse:workflow explore",
-    next_skill_recommended: toolingStatusPayload.next_command || "pulse:workflow explore",
   });
 
   const toolingStatusPath = path.join(repoRoot, ".pulse", "runtime", "tooling-status.json");
@@ -865,8 +862,6 @@ export function applyRepo(repoRoot, _allowCompactPromptReplace, options = {}) {
   fs.writeFileSync(toolingStatusPath, `${JSON.stringify(toolingStatusPayload, null, 2)}\n`, "utf8");
   fs.writeFileSync(statePath, `${JSON.stringify(nextState, null, 2)}\n`, "utf8");
   writeStateMarkdownFromTooling(repoRoot, toolingStatusPayload);
-
-  syncPulseRuntimeArtifacts(repoRoot);
 
   const onboardingNotes = [
     ...domainNormalization.domains.pulse.notes,

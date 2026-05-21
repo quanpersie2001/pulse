@@ -3,6 +3,8 @@
 import fs from "node:fs";
 
 import { ensureParent, readJsonIfExists, readTextIfExists } from "./core/fs.mjs";
+import { normalizeWorkflowCommand } from "./core/commands.mjs";
+import { firstNonEmptyString } from "./core/strings.mjs";
 import { getPulsePaths, resolveRepoRoot as resolveRepoRootFromPaths } from "./pulse_paths.mjs";
 
 export const STATE_SCHEMA_VERSION = "1.0";
@@ -13,6 +15,17 @@ function utcNow() {
 
 export const fileTextIfExists = readTextIfExists;
 export { readJsonIfExists };
+
+function normalizeNextCommand(overrides) {
+  return normalizeWorkflowCommand(
+    firstNonEmptyString(
+      overrides.next_command,
+      overrides.next_command_recommended,
+      overrides.next_skill_recommended,
+      overrides.next_skill,
+    ),
+  );
+}
 
 export function resolveRepoRoot(explicitRoot, startFrom = process.cwd(), env = process.env) {
   return resolveRepoRootFromPaths({
@@ -43,11 +56,7 @@ export function buildDefaultState(overrides = {}) {
     requested_mode: typeof overrides.requested_mode === "string" ? overrides.requested_mode : "",
     recommended_mode: typeof overrides.recommended_mode === "string" ? overrides.recommended_mode : "",
     next_action: typeof overrides.next_action === "string" ? overrides.next_action : "",
-    next_command: typeof overrides.next_command === "string" ? overrides.next_command : "",
-    next_command_recommended:
-      typeof overrides.next_command_recommended === "string" ? overrides.next_command_recommended : "",
-    next_skill_recommended:
-      typeof overrides.next_skill_recommended === "string" ? overrides.next_skill_recommended : "",
+    next_command: normalizeNextCommand(overrides),
     session: {
       posture: typeof session.posture === "string" ? session.posture : "",
       scout_findings: Array.isArray(session.scout_findings) ? session.scout_findings : [],
