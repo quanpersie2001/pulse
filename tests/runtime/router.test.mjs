@@ -25,20 +25,33 @@ test("pulse router renders global and command help", () => {
   const helpResult = spawnPulse(["--help"]);
 
   assert.equal(helpResult.status, 0, helpResult.stderr);
-  assert.match(helpResult.stdout, /Usage: pulse\.mjs <command> \[options\]/);
-  assert.match(helpResult.stdout, /status \[--repo-root <repo>\] \[--json\] \[--sync\]/);
-  assert.match(helpResult.stdout, /ready \[--repo-root <repo>\] \[--json\]/);
-  assert.match(helpResult.stdout, /intake \[user input\] \[--json\]/);
-  assert.match(helpResult.stdout, /reservation <reserve\|release\|list\|sweep> \[options\]/);
-  assert.match(helpResult.stdout, /session-load \[--repo-root <repo>\] \[--resume-owner <owner_id>\] \[--json\]/);
-  assert.match(helpResult.stdout, /onboard <check\|apply> \[--repo-root <repo>\] \[--resume-owner <owner_id>\] \[--json\]/);
-  assert.match(helpResult.stdout, /workgraph <create\|show\|list\|ready\|update\|close\|reopen\|dep\|link\|children\|graph\|doctor> \[options\]/);
-  assert.match(helpResult.stdout, /help \[command\]/);
+  assert.match(helpResult.stdout, /Pulse runtime workflow CLI/);
+  assert.match(helpResult.stdout, /Usage: pulse\.mjs \[OPTIONS\] <COMMAND>/);
+  assert.match(helpResult.stdout, /status\s+Inspect Pulse runtime posture/);
+  assert.match(helpResult.stdout, /ready\s+Show work items that are unblocked/);
+  assert.match(helpResult.stdout, /reservation\s+Coordinate worker claims/);
+  assert.match(helpResult.stdout, /session-load\s+Load the safe resume packet/);
+  assert.match(helpResult.stdout, /onboard\s+Check or create required Pulse runtime/);
+  assert.match(helpResult.stdout, /workgraph\s+Maintain canonical work items/);
+  assert.match(helpResult.stdout, /Subcommands:/);
+  assert.match(helpResult.stdout, /reserve\s+Claim a work item/);
+  assert.match(helpResult.stdout, /check\s+Validate required \.pulse runtime\/workgraph files/);
+  assert.match(helpResult.stdout, /create\s+Create an epic\/story\/task\/bug item/);
+  assert.match(helpResult.stdout, /Options:/);
+  assert.match(helpResult.stdout, /Examples:/);
 
   const commandHelpResult = spawnPulse(["help", "session-load"]);
   assert.equal(commandHelpResult.status, 0, commandHelpResult.stderr);
-  assert.match(commandHelpResult.stdout, /Command:/);
-  assert.match(commandHelpResult.stdout, /session-load \[--repo-root <repo>\]/);
+  assert.match(commandHelpResult.stdout, /Description:/);
+  assert.match(commandHelpResult.stdout, /Command usage:/);
+  assert.match(commandHelpResult.stdout, /Usage: pulse\.mjs session-load \[--repo-root <repo>\]/);
+
+  const workgraphHelpResult = spawnPulse(["help", "workgraph"]);
+  assert.equal(workgraphHelpResult.status, 0, workgraphHelpResult.stderr);
+  assert.match(workgraphHelpResult.stdout, /Subcommands:/);
+  assert.match(workgraphHelpResult.stdout, /create\s+Create an epic\/story\/task\/bug item/);
+  assert.match(workgraphHelpResult.stdout, /dep\s+Manage blocking dependency edges/);
+  assert.match(workgraphHelpResult.stdout, /dep add <id> <depends-on>/);
 });
 
 test("pulse router executes through direct and symlinked entrypoints", () => {
@@ -80,14 +93,6 @@ test("pulse router delegates command groups", () => {
     assert.equal(readyPayload.command, "ready");
     assert.equal(Array.isArray(readyPayload.items), true);
 
-    const intakeResult = spawnPulse(["intake", "new", "request", "--json"]);
-    assert.equal(intakeResult.status, 0, intakeResult.stderr);
-    const intakePayload = parseJsonOutput(intakeResult);
-    assert.equal(intakePayload.command, "intake");
-    assert.equal(intakePayload.implemented, false);
-    assert.equal(intakePayload.request, "new request");
-    assert.match(intakePayload.contract_markdown, /# `pulse:workflow intake`/);
-
     const reservationResult = spawnPulse([
       "reservation",
       "list",
@@ -124,5 +129,5 @@ test("pulse router rejects unknown commands with help", () => {
 
   assert.equal(result.status, 1);
   assert.match(result.stderr, /Unknown command: unknown-command/);
-  assert.match(result.stderr, /Usage: pulse\.mjs <command> \[options\]/);
+  assert.match(result.stderr, /Usage: pulse\.mjs \[OPTIONS\] <COMMAND>/);
 });

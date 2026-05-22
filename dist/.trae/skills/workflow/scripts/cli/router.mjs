@@ -9,10 +9,6 @@ export const COMMANDS = {
     usage: "ready [--repo-root <repo>] [--json]",
     load: async () => import("./ready.mjs"),
   },
-  intake: {
-    usage: "intake [user input] [--json]",
-    load: async () => import("./intake.mjs"),
-  },
   reservation: {
     usage: "reservation <reserve|release|list|sweep> [options]",
     load: async () => import("./reservation.mjs"),

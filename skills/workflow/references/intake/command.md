@@ -6,18 +6,19 @@ This command is the only place where a new user request enters an empty Pulse wo
 
 ## Mission
 
-Classify the new request, determine which Pulse artifacts must be created or updated, resolve whether the request belongs to existing work or is already satisfied, and route the operator to the next safe workflow command.
+Classify the new request, determine which Pulse artifacts should be proposed, resolve whether the request belongs to existing work or is already satisfied, ask for confirmation before structural mutation, and route the operator to the next safe workflow command.
 
 Intake answers:
 
 - what type of work is this?
 - what existing or new work boundary should contain it?
 - does existing work already cover, satisfy, or block this request?
-- which artifacts must be created or updated downstream?
+- which artifacts should be proposed now and created only after confirmation?
 - how risky is it?
 - what command should run next?
 
 Intake does not design the solution, lock implementation decisions, create execution tasks, validate readiness, or implement code.
+Intake also must not create or mutate a workgraph boundary until the operator has presented the proposed boundary and received explicit user confirmation.
 
 ## Intake flow
 
@@ -54,10 +55,23 @@ Choose work boundary: none, direct_task, single_story, initiative, or blocked
 Define artifact obligations
     |
     v
+If no mutation is needed, record routing result and stop
+    |
+    v
+If structural mutation is needed, present proposed boundary creation/update and artifact paths
+    |
+    v
+<HARD_GATE>Ask for explicit user confirmation before any workgraph or works/ mutation</HARD_GATE>
+    |
+    v
+Create/update only the confirmed boundary and intake artifact, or stop without mutation
+    |
+    v
 Recommend next command
 ```
 
 The flow is intentionally admission-focused. Stop as soon as one step cannot be completed safely, record the blocker, and do not proceed to downstream workflow commands.
+The first pass is classification and proposal only; structural workgraph creation and `works/` writes happen only after the user confirms the proposed boundary.
 
 ## Entry criteria
 
@@ -143,11 +157,11 @@ Classification rules:
 4+ risk flags:
   high_risk
 
-Any hard gate:
+Any risk hard gate:
   high_risk unless the user explicitly narrows scope
 ```
 
-Hard gates:
+Risk hard gates:
 
 - auth
 - authorization
@@ -207,9 +221,9 @@ Intake must classify the request into exactly one of these outcomes before artif
 
 | Outcome | Meaning | Default action |
 | --- | --- | --- |
-| `new_work` | no existing durable boundary adequately contains the request | create a new epic/story boundary as needed |
-| `existing_open_work` | an open epic/story already owns the requested behavior | route into that existing boundary and update its intake/context artifacts |
-| `existing_closed_related_work` | a closed story is closely related, but the user is asking for additional behavior or a behavior delta | create a new story linked to the closed story; do not reopen the closed story by default |
+| `new_work` | no existing durable boundary adequately contains the request | propose a new epic/story boundary and ask for confirmation before creating it |
+| `existing_open_work` | an open epic/story already owns the requested behavior | propose reuse/update of that boundary and ask for confirmation before writing new intake/context artifacts |
+| `existing_closed_related_work` | a closed story is closely related, but the user is asking for additional behavior or a behavior delta | propose a new story linked to the closed story; do not reopen the closed story by default |
 | `already_satisfied` | the request appears implemented already or fully covered by existing accepted behavior | do not create new execution work; present evidence and ask only if confirmation is needed |
 | `ambiguous_or_blocked` | evidence conflicts, is too weak, or required context is missing | stop intake and ask the routing question |
 
@@ -238,9 +252,9 @@ A small follow-up change to a closed story is still new work when it changes acc
 Do not reopen the closed story or add a task under the closed story by default.
 Instead:
 
-- create a new small story for the delta
-- link it to the prior closed story for traceability
-- carry forward any relevant context or verification evidence
+- propose a new small story for the delta
+- propose a traceability link to the prior closed story
+- carry forward any relevant context or verification evidence in the intake artifact after confirmation
 - note why the old story is related but insufficient
 
 This preserves closure semantics while keeping the new request visible as a separate behavior change.
@@ -257,36 +271,36 @@ Choose one boundary:
 
 Rules:
 
-- `new_initiative` normally produces an `initiative` or epic boundary plus a selected first story.
-- `new_spec` may produce an initiative boundary or a first story when the first slice is obvious.
+- `new_initiative` normally proposes an `initiative` or epic boundary plus a selected first story.
+- `new_spec` may propose an initiative boundary or a first story when the first slice is obvious.
 - `spec_slice` normally produces a `single_story` boundary.
 - `change_request` may be `direct_task` only when tiny, clear, low-risk, and clearly belongs to existing open work.
 - `direct_task` is a routing shape only: intake may identify that downstream planning can produce a task under an existing open story, but intake itself must not create `TASK` or `BUG` metadata.
 - `maintenance_request` may be `direct_task` or `single_story` depending blast radius.
 - `harness_improvement` should be `single_story` or `initiative` when it changes public workflow behavior.
 - `already_satisfied` uses boundary `none`; it must not create a new boundary or new execution work.
-- `existing_closed_related_work` that changes behavior should produce a new `single_story` boundary linked to the closed story, not reopen it by default.
+- `existing_closed_related_work` that changes behavior should propose a new `single_story` boundary linked to the closed story, not reopen it by default.
 - `ambiguous_or_blocked` means `blocked` until the routing question is answered.
 
 Do not create an execution-ready `TASK` or `BUG` during intake.
 
 ## Artifact output
 
-Successful intake produces an intake package.
+Intake first produces a proposed intake package and asks the user to confirm the structural boundary before writing durable files.
+A confirmed intake produces the durable intake package.
 
-If a story boundary is known, write:
-
-```text
-works/epics/<epic-id>-<epic-slug>/<story-id>-<story-slug>/INTAKE.md
-```
-
-If only an initiative or epic boundary is known, write:
+Before confirmation, show the expected artifact shape without creating files:
 
 ```text
-works/epics/<epic-id>-<epic-slug>/INTAKE.md
+Story boundary:
+  works/epics/<epic-id>-<epic-slug>/<story-id>-<story-slug>/INTAKE.md
+
+Initiative or epic boundary:
+  works/epics/<epic-id>-<epic-slug>/INTAKE.md
 ```
 
-Temporary runtime notes may be used while classifying, but successful intake that creates or updates a work boundary must leave the durable result under `works/`.
+After confirmation, use the path returned by `{{pulse_command}} workgraph create --json` as the source of truth for the concrete directory, then write `INTAKE.md` in that boundary directory.
+Temporary runtime notes may be used while classifying, but confirmed intake that creates or updates a work boundary must leave the durable result under `works/`.
 For `already_satisfied`, intake may exit without writing a new `INTAKE.md` when doing so would mutate closed historical work or create a misleading new work stream; in that case, runtime state must record the satisfaction result, matched item IDs, and evidence summary.
 
 Minimum `INTAKE.md` structure:
@@ -329,7 +343,7 @@ Minimum `INTAKE.md` structure:
 
 `Duplicate / Satisfaction Evidence` should summarize the specific proof used to decide whether the request is already covered, partially covered, or clearly new. Include why the matched work is insufficient when creating a new delta story over a closed story.
 
-Artifact obligations should state what downstream commands must create or update. Examples:
+Artifact obligations should state what the confirmed intake and downstream commands must create or update. Examples:
 
 - `new_spec`: spec intake, product contract material, candidate epics, validation shape, decisions
 - `spec_slice`: story slice and related product contract links
@@ -340,14 +354,61 @@ Artifact obligations should state what downstream commands must create or update
 
 ## Workgraph output
 
-Intake may create only structural metadata:
+Intake may create only structural metadata after explicit user confirmation:
 
 - one `EPIC` when a new epic or initiative boundary is needed
 - one `STORY` when a story-sized boundary is known
 - `linked_items` references for non-blocking traceability when the new story is related to prior closed work or parallel context
-- links from metadata to the durable `INTAKE.md` content path
 
-If correlation outcome is `existing_open_work`, update or extend the existing structural metadata instead of creating a duplicate story.
+Do not invent unsupported workgraph metadata fields for `INTAKE.md`; the durable intake narrative lives in the adjacent `INTAKE.md` artifact.
+
+Before confirmation, intake must present the exact proposed workgraph operation(s), expected boundary path, and `INTAKE.md` path, then stop at a `<HARD_GATE>`:
+
+```xml
+<HARD_GATE>
+Confirm the proposed intake boundary before any workgraph or works/ mutation.
+
+Proposed workgraph operation(s):
+- ...
+
+Expected boundary path:
+- ...
+
+Expected intake artifact:
+- .../INTAKE.md
+
+Reply with explicit approval to create/update this boundary, or provide corrections. Do not continue on silence or ambiguous acknowledgement.
+</HARD_GATE>
+```
+
+Do not run `{{pulse_command}} workgraph create`, update existing metadata, or write the boundary `INTAKE.md` until the user confirms the `<HARD_GATE>`.
+
+After the user confirms the `<HARD_GATE>`, create only the confirmed structural boundary using the existing workgraph CLI.
+
+For a new epic or initiative boundary:
+
+```bash
+{{pulse_command}} workgraph create --repo-root <repo> --kind EPIC --title "<confirmed epic title>" --json
+```
+
+For a story boundary under a confirmed or existing epic:
+
+```bash
+{{pulse_command}} workgraph create --repo-root <repo> --kind STORY --parent <epic-id> --title "<confirmed story title>" --json
+```
+
+Add optional `--owner`, `--priority`, `--label`, and `--risk` flags only when they were part of the confirmed proposal.
+If the confirmed boundary requires both a new epic and a new story, create the epic first, read the returned `item.id`, then use that ID as the story `--parent`.
+If a traceability link to related closed or parallel work was confirmed, add it after both items exist:
+
+```bash
+{{pulse_command}} workgraph link add --repo-root <repo> <new-story-or-epic-id> <related-item-id> --json
+```
+
+After `workgraph create` succeeds, write the intake artifact to the confirmed path defined in [Artifact output](#artifact-output).
+Do not hand-author IDs or guess final paths before `workgraph create` returns.
+
+If correlation outcome is `existing_open_work`, propose the existing boundary update instead of creating a duplicate story, then ask for confirmation before mutating it.
 If correlation outcome is `already_satisfied`, do not create new EPIC/STORY/TASK/BUG metadata unless the user clarifies that the behavior is actually different.
 
 Intake must not create execution work:
@@ -360,12 +421,15 @@ Intake must not create execution work:
 ## Runtime output
 
 Record intake posture in `.pulse/runtime/state.json` and `.pulse/runtime/STATE.md` without approving any gate.
+Runtime state may record classification and proposed boundary before confirmation, but must not claim active created epic/story IDs until creation succeeds.
+After confirmation and creation, runtime state may record the created active epic/story IDs.
 
 State should express:
 
 - `active_command: intake`
-- active epic/story IDs when created
-- intake status: `classified`, `needs_user_routing`, `blocked`, or `already_satisfied`
+- proposed epic/story title and path before confirmation
+- active epic/story IDs only after confirmed creation
+- intake status: `classified`, `awaiting_creation_confirmation`, `confirmed_created`, `needs_user_routing`, `blocked`, or `already_satisfied`
 - input type
 - correlation outcome
 - matched item IDs, when any
@@ -381,19 +445,22 @@ Gate state remains `none` or `pre_gate`. Gate 1 begins only after `pulse:workflo
 
 ## Routing decision
 
-Recommend exactly one next command.
+Recommend exactly one next command or one immediate `<HARD_GATE>` action.
 
-| Situation | Next command |
+| Situation | Next action |
 | --- | --- |
 | repository/session readiness is unclear | `pulse:workflow use` |
-| new spec or initiative lacks a selected story shape | `pulse:workflow brainstorm` |
-| story intent exists but behavior/context decisions need locking | `pulse:workflow explore` |
+| structural workgraph or `works/` mutation is proposed | present the `<HARD_GATE>` and stop until explicit approval |
+| new spec or initiative lacks a selected story shape after confirmed boundary handling | `pulse:workflow brainstorm` |
+| story intent exists but behavior/context decisions need locking after confirmed boundary handling | `pulse:workflow explore` |
 | tiny or clear low-risk work has enough context for execution shaping | `pulse:workflow plan` |
-| request maps to existing open work | route to the existing stream and recommend the next unmet command in that stream |
+| request maps to existing open work | propose reuse/update of the existing stream, hard-gate any artifact mutation, then recommend the next unmet command |
 | request appears already satisfied with strong evidence | stop and present the evidence; no new execution command |
 | intake cannot safely classify or route | block and ask the routing question |
 
 Default continuation is manual. Do not invoke the next command unless the user explicitly asks to continue now.
+When new or updated structural work is needed, the next immediate action is the `<HARD_GATE>` confirmation, not `brainstorm`, `explore`, or `plan`.
+Do not treat classification alone as permission to mutate workgraph or `works/`.
 
 ## Routing questions
 
@@ -421,13 +488,14 @@ Intake is a pre-gate admission checkpoint, not Gate 1.
 - Gate 3 remains after `validate`
 - Gate 4 remains after `review`
 
-For non-trivial intake results, stop after presenting the routing decision. Do not auto-invoke the next command unless the user explicitly asks to continue.
+For non-trivial intake results, stop after presenting the routing decision or `<HARD_GATE>`. Do not auto-invoke the next command unless the user explicitly asks to continue after required confirmation is complete.
 
 Stop after intake when:
 
 - lane is `normal` or `high_risk`
 - boundary is `initiative`
 - any routing question was needed
+- structural workgraph or `works/` mutation is proposed and awaiting `<HARD_GATE>` approval
 - the recommended next command is not obvious from existing artifacts
 
 ## Exit contract
@@ -440,9 +508,11 @@ Successful exit requires:
 - duplicate/satisfaction evidence recorded
 - lane selected with risk flags
 - work boundary selected or blocker stated
-- durable `INTAKE.md` written under `works/` when a work boundary is created or updated
+- proposed workgraph operation(s), boundary path, and `INTAKE.md` path presented before mutation
+- when creation or update is proposed, explicit user confirmation received through the `<HARD_GATE>` before creating/updating EPIC/STORY metadata or writing boundary `INTAKE.md`
+- durable `INTAKE.md` written under `works/` only after confirmation when a work boundary is created or updated
 - for `already_satisfied`, either no new artifact is written or any evidence note must avoid mutating closed historical work misleadingly
-- structural EPIC/STORY metadata created only when needed
+- structural EPIC/STORY metadata created only when needed and only after confirmation
 - runtime state updated with intake posture and no gate approval
 - next command recommendation stated
 
@@ -451,6 +521,8 @@ Successful exit requires:
 Stop if you catch yourself:
 
 - running intake while active or resumable work exists
+- creating or updating EPIC/STORY metadata before explicit user confirmation
+- writing boundary `INTAKE.md` before explicit user confirmation
 - creating executable tasks or bugs
 - approving gates
 - planning implementation details

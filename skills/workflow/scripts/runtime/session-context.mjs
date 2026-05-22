@@ -1,5 +1,14 @@
 #!/usr/bin/env node
 
+/**
+ * Purpose: Build Pulse session-start context for Claude Code hook/bootstrap messages.
+ * Caller/flow: Used by runtime hooks to remind agents to run pulse:workflow use and surface current posture.
+ * Reads/Writes: Reads workflow skill text, onboarding state, runtime status, memory markers, and GitNexus readiness; no writes.
+ * CLI args: None (module API).
+ * Ownership: Advisory context builder only; does not mutate Pulse state or choose workflow gates.
+ * Repo root rule: findPulseRepoRoot walks upward from the hook cwd and prefers .pulse/runtime/onboarding.json before .git.
+ */
+
 import fs from "node:fs";
 import path from "node:path";
 

@@ -1,5 +1,14 @@
 #!/usr/bin/env node
 
+/**
+ * Purpose: Normalize and persist the machine-readable Pulse runtime state record.
+ * Caller/flow: Used by runtime status, sync, onboarding, and session-load code that needs .pulse/runtime/state.json.
+ * Reads/Writes: Reads/writes .pulse/runtime/state.json and exposes markdown/key-value helpers for adjacent runtime files.
+ * CLI args: None (module API).
+ * Ownership: State schema and path helpers only; higher-level commands decide when state changes.
+ * Repo root rule: Uses shared resolver from core/paths.mjs through resolveRepoRoot().
+ */
+
 import fs from "node:fs";
 
 import { ensureParent, readJsonIfExists, readTextIfExists } from "../core/fs.mjs";

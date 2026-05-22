@@ -1,5 +1,14 @@
 #!/usr/bin/env node
 
+/**
+ * Purpose: Derive current Pulse runtime snapshot records from persisted runtime artifacts.
+ * Caller/flow: Called by read-model/status paths to normalize current_feature and runtime_snapshot views.
+ * Reads/Writes: Reads state JSON/markdown, tooling status, handoff manifest, reservations, and critical memory marker; no writes.
+ * CLI args: None (module API).
+ * Ownership: Derivation layer only; source-of-truth files stay owned by their runtime/workgraph writers.
+ * Repo root rule: Normalizes explicit repo roots through runtime/state.mjs.
+ */
+
 import fs from "node:fs";
 import {
   getPulseStatePaths,
