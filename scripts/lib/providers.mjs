@@ -3,21 +3,89 @@ import path from "node:path";
 export const WORKFLOW_SKILL_NAME = "workflow";
 
 export const PROVIDERS = [
-  { name: "claude-code", configDir: ".claude", skillsRoot: ".claude/skills" },
-  { name: "cursor", configDir: ".cursor", skillsRoot: ".cursor/skills" },
-  { name: "gemini", configDir: ".gemini", skillsRoot: ".gemini/skills" },
-  { name: "codex", configDir: ".codex", skillsRoot: ".codex/skills" },
-  { name: "agents", configDir: ".agents", skillsRoot: ".agents/skills" },
-  { name: "github", configDir: ".github", skillsRoot: ".github/skills" },
-  { name: "kiro", configDir: ".kiro", skillsRoot: ".kiro/skills" },
-  { name: "opencode", configDir: ".opencode", skillsRoot: ".opencode/skills" },
-  { name: "pi", configDir: ".pi", skillsRoot: ".pi/skills" },
-  { name: "qoder", configDir: ".qoder", skillsRoot: ".qoder/skills" },
-  { name: "trae-cn", configDir: ".trae-cn", skillsRoot: ".trae-cn/skills" },
-  { name: "trae", configDir: ".trae", skillsRoot: ".trae/skills" },
-  { name: "rovo-dev", configDir: ".rovodev", skillsRoot: ".rovodev/skills" },
+  {
+    name: "claude-code",
+    displayName: "Claude Code",
+    providerTags: ["claude-code", "claude"],
+    configDir: ".claude",
+  },
+  {
+    name: "cursor",
+    displayName: "Cursor",
+    providerTags: ["cursor"],
+    configDir: ".cursor",
+  },
+  {
+    name: "gemini",
+    displayName: "Gemini",
+    providerTags: ["gemini"],
+    configDir: ".gemini",
+  },
+  {
+    name: "codex",
+    displayName: "Codex",
+    providerTags: ["codex"],
+    configDir: ".codex",
+  },
+  {
+    name: "agents",
+    displayName: "Codex Repo Skills",
+    providerTags: ["agents", "codex"],
+    configDir: ".agents",
+  },
+  {
+    name: "github",
+    displayName: "GitHub Copilot",
+    providerTags: ["github"],
+    configDir: ".github",
+  },
+  {
+    name: "kiro",
+    displayName: "Kiro",
+    providerTags: ["kiro"],
+    configDir: ".kiro",
+  },
+  {
+    name: "opencode",
+    displayName: "OpenCode",
+    providerTags: ["opencode"],
+    configDir: ".opencode",
+  },
+  {
+    name: "pi",
+    displayName: "Pi",
+    providerTags: ["pi"],
+    configDir: ".pi",
+  },
+  {
+    name: "qoder",
+    displayName: "Qoder",
+    providerTags: ["qoder"],
+    configDir: ".qoder",
+  },
+  {
+    name: "trae-cn",
+    displayName: "Trae China",
+    providerTags: ["trae-cn", "trae"],
+    configDir: ".trae-cn",
+  },
+  {
+    name: "trae",
+    displayName: "Trae",
+    providerTags: ["trae"],
+    configDir: ".trae",
+  },
+  {
+    name: "rovo-dev",
+    displayName: "Rovo Dev",
+    providerTags: ["rovo-dev"],
+    configDir: ".rovodev",
+  },
 ];
 
 export function getPulseCommand(provider) {
-  return ["node", path.posix.join(provider.skillsRoot, WORKFLOW_SKILL_NAME, "scripts", "pulse.mjs")].join(" ");
+  return [
+    "node",
+    path.posix.join(provider.configDir, "skills", WORKFLOW_SKILL_NAME, "scripts", "pulse.mjs"),
+  ].join(" ");
 }

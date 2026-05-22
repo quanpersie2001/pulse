@@ -53,8 +53,12 @@ test("Claude and Codex plugin manifests ship the same skills", () => {
 test("providers render workflow skill under its normal skill name", () => {
   assert.equal(WORKFLOW_SKILL_NAME, "workflow");
   for (const provider of PROVIDERS) {
-    assert.deepEqual(Object.keys(provider), ["name", "configDir", "skillsRoot"], provider.name);
-    assert.equal(getPulseCommand(provider).includes("/skills/workflow/scripts/pulse.mjs"), true, provider.name);
+    assert.deepEqual(Object.keys(provider), ["name", "displayName", "providerTags", "configDir"], provider.name);
+    assert.equal(typeof provider.displayName, "string", provider.name);
+    assert.equal(provider.displayName.length > 0, true, provider.name);
+    assert.equal(Array.isArray(provider.providerTags), true, provider.name);
+    assert.equal(provider.providerTags.length > 0, true, provider.name);
+    assert.equal(getPulseCommand(provider).includes(`${provider.configDir}/skills/workflow/scripts/pulse.mjs`), true, provider.name);
   }
 });
 
