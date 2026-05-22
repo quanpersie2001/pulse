@@ -1,4 +1,4 @@
-const UNRESOLVED_RUNTIME_PLACEHOLDERS = ["{{pulse_command}}", "{{scripts_path}}", "{{skills_path}}"];
+const UNRESOLVED_RUNTIME_PLACEHOLDERS = ["{{pulse_command}}"];
 
 export function renderPulsePlaceholders(content, { pulseCommand }) {
   return content.replace(/\{\{pulse_command\}\}/g, pulseCommand);
