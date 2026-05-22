@@ -19,7 +19,7 @@ import {
   showItem,
   updateItem,
 } from "../../skills/workflow/scripts/workgraph/service.mjs";
-import { getWorkgraphPaths } from "../../skills/workflow/scripts/workgraph_store.mjs";
+import { getWorkgraphPaths } from "../../skills/workflow/scripts/workgraph/store.mjs";
 import { cleanupTempRepo, mkTempRepo } from "../helpers/temp-repo.mjs";
 
 async function createStoryWithTask(root) {

@@ -3,7 +3,7 @@ import {
   inspectJsonFileLock,
   releaseJsonFileLock,
   removeStaleJsonFileLock,
-} from "./core/lock.mjs";
+} from "../core/lock.mjs";
 
 export function inspectLock(lockPath) {
   return inspectJsonFileLock(lockPath);

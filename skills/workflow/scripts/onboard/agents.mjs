@@ -4,7 +4,7 @@ import path from "node:path";
 import {
   getPluginRoot,
   getScriptDir,
-} from "../pulse_package_paths.mjs";
+} from "../core/package-paths.mjs";
 
 const SCRIPT_DIR = path.dirname(getScriptDir(import.meta.url));
 const PLUGIN_ROOT = getPluginRoot(SCRIPT_DIR);

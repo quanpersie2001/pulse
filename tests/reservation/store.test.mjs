@@ -10,7 +10,7 @@ import {
   readReservationStore,
   reservePaths,
   sweepExpiredReservations,
-} from "../../skills/workflow/scripts/pulse_reservation_store.mjs";
+} from "../../skills/workflow/scripts/reservation/store.mjs";
 import { cleanupTempRepo, mkTempRepo } from "../helpers/temp-repo.mjs";
 
 test("reservation conflict detection blocks overlapping paths across agents", () => {
@@ -24,7 +24,7 @@ test("reservation conflict detection blocks overlapping paths across agents", ()
 
     const second = reservePaths(root, {
       agent: "agent-b",
-      paths: ["skills/workflow/scripts/pulse_state.mjs"],
+      paths: ["skills/workflow/scripts/runtime/state.mjs"],
     });
 
     assert.equal(second.ok, false);

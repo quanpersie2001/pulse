@@ -11,7 +11,7 @@ import {
   releaseReservations,
   reservePaths,
   main as reservationsMain,
-} from "../../skills/workflow/scripts/pulse_reservations.mjs";
+} from "../../skills/workflow/scripts/cli/reservation.mjs";
 import { captureStdout } from "../helpers/capture-stdout.mjs";
 import { cleanupTempRepo, mkTempRepo } from "../helpers/temp-repo.mjs";
 import { parseJsonOutput, spawnPulse } from "../helpers/spawn-pulse.mjs";
@@ -65,7 +65,7 @@ test("CLI main uses --repo-root store even when cwd points elsewhere", () => {
         "--item",
         "S-42",
         "--path",
-        "skills/workflow/tests/**",
+        "tests/runtime/**",
         "--json",
       ]),
     );

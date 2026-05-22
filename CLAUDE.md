@@ -72,7 +72,7 @@ When adding or modifying command behavior:
 
 ## Testing
 
-Pulse has automated coverage for onboarding/runtime control-plane behavior in `skills/workflow/tests/`. The `references/superpowers/tests/brainstorm-server/` suite is reference material and not part of the shipping plugin.
+Pulse has automated coverage for onboarding/runtime control-plane behavior in `tests/`. The `references/superpowers/tests/brainstorm-server/` suite is reference material and not part of the shipping plugin.
 
 ## Session Protocol
 
@@ -89,7 +89,7 @@ git push
 <!-- gitnexus:start -->
 # GitNexus — Code Intelligence
 
-This project is indexed by GitNexus as **pulse** (3444 symbols, 5038 relationships, 209 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
+This project is indexed by GitNexus as **pulse** (3700 symbols, 5804 relationships, 283 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
 
 > If any GitNexus tool warns the index is stale, run `npx gitnexus analyze` in terminal first.
 

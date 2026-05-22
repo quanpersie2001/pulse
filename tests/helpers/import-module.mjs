@@ -4,7 +4,8 @@ import { spawnSync } from "node:child_process";
 import { pathToFileURL } from "node:url";
 
 export function writeImporter(root, targetPath, name = "module") {
-  const importerPath = path.join(root, `import-${name}.mjs`);
+  const safeName = String(name).replace(/[^A-Za-z0-9_.-]+/g, "-");
+  const importerPath = path.join(root, `import-${safeName}.mjs`);
   fs.writeFileSync(importerPath, `import ${JSON.stringify(pathToFileURL(targetPath).href)};\n`, "utf8");
   return importerPath;
 }

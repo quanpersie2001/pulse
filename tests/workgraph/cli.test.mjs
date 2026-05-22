@@ -5,7 +5,6 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import { main as workgraphMain } from "../../skills/workflow/scripts/cli/workgraph.mjs";
-import { main as pulseWorkMain } from "../../skills/workflow/scripts/pulse_work.mjs";
 import { captureStdoutAsync } from "../helpers/capture-stdout.mjs";
 import { importModuleInNode } from "../helpers/import-module.mjs";
 import { cleanupTempRepo, initGitRepo, mkTempRepo } from "../helpers/temp-repo.mjs";
@@ -15,9 +14,9 @@ import { parseJsonOutput, spawnPulse } from "../helpers/spawn-pulse.mjs";
 const SCRIPTS_DIR = path.join(REPO_ROOT, "skills", "workflow", "scripts");
 
 test("cli/workgraph.mjs prefers --repo-root over env and cwd", async () => {
-  const explicitRoot = mkTempRepo("pulse_work.mjs-runtime-");
-  const envRoot = mkTempRepo("pulse_work.mjs-runtime-");
-  const cwdRoot = mkTempRepo("pulse_work.mjs-runtime-");
+  const explicitRoot = mkTempRepo("cli-workgraph-runtime-");
+  const envRoot = mkTempRepo("cli-workgraph-runtime-");
+  const cwdRoot = mkTempRepo("cli-workgraph-runtime-");
   const originalCwd = process.cwd();
   const previousEnv = process.env.PULSE_REPO_ROOT;
 
@@ -51,8 +50,8 @@ test("cli/workgraph.mjs prefers --repo-root over env and cwd", async () => {
 });
 
 test("cli/workgraph.mjs uses PULSE_REPO_ROOT when --repo-root is not provided", async () => {
-  const envRoot = mkTempRepo("pulse_work.mjs-runtime-");
-  const cwdRoot = mkTempRepo("pulse_work.mjs-runtime-");
+  const envRoot = mkTempRepo("cli-workgraph-runtime-");
+  const cwdRoot = mkTempRepo("cli-workgraph-runtime-");
   const originalCwd = process.cwd();
   const previousEnv = process.env.PULSE_REPO_ROOT;
 
@@ -82,7 +81,7 @@ test("cli/workgraph.mjs uses PULSE_REPO_ROOT when --repo-root is not provided", 
 });
 
 test("cli/workgraph.mjs resolves git root from nested cwd", async () => {
-  const gitRoot = mkTempRepo("pulse_work.mjs-runtime-");
+  const gitRoot = mkTempRepo("cli-workgraph-runtime-");
   const originalCwd = process.cwd();
   const previousEnv = process.env.PULSE_REPO_ROOT;
 
@@ -114,7 +113,7 @@ test("cli/workgraph.mjs resolves git root from nested cwd", async () => {
 });
 
 test("cli/workgraph.mjs rejects unknown flags, valued booleans, and extra positionals", async () => {
-  const root = mkTempRepo("pulse_work.mjs-runtime-");
+  const root = mkTempRepo("cli-workgraph-runtime-");
   try {
     const unknownFlag = await captureStdoutAsync(() =>
       workgraphMain(["--repo-root", root, "list", "--statuz", "OPEN", "--json"]),
@@ -157,15 +156,15 @@ test("cli/workgraph.mjs rejects unknown flags, valued booleans, and extra positi
 });
 
 test("importing CLI modules does not execute their mains", () => {
-  const root = mkTempRepo("pulse_work.mjs-runtime-");
+  const root = mkTempRepo("cli-workgraph-runtime-");
   try {
     for (const scriptName of [
-      "pulse_status.mjs",
-      "pulse_reservations.mjs",
-      "pulse_work.mjs",
-      "pulse_session_load.mjs",
-      "pulse_package_paths.mjs",
-      "onboard_pulse.mjs",
+      "cli/status.mjs",
+      "cli/reservation.mjs",
+      "cli/workgraph.mjs",
+      "cli/session-load.mjs",
+      "core/package-paths.mjs",
+      "cli/onboard.mjs",
     ]) {
       const result = importModuleInNode(path.join(SCRIPTS_DIR, scriptName), { root, name: scriptName, cwd: REPO_ROOT });
 
@@ -177,11 +176,11 @@ test("importing CLI modules does not execute their mains", () => {
   }
 });
 
-test("pulse_work.mjs create scaffolds files from workflow-owned work templates", async () => {
-  const root = mkTempRepo("pulse_work.mjs-runtime-");
+test("cli/workgraph.mjs create scaffolds files from workflow-owned work templates", async () => {
+  const root = mkTempRepo("cli-workgraph-runtime-");
   try {
     const epicCall = await captureStdoutAsync(() =>
-      pulseWorkMain(["--repo-root", root, "create", "--kind", "EPIC", "--title", "Runtime path fix", "--json"]),
+      workgraphMain(["--repo-root", root, "create", "--kind", "EPIC", "--title", "Runtime path fix", "--json"]),
     );
     assert.equal(epicCall.returnValue, 0);
     const epic = JSON.parse(epicCall.output).item;
@@ -189,7 +188,7 @@ test("pulse_work.mjs create scaffolds files from workflow-owned work templates",
     assert.match(fs.readFileSync(path.join(root, epic.content_path), "utf8"), /Runtime path fix/);
 
     const storyCall = await captureStdoutAsync(() =>
-      pulseWorkMain([
+      workgraphMain([
         "--repo-root",
         root,
         "create",
@@ -208,7 +207,7 @@ test("pulse_work.mjs create scaffolds files from workflow-owned work templates",
     assert.match(fs.readFileSync(path.join(root, story.content_path), "utf8"), /Lock runtime contract/);
 
     const taskCall = await captureStdoutAsync(() =>
-      pulseWorkMain([
+      workgraphMain([
         "--repo-root",
         root,
         "create",
@@ -232,7 +231,7 @@ test("pulse_work.mjs create scaffolds files from workflow-owned work templates",
 });
 
 test("pulse router exposes workgraph list, ready, and create", () => {
-  const root = mkTempRepo("pulse_work.mjs-runtime-");
+  const root = mkTempRepo("cli-workgraph-runtime-");
   try {
     const listResult = spawnPulse(["workgraph", "list", "--repo-root", root, "--json"]);
     assert.equal(listResult.status, 0, listResult.stderr);

@@ -5,9 +5,9 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 
-import { reservePaths } from "../../skills/workflow/scripts/pulse_reservation_store.mjs";
-import { readPulseStatus } from "../../skills/workflow/scripts/pulse_status_model.mjs";
-import { buildSessionLoad } from "../../skills/workflow/scripts/pulse_session_load.mjs";
+import { reservePaths } from "../../skills/workflow/scripts/reservation/store.mjs";
+import { readPulseStatus } from "../../skills/workflow/scripts/runtime/read-model.mjs";
+import { buildSessionLoad } from "../../skills/workflow/scripts/runtime/session-load.mjs";
 import { cleanupTempRepo, mkTempRepo } from "../helpers/temp-repo.mjs";
 
 test("readPulseStatus exposes reservation compatibility summary keys", async () => {

@@ -8,15 +8,15 @@ import {
   fileTextIfExists,
   resolveRepoRoot,
   normalizePulseState,
-} from "./pulse_state.mjs";
-import { summarizeReservationStatusForState } from "./pulse_reservation_store.mjs";
-import { summarizeHandoffManifest } from "./pulse_handoffs.mjs";
+} from "./state.mjs";
+import { summarizeReservationStatusForState } from "../reservation/store.mjs";
+import { summarizeHandoffManifest } from "./handoffs.mjs";
 import {
   buildCurrentFeatureRecord,
   buildRuntimeSnapshotRecord,
   summarizeCurrentFeature,
   summarizeRuntimeSnapshot,
-} from "./pulse_runtime_derivations.mjs";
+} from "./derivations.mjs";
 
 function buildPulseRuntimeArtifacts(repoRoot) {
   const paths = getPulseStatePaths(repoRoot);

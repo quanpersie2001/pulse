@@ -8,9 +8,8 @@ import path from "node:path";
 import { applyRepo } from "../../skills/workflow/scripts/onboard/apply.mjs";
 import { checkRepo } from "../../skills/workflow/scripts/onboard/check.mjs";
 import { cleanupTempRepo, mkTempRepo } from "../helpers/temp-repo.mjs";
-import { parseJsonOutput, spawnNodeScript, spawnPulse } from "../helpers/spawn-pulse.mjs";
+import { parseJsonOutput, spawnPulse } from "../helpers/spawn-pulse.mjs";
 
-const ONBOARD_WRAPPER_PATH = path.join(process.cwd(), "skills", "workflow", "scripts", "onboard_pulse.mjs");
 
 test("checkRepo/applyRepo expose FAIL->PASS readiness without optional external CLI blockers", () => {
   const root = mkTempRepo("pulse-onboard-routing-");
@@ -84,15 +83,3 @@ test("pulse router exposes onboard check and apply", () => {
   }
 });
 
-test("legacy onboard_pulse direct execution still applies onboarding", () => {
-  const root = mkTempRepo("pulse-onboard-routing-");
-  try {
-    const applied = spawnNodeScript(ONBOARD_WRAPPER_PATH, ["--repo-root", root, "--apply", "--json"]);
-
-    assert.equal(applied.status, 0, applied.stderr);
-    assert.equal(parseJsonOutput(applied).status, "PASS");
-    assert.equal(fs.existsSync(path.join(root, ".pulse", "runtime", "onboarding.json")), true);
-  } finally {
-    cleanupTempRepo(root);
-  }
-});
