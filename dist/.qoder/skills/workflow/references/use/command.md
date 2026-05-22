@@ -241,8 +241,9 @@ Use recommends supported v2 workflow surfaces only.
 | Situation | Recommendation |
 | --- | --- |
 | Repo is not bootstrapped or readiness is stale | `pulse:workflow use` |
-| Request is vague or design intent is not formed | `pulse:workflow brainstorm` |
-| Feature intent exists but implementation context is unresolved | `pulse:workflow explore` |
+| Session is empty and new user input needs admission | `pulse:workflow intake` |
+| Request is vague or design intent is not formed after intake | `pulse:workflow brainstorm` |
+| Feature intent exists but implementation context is unresolved after intake | `pulse:workflow explore` |
 | Decisions are approved and implementation planning is next | `pulse:workflow plan` |
 | Plan exists but feasibility and readiness need proof | `pulse:workflow validate` |
 | Execution is approved and swarm capability is available | `pulse:workflow swarm` |

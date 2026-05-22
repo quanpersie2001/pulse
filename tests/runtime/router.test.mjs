@@ -28,10 +28,11 @@ test("pulse router renders global and command help", () => {
   assert.match(helpResult.stdout, /Usage: pulse\.mjs <command> \[options\]/);
   assert.match(helpResult.stdout, /status \[--repo-root <repo>\] \[--json\] \[--sync\]/);
   assert.match(helpResult.stdout, /ready \[--repo-root <repo>\] \[--json\]/);
+  assert.match(helpResult.stdout, /intake \[user input\] \[--json\]/);
   assert.match(helpResult.stdout, /reservation <reserve\|release\|list\|sweep> \[options\]/);
   assert.match(helpResult.stdout, /session-load \[--repo-root <repo>\] \[--resume-owner <owner_id>\] \[--json\]/);
   assert.match(helpResult.stdout, /onboard <check\|apply> \[--repo-root <repo>\] \[--resume-owner <owner_id>\] \[--json\]/);
-  assert.match(helpResult.stdout, /workgraph <create\|show\|list\|ready\|update\|close\|reopen\|dep\|children\|graph\|doctor> \[options\]/);
+  assert.match(helpResult.stdout, /workgraph <create\|show\|list\|ready\|update\|close\|reopen\|dep\|link\|children\|graph\|doctor> \[options\]/);
   assert.match(helpResult.stdout, /help \[command\]/);
 
   const commandHelpResult = spawnPulse(["help", "session-load"]);
@@ -78,6 +79,14 @@ test("pulse router delegates command groups", () => {
     const readyPayload = parseJsonOutput(readyResult);
     assert.equal(readyPayload.command, "ready");
     assert.equal(Array.isArray(readyPayload.items), true);
+
+    const intakeResult = spawnPulse(["intake", "new", "request", "--json"]);
+    assert.equal(intakeResult.status, 0, intakeResult.stderr);
+    const intakePayload = parseJsonOutput(intakeResult);
+    assert.equal(intakePayload.command, "intake");
+    assert.equal(intakePayload.implemented, false);
+    assert.equal(intakePayload.request, "new request");
+    assert.match(intakePayload.contract_markdown, /# `pulse:workflow intake`/);
 
     const reservationResult = spawnPulse([
       "reservation",

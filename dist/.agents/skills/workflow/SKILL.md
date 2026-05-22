@@ -35,7 +35,8 @@ Unknown input should not trigger hidden dispatch behavior.
 
 | Command | Category | Use when... | Reference | Usually next |
 | --- | --- | --- | --- | --- |
-| `use` | Session entrypoint | the repo needs readiness/onboarding if stale, session restoration, resume routing, repair, or runtime posture | [references/use/command.md](references/use/command.md) | `explore`, `brainstorm`, `plan` |
+| `use` | Session entrypoint | the repo needs readiness/onboarding if stale, session restoration, resume routing, repair, or runtime posture | [references/use/command.md](references/use/command.md) | `intake`, `explore`, `brainstorm`, `plan` |
+| `intake` | New-work admission | `use` reports an empty session and the user has new input to classify before any design, discovery, or planning | [references/intake/command.md](references/intake/command.md) | `brainstorm`, `explore`, `plan` |
 | `explore` | Discovery | the design direction is chosen but repo-grounded decisions and constraints still need investigation | [references/explore/command.md](references/explore/command.md) | `plan` |
 | `brainstorm` | Design | the user goal is real but the feature shape is still open | [references/brainstorm/command.md](references/brainstorm/command.md) | `explore` |
 | `plan` | Planning | explored context must become a concrete implementation shape | [references/plan/command.md](references/plan/command.md) | `validate` |

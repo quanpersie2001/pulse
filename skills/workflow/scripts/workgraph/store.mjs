@@ -31,6 +31,7 @@ export const WORKGRAPH_SCHEMA = {
     "parent_id",
     "epic_id",
     "depends_on",
+    "linked_items",
     "priority",
     "owner",
     "labels",
@@ -51,6 +52,11 @@ export const WORKGRAPH_SCHEMA = {
     parent_id: { type: ["string", "null"] },
     epic_id: { type: "string" },
     depends_on: {
+      type: "array",
+      items: { type: "string" },
+      uniqueItems: true,
+    },
+    linked_items: {
       type: "array",
       items: { type: "string" },
       uniqueItems: true,
@@ -89,6 +95,12 @@ export const WORKGRAPH_SCHEMA = {
     dependencies: {
       allow_cross_epic: true,
       allow_cycles: false,
+    },
+    links: {
+      allow_cross_epic: true,
+      blocks_ready: false,
+      participates_in_cycle_detection: false,
+      description: "Traceability-only links between related work items; links do not block readiness or create dependency edges.",
     },
   },
 };

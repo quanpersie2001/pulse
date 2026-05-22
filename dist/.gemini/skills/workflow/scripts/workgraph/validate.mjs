@@ -23,6 +23,7 @@ const REQUIRED_FIELDS = [
   "parent_id",
   "epic_id",
   "depends_on",
+  "linked_items",
   "content_path",
   "created_at",
   "updated_at",
@@ -136,6 +137,9 @@ function validateScalarFields(item, issues) {
   if (!Array.isArray(item.depends_on)) {
     issues.push(createIssue("invalid_dependencies", `Item ${item.id} must have a depends_on array.`, { item_id: item.id }));
   }
+  if (!Array.isArray(item.linked_items)) {
+    issues.push(createIssue("invalid_linked_items", `Item ${item.id} must have a linked_items array.`, { item_id: item.id }));
+  }
   if (!isIsoUtcTimestamp(item.created_at)) {
     issues.push(createIssue("invalid_created_at", `Item ${item.id} has invalid created_at ${item.created_at}.`, { item_id: item.id }));
   }
@@ -158,6 +162,11 @@ function validateScalarFields(item, issues) {
   const dependencySet = new Set(item.depends_on || []);
   if (dependencySet.size !== (item.depends_on || []).length) {
     issues.push(createIssue("duplicate_dependencies", `Item ${item.id} has duplicate dependencies.`, { item_id: item.id }));
+  }
+
+  const linkedItemSet = new Set(item.linked_items || []);
+  if (linkedItemSet.size !== (item.linked_items || []).length) {
+    issues.push(createIssue("duplicate_linked_items", `Item ${item.id} has duplicate linked_items.`, { item_id: item.id }));
   }
 
   const riskSet = new Set(item.risk_flags || []);
@@ -242,6 +251,18 @@ function validateDependencies(item, recordsById, issues) {
     }
     if (!recordsById.has(dependencyId)) {
       issues.push(createIssue("missing_dependency", `Item ${item.id} references missing dependency ${dependencyId}.`, { item_id: item.id }));
+    }
+  }
+}
+
+function validateLinkedItems(item, recordsById, issues) {
+  for (const linkedItemId of item.linked_items || []) {
+    if (linkedItemId === item.id) {
+      issues.push(createIssue("self_link", `Item ${item.id} cannot link to itself.`, { item_id: item.id }));
+      continue;
+    }
+    if (!recordsById.has(linkedItemId)) {
+      issues.push(createIssue("missing_linked_item", `Item ${item.id} references missing linked item ${linkedItemId}.`, { item_id: item.id }));
     }
   }
 }
@@ -357,6 +378,7 @@ export function collectGraphIssues(records, options = {}) {
     validateScalarFields(item, issues);
     validateHierarchy(item, recordsById, issues);
     validateDependencies(item, recordsById, issues);
+    validateLinkedItems(item, recordsById, issues);
 
     if ((idCounts.get(item.id) || 0) > 1) {
       issues.push(createIssue("duplicate_id", `Duplicate id detected for ${item.id}.`, { item_id: item.id }));

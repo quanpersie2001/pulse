@@ -9,6 +9,10 @@ export const COMMANDS = {
     usage: "ready [--repo-root <repo>] [--json]",
     load: async () => import("./ready.mjs"),
   },
+  intake: {
+    usage: "intake [user input] [--json]",
+    load: async () => import("./intake.mjs"),
+  },
   reservation: {
     usage: "reservation <reserve|release|list|sweep> [options]",
     load: async () => import("./reservation.mjs"),
@@ -22,7 +26,7 @@ export const COMMANDS = {
     load: async () => import("./onboard.mjs"),
   },
   workgraph: {
-    usage: "workgraph <create|show|list|ready|update|close|reopen|dep|children|graph|doctor> [options]",
+    usage: "workgraph <create|show|list|ready|update|close|reopen|dep|link|children|graph|doctor> [options]",
     load: async () => import("./workgraph.mjs"),
   },
 };

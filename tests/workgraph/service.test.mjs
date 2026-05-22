@@ -14,6 +14,7 @@ import {
   graph,
   listItems,
   mutateDependencies,
+  mutateLinks,
   readyItems,
   reopenItem,
   showItem,
@@ -49,10 +50,10 @@ test("workgraph service creates items and returns decorated payloads", async () 
   }
 });
 
-test("workgraph service updates, filters, and mutates dependencies without CLI parsing", async () => {
+test("workgraph service updates, filters, and mutates dependencies and links without CLI parsing", async () => {
   const root = mkTempRepo("pulse-workgraph-service-");
   try {
-    const { story, task } = await createStoryWithTask(root);
+    const { epic, story, task } = await createStoryWithTask(root);
 
     const updated = await updateItem(root, {
       id: task.id,
@@ -74,15 +75,31 @@ test("workgraph service updates, filters, and mutates dependencies without CLI p
     assert.equal(dependency.command, "dep_add");
     assert.equal(dependency.dependency_id, story.id);
 
+    const link = await mutateLinks(root, { mode: "add", id: story.id, linkedItemId: epic.id });
+    assert.equal(link.command, "link_add");
+    assert.equal(link.linked_item_id, epic.id);
+    assert.deepEqual(link.item.linked_items, [epic.id]);
+
     const listed = await listItems(root, { owner: "agent-1", ownerProvided: true });
     assert.deepEqual(listed.items.map((item) => item.id), [task.id]);
+    assert.deepEqual(listed.items[0].linked_items, []);
 
     const ready = await readyItems(root);
     assert.equal(ready.command, "ready");
     assert.equal(ready.items.some((item) => item.id === task.id), false);
+    assert.equal(ready.items.some((item) => item.id === story.id), true);
 
     const children = await childrenOf(root, { id: story.id });
     assert.deepEqual(children.items.map((item) => item.id), [task.id]);
+
+    await assert.rejects(
+      () => mutateLinks(root, { mode: "add", id: story.id, linkedItemId: story.id }),
+      /cannot link to itself/i,
+    );
+    await assert.rejects(
+      () => mutateLinks(root, { mode: "add", id: story.id, linkedItemId: "S-MISSING" }),
+      /No item matches lookup: S-MISSING/,
+    );
   } finally {
     cleanupTempRepo(root);
   }
@@ -92,6 +109,8 @@ test("workgraph service closes, reopens, graphs, and doctors directly", async ()
   const root = mkTempRepo("pulse-workgraph-service-");
   try {
     const standalone = await createItem(root, { kind: "EPIC", title: "Standalone epic" });
+    const sibling = await createItem(root, { kind: "EPIC", title: "Linked epic" });
+    await mutateLinks(root, { mode: "add", id: standalone.item.id, linkedItemId: sibling.item.id });
 
     const closed = await closeItem(root, { id: standalone.item.id });
     assert.equal(closed.command, "close");
@@ -103,7 +122,8 @@ test("workgraph service closes, reopens, graphs, and doctors directly", async ()
 
     const graphPayload = await graph(root);
     assert.equal(graphPayload.command, "graph");
-    assert.equal(graphPayload.graph.nodes.length, 1);
+    assert.equal(graphPayload.graph.nodes.length, 2);
+    assert.deepEqual(graphPayload.graph.edges.links, [{ from: standalone.item.id, to: sibling.item.id }]);
 
     const doctorPayload = await doctor(root);
     assert.equal(doctorPayload.command, "doctor");

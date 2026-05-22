@@ -11,6 +11,7 @@ import {
   graph,
   listItems,
   mutateDependencies,
+  mutateLinks,
   readyItems,
   reopenItem,
   showItem,
@@ -101,6 +102,8 @@ function renderHumanSummary(result) {
       `Ready: ${item.ready ? "yes" : "no"}`,
       `Children: ${item.children.join(", ") || "(none)"}`,
       `Dependencies: ${item.depends_on.join(", ") || "(none)"}`,
+      ...(Array.isArray(item.linked_items) ? [`Linked items: ${item.linked_items.join(", ") || "(none)"}`] : []),
+      ...(Array.isArray(item.reverse_links) ? [`Reverse links: ${item.reverse_links.join(", ") || "(none)"}`] : []),
     ].join("\n");
   }
 
@@ -122,8 +125,17 @@ function renderHumanSummary(result) {
     return `Removed dependency ${result.dependency_id} from ${result.item.id}`;
   }
 
+  if (result.command === "link_add") {
+    return `Added link ${result.item.id} -> ${result.linked_item_id}`;
+  }
+
+  if (result.command === "link_rm") {
+    return `Removed link ${result.linked_item_id} from ${result.item.id}`;
+  }
+
   if (result.command === "graph") {
-    return `Graph: ${result.graph.nodes.length} nodes, ${result.graph.edges.hierarchy.length} hierarchy edges, ${result.graph.edges.dependencies.length} dependency edges`;
+    const linkCount = Array.isArray(result.graph.edges.links) ? result.graph.edges.links.length : 0;
+    return `Graph: ${result.graph.nodes.length} nodes, ${result.graph.edges.hierarchy.length} hierarchy edges, ${result.graph.edges.dependencies.length} dependency edges, ${linkCount} link edges`;
   }
 
   if (result.command === "doctor") {
@@ -245,6 +257,16 @@ async function dispatchCommand(repoRoot, parsed) {
         dependencyId: requirePositional(parsed, 3, "depends-on"),
       });
     }
+    case "link": {
+      assertCommandOptions(parsed);
+      assertPositionalCount(parsed, 4);
+      const mode = parsed.positionals[1];
+      return mutateLinks(repoRoot, {
+        mode,
+        id: requirePositional(parsed, 2, "id"),
+        linkedItemId: requirePositional(parsed, 3, "linked-item"),
+      });
+    }
     case "children":
       assertCommandOptions(parsed);
       assertPositionalCount(parsed, 2);
@@ -283,6 +305,8 @@ export async function main(argv = process.argv.slice(2), context = {}) {
         "  reopen <id>",
         "  dep add <id> <depends-on>",
         "  dep rm <id> <depends-on>",
+        "  link add <id> <linked-item>",
+        "  link rm <id> <linked-item>",
         "  children <id>",
         "  graph",
         "  doctor [--fix]",

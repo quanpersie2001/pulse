@@ -185,6 +185,7 @@ test("cli/workgraph.mjs create scaffolds files from workflow-owned work template
     assert.equal(epicCall.returnValue, 0);
     const epic = JSON.parse(epicCall.output).item;
     assert.equal(fs.existsSync(path.join(root, epic.content_path)), true);
+    assert.deepEqual(epic.linked_items, []);
     assert.match(fs.readFileSync(path.join(root, epic.content_path), "utf8"), /Runtime path fix/);
 
     const storyCall = await captureStdoutAsync(() =>
@@ -230,7 +231,87 @@ test("cli/workgraph.mjs create scaffolds files from workflow-owned work template
   }
 });
 
-test("pulse router exposes workgraph list, ready, and create", () => {
+test("cli/workgraph.mjs links items, reports graph links, and keeps links out of ready blocking", async () => {
+  const root = mkTempRepo("cli-workgraph-runtime-");
+  try {
+    const epicCall = await captureStdoutAsync(() =>
+      workgraphMain(["--repo-root", root, "create", "--kind", "EPIC", "--title", "Router epic", "--json"]),
+    );
+    const relatedEpicCall = await captureStdoutAsync(() =>
+      workgraphMain(["--repo-root", root, "create", "--kind", "EPIC", "--title", "Related epic", "--json"]),
+    );
+    const storyCall = await captureStdoutAsync(() =>
+      workgraphMain([
+        "--repo-root",
+        root,
+        "create",
+        "--kind",
+        "STORY",
+        "--parent",
+        JSON.parse(epicCall.output).item.id,
+        "--title",
+        "Router story",
+        "--json",
+      ]),
+    );
+
+    const epic = JSON.parse(epicCall.output).item;
+    const relatedEpic = JSON.parse(relatedEpicCall.output).item;
+    const story = JSON.parse(storyCall.output).item;
+
+    const linkAdd = await captureStdoutAsync(() =>
+      workgraphMain(["--repo-root", root, "link", "add", story.id, relatedEpic.id, "--json"]),
+    );
+    assert.equal(linkAdd.returnValue, 0);
+    const linkAddPayload = JSON.parse(linkAdd.output);
+    assert.equal(linkAddPayload.command, "link_add");
+    assert.equal(linkAddPayload.linked_item_id, relatedEpic.id);
+    assert.deepEqual(linkAddPayload.item.linked_items, [relatedEpic.id]);
+
+    const showCall = await captureStdoutAsync(() => workgraphMain(["--repo-root", root, "show", story.id, "--json"]));
+    const shown = JSON.parse(showCall.output).item;
+    assert.deepEqual(shown.linked_items, [relatedEpic.id]);
+    assert.deepEqual(shown.reverse_links, []);
+
+    const reverseShowCall = await captureStdoutAsync(() =>
+      workgraphMain(["--repo-root", root, "show", relatedEpic.id, "--json"]),
+    );
+    const reverseShown = JSON.parse(reverseShowCall.output).item;
+    assert.deepEqual(reverseShown.reverse_links, [story.id]);
+
+    const graphCall = await captureStdoutAsync(() => workgraphMain(["--repo-root", root, "graph", "--json"]));
+    const graphPayload = JSON.parse(graphCall.output);
+    assert.deepEqual(graphPayload.graph.edges.links, [{ from: story.id, to: relatedEpic.id }]);
+
+    const readyCall = await captureStdoutAsync(() => workgraphMain(["--repo-root", root, "ready", "--json"]));
+    const readyPayload = JSON.parse(readyCall.output);
+    assert.equal(readyPayload.items.some((item) => item.id === story.id), true);
+
+    const selfLink = await captureStdoutAsync(() =>
+      workgraphMain(["--repo-root", root, "link", "add", story.id, story.id, "--json"]),
+    );
+    assert.equal(selfLink.returnValue, 1);
+    assert.match(JSON.parse(selfLink.output).error, /cannot link to itself/i);
+
+    const missingLink = await captureStdoutAsync(() =>
+      workgraphMain(["--repo-root", root, "link", "add", story.id, "E-MISSING", "--json"]),
+    );
+    assert.equal(missingLink.returnValue, 1);
+    assert.match(JSON.parse(missingLink.output).error, /No item matches lookup: E-MISSING/);
+
+    const linkRm = await captureStdoutAsync(() =>
+      workgraphMain(["--repo-root", root, "link", "rm", story.id, relatedEpic.id, "--json"]),
+    );
+    assert.equal(linkRm.returnValue, 0);
+    const linkRmPayload = JSON.parse(linkRm.output);
+    assert.equal(linkRmPayload.command, "link_rm");
+    assert.deepEqual(linkRmPayload.item.linked_items, []);
+  } finally {
+    cleanupTempRepo(root);
+  }
+});
+
+test("pulse router exposes workgraph list, ready, create, and link", () => {
   const root = mkTempRepo("cli-workgraph-runtime-");
   try {
     const listResult = spawnPulse(["workgraph", "list", "--repo-root", root, "--json"]);
@@ -258,6 +339,33 @@ test("pulse router exposes workgraph list, ready, and create", () => {
     const item = parseJsonOutput(createResult).item;
     assert.equal(item.kind, "EPIC");
     assert.equal(fs.existsSync(path.join(root, item.content_path)), true);
+
+    const relatedResult = spawnPulse([
+      "workgraph",
+      "create",
+      "--repo-root",
+      root,
+      "--kind",
+      "EPIC",
+      "--title",
+      "Router related item",
+      "--json",
+    ]);
+    assert.equal(relatedResult.status, 0, relatedResult.stderr);
+    const related = parseJsonOutput(relatedResult).item;
+
+    const linkResult = spawnPulse([
+      "workgraph",
+      "link",
+      "add",
+      "--repo-root",
+      root,
+      item.id,
+      related.id,
+      "--json",
+    ]);
+    assert.equal(linkResult.status, 0, linkResult.stderr);
+    assert.equal(parseJsonOutput(linkResult).command, "link_add");
   } finally {
     cleanupTempRepo(root);
   }

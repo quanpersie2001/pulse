@@ -15,6 +15,7 @@ This document describes the Pulse workflow pipeline in router language.
 
 ```text
 pulse:workflow use
+  -> pulse:workflow intake         (only when use reports an empty session and new user input exists)
   -> pulse:workflow brainstorm     (optional when feature shape is still vague)
   -> pulse:workflow explore
   -> pulse:workflow plan
@@ -36,6 +37,7 @@ When execution gets stuck or needs deeper tactical support, reroute to standalon
 | Command | Primary responsibility |
 | --- | --- |
 | `use` | prepare the repo if needed, load the current session, and surface runtime posture |
+| `intake` | admit new user input only when the session is empty, then classify type, lane, artifact obligations, and next command |
 | `explore` | understand the codebase, current state, and implementation-relevant decision context |
 | `brainstorm` | shape vague intent into candidate approaches and an approved design before exploration |
 | `plan` | turn context into a concrete implementation shape |
@@ -48,6 +50,8 @@ When execution gets stuck or needs deeper tactical support, reroute to standalon
 ## Gated progression
 
 The router keeps the human-gate model attached to artifacts and runtime state.
+
+`intake` is a pre-gate admission checkpoint for new work. It can run only after `use` reports an empty session, and it does not replace Gate 1.
 
 1. after `explore`, approve the context artifact
 2. after `plan`, approve the selected shape artifact

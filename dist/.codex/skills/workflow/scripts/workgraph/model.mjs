@@ -30,6 +30,7 @@ export const ITEM_FIELD_ORDER = [
   "parent_id",
   "epic_id",
   "depends_on",
+  "linked_items",
   "priority",
   "owner",
   "labels",
@@ -79,6 +80,7 @@ export function cloneItemRecord(item) {
   return {
     ...item,
     depends_on: [...(item.depends_on || [])],
+    linked_items: [...(item.linked_items || [])],
     labels: [...(item.labels || [])],
     risk_flags: [...(item.risk_flags || [])],
   };
@@ -91,6 +93,7 @@ export function cloneItems(items) {
 export function canonicalizeItemRecord(item) {
   const source = cloneItemRecord(item);
   source.depends_on = normalizeStringArray(source.depends_on);
+  source.linked_items = normalizeStringArray(source.linked_items);
   source.labels = normalizeStringArray(source.labels);
   source.risk_flags = normalizeStringArray(source.risk_flags);
 

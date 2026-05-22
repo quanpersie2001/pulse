@@ -2,6 +2,10 @@
 
 Pulse keeps a human approval model attached to artifacts and workflow state.
 
+## Pre-gate admission
+
+`pulse:workflow intake` is not Gate 1. It is a new-work admission checkpoint that can run only when `pulse:workflow use` reports an empty session. Intake classifies input type, lane, artifact obligations, and next command without approving context, shape, execution, or review state.
+
 ## Gate model overview
 
 | Gate | When it happens | What gets approved | If not approved |
@@ -92,6 +96,7 @@ A gate must never be marked approved without explicit user sign-off.
 
 ## Command posture around gates
 
+- `intake` may ask for routing confirmation, but it does not replace Gate 1 or start work when the session is not empty.
 - `brainstorm` may ask for directional sign-off, but it does not replace Gate 1 or Gate 2.
 - `plan` prepares the shape; it does not auto-approve it.
 - `validate` prepares the execution case; it does not auto-start implementation.

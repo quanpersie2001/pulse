@@ -16,8 +16,27 @@
         "next-command recommendation"
       ],
       "next_commands": [
+        "intake",
         "explore",
         "brainstorm",
+        "plan"
+      ]
+    },
+    {
+      "name": "intake",
+      "summary": "Admit new user input only after an empty session, then classify type, lane, artifact obligations, and the next safe command.",
+      "hint": "Use after pulse:workflow use reports no active work and the user provides new input to classify.",
+      "category": "new-work-admission",
+      "produces": [
+        "intake package",
+        "input type",
+        "lane and risk flags",
+        "artifact obligations",
+        "next-command recommendation"
+      ],
+      "next_commands": [
+        "brainstorm",
+        "explore",
         "plan"
       ]
     },

@@ -51,6 +51,41 @@ A work item is ready when all are true:
 - every dependency is `CLOSED`
 - the current workflow has passed the required approval gate for execution
 
+Only dependency edges participate in readiness checks.
+Traceability links must not change readiness.
+
+## Dependency vs linked traceability
+
+Pulse uses at least two different relationship meanings between items, and they must not be conflated.
+
+### `depends_on`
+
+Use `depends_on` when one item cannot safely execute or complete until another item is closed.
+This relation is blocking.
+It affects readiness, execution ordering, and dependency analysis.
+Dependency cycles are invalid because they would prevent progress.
+
+### `linked_items`
+
+Use `linked_items` for non-blocking traceability only.
+Examples:
+
+- a new story that is a behavior delta over an older closed story
+- a maintenance story related to a previous refactor
+- parallel work streams that share context but do not gate each other
+- follow-up cleanup explicitly separated from the original delivery item
+
+`linked_items` is distinct from `depends_on` in all router behavior:
+
+- it does not affect readiness
+- it does not make an item blocked
+- it does not participate in dependency cycle detection
+- it does not authorize execution ordering by itself
+- it exists so humans and tooling can understand historical or semantic relationships
+
+A linked item may also have dependencies, but those are separate edges with separate semantics.
+Never upgrade a traceability link into a dependency unless execution really must wait.
+
 ## Ownership vs reservation
 
 Pulse v2 deliberately separates durable responsibility from short-lived execution claims.

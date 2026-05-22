@@ -16,6 +16,7 @@ test("workflow command metadata exposes known commands", () => {
 
   assert.equal(metadata.router, "pulse:workflow");
   assert.equal(commands.has("use"), true);
+  assert.equal(commands.has("intake"), true);
   assert.equal(commands.has("plan"), true);
 });
 

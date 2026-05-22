@@ -35,6 +35,8 @@ export const WORKGRAPH_COMMANDS = [
   "reopen",
   "dep add",
   "dep rm",
+  "link add",
+  "link rm",
   "children",
   "graph",
   "doctor",
@@ -54,6 +56,8 @@ export function buildDisplayItem(item) {
     owner: item.owner,
     ready: item.ready,
     blocked_by_dependencies: item.blocked_by_dependencies,
+    linked_items: item.linked_items,
+    reverse_links: item.reverse_links,
     content_path: item.content_path,
     verification_path: item.verification_path,
   };
@@ -114,6 +118,7 @@ export async function createItem(repoRoot, options = {}) {
       parent_id: parentId,
       epic_id: epicId,
       depends_on: [],
+      linked_items: [],
       priority,
       owner,
       labels,
@@ -393,6 +398,48 @@ export async function mutateDependencies(repoRoot, options = {}) {
     command: mode === "add" ? "dep_add" : "dep_rm",
     item: deriveViewState(outcome.items).find((item) => item.id === outcome.item.id),
     dependency_id: outcome.dependency_id,
+  };
+}
+
+export async function mutateLinks(repoRoot, options = {}) {
+  const { mode, id: lookup, linkedItemId: linkedItemLookup } = options;
+  if (!lookup) {
+    throw new Error("Missing required argument: id");
+  }
+  if (!linkedItemLookup) {
+    throw new Error("Missing required argument: linked-item");
+  }
+  if (!mode || !["add", "rm"].includes(mode)) {
+    throw new Error("link requires add or rm.");
+  }
+
+  const outcome = await runMutation(repoRoot, `workgraph link ${mode}`, ({ items }) => {
+    const id = resolveItemId(items, lookup);
+    const linkedItemId = resolveItemId(items, linkedItemLookup);
+    if (id === linkedItemId) {
+      throw new Error(`Item ${id} cannot link to itself.`);
+    }
+    const previousItem = items.find((item) => item.id === id);
+    const nextItem = cloneItemRecord(previousItem);
+
+    if (mode === "add") {
+      nextItem.linked_items = normalizeStringArray([...nextItem.linked_items, linkedItemId]);
+    } else {
+      nextItem.linked_items = nextItem.linked_items.filter((candidate) => candidate !== linkedItemId);
+    }
+    nextItem.updated_at = utcNow();
+
+    return {
+      items: items.map((item) => (item.id === id ? nextItem : cloneItemRecord(item))),
+      item: nextItem,
+      linked_item_id: linkedItemId,
+    };
+  });
+
+  return {
+    command: mode === "add" ? "link_add" : "link_rm",
+    item: deriveViewState(outcome.items).find((item) => item.id === outcome.item.id),
+    linked_item_id: outcome.linked_item_id,
   };
 }
 

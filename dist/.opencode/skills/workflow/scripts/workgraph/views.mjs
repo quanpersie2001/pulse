@@ -48,6 +48,7 @@ export function deriveViewState(items) {
   const recordsById = new Map(records.map((item) => [item.id, item]));
   const childrenByParent = new Map();
   const reverseDependencyMap = new Map(records.map((item) => [item.id, []]));
+  const reverseLinkMap = new Map(records.map((item) => [item.id, []]));
 
   for (const item of records) {
     if (item.parent_id) {
@@ -60,6 +61,12 @@ export function deriveViewState(items) {
       const reverse = reverseDependencyMap.get(dependencyId) || [];
       reverse.push(item.id);
       reverseDependencyMap.set(dependencyId, reverse);
+    }
+
+    for (const linkedItemId of item.linked_items) {
+      const reverse = reverseLinkMap.get(linkedItemId) || [];
+      reverse.push(item.id);
+      reverseLinkMap.set(linkedItemId, reverse);
     }
   }
 
@@ -84,6 +91,11 @@ export function deriveViewState(items) {
           .map((dependentId) => recordsById.get(dependentId))
           .filter(Boolean),
       ).map((dependent) => dependent.id),
+      reverse_links: sortByCreatedThenId(
+        (reverseLinkMap.get(item.id) || [])
+          .map((linkedId) => recordsById.get(linkedId))
+          .filter(Boolean),
+      ).map((linked) => linked.id),
       blocked_by_dependencies: unresolvedDependencies,
       ready,
       descendant_count: countDescendants(item.id),
@@ -101,6 +113,9 @@ export function buildGraphView(items) {
         .map((item) => ({ from: item.parent_id, to: item.id })),
       dependencies: decorated.flatMap((item) =>
         item.depends_on.map((dependencyId) => ({ from: item.id, to: dependencyId })),
+      ),
+      links: decorated.flatMap((item) =>
+        item.linked_items.map((linkedItemId) => ({ from: item.id, to: linkedItemId })),
       ),
     },
   };
