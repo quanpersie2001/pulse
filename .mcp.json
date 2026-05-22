@@ -1,17 +1,9 @@
 {
-  "gitnexus": {
-    "type": "stdio",
-    "command": "npx",
-    "args": ["-y", "gitnexus@1.6.3", "mcp"],
-    "includeTools": [
-      "list_repos",
-      "query",
-      "context",
-      "impact",
-      "api_impact",
-      "route_map",
-      "shape_check",
-      "detect_changes"
-    ]
+  "mcpServers": {
+    "gitnexus": {
+      "type": "stdio",
+      "command": "npx",
+      "args": ["-y", "gitnexus@latest", "mcp"]
+    }
   }
 }

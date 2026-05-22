@@ -1,9 +1,6 @@
 node_modules/
 coverage/
 .DS_Store
-tests
-!standalone/**/scripts/
-!standalone/**/scripts/**
 package*
 tsconfig.json
 vitest.config.ts
@@ -21,8 +18,4 @@ references/**
 !references/lineage/
 !references/lineage/**
 
-# Eval workspace (generated artifacts)
-pulse-eval-workspace/iteration-*/
-pulse-eval-workspace/*.html
-pulse-eval-workspace/benchmark*.json
 .gitnexus
