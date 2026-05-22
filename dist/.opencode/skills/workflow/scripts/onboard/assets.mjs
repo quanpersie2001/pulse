@@ -4,13 +4,13 @@ import path from "node:path";
 import {
   getScriptDir,
   getWorkflowSkillDir,
-} from "../pulse_package_paths.mjs";
+} from "../core/package-paths.mjs";
 import {
   ensureWorkgraphFilesystem,
   getWorkgraphPaths,
   loadItems,
   writeViews,
-} from "../workgraph_store.mjs";
+} from "../workgraph/store.mjs";
 
 const SCRIPT_DIR = path.dirname(getScriptDir(import.meta.url));
 const WORKFLOW_SKILL_DIR = getWorkflowSkillDir(SCRIPT_DIR);

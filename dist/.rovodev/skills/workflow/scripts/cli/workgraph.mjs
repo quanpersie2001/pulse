@@ -1,5 +1,5 @@
-import { normalizeNullableString } from "../workgraph_model.mjs";
-import { resolveRepoRoot as resolveSharedRepoRoot } from "../pulse_paths.mjs";
+import { resolveRepoRoot as resolveSharedRepoRoot } from "../core/paths.mjs";
+import { normalizeNullableString } from "../workgraph/model.mjs";
 import { assertBareBooleanOptions, assertKnownOptions, parseCliArgs as parseArgv } from "./args.mjs";
 import { normalizeIo, writePayload } from "./io.mjs";
 import {

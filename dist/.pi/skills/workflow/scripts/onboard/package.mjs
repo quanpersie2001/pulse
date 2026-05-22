@@ -5,8 +5,8 @@ import {
   getPluginRoot,
   getPulseEntrypointPath,
   getScriptDir,
-} from "../pulse_package_paths.mjs";
-import { resolveRepoRoot as resolveRepoRootFromPaths } from "../pulse_paths.mjs";
+} from "../core/package-paths.mjs";
+import { resolveRepoRoot as resolveRepoRootFromPaths } from "../core/paths.mjs";
 
 const SCRIPT_DIR = path.dirname(getScriptDir(import.meta.url));
 const PLUGIN_ROOT = getPluginRoot(SCRIPT_DIR);

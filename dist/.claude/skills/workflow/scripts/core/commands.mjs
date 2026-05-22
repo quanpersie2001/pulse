@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { firstNonEmptyString } from "./strings.mjs";
 
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
-const METADATA_PATH = path.resolve(SCRIPT_DIR, "..", "metadata", "command-metadata.json");
+const METADATA_PATH = path.resolve(SCRIPT_DIR, "..", "command-metadata.json");
 let cachedMetadata = null;
 
 export function loadWorkflowCommandMetadata() {

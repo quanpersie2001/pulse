@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 
 import { ensureParent, readJsonIfExists, readTextIfExists } from "../core/fs.mjs";
-import { buildDefaultState, normalizePulseState } from "../pulse_state.mjs";
+import { buildDefaultState, normalizePulseState } from "../runtime/state.mjs";
 import {
   managedAgentsPresent,
   mergeAgentsContent,

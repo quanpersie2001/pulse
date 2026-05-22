@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 
 import { ensureParent, readJsonIfExists } from "../core/fs.mjs";
-import { buildSessionLoad } from "../pulse_session_load.mjs";
+import { buildSessionLoad } from "../runtime/session-load.mjs";
 
 export const ONBOARDING_SCHEMA_VERSION = "1.0";
 export const WORKFLOW_COMMAND = "use";

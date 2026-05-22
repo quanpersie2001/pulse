@@ -2,8 +2,8 @@ import fs from "node:fs";
 import path from "node:path";
 
 import { readJsonIfExists, readTextIfExists } from "../core/fs.mjs";
-import { normalizePulseState } from "../pulse_state.mjs";
-import { getWorkgraphPaths } from "../workgraph_store.mjs";
+import { normalizePulseState } from "../runtime/state.mjs";
+import { getWorkgraphPaths } from "../workgraph/store.mjs";
 import { managedAgentsPresent } from "./agents.mjs";
 import { supportAssetsNeedUpdate } from "./assets.mjs";
 import {

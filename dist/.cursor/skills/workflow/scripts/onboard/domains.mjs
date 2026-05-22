@@ -6,7 +6,7 @@ import {
   ensureDirectory,
   listDirectoryEntries,
 } from "../core/fs.mjs";
-import { relativePosix } from "../pulse_paths.mjs";
+import { relativePosix } from "../core/paths.mjs";
 
 function utcNow() {
   return new Date().toISOString();

@@ -1,4 +1,4 @@
-import { generateItemId, resolveItemId } from "../workgraph_ids.mjs";
+import { generateItemId, resolveItemId } from "./ids.mjs";
 import {
   ITEM_KIND_VALUES,
   cloneItemRecord,
@@ -6,24 +6,24 @@ import {
   normalizeStringArray,
   parsePriority,
   utcNow,
-} from "../workgraph_model.mjs";
-import { applyCanonicalPaths, sanitizeSlug } from "../workgraph_paths.mjs";
+} from "./model.mjs";
+import { applyCanonicalPaths, sanitizeSlug } from "./paths.mjs";
 import {
   ensureWorkgraphFilesystem,
   getWorkgraphPaths,
   inspectViewDrift,
   loadItems,
   runMutation,
-} from "../workgraph_store.mjs";
-import { ensureItemFiles, moveItemContent, scaffoldItemFiles } from "../workgraph_templates.mjs";
+} from "./store.mjs";
+import { ensureItemFiles, moveItemContent, scaffoldItemFiles } from "./templates.mjs";
 import {
   assertItemClosable,
   assertItemReopenable,
   assertValidGenericStatusTransition,
   collectGraphIssues,
-} from "../workgraph_validate.mjs";
-import { buildGraphView, deriveViewState } from "../workgraph_views.mjs";
-import { inspectLock, removeStaleLock } from "../workgraph_lock.mjs";
+} from "./validate.mjs";
+import { buildGraphView, deriveViewState } from "./views.mjs";
+import { inspectLock, removeStaleLock } from "./lock.mjs";
 
 export const WORKGRAPH_COMMANDS = [
   "create",
