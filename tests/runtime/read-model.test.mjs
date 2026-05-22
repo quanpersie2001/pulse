@@ -8,6 +8,7 @@ import path from "node:path";
 import { reservePaths } from "../../skills/workflow/scripts/reservation/store.mjs";
 import { readPulseStatus } from "../../skills/workflow/scripts/runtime/read-model.mjs";
 import { buildSessionLoad } from "../../skills/workflow/scripts/runtime/session-load.mjs";
+import { readPulseState, writePulseState } from "../../skills/workflow/scripts/runtime/state.mjs";
 import { cleanupTempRepo, mkTempRepo } from "../helpers/temp-repo.mjs";
 
 test("readPulseStatus exposes reservation compatibility summary keys", async () => {
@@ -60,6 +61,60 @@ test("readPulseStatus accepts legacy next-command aliases without re-emitting th
     assert.equal(status.state_json.next_command, "pulse:workflow validate");
     assert.equal(Object.prototype.hasOwnProperty.call(status.state_json, "next_skill_recommended"), false);
     assert.equal(Object.prototype.hasOwnProperty.call(status.state_json, "next_command_recommended"), false);
+  } finally {
+    cleanupTempRepo(root);
+  }
+});
+
+test("runtime state preserves normalized intake posture", async () => {
+  const root = mkTempRepo("pulse-intake-state-");
+  try {
+    const written = writePulseState(root, {
+      active_command: "intake",
+      intake: {
+        status: "awaiting_creation_confirmation",
+        input_type: "harness_improvement",
+        correlation_outcome: "existing_open_work",
+        matched_item_ids: ["S-1", "", 7, "E-1"],
+        linked_item_ids: ["S-2"],
+        satisfaction_evidence_summary: "Existing story already covers the request.",
+        lane: "normal",
+        risk_flags: ["EXISTING_BEHAVIOR", "", null, "CI"],
+        artifact_path: "works/epics/E-1/S-1/INTAKE.md",
+        proposed_boundary: {
+          kind: "STORY",
+          title: "Improve intake workflow",
+          path: "works/epics/E-1/S-1",
+        },
+        recommended_next_command: "explore",
+      },
+      unexpected_top_level_field: "dropped",
+    });
+
+    assert.deepEqual(written.intake, {
+      status: "awaiting_creation_confirmation",
+      input_type: "harness_improvement",
+      correlation_outcome: "existing_open_work",
+      matched_item_ids: ["S-1", "E-1"],
+      linked_item_ids: ["S-2"],
+      satisfaction_evidence_summary: "Existing story already covers the request.",
+      lane: "normal",
+      risk_flags: ["EXISTING_BEHAVIOR", "CI"],
+      artifact_path: "works/epics/E-1/S-1/INTAKE.md",
+      proposed_boundary: {
+        kind: "STORY",
+        title: "Improve intake workflow",
+        path: "works/epics/E-1/S-1",
+      },
+      recommended_next_command: "pulse:workflow explore",
+    });
+
+    const read = readPulseState(root);
+    assert.deepEqual(read.intake, written.intake);
+    assert.equal(Object.prototype.hasOwnProperty.call(read, "unexpected_top_level_field"), false);
+
+    const status = await readPulseStatus(root);
+    assert.deepEqual(status.state_json.intake, written.intake);
   } finally {
     cleanupTempRepo(root);
   }
