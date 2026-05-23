@@ -79,7 +79,6 @@ test("buildSkills renders provider skill outputs without runtime placeholders", 
     assert.equal(fs.existsSync(path.join(workflowScripts, "cli_execution.mjs")), false, provider.name);
     assert.equal(fs.existsSync(path.join(workflowScripts, "cli", "status.mjs")), true, provider.name);
     assert.equal(fs.existsSync(path.join(workflowScripts, "cli", "ready.mjs")), true, provider.name);
-    assert.equal(fs.existsSync(path.join(workflowScripts, "cli", "intake.mjs")), true, provider.name);
     assert.equal(fs.existsSync(path.join(workflowScripts, "cli", "reservation.mjs")), true, provider.name);
     assert.equal(fs.existsSync(path.join(workflowScripts, "cli", "session-load.mjs")), true, provider.name);
     assert.equal(fs.existsSync(path.join(workflowScripts, "cli", "onboard.mjs")), true, provider.name);

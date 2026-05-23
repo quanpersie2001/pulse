@@ -122,12 +122,12 @@ Choose exactly one primary input type.
 
 | Input type | Use when | Flow effect |
 | --- | --- | --- |
-| `new_spec` | the user provides a completely new product or project spec | create spec intake, initial product contract material, candidate epics, validation shape, and decisions |
-| `spec_slice` | the user selects work from an existing spec or product contract | find related contract material and create or update the story for that slice |
-| `change_request` | the user changes or extends accepted behavior | update existing contract material, update or create the story, and update verification expectations |
-| `new_initiative` | the user introduces a large new area spanning multiple stories | create initiative or epic material, identify candidate stories, and select a first story without creating every story too early |
-| `maintenance_request` | the user asks for dependency, performance, architecture, operational, refactor, or similar technical work | create a story, validation report, or decision when needed; usually touch fewer product contract artifacts unless behavior changes |
-| `harness_improvement` | the user asks to improve Pulse workflow, process, templates, or harness behavior | update router/reference/template/runtime contract material or record a proposal in `.pulse/harness/HARNESS_BACKLOG.md` |
+| `new_spec` | the user provides a completely new product or project spec | propose a spec intake boundary and identify required downstream product contract, candidate epic, validation, and decision artifacts |
+| `spec_slice` | the user selects work from an existing spec or product contract | find related contract material and propose the story boundary or update needed for that slice |
+| `change_request` | the user changes or extends accepted behavior | identify affected contract material, propose the story update or new boundary, and identify downstream verification expectations |
+| `new_initiative` | the user introduces a large new area spanning multiple stories | propose an initiative or epic intake boundary, identify candidate downstream stories, and select a likely first story shape without creating every story upfront |
+| `maintenance_request` | the user asks for dependency, performance, architecture, operational, refactor, or similar technical work | propose a technical story boundary when needed and identify downstream validation report or decision obligations; usually touch fewer product contract artifacts unless behavior changes |
+| `harness_improvement` | the user asks to improve Pulse workflow, process, templates, or harness behavior | propose a harness story or initiative boundary and identify downstream router/reference/template/runtime contract updates or harness backlog proposal obligations |
 
 A read-only review of workflow or harness material does not by itself require intake mutation. If the review produces implementation or tracking work, classify that resulting work as `harness_improvement` and follow the normal boundary proposal and confirmation rules.
 
@@ -222,7 +222,7 @@ Classify likely affected surfaces without doing deep implementation analysis:
 - `harness`
 - `provider_metadata`
 
-Use these to explain why the next command is safe.
+Use these to explain why the next command is safe and to sanity-check the selected input type, lane, and risk flags. As a lightweight heuristic, changes to `router`, `runtime`, or `workgraph` behavior are usually at least `normal`; downstream-facing changes to `product_contract` or `provider_metadata` usually add `PUBLIC_CONTRACTS`; and public workflow behavior changes in `harness` usually classify as `harness_improvement`.
 
 ## Work boundary resolution
 
@@ -379,14 +379,14 @@ Minimum `INTAKE.md` structure:
 
 `Duplicate / Satisfaction Evidence` should summarize the specific proof used to decide whether the request is already covered, partially covered, or clearly new. Include why the matched work is insufficient when creating a new delta story over a closed story.
 
-Artifact obligations should state what the confirmed intake and downstream commands must create or update. Examples:
+Artifact obligations should state what the confirmed intake may create or update now and what downstream commands must produce later. Examples:
 
-- `new_spec`: spec intake, product contract material, candidate epics, validation shape, decisions
-- `spec_slice`: story slice and related product contract links
-- `change_request`: current behavior, target behavior, story update, verification matrix update
-- `new_initiative`: initiative or epic intake, candidate story list, selected first story
-- `maintenance_request`: validation report, decision, or technical story if needed
-- `harness_improvement`: router/reference/template/runtime contract updates or harness backlog proposal
+- `new_spec`: confirmed spec intake boundary now; downstream product contract material, candidate epic analysis, validation shape, and decisions
+- `spec_slice`: confirmed story slice boundary or update now; downstream related product contract links
+- `change_request`: confirmed story update or new boundary now; downstream current behavior, target behavior, and verification matrix updates
+- `new_initiative`: confirmed initiative or epic intake boundary now; downstream candidate story list and selected first story refinement
+- `maintenance_request`: confirmed technical story boundary when needed; downstream validation report or decision
+- `harness_improvement`: confirmed harness story or initiative boundary when needed; downstream router/reference/template/runtime contract updates or harness backlog proposal
 
 ## Workgraph output
 
@@ -492,18 +492,18 @@ State should express general routing posture with `active_command: intake` and `
     "risk_flags": ["EXISTING_BEHAVIOR", "CI"],
     "artifact_path": null,
     "proposed_boundary": null,
-    "recommended_next_command": "pulse:workflow explore"
+    "recommended_next_command": null
   }
 }
 ```
 
-Use `state.intake.proposed_boundary` only after a confirmed mutation package permits writing runtime posture for a pending proposal; before that, proposed boundary details live in the response only. Record active epic/story IDs only after confirmed creation succeeds. Use `state.intake.artifact_path` only after a durable intake artifact is written. For `already_satisfied`, record the satisfaction result, matched item IDs, and evidence summary in both `state.intake` and `.pulse/runtime/STATE.md` only after a confirmed runtime-only package permits recording the result; do not mutate closed historical work just to record satisfaction evidence.
+Use `state.intake.proposed_boundary` only after a confirmed mutation package permits writing runtime posture for a pending proposal; before that, proposed boundary details live in the response only. Record active epic/story IDs only after confirmed creation succeeds. Use `state.intake.artifact_path` only after a durable intake artifact is written. For `already_satisfied`, record the satisfaction result, matched item IDs, and evidence summary in both `state.intake` and `.pulse/runtime/STATE.md` only after a confirmed runtime-only package permits recording the result; do not mutate closed historical work just to record satisfaction evidence. Because `already_satisfied` is a terminal intake result, `state.intake.recommended_next_command` should be `null` or empty for that outcome rather than pointing to `brainstorm`, `explore`, `plan`, or another downstream workflow command.
 
 Gate state remains `none` or `pre_gate`. Gate 1 begins only after `pulse:workflow explore` produces an approvable context artifact.
 
 ## Routing decision
 
-Recommend exactly one next command or one immediate `<HARD_GATE>` action.
+Recommend exactly one next command, one immediate `<HARD_GATE>` action, or no command when intake reaches a terminal result such as `already_satisfied`.
 
 | Situation | Next action |
 | --- | --- |
