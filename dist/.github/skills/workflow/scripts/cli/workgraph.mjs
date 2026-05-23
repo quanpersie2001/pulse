@@ -1,3 +1,12 @@
+/**
+ * Purpose: CLI facade for Pulse workgraph item and relationship operations.
+ * Caller/flow: Invoked by operators/workers through `pulse.mjs workgraph ...`; ready also delegates here.
+ * Reads/Writes: Reads/writes .pulse/workgraph items, derived views, and related work content via workgraph/service.mjs.
+ * CLI args: create|show|list|ready|update|close|reopen|dep|link|children|graph|doctor with --repo-root and command options.
+ * Ownership: Argument parsing and human rendering only; model, validation, locking, and persistence live under workgraph/*.mjs.
+ * Repo root rule: Uses shared resolver from core/paths.mjs.
+ */
+
 import { resolveRepoRoot as resolveSharedRepoRoot } from "../core/paths.mjs";
 import { normalizeNullableString } from "../workgraph/model.mjs";
 import { assertBareBooleanOptions, assertKnownOptions, parseCliArgs as parseArgv } from "./args.mjs";
@@ -151,14 +160,46 @@ function renderHumanSummary(result) {
   }
 
   if (result.command === "help") {
-    return [
-      "Usage: pulse.mjs workgraph <command> [options]",
-      "",
-      ...result.commands.map((commandName) => `  ${commandName}`),
-    ].join("\n");
+    return renderWorkgraphHelp();
   }
 
   return JSON.stringify(result, null, 2);
+}
+
+function renderWorkgraphHelp() {
+  return [
+    "Usage: pulse.mjs workgraph <command> [options]",
+    "",
+    "Maintain canonical Pulse work items, hierarchy, dependencies, cross-links, and workgraph health.",
+    "Common options: --repo-root <repo>, --json",
+    "",
+    "Commands:",
+    "  create --kind <kind> --title <title> [--parent <id>] [--owner <owner>] [--priority <n>] [--label <label>] [--risk <flag>]",
+    "      Create an epic/story/task/bug item and optional parent, ownership, priority, labels, and risk flags.",
+    "  show <id>",
+    "      Print one work item with metadata, hierarchy, dependencies, labels, risks, and content paths.",
+    "  list [--kind <kind>] [--status <status>] [--epic <id>] [--parent <id>] [--owner <owner>] [--label <label>]",
+    "      Filter work items for planning, review, or operational triage.",
+    "  ready",
+    "      Show unblocked open items whose dependencies are complete and that are eligible for execution.",
+    "  update <id> [--title <title>] [--slug <slug>] [--status <status>] [--priority <n>] [--owner <owner>] [--clear-owner]",
+    "              [--blocked-reason <text>] [--clear-blocked-reason] [--add-label <label>] [--rm-label <label>] [--add-risk <flag>] [--rm-risk <flag>]",
+    "      Mutate item metadata without editing workgraph files by hand.",
+    "  close <id>",
+    "      Mark an item complete/closed after verification artifacts are in place.",
+    "  reopen <id>",
+    "      Return a closed item to active status when follow-up work is required.",
+    "  dep add <id> <depends-on> | dep rm <id> <depends-on>",
+    "      Add or remove dependency edges that control readiness.",
+    "  link add <id> <linked-item> | link rm <id> <linked-item>",
+    "      Add or remove non-blocking related-item links.",
+    "  children <id>",
+    "      List direct child items under an epic/story/task parent.",
+    "  graph",
+    "      Summarize graph nodes plus hierarchy, dependency, and link edges.",
+    "  doctor [--fix]",
+    "      Validate workgraph integrity and optionally repair supported issues.",
+  ].join("\n");
 }
 
 function helpPayload() {
@@ -291,27 +332,7 @@ async function dispatchCommand(repoRoot, parsed) {
 export async function main(argv = process.argv.slice(2), context = {}) {
   const io = normalizeIo(context.io);
   if (argv.includes("--help") || argv.includes("-h")) {
-    io.stdout.write(
-      `${[
-        "Usage: pulse.mjs workgraph <command> [options]",
-        "",
-        "Commands:",
-        "  create --kind <kind> --title <title> [--parent <id>]",
-        "  show <id>",
-        "  list [--kind <kind>] [--status <status>] [--epic <id>] [--parent <id>] [--owner <owner>] [--label <label>]",
-        "  ready",
-        "  update <id> [--title <title>] [--slug <slug>] [--status <status>] [--priority <n>] [--owner <owner>] [--add-label <label>] [--rm-label <label>] [--add-risk <flag>] [--rm-risk <flag>] [--blocked-reason <text>]",
-        "  close <id>",
-        "  reopen <id>",
-        "  dep add <id> <depends-on>",
-        "  dep rm <id> <depends-on>",
-        "  link add <id> <linked-item>",
-        "  link rm <id> <linked-item>",
-        "  children <id>",
-        "  graph",
-        "  doctor [--fix]",
-      ].join("\n")}\n`,
-    );
+    io.stdout.write(`${renderWorkgraphHelp()}\n`);
     return 0;
   }
 

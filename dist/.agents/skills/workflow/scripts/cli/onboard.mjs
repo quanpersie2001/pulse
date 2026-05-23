@@ -1,3 +1,12 @@
+/**
+ * Purpose: CLI facade for Pulse onboarding readiness checks and first-run apply.
+ * Caller/flow: Invoked by pulse:workflow use through `pulse.mjs onboard check|apply` before session loading.
+ * Reads/Writes: check reads target repo readiness; apply may back up/rebuild Pulse runtime artifacts via onboard/apply.mjs.
+ * CLI args: check|apply with --repo-root, --resume-owner, --json, --help.
+ * Ownership: Command surface only; onboarding decisions live under onboard/*.mjs modules.
+ * Repo root rule: Uses onboarding resolver from onboard/package.mjs.
+ */
+
 import { assertBareBooleanOptions, assertKnownOptions, parseCliArgs as parseSharedCliArgs } from "./args.mjs";
 import { normalizeIo, writeJson } from "./io.mjs";
 import { applyRepo } from "../onboard/apply.mjs";

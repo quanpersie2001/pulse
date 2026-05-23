@@ -1,5 +1,14 @@
 #!/usr/bin/env node
 
+/**
+ * Purpose: Normalize and persist the machine-readable Pulse runtime state record.
+ * Caller/flow: Used by runtime status, sync, onboarding, and session-load code that needs .pulse/runtime/state.json.
+ * Reads/Writes: Reads/writes .pulse/runtime/state.json and exposes markdown/key-value helpers for adjacent runtime files.
+ * CLI args: None (module API).
+ * Ownership: State schema and path helpers only; higher-level commands decide when state changes.
+ * Repo root rule: Uses shared resolver from core/paths.mjs through resolveRepoRoot().
+ */
+
 import fs from "node:fs";
 
 import { ensureParent, readJsonIfExists, readTextIfExists } from "../core/fs.mjs";
@@ -25,6 +34,40 @@ function normalizeNextCommand(overrides) {
       overrides.next_skill,
     ),
   );
+}
+
+function normalizeStringArray(value) {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value
+    .filter((entry) => typeof entry === "string")
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+}
+
+function normalizePlainObjectOrNull(value) {
+  return value && typeof value === "object" && !Array.isArray(value) ? value : null;
+}
+
+function normalizeIntakeState(value) {
+  const intake = value && typeof value === "object" && !Array.isArray(value) ? value : {};
+
+  return {
+    status: typeof intake.status === "string" ? intake.status : "",
+    input_type: typeof intake.input_type === "string" ? intake.input_type : "",
+    correlation_outcome: typeof intake.correlation_outcome === "string" ? intake.correlation_outcome : "",
+    matched_item_ids: normalizeStringArray(intake.matched_item_ids),
+    linked_item_ids: normalizeStringArray(intake.linked_item_ids),
+    satisfaction_evidence_summary:
+      typeof intake.satisfaction_evidence_summary === "string" ? intake.satisfaction_evidence_summary : "",
+    lane: typeof intake.lane === "string" ? intake.lane : "",
+    risk_flags: normalizeStringArray(intake.risk_flags),
+    artifact_path: typeof intake.artifact_path === "string" ? intake.artifact_path : null,
+    proposed_boundary: normalizePlainObjectOrNull(intake.proposed_boundary),
+    recommended_next_command: normalizeWorkflowCommand(intake.recommended_next_command),
+  };
 }
 
 export function resolveRepoRoot(explicitRoot, startFrom = process.cwd(), env = process.env) {
@@ -57,6 +100,7 @@ export function buildDefaultState(overrides = {}) {
     recommended_mode: typeof overrides.recommended_mode === "string" ? overrides.recommended_mode : "",
     next_action: typeof overrides.next_action === "string" ? overrides.next_action : "",
     next_command: normalizeNextCommand(overrides),
+    intake: normalizeIntakeState(overrides.intake),
     session: {
       posture: typeof session.posture === "string" ? session.posture : "",
       scout_findings: Array.isArray(session.scout_findings) ? session.scout_findings : [],

@@ -38,7 +38,6 @@ Mode -> Shape -> Current Work -> (Conditional Workgraph Items) -> Validate
 
 Modes:
 
-- `direct_task`
 - `spike`
 - `small_change`
 - `standard_feature`
@@ -115,7 +114,6 @@ Planning creates execution work items only when allowed by mode/readiness postur
 
 Allowed immediately:
 
-- `direct_task`
 - already-proven `small_change`
 
 Deferred (feasibility-first):

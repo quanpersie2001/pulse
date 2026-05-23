@@ -4,7 +4,7 @@ Use when `pulse:workflow plan` needs quality rules or artifact schemas.
 
 ## Quality rules
 
-- Choose one mode first: `direct_task`, `spike`, `small_change`, `standard_feature`, or `high_risk_feature`.
+- Choose one mode first: `spike`, `small_change`, `standard_feature`, or `high_risk_feature`.
 - Use the least workflow that honestly protects the work.
 - Use phases only for observable milestones. Use epics when capability/risk areas explain tough work better.
 - `high_risk_feature` defaults to an epic map unless a phase plan is plainly clearer.
@@ -22,7 +22,6 @@ mode -> shape -> current work -> work item?
 
 | Mode | Use when | Shape |
 |---|---|---|
-| `direct_task` | obvious local change | short approach + direct handoff or one work item |
 | `spike` | one assumption decides path | yes/no question + proof |
 | `small_change` | <=3 files, LOW risk, no API/data model change | one work shape |
 | `standard_feature` | ordered user/system capability | phase plan or epic map |
@@ -53,7 +52,7 @@ Canonical story-level planning artifacts:
 
 ## Shape artifacts
 
-For direct, spike, or small work:
+For spike or small work:
 
 ```markdown
 # Work Shape: <Feature>
@@ -122,7 +121,7 @@ Story-to-work-item mapping: <work item id or pending validation>
 
 ## Pressure scenarios
 
-- Small fix stays `direct_task` or `small_change`; no epic/phase ceremony.
+- Small workflow-managed fix stays `small_change`; no phase or epic-map ceremony beyond the required owning story boundary. Tiny untracked direct edits are outside `pulse:workflow`.
 - Tough feature uses an epic map when capability/risk areas are clearer than 2-4 phases.
 - MEDIUM/HIGH unknown appears as proof needed before execution items; standard/high-risk work defers item creation until validating confirms feasibility and routes back.
 - Current story is small enough for feasibility validation and one bounded execution pass.

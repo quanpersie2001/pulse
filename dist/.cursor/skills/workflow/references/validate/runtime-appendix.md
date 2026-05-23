@@ -5,7 +5,7 @@ Reusable templates, checklists, and approval prompts for validating.
 ## A. Orientation template
 
 ```text
-Validating mode: <direct_task | spike | small_change | standard_feature | high_risk_feature>
+Validating mode: <spike | small_change | standard_feature | high_risk_feature>
 Approved shape artifact: <work-shape.md | phase-plan.md | epic-map.md>
 Current work: <direct work item | spike question | current story | current phase>
 Approval status: APPROVED | PENDING | REVISE_REQUIRED
