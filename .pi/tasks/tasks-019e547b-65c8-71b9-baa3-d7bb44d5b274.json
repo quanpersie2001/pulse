@@ -1,0 +1,17 @@
+{
+  "nextId": 2,
+  "tasks": [
+    {
+      "id": "1",
+      "subject": "Review intake reference docs",
+      "description": "Read all files under skills/workflow/references/intake/, understand their purpose and interactions, then provide a structured review in Vietnamese with strengths, issues, and recommendations.",
+      "status": "completed",
+      "activeForm": "Reviewing intake reference docs",
+      "metadata": {},
+      "blocks": [],
+      "blockedBy": [],
+      "createdAt": 1779533928341,
+      "updatedAt": 1779534212814
+    }
+  ]
+}

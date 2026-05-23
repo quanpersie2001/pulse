@@ -49,13 +49,13 @@ Run risk checklist
 Choose lane: tiny, normal, or high_risk
     |
     v
-Choose work boundary: none, direct_task, single_story, initiative, or blocked
+Choose work boundary: none, single_story, initiative, or blocked
     |
     v
 Define artifact obligations
     |
     v
-If no mutation is needed, record routing result and stop
+If no structural mutation is needed, present routing result and stop without writing files unless the confirmed mutation package includes a runtime-only record
     |
     v
 If structural mutation is needed, present proposed boundary creation/update and artifact paths
@@ -70,22 +70,42 @@ Create/update only the confirmed boundary and intake artifact, or stop without m
 Recommend next command
 ```
 
-The flow is intentionally admission-focused. Stop as soon as one step cannot be completed safely, record the blocker, and do not proceed to downstream workflow commands.
-The first pass is classification and proposal only; structural workgraph creation and `works/` writes happen only after the user confirms the proposed boundary.
+The flow is intentionally admission-focused. Stop as soon as one step cannot be completed safely, present the blocker, and do not proceed to downstream workflow commands.
+The first pass is classification and proposal only. Before confirmation, keep classification, correlation, blockers, and proposed boundary details in the operator response only; do not write `.pulse/runtime/`, `.pulse/workgraph/`, or `works/` files. Any file mutation requires a single explicit confirmation of the proposed mutation package. If the package creates or updates a boundary, that same confirmation covers the matching runtime posture update; do not ask for a second runtime-record approval. Structural workgraph creation, workgraph metadata updates, and `works/` writes happen only after the user confirms the proposed boundary.
 
 ## Entry criteria
 
 Run `pulse:workflow intake <user input>` only when all are true:
 
-- `pulse:workflow use` has just established readiness and loaded the session
-- session load reports no active, resumable, conflicted, or executable work
+- the user provided new input to classify
+- `pulse:workflow use` has established readiness and loaded the session for this operator session
+- the empty-session proof is fresh according to [Freshness and posture proof](#freshness-and-posture-proof)
+- the latest posture proof reports no active, resumable, conflicted, gated, or executable work
 - `.pulse/runtime/state.json` has no active epic, story, item, command, or pending gate
 - `.pulse/runtime/handoffs/manifest.json` has no active handoff to resume
 - `.pulse/workgraph` has no ready execution work for an existing stream
-- the user provided new input to classify
 
 If any active, resumable, conflicted, gated, or executable session work exists, block immediately.
-Dormant open workgraph items may still be used for correlation and routing when `use` reports no active session to resume.
+Dormant open workgraph items may still be used for correlation and routing when the latest posture proof reports no active session to resume.
+
+### Freshness and posture proof
+
+A `use` result is fresh only while intake can prove it still represents the current runtime posture. Treat the proof as stale unless at least one of these is true:
+
+- intake is running in the same uninterrupted operator turn immediately after `pulse:workflow use`, with no intervening file mutation, workgraph command, reservation command, handoff update, or downstream workflow command
+- the session load artifact records a `generated_at` timestamp, it is within the implementation-defined freshness window, and `.pulse/runtime/state.json`, `.pulse/runtime/handoffs/manifest.json`, and `.pulse/workgraph` have not changed since that timestamp
+- intake has just run `{{pulse_command}} status --repo-root <repo> --json` and the returned posture confirms the session is empty for intake purposes
+
+The optimal default is to run `{{pulse_command}} status --repo-root <repo> --json` immediately before the first intake hard gate and use that output as the authoritative posture proof. Do not rely on memory of an earlier `use` result when the runtime files may have changed.
+
+The posture proof must explicitly cover:
+
+- active epic, story, item, command, or pending gate in `.pulse/runtime/state.json`
+- active/resumable handoff in `.pulse/runtime/handoffs/manifest.json`
+- conflicted, reserved, executable, or ready work reported by runtime/workgraph status
+- ready execution work in `.pulse/workgraph` for an existing stream
+
+If freshness cannot be proven, block instead of guessing.
 
 Block message shape:
 
@@ -121,41 +141,43 @@ After input type, choose a lane:
 - `normal`
 - `high_risk`
 
+Risk flags are canonical uppercase identifiers everywhere: intake classification, `INTAKE.md`, `state.intake.risk_flags`, workgraph metadata, and tests. Lowercase risk flag names are not valid documented or persisted flag values.
+
 Risk flags:
 
-- `auth`
-- `authorization`
-- `data_model`
-- `data_loss`
-- `migration`
-- `audit_security`
-- `external_systems`
-- `performance`
-- `ux`
-- `ci`
-- `public_contracts`
-- `cross_platform`
-- `existing_behavior`
-- `weak_proof`
-- `multi_domain`
+- `AUTH`
+- `DATA`
+- `MIGRATION`
+- `SECURITY`
+- `EXTERNAL_API`
+- `PERFORMANCE`
+- `UX`
+- `CI`
+- `PUBLIC_CONTRACTS`
+- `CROSS_PLATFORM`
+- `EXISTING_BEHAVIOR`
+- `WEAK_PROOF`
+- `MULTI_DOMAIN`
+- `UNKNOWN`
 
-When writing risk flags to workgraph metadata, use the canonical uppercase workgraph enum. Map intake flags as follows:
+Use the most specific canonical flag set available:
 
-| Intake flag | Workgraph flag |
+| Risk area | Canonical flag |
 | --- | --- |
-| `auth`, `authorization` | `AUTH` |
-| `data_model` | `DATA` |
-| `data_loss` | `DATA`; also add `MIGRATION` when persistence shape, migration behavior, or recovery mechanics change |
-| `migration` | `MIGRATION` |
-| `audit_security` | `SECURITY` |
-| `external_systems` | `EXTERNAL_API` |
-| `existing_behavior` | `EXISTING_BEHAVIOR` |
-| `performance` | `PERFORMANCE` |
-| `ux` | `UX` |
-| `ci` | `CI` |
-| unresolved or unclear risk | `UNKNOWN` |
-
-Flags without a canonical workgraph equivalent should remain in the intake artifact unless a downstream command introduces a supported metadata label or risk flag.
+| Authentication or authorization behavior | `AUTH` |
+| Data model, persistence shape, or data handling | `DATA` |
+| Persistence migration, recovery, or data-loss-sensitive transition | `MIGRATION` |
+| Audit, abuse, privacy, or security-sensitive behavior | `SECURITY` |
+| External provider, integration, or API behavior | `EXTERNAL_API` |
+| Performance-sensitive behavior | `PERFORMANCE` |
+| User experience or interaction behavior | `UX` |
+| CI, release, or verification infrastructure | `CI` |
+| Public contract, API, CLI, or documented behavior compatibility | `PUBLIC_CONTRACTS` |
+| Cross-platform behavior or portability | `CROSS_PLATFORM` |
+| Existing accepted behavior may change | `EXISTING_BEHAVIOR` |
+| Proof is weak, validation is reduced, or evidence is unclear | `WEAK_PROOF` |
+| Multiple product or technical domains are affected | `MULTI_DOMAIN` |
+| Unresolved or unclear risk | `UNKNOWN` |
 
 Classification rules:
 
@@ -175,13 +197,13 @@ Any risk hard gate:
 
 Risk hard gates:
 
-- auth
-- authorization
-- data loss or migration
-- audit/security
-- external provider behavior
-- weakening validation requirements
-- public contract breakage
+- `AUTH`
+- `DATA` when data loss is possible
+- `MIGRATION`
+- `SECURITY`
+- `EXTERNAL_API`
+- `WEAK_PROOF` when validation requirements are weakened
+- `PUBLIC_CONTRACTS` when public behavior can break
 
 Lane controls workflow strictness. Input type controls artifact obligations.
 
@@ -224,7 +246,7 @@ Use the strongest available evidence in this order:
 5. narrow code evidence only when it is named by the user, already surfaced by `use`, or checkable with a targeted read
 6. weak semantic similarity only
 
-If proving satisfaction requires broad codebase investigation, do not turn intake into `explore`; classify as `ambiguous_or_blocked` or route to `explore` with the suspected match recorded.
+If proving satisfaction requires broad codebase investigation, do not turn intake into `explore`; classify as `ambiguous_or_blocked` or route to `explore` with the suspected match presented in the response. Persist the suspected match only after the user explicitly approves recording the routing result.
 If correlation is weak, do not guess. Ask the minimum routing question needed before creating boundaries.
 
 ### Correlation outcomes
@@ -250,7 +272,7 @@ Ask:
 - is the user actually asking for a new behavior delta over prior work rather than a bugfix or follow-up within that same story?
 
 If the answer is `already_satisfied`, intake must not create new execution work.
-Record the evidence, explain why the request looks satisfied, and either:
+Present the evidence, explain why the request looks satisfied, and either:
 
 - stop with an `already_satisfied` routing result, or
 - ask one routing question if the evidence is suggestive but not decisive
@@ -276,7 +298,6 @@ This preserves closure semantics while keeping the new request visible as a sepa
 Choose one boundary:
 
 - `none`
-- `direct_task`
 - `single_story`
 - `initiative`
 - `blocked`
@@ -286,17 +307,16 @@ Rules:
 - `new_initiative` normally proposes an `initiative` or epic boundary plus a selected first story.
 - `new_spec` may propose an initiative boundary or a first story when the first slice is obvious.
 - `spec_slice` normally produces a `single_story` boundary.
-- `change_request` may be `direct_task` only when tiny, clear, low-risk, and clearly belongs to existing open work.
-- `direct_task` is a routing shape only: intake may identify that downstream planning can produce a task under an existing open story, but intake itself must not create `TASK` or `BUG` metadata.
-- `direct_task` is valid only when an existing open story owns the request. Any confirmed intake note belongs to that owning story boundary. Intake must not create a task or bug directory, task or bug metadata, or a new story just to preserve the `direct_task` label.
-- If no existing open story owns the request, do not choose `direct_task`; choose `single_story` or `blocked` instead.
-- `maintenance_request` may be `direct_task` or `single_story` depending blast radius.
+- `change_request` should use `single_story` when workflow-managed durability is needed, even when the change is tiny.
+- `maintenance_request` should use `single_story` when workflow-managed durability is needed, or `blocked` when it does not belong in the workflow session.
+- Pulse intake does not model standalone direct tasks. If the user intentionally wants an untracked tiny direct edit outside Pulse workflow, do not run intake for it; the operator may handle it outside `pulse:workflow` discipline.
+- If an existing open story owns the request, use `single_story` and update that owning story boundary after confirmation instead of creating a task-shaped intake path.
 - `harness_improvement` should be `single_story` or `initiative` when it changes public workflow behavior.
 - `already_satisfied` uses boundary `none`; it must not create a new boundary or new execution work.
 - `existing_closed_related_work` that changes behavior should propose a new `single_story` boundary linked to the closed story, not reopen it by default.
 - `ambiguous_or_blocked` means `blocked` until the routing question is answered.
 
-Do not create an execution-ready `TASK` or `BUG` during intake.
+Do not create an execution-ready `TASK` or `BUG` during intake. Intake-managed work must resolve to an epic/story boundary before downstream planning or execution.
 
 ## Artifact output
 
@@ -315,7 +335,7 @@ Initiative or epic boundary:
 
 After confirmation, use `dirname(item.content_path)` from the `{{pulse_command}} workgraph create --json` result as the source of truth for the concrete boundary directory, then write `INTAKE.md` in that directory. For example, a returned `item.content_path` of `works/epics/E-1-example/S-1-slice/README.md` means the confirmed intake artifact is `works/epics/E-1-example/S-1-slice/INTAKE.md`.
 Temporary runtime notes may be used while classifying, but confirmed intake that creates or updates a work boundary must leave the durable result under `works/`.
-For `already_satisfied`, intake may exit without writing a new `INTAKE.md` when doing so would mutate closed historical work or create a misleading new work stream; in that case, `state.intake` and `.pulse/runtime/STATE.md` must record the satisfaction result, matched item IDs, and evidence summary.
+For `already_satisfied`, intake may exit without writing a new `INTAKE.md` when doing so would mutate closed historical work or create a misleading new work stream. By default, present the satisfaction result, matched item IDs, and evidence summary in the response only. If the proposed mutation package is runtime-only and the user confirms it, `state.intake` and `.pulse/runtime/STATE.md` must record the satisfaction result, matched item IDs, and evidence summary.
 
 For `existing_open_work`, the confirmed intake note belongs to the existing owning boundary. If that boundary does not have `INTAKE.md`, create it after confirmation. If `INTAKE.md` already exists, append a dated `Additional Intake` section by default and include the new user input, restated work, correlation evidence, duplicate/satisfaction check, and routing decision. Do not overwrite previous intake material unless the user explicitly confirms replacement.
 
@@ -378,7 +398,7 @@ Intake may create only structural metadata after explicit user confirmation:
 
 Do not invent unsupported workgraph metadata fields for `INTAKE.md`; the durable intake narrative lives in the adjacent `INTAKE.md` artifact.
 
-Before confirmation, intake must present the exact proposed workgraph operation(s), expected boundary path, and `INTAKE.md` path, then stop at a `<HARD_GATE>`. If the `use` result is not from the current operator turn, or if `.pulse/runtime`, `.pulse/workgraph`, or `works/` changed during classification, re-check session posture before presenting the hard gate and route back to `pulse:workflow use` if the empty-session proof is stale or contradicted.
+Before confirmation, intake must present the exact proposed workgraph operation(s), expected boundary path, and `INTAKE.md` path, then stop at a `<HARD_GATE>`. Immediately before presenting this hard gate, run or verify a fresh `{{pulse_command}} status --repo-root <repo> --json` posture proof. If the proof is stale, missing, or contradicted by `.pulse/runtime`, `.pulse/workgraph`, or `works/` changes during classification, do not present the creation/update hard gate; route back to `pulse:workflow use` or ask the operator to rerun status first.
 
 ```xml
 <HARD_GATE>
@@ -399,7 +419,7 @@ Reply with explicit approval to create/update this boundary, or provide correcti
 
 Do not run `{{pulse_command}} workgraph create`, update existing metadata, or write the boundary `INTAKE.md` until the user confirms the `<HARD_GATE>`.
 
-After the user confirms the `<HARD_GATE>`, re-check that no active, resumable, conflicted, gated, or executable work appeared since the hard gate. If posture changed, stop without mutation and route back to `pulse:workflow use`. If the session is still safe, create only the confirmed structural boundary using the existing workgraph CLI.
+After the user confirms the `<HARD_GATE>`, run `{{pulse_command}} status --repo-root <repo> --json` again before any mutation. Re-check that no active, resumable, conflicted, gated, or executable work appeared since the hard gate and that the confirmed proposal still matches the current runtime/workgraph posture. If posture changed, stop without mutation and route back to `pulse:workflow use`. If the session is still safe, create only the confirmed structural boundary using the existing workgraph CLI.
 
 For a new epic or initiative boundary:
 
@@ -436,9 +456,26 @@ Intake must not create execution work:
 
 ## Runtime output
 
-Record intake posture in `.pulse/runtime/state.json` and `.pulse/runtime/STATE.md` without approving any gate.
-Runtime state may record classification and proposed boundary before confirmation, but must not claim active created epic/story IDs until creation succeeds.
-After confirmation and creation, runtime state may record the created active epic/story IDs.
+Do not write intake posture to `.pulse/runtime/state.json` or `.pulse/runtime/STATE.md` before user confirmation. Before confirmation, intake posture belongs in the operator response only.
+Use one confirmation for the whole proposed mutation package:
+
+- Boundary package: creates or updates workgraph/`works/` artifacts and records the matching runtime posture in the same confirmed operation.
+- Runtime-only package: records a no-structural-mutation result in runtime mirrors only, when preserving that result is useful.
+- No-write package: presents the routing result and stops without any file mutation.
+
+Do not ask for a separate runtime-record approval after the user has confirmed a boundary package.
+Runtime state must not claim active created epic/story IDs until creation succeeds. After confirmation and creation, runtime state may record the created active epic/story IDs.
+
+For no-structural-mutation outcomes, use this rule:
+
+| Outcome | Default no-write package | Confirmed runtime-only package |
+| --- | --- | --- |
+| `already_satisfied` | Present evidence and stop without writing files | Update `state.intake` and `.pulse/runtime/STATE.md` with `status: already_satisfied`, matched IDs, evidence summary, and recommended next action |
+| `ambiguous_or_blocked` | Ask the routing question and stop without writing files | Update `state.intake` and `.pulse/runtime/STATE.md` with `status: needs_user_routing` or `blocked`, evidence summary, open question, and recommended next action |
+| routing-only recommendation | Present the recommended next command and stop without writing files | Update `state.intake` and `.pulse/runtime/STATE.md` with the classification, correlation outcome, lane, and recommended next command |
+
+When runtime posture is recorded, update `.pulse/runtime/state.json` and `.pulse/runtime/STATE.md` together in the same operation. Do not update only one runtime mirror.
+Do not write `works/` artifacts or workgraph metadata for no-structural-mutation outcomes unless the user later confirms a boundary creation/update hard gate.
 
 State should express general routing posture with `active_command: intake` and `next_action` set for manual invocation by default. Intake-specific fields must be recorded under the official `state.intake` namespace:
 
@@ -452,7 +489,7 @@ State should express general routing posture with `active_command: intake` and `
     "linked_item_ids": [],
     "satisfaction_evidence_summary": "",
     "lane": "tiny | normal | high_risk",
-    "risk_flags": [],
+    "risk_flags": ["EXISTING_BEHAVIOR", "CI"],
     "artifact_path": null,
     "proposed_boundary": null,
     "recommended_next_command": "pulse:workflow explore"
@@ -460,7 +497,7 @@ State should express general routing posture with `active_command: intake` and `
 }
 ```
 
-Use `state.intake.proposed_boundary` for proposed epic/story title and expected path before confirmation. Record active epic/story IDs only after confirmed creation succeeds. Use `state.intake.artifact_path` only after a durable intake artifact is written. For `already_satisfied`, record the satisfaction result, matched item IDs, and evidence summary in both `state.intake` and `.pulse/runtime/STATE.md`; do not mutate closed historical work just to record satisfaction evidence.
+Use `state.intake.proposed_boundary` only after a confirmed mutation package permits writing runtime posture for a pending proposal; before that, proposed boundary details live in the response only. Record active epic/story IDs only after confirmed creation succeeds. Use `state.intake.artifact_path` only after a durable intake artifact is written. For `already_satisfied`, record the satisfaction result, matched item IDs, and evidence summary in both `state.intake` and `.pulse/runtime/STATE.md` only after a confirmed runtime-only package permits recording the result; do not mutate closed historical work just to record satisfaction evidence.
 
 Gate state remains `none` or `pre_gate`. Gate 1 begins only after `pulse:workflow explore` produces an approvable context artifact.
 
@@ -474,7 +511,7 @@ Recommend exactly one next command or one immediate `<HARD_GATE>` action.
 | structural workgraph or `works/` mutation is proposed | present the `<HARD_GATE>` and stop until explicit approval |
 | new spec or initiative lacks a selected story shape after confirmed boundary handling | `pulse:workflow brainstorm` |
 | story intent exists but behavior/context decisions need locking after confirmed boundary handling | `pulse:workflow explore` |
-| tiny or clear low-risk work has enough context for execution shaping | `pulse:workflow plan` |
+| tiny or clear low-risk work needs Pulse-managed durability | `pulse:workflow plan` under the owning or newly confirmed story boundary |
 | request maps to existing open work | propose reuse/update of the existing stream, hard-gate any artifact mutation, then recommend the next unmet command |
 | request appears already satisfied with strong evidence | stop and present the evidence; no new execution command |
 | intake cannot safely classify or route | block and ask the routing question |
@@ -523,10 +560,10 @@ Stop after intake when:
 
 Successful exit requires:
 
-- fresh `use` result confirmed the session was empty before intake
+- fresh posture proof, preferably `{{pulse_command}} status --repo-root <repo> --json`, confirmed the session was empty before intake hard gate
 - input type selected
 - existing work correlation outcome selected
-- duplicate/satisfaction evidence recorded
+- duplicate/satisfaction evidence presented in the response, and persisted only when included in a confirmed mutation package
 - lane selected with risk flags
 - work boundary selected or blocker stated
 - proposed workgraph operation(s), boundary path, and `INTAKE.md` path presented before mutation
@@ -534,14 +571,14 @@ Successful exit requires:
 - durable `INTAKE.md` written under `works/` only after confirmation when a work boundary is created or updated
 - for `already_satisfied`, either no new artifact is written or any evidence note must avoid mutating closed historical work misleadingly
 - structural EPIC/STORY metadata created only when needed and only after confirmation
-- runtime state updated with intake posture and no gate approval
+- runtime state updated with intake posture and no gate approval only when included in a confirmed mutation package
 - next command recommendation stated
 
 ## Red flags
 
 Stop if you catch yourself:
 
-- running intake while active or resumable work exists
+- running intake without a fresh posture proof, or while active or resumable work exists
 - creating or updating EPIC/STORY metadata before explicit user confirmation
 - writing boundary `INTAKE.md` before explicit user confirmation
 - creating executable tasks or bugs

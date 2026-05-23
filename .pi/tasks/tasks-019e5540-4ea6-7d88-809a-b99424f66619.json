@@ -1,0 +1,17 @@
+{
+  "nextId": 2,
+  "tasks": [
+    {
+      "id": "1",
+      "subject": "Clarify intake freshness rules",
+      "description": "Update skills/workflow/references/intake/command.md so entry criteria define a mechanically checkable fresh use/session proof, require a status --json posture check before hard gate and before mutation, and align exit/red-flag language.",
+      "status": "completed",
+      "activeForm": "Clarifying intake freshness rules",
+      "metadata": {},
+      "blocks": [],
+      "blockedBy": [],
+      "createdAt": 1779546916871,
+      "updatedAt": 1779546977012
+    }
+  ]
+}

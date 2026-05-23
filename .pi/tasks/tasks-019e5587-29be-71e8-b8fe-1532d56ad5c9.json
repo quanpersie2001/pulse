@@ -1,0 +1,17 @@
+{
+  "nextId": 2,
+  "tasks": [
+    {
+      "id": "1",
+      "subject": "Remove direct_task workflow path",
+      "description": "Update workflow reference docs so intake no longer exposes direct_task as a boundary/mode; all workflow-managed changes must be under EPIC/STORY, and tiny direct changes outside workflow are left to user/operator outside pulse:workflow.",
+      "status": "completed",
+      "activeForm": "Removing direct_task workflow path",
+      "metadata": {},
+      "blocks": [],
+      "blockedBy": [],
+      "createdAt": 1779553155821,
+      "updatedAt": 1779553225722
+    }
+  ]
+}
