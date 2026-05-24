@@ -1,205 +1,256 @@
 # `pulse:workflow plan`
 
-Task-planning manual for decomposing an approved `solution-design.md` into execution-ready work without changing the solution.
+Task-planning command for turning approved `solution-design.md` into a durable lowercase story-scoped `plan.md`, docs impact, work content enrichment, and approved workgraph materialization posture.
 
 Plan answers:
 
-> How should the approved solution be broken into executable work?
+> How should the approved solution be decomposed into validate-ready work?
 
 Plan does **not** decide product behavior, technical approach, architecture, schema, API, UX, migration posture, or verification strategy. Those belong to `pulse:workflow design`.
 
+Plan may map approved verification requirements into task-level checks, evidence paths, and validation commands.
+
 ## Mission
 
-Convert approved solution design into one clear task/current-work breakdown that validation can prove and execution can follow.
+Produce an approved `plan.md` that validation and execution can follow without changing the solution.
+
+`plan.md` must define:
+
+- full task breakdown
+- mandatory docs impact
+- epic/story README enrichment
+- approved TASK/BUG materialization posture
+- validation plan
+- Gate 2 approval request
 
 ## Entry criteria
 
 Run `pulse:workflow plan` when:
 
-- `solution-design.md` exists under the owning story
-- solution design has explicit user approval or approval posture
-- discovery/design/runtime mirrors do not conflict
-- the next work is decomposition, sequencing, dependencies, and validation mapping
+- story `discovery.md` exists
+- story `solution-design.md` exists and is approved or explicitly approval-ready
+- runtime/workgraph posture identifies the active epic/story boundary
+- the next work is decomposition, docs impact, README enrichment, validation plan, and task materialization
 
 Block planning when:
 
 - `solution-design.md` is missing, draft, contradictory, or unapproved
-- plan would need to choose or change solution approach
-- design decisions are missing for schema/API/UX/architecture/verification strategy
-- runtime readiness is stale or blocked
+- decomposition requires changing or inventing solution decisions
+- `discovery.md` lacks evidence needed for docs/task/validation plan
+- runtime/workgraph posture is stale, blocked, or cannot identify the active boundary
 
-## Required inputs
+## Inputs
+
+Minimum story inputs:
+
+- story `discovery.md`
+- approved story `solution-design.md` (authoritative)
+
+Runtime/workgraph/docs inputs:
+
+- `.pulse/runtime/state.json` and `.pulse/runtime/STATE.md`
+- active epic/story workgraph state queried through `{{pulse_command}} workgraph ... --json`
+- targeted docs context after affected surfaces are known:
+  - inspect only the required docs surfaces needed to judge impact
+  - read `docs/ARCHITECTURE.md` or `docs/GLOSSARY.md` only when architecture/runtime/workgraph terms may change
+  - list `docs/decisions/` or `docs/product/` when relevant, then read only docs tied to the approved design or affected surfaces
+  - do not crawl all of `docs/` during orientation
+
+Optional fallback inputs; read only for boundary drift, missing carried-forward context, cited evidence, or iteration state:
 
 - story `intake.md`
 - story `work-brief.md` when brainstorm was used
-- story `discovery.md`
-- story `references/*.md` when cited by discovery/design
-- approved story `solution-design.md` (authoritative)
-- `.pulse/memory/critical-patterns.md` when present
-- `.pulse/runtime/state.json` and `.pulse/runtime/STATE.md`
-- prior planning artifacts if iterating
+- story `references/*.md` when cited but not summarized enough for planning
+- `.pulse/memory/critical-patterns.md` when relevant
+- prior `plan.md` when iterating
 
-## Immutable design contract
+If plan needs `intake.md` or `work-brief.md` to infer missing solution scope, behavior, direction, or constraints, stop and route back to `pulse:workflow design`.
 
-Plan consumes `solution-design.md` as immutable input.
+## Core contracts
 
-Plan may:
-- decompose work into tasks or current-work slices
-- sequence tasks
-- identify dependencies and parallelization boundaries
-- map validation evidence to tasks
-- prepare execution packaging
-- recommend execution mode
+### Immutable design
 
-Plan must not:
-- revise design/approach/architecture
-- choose a different pattern
-- alter schema, API, UX, product behavior, migration, or verification strategy
-- add new solution decisions
-- silently resolve design gaps
+`solution-design.md` is immutable input.
 
-If planning discovers a design gap, contradiction, or infeasible decision, stop and route back to `pulse:workflow design` with exact repair questions. If missing evidence caused the gap, route back to `pulse:workflow explore`.
+Plan may decompose, sequence, map docs/validation evidence, enrich work content, and prepare approved TASK/BUG materialization.
+
+Plan must not revise design, alter schema/API/UX/product behavior, add solution decisions, or silently resolve design gaps.
+
+### Docs impact is mandatory and targeted
+
+Every `plan.md` must include docs impact for:
+
+```text
+docs/
+├── ARCHITECTURE.md
+├── GLOSSARY.md
+├── decisions/
+└── product/
+```
+
+Mandatory docs impact does not mean reading all docs. First identify affected code/runtime/workgraph/product surfaces from `solution-design.md`; then inspect only the docs needed to judge whether those surfaces require `Create`, `Update`, or `No change`.
+
+Each required docs surface must still record an action, rationale, and validation evidence. Do not write “update docs if needed”.
+
+### Work content enrichment
+
+Intake creates or matches EPIC/STORY boundaries and writes `intake.md`. Plan enriches content:
+
+- enrich existing epic `README.md` from [`epic.readme.md`](./epic.readme.md) when needed
+- enrich existing story `README.md` from [`story.readme.md`](./story.readme.md)
+- create TASK/BUG README content from [`task.readme.md`](./task.readme.md) only after `workgraph create --json` returns the canonical `content_path`
+
+Do not create duplicate EPIC/STORY items when intake already established the boundary.
+
+### Workgraph via CLI only
+
+Treat `.pulse/workgraph/items.jsonl` as database-like storage behind the CLI. Do not read or edit it during planning.
+
+Use `{{pulse_command}} workgraph ... --json` for all workgraph reads and mutations. Use [`../shared/workgraph-model.md`](../shared/workgraph-model.md) when deciding dependency vs link semantics, readiness behavior, or owner/reservation boundaries.
+
+### Planning mode
+
+Use the lightest mode that still makes the implementation reviewable.
+
+| Mode | Use when | Required emphasis |
+| --- | --- | --- |
+| `spike` | one approved-design assumption needs proof before execution | proof question, evidence, stop/continue criteria |
+| `small_change` | <=3 files, LOW risk, simple approved design | concise file-level plan, docs impact, validation commands |
+| `standard_feature` | ordered capability or multi-surface change | sequencing, integration points, validation plan |
+| `high_risk_feature` | hard-to-reverse, external/security/data/public contract risk | risks, rollback/repair posture, decision/docs evidence |
+
+Above `small_change`, record why the smaller mode is insufficient.
 
 ## Phase model
 
 ### Phase 0 — Orientation
 
-Read required inputs and confirm:
+1. Read minimum story inputs.
+2. Choose the planning mode using the table above.
+3. Query active epic/story through `{{pulse_command}} workgraph ... --json`.
+4. Confirm:
+   - active story boundary
+   - approved design status
+   - design decision IDs and planning constraints
+   - discovery evidence needed for task/docs/validation plan
+   - runtime mirror sync
+   - existing epic/story README posture
+5. Identify affected surfaces from the approved design before reading docs.
+6. Inspect only docs surfaces relevant to those affected surfaces.
+7. Read optional fallback inputs only when needed.
 
-- active story boundary
-- approved design path/status
-- decision IDs and planning constraints
-- runtime mirror sync
-- prior planning state if any
+Hard stop if `solution-design.md` is not authoritative or approved.
 
-Hard stop if `solution-design.md` is not the authoritative approved solution.
+### Phase 1 — Plan draft
 
-### Phase 1 — Learnings retrieval
-
-Load critical corrections/ratchets from `.pulse/memory/critical-patterns.md` when present.
-
-Record applied learnings in the planning artifact. If learnings conflict with approved design, stop and route back to design instead of changing the plan silently.
-
-### Phase 2 — Task decomposition
-
-Create or update the story planning artifact, typically:
+Create or update:
 
 ```text
-works/epics/<epic-id>-<epic-slug>/<story-id>-<story-slug>/PLAN.md
+works/epics/<epic-id>-<epic-slug>/<story-id>-<story-slug>/plan.md
 ```
 
-Break the approved solution into work units.
+Use [`plan.template.md`](./plan.template.md) as the starting structure for the story `plan.md`. Keep the artifact focused on implementation detail: what will be implemented, where, how, and how completion will be proven.
 
-For each unit:
-- objective
-- source design decision IDs
-- dependencies
-- expected touched surfaces at a high level
-- acceptance/evidence expectation
-- sequencing or parallelization notes
-- risks inherited from design
+Draft must include:
 
-### Phase 3 — Current-work contract
+- inputs read, with reasons
+- planning mode
+- referenced design decisions
+- affected surfaces
+- docs impact
+- implementation structure focused on what/where/how to implement
+- change strategy
+- task breakdown
+- sequencing/parallelization
+- scope and completion contract
+- validation plan
+- approved work item materialization posture
+- README enrichment posture when relevant
+- risks and repair posture
 
-Prepare one bounded current-work contract for the next validation pass:
+### Phase 2 — Self-review
 
-- entry state
-- exit state
-- in-scope
-- out-of-scope
-- dependencies
-- validation evidence to produce
-- rollback/repair posture if applicable
+Check `plan.md` before Gate 2 approval:
 
-Do not prepare multiple unrelated slices at once.
+- inputs read have reasons, including targeted docs reads only after affected surfaces are known
+- every task or implementation choice traces to approved design decision IDs
+- affected surfaces and file-level implementation structure are concrete
+- change strategy covers implementation approach, integration points, data/control flow, and non-goals
+- task breakdown covers the full approved work, not only the next/current execution slice
+- sequencing and parallelization boundaries are explicit
+- scope and completion contract defines the full plan boundary
+- validation plan includes proof strategy, test layers, fixtures, commands, expected results, and evidence to produce
+- docs impact covers `docs/ARCHITECTURE.md`, `docs/GLOSSARY.md`, `docs/decisions/`, and `docs/product/`
+- README enrichment reuses existing EPIC/STORY items and does not dominate the implementation plan
+- TASK/BUG materialization posture uses workgraph CLI only and avoids pre-approval mutations
+- no product, architecture, schema, API, UX, migration, or verification-strategy decisions were added
 
-### Phase 4 — Gate 2 approval
+Fix issues once. If serious issues remain, stop and route as below.
 
-Present the task breakdown/current-work shape for explicit approval.
+### Phase 3 — Approval-ready output
 
-Gate 2 approves the plan/decomposition only. It does not approve or revise solution design.
+Present `plan.md` for explicit Gate 2 approval.
+
+Gate 2 approves decomposition, docs impact, README enrichment, scope and completion boundary, and TASK/BUG materialization posture. It does not approve new solution decisions.
+
+Before approval, `pulse:workflow plan` may produce or repair the approval-ready `plan.md`. It must not create TASK/BUG items, mutate workgraph metadata, mark the plan approved, or write task README files.
+
+### Phase 4 — Post-approval materialization
+
+Continue only after explicit Gate 2 approval.
 
 After approval:
 
-1. mark planning artifact approved
-2. sync `.pulse/runtime/STATE.md` and `.pulse/runtime/state.json`
-3. recommend `pulse:workflow validate`
+1. mark `plan.md` approved
+2. enrich epic/story `README.md` content as approved, using the README templates only for the sections being enriched
+3. create approved TASK/BUG items through `{{pulse_command}} workgraph create ... --json`
+4. write task README content at each returned `content_path` using [`task.readme.md`](./task.readme.md)
+5. add approved dependency/link edges through `{{pulse_command}} workgraph dep/link ... --json`
+6. run or request `{{pulse_command}} workgraph doctor --repo-root <repo> --json`
+7. sync `.pulse/runtime/STATE.md` and `.pulse/runtime/state.json`
+8. recommend `pulse:workflow validate`
 
-### Phase 5 — Conditional work item creation
+Create only approved TASK/BUG items. Do not create speculative future backlog.
 
-Create execution work items only when the approved planning posture and runtime/workgraph rules allow it.
-
-Do not create future-slice backlog inflation. Create only current-slice items that are ready for validation/execution flow.
-
-## Stop conditions and reroutes
+## Reroutes
 
 Route to `pulse:workflow design` when:
 
-- a solution decision is missing or contradictory
-- design constraints make decomposition impossible
-- a safer/different approach appears necessary
-- verification strategy needs to change
+- a solution decision is missing, contradictory, or infeasible
+- decomposition requires a different approach
+- docs impact reveals a product/architecture decision absent from `solution-design.md`
+- plan needs `intake.md` or `work-brief.md` to infer solution scope/direction/behavior/constraints
 
 Route to `pulse:workflow explore` when:
 
-- the design gap is caused by missing evidence
+- `discovery.md` lacks evidence needed for task, docs, or validation plan
 - external/provider/security/domain research is required
 
 Route to `pulse:workflow use` when:
 
-- runtime readiness is untrusted or blocked
+- runtime/workgraph posture is stale, blocked, invalid, or conflicts with mirrors
 
-## Role boundaries
+## Exit contracts
 
-Plan owns:
-- task breakdown
-- sequencing
-- dependency mapping
-- current-work contract
-- validation mapping
-- execution mode recommendation
+### Approval-ready exit
 
-Plan does not own:
-- solution design
-- product/technical decisions
-- discovery/deep research
-- implementation
-- quality signoff
+Before Gate 2 approval, a successful planning pass requires:
 
-## Handoff posture
+- lowercase `plan.md` under the owning story
+- docs impact recorded for all required docs surfaces
+- epic/story README enrichment posture recorded
+- approved TASK/BUG materialization posture recorded without mutations
+- scope and completion contract
+- validation plan with observable evidence
+- explicit Gate 2 approval request
 
-At completion, provide:
+### Post-approval exit
 
-- approved planning artifact path
-- current-work contract path/summary
-- item creation posture
-- referenced design decision IDs
-- recommendation: `pulse:workflow validate`
-- default `next_action`: manual invoke
+After explicit Gate 2 approval, a successful materialization pass requires:
 
-## Red flags
-
-- changing design decisions during planning
-- inventing schema/API/UX/architecture in plan
-- treating a design gap as a planning detail
-- creating tasks not traceable to solution design decisions
-- preparing multiple unrelated slices at once
-- creating future-slice items prematurely
-- vague, non-observable exit criteria
-- proceeding beyond Gate 2 without explicit approval
-
-## Exit contract
-
-Successful exit requires:
-
-- approved task/current-work breakdown under `works/`
-- every task traces to approved solution design decisions
-- no design changes introduced by plan
-- one bounded current-work contract
-- `.pulse/runtime` mirrors synchronized to artifact truth
-- validate-ready handoff
-
-## References
-
-- `planning-reference.md` — task/current-work quality rules
-- `work-item-template.md` — canonical execution item schema and normalization contract
+- approved lowercase `plan.md` under the owning story
+- epic/story README enrichment completed when approved
+- approved TASK/BUG materialization applied only through `{{pulse_command}} workgraph`
+- task README content written from returned `content_path` values
+- `.pulse/runtime` mirrors synchronized
+- next recommendation: `pulse:workflow validate`

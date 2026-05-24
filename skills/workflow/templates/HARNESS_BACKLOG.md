@@ -40,4 +40,4 @@ The contract lives in `skills/workflow/references/HARNESS.md`.
 - Suggested improvement: keep canonical runtime scripts flat under `skills/workflow/scripts/` while materializing the v2 layout under `.pulse/`
 - Risk: high
 - Status: planned
-- Evidence: `PLAN.md`, `solution-design.md`
+- Evidence: `plan.md`, `solution-design.md`

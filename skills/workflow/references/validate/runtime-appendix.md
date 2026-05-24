@@ -6,7 +6,7 @@ Reusable templates, checklists, and approval prompts for validating.
 
 ```text
 Validating mode: <spike | small_change | standard_feature | high_risk_feature>
-Approved shape artifact: <work-shape.md | phase-plan.md | epic-map.md>
+Approved plan artifact: plan.md
 Current work: <direct work item | spike question | current story | current phase>
 Approval status: APPROVED | PENDING | REVISE_REQUIRED
 Approval source: works/.../<shape-artifact>
@@ -85,8 +85,8 @@ Additional checks:
 
 Input set:
 - current work items from `.pulse/workgraph/items.jsonl`
-- story-scoped artifacts under `works/epics/<epic-id>-<epic-slug>/<story-id>-<story-slug>/`: `discovery.md`, `solution-design.md`, `PLAN.md`
-- approved shape artifact (`work-shape.md` | `phase-plan.md` | `epic-map.md`) and current-work contract docs in that same story directory
+- story-scoped artifacts under `works/epics/<epic-id>-<epic-slug>/<story-id>-<story-slug>/`: `discovery.md`, `solution-design.md`, `plan.md`
+- approved `plan.md` and current-work contract docs in that same story directory
 
 PASS only when all dimensions pass:
 1. mode/shape coherence

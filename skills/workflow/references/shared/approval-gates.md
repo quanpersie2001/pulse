@@ -55,7 +55,7 @@ Purpose:
 
 Typical artifacts:
 
-- `PLAN.md` or current-work/task breakdown artifacts under the story directory
+- `plan.md` or current-work/task breakdown artifacts under the story directory
 
 Default next command after approval:
 

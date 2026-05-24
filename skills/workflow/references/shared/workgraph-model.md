@@ -114,7 +114,7 @@ Typical attached paths include:
 
 ## Router implications
 
-- `plan` should produce shapes that can be turned into workgraph items later.
+- `plan` should produce lowercase `plan.md` shapes and materialize approved current-slice items through `{{pulse_command}} workgraph`, never by hand-editing `.pulse/workgraph/items.jsonl`.
 - `validate` should test whether proposed items are ready for execution.
 - `swarm` and `execute` should respect owner and reservation boundaries.
 - `review` and `compound` should consume verification and lifecycle evidence rather than redefining metadata.

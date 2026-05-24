@@ -24,9 +24,9 @@ Do not run when:
 
 ## Required inputs
 
-- approved story-scoped design/planning artifacts under `works/epics/<epic-id>-<epic-slug>/<story-id>-<story-slug>/` (`solution-design.md`, `PLAN.md`)
+- approved story-scoped design/planning artifacts under `works/epics/<epic-id>-<epic-slug>/<story-id>-<story-slug>/` (`solution-design.md`, `plan.md`)
 - canonical discovery/design artifacts in that same story directory (`discovery.md`, `solution-design.md`)
-- approved task/current-work plan artifact in that same story directory, typically `PLAN.md` plus any current-work contract
+- approved task/current-work plan artifact in that same story directory, typically `plan.md` plus any current-work contract
 - current-work artifacts (plan-dependent) in that same story directory
 - `.pulse/runtime/STATE.md` and `.pulse/runtime/state.json`
 - existing current-slice workgraph items if already created (`.pulse/workgraph/items.jsonl`)

@@ -126,6 +126,8 @@ Write:
 works/epics/<epic-id>-<epic-slug>/<story-id>-<story-slug>/solution-design.md
 ```
 
+Use [`solution-design.template.md`](./solution-design.template.md) as the required starting structure. Preserve its section order unless a story-specific reason requires an explicit deviation.
+
 Required sections:
 - solution summary
 - source inputs
