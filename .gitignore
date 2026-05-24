@@ -2,7 +2,7 @@ node_modules/
 coverage/
 .DS_Store
 package*
-tsconfig.json
+!skills/workflow/scripts/core/package-paths.mjs
 vitest.config.ts
 
 # bv (beads viewer) local config and caches
