@@ -117,7 +117,7 @@ A read-only review of workflow or harness material does not by itself require in
 
 ## Risk, lane, and affected surfaces
 
-Risk flags are canonical uppercase identifiers everywhere: intake classification, `INTAKE.md`, `state.intake.risk_flags`, workgraph metadata, and tests. Lowercase risk flag names are invalid.
+Risk flags are canonical uppercase identifiers everywhere: intake classification, `intake.md`, `state.intake.risk_flags`, workgraph metadata, and tests. Lowercase risk flag names are invalid.
 
 Canonical risk flags:
 
@@ -261,24 +261,24 @@ Rules:
 
 Intake first produces a proposed intake package and asks the user to confirm any structural boundary before writing durable files. A confirmed intake produces the durable intake package.
 
-Use [`INTAKE.template.md`](INTAKE.template.md) as the required shape for any boundary `INTAKE.md` artifact.
+Use [`intake.template.md`](intake.template.md) as the required shape for any boundary `intake.md` artifact.
 
 Before confirmation, show the expected artifact path without creating files:
 
 ```text
 Story boundary:
-  works/epics/<epic-id>-<epic-slug>/<story-id>-<story-slug>/INTAKE.md
+  works/epics/<epic-id>-<epic-slug>/<story-id>-<story-slug>/intake.md
 
 Initiative or epic boundary:
-  works/epics/<epic-id>-<epic-slug>/INTAKE.md
+  works/epics/<epic-id>-<epic-slug>/intake.md
 ```
 
 After confirmation, determine boundary path source by mutation type:
 
-- **New boundary creation path (`new_work`, `existing_closed_related_work`)**: use `dirname(item.content_path)` from the `{{pulse_command}} workgraph create --json` result as the source of truth for the concrete boundary directory. For example, `works/epics/E-1-example/S-1-slice/README.md` means the confirmed intake artifact is `works/epics/E-1-example/S-1-slice/INTAKE.md`.
-- **Existing boundary update path (`existing_open_work`)**: do not run `workgraph create`. Use the matched item's existing `content_path` (and current status metadata) as the source of truth for the owning boundary directory, then target `<owning-boundary>/INTAKE.md`.
+- **New boundary creation path (`new_work`, `existing_closed_related_work`)**: use `dirname(item.content_path)` from the `{{pulse_command}} workgraph create --json` result as the source of truth for the concrete boundary directory. For example, `works/epics/E-1-example/S-1-slice/README.md` means the confirmed intake artifact is `works/epics/E-1-example/S-1-slice/intake.md`.
+- **Existing boundary update path (`existing_open_work`)**: do not run `workgraph create`. Use the matched item's existing `content_path` (and current status metadata) as the source of truth for the owning boundary directory, then target `<owning-boundary>/intake.md`.
 
-For `existing_open_work`, the confirmed intake note belongs to the existing owning boundary. If that boundary does not have `INTAKE.md`, create it after confirmation. If `INTAKE.md` already exists, append a dated `Additional Intake` section by default using the append-only format in [`INTAKE.template.md`](INTAKE.template.md) (do not overwrite previous intake material unless the user explicitly confirms replacement).
+For `existing_open_work`, the confirmed intake note belongs to the existing owning boundary. If that boundary does not have `intake.md`, create it after confirmation. If `intake.md` already exists, append a dated `Additional Intake` section by default using the append-only format in [`intake.template.md`](intake.template.md) (do not overwrite previous intake material unless the user explicitly confirms replacement).
 
 Artifact obligations by input type:
 
@@ -314,7 +314,7 @@ Expected boundary path:
 - ...
 
 Expected intake artifact:
-- .../INTAKE.md
+- .../intake.md
 
 Reply with explicit approval to create/update this boundary, or provide corrections. Do not continue on silence or ambiguous acknowledgement.
 </HARD_GATE>
@@ -349,7 +349,7 @@ After the user confirms the hard gate:
 4. Apply only the confirmed boundary mutation path:
    - **New boundary creation path**: create the confirmed EPIC/STORY boundary using the workgraph CLI.
    - **Existing boundary update path (`existing_open_work`)**: do not create new EPIC/STORY items; reuse the matched open item boundary from its current `content_path`.
-5. Write or append boundary `INTAKE.md` using [`INTAKE.template.md`](INTAKE.template.md) and the confirmed classification details.
+5. Write or append boundary `intake.md` using [`intake.template.md`](intake.template.md) and the confirmed classification details.
 6. Record matching runtime posture only as permitted by the confirmed package and only when explicitly confirmed.
 7. Recommend the next command.
 
@@ -359,7 +359,7 @@ Supported workgraph mutations (creation path only):
 - one `STORY` when a story-sized boundary is known
 - `linked_items` references for non-blocking traceability when the new story is related to prior closed work or parallel context
 
-For `existing_open_work`, no create mutation is supported or needed. Intake may only update boundary artifacts (for example `INTAKE.md`) and optional metadata updates that were explicitly confirmed and are supported by the CLI.
+For `existing_open_work`, no create mutation is supported or needed. Intake may only update boundary artifacts (for example `intake.md`) and optional metadata updates that were explicitly confirmed and are supported by the CLI.
 
 CLI patterns:
 
@@ -485,9 +485,9 @@ Successful exit requires:
 - duplicate/satisfaction evidence presented, and persisted only when included in a confirmed package
 - lane selected with canonical uppercase risk flags and any high-risk trigger applied explicitly
 - work boundary selected or blocker stated
-- proposed workgraph operation(s), expected boundary path, and expected `INTAKE.md` path presented before structural mutation
-- explicit user confirmation received before creating/updating EPIC/STORY metadata or writing boundary `INTAKE.md`
-- durable `INTAKE.md` written under `works/` only after confirmation when a work boundary is created or updated
+- proposed workgraph operation(s), expected boundary path, and expected `intake.md` path presented before structural mutation
+- explicit user confirmation received before creating/updating EPIC/STORY metadata or writing boundary `intake.md`
+- durable `intake.md` written under `works/` only after confirmation when a work boundary is created or updated
 - structural EPIC/STORY metadata created only when needed and only after confirmation
 - runtime state updated with intake posture and no gate approval only when included in a confirmed package
 - exactly one next command, hard-gate action, routing question, or terminal no-command result stated
@@ -499,7 +499,7 @@ Stop if you catch yourself:
 - running intake without fresh empty-session proof
 - continuing while active, resumable, conflicted, gated, reserved, executable, or ready work exists
 - creating or updating EPIC/STORY metadata before explicit user confirmation
-- writing boundary `INTAKE.md` before explicit user confirmation
+- writing boundary `intake.md` before explicit user confirmation
 - creating executable tasks, bugs, reservations, ready queue entries, or gate approvals
 - planning implementation details, doing deep codebase analysis, or validating readiness
 - creating every story for a large initiative upfront

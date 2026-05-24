@@ -1,26 +1,48 @@
 # `pulse:workflow brainstorm`
 
-Turns vague intent into a documented, approved story-level design spec through structured dialogue before repo-grounded decision locking or implementation planning begins.
+Turns admitted but under-shaped work into an approved story/work-level `work-brief.md` through structured dialogue before downstream discovery or implementation planning begins.
 
-This command shapes exactly one story at a time. It does not brainstorm an epic-wide execution tree, and it does not write its output into the story `README.md`.
+This command shapes exactly one confirmed work boundary at a time. It does not brainstorm an epic-wide execution tree, and it does not write its output into the story `README.md`, `SPEC.md`, or `DESIGN.md`.
 
-Validated designs reduce planning rework by stopping assumption drift before it compounds.
+Approved work briefs reduce downstream rework by stopping direction and assumption drift before it compounds.
 
-This command should behave like a disciplined design grilling session:
-- walk the design tree until no planning-critical branch is unresolved
+This command should behave like a disciplined direction-setting session:
+- walk the direction tree until no planning-critical intent branch is unresolved
 - ask the user only what the repo and docs cannot already answer
 - when a strong default exists, include a recommended answer so the user can confirm or override it quickly
 
 <HARD-GATE>
-Do NOT invoke `pulse:workflow explore`, `pulse:workflow plan`, or any implementation command, write any code, create work items, or take implementation action until a design has been presented AND the user has approved it.
-This applies regardless of perceived simplicity. The design can be short, but it MUST exist and be approved.
+Do NOT invoke another workflow command, write any code, create work items, or take implementation action until a `work-brief.md` has been presented AND the user has approved it.
+This applies regardless of perceived simplicity. The brief can be short, but it MUST exist and be approved.
 </HARD-GATE>
 
-## Anti-pattern: "This is too simple to need a design"
 
-Every new feature with unclear design goes through this process. A new config capability, a new function that expands behavior, a new UI path — if the shape is still fuzzy, this is where you turn it into an approved spec. "Simple" feature work is where unexamined assumptions cause the most wasted planning work. The spec can be a paragraph. But you MUST present it and get approval.
+## Technical boundary
 
-This is not the path for trivial non-feature corrections already covered by lighter execution posture. If the request is only a wording fix, local correction, or similarly bounded non-feature adjustment, follow the lighter route instead of forcing a brainstorming spec.
+Brainstorm may discuss **technical direction**. It must not produce **technical design**.
+
+Allowed examples:
+- “Prefer direct handlers over MediatR-style mediator abstraction to keep flow debuggable.”
+- “Keep runtime mutation separate from conversational workflow routing.”
+- “Prioritize tenant isolation over premature partitioning.”
+- “Use an incremental migration direction rather than a big-bang rewrite.”
+
+Not allowed:
+- concrete interfaces, classes, functions, or APIs
+- file/module ownership
+- concrete data schema, table fields, indexes, ERD, migration, or backfill plan
+- final multi-tenant partitioning design
+- detailed test plan or validation command list
+- implementation sequence or work breakdown
+- repo-grounded decisions that require code/schema/test evidence
+
+If a technical choice depends on repo evidence, record it as an assumption or follow-up question, not as a final design. If the user explicitly mandates a technical constraint, record it as a user-approved constraint and mark any repo impact as unresolved.
+
+## Anti-pattern: "This is too simple to need a brief"
+
+Every new feature or technical change with unclear direction goes through this process when brainstorm is selected. A new config capability, a new function that expands behavior, a new workflow behavior, a harness refactor, a pattern choice — if the shape is still fuzzy, this is where you turn it into an approved work brief. "Simple" work is where unexamined assumptions cause the most wasted downstream work. The brief can be a paragraph. But you MUST present it and get approval.
+
+This is not the path for trivial non-feature corrections already covered by lighter execution posture. If the request is only a wording fix, local correction, or similarly bounded non-feature adjustment, follow the lighter route instead of forcing a brainstorming brief.
 
 ---
 
@@ -28,15 +50,16 @@ This is not the path for trivial non-feature corrections already covered by ligh
 
 | Step | What you do | What you produce |
 |---|---|---|
-| Explore context | Read just enough project material to understand what already exists | Internal context snapshot |
-| Assess scope | Decide whether this is one feature or multiple independent systems | Scoped brainstorming target |
-| Clarifying questions | Ask one question at a time to uncover purpose, constraints, and success criteria | Validated requirements |
+| Load intake | Read the owning story `intake.md` as the authoritative admission context | Intake-grounded brainstorming target |
+| Travel context | Read relevant project material to understand what already exists | Internal context snapshot |
+| Assess scope | Decide whether this is one work boundary or multiple independent systems | Scoped brainstorming target |
+| Clarifying questions | Ask one question at a time to uncover purpose, constraints, and success criteria | Validated direction inputs |
 | Approaches | Present 2–3 viable directions with trade-offs | Chosen direction |
-| Design | Present the solution in sections and validate incrementally | Approved design |
-| Spec | Write the approved design to `works/epics/<epic-id>-<epic-slug>/<story-id>-<story-slug>/SPEC.md` | Stable spec for exploration |
-| Self-review | Run the spec reviewer and fix serious issues | Exploration-ready spec |
-| User review gate | Wait for explicit approval on the written spec | Approved handoff artifact |
-| Handoff | Update `.pulse/runtime/STATE.md` and recommend `pulse:workflow explore` as the next manual step | Clean pipeline transition |
+| Brief sections | Present the work brief in sections and validate incrementally | Approved work direction |
+| Brief | Write the approved direction to `works/epics/<epic-id>-<epic-slug>/<story-id>-<story-slug>/work-brief.md` using [`work-brief.template.md`](work-brief.template.md) | Stable brief for downstream workflow |
+| Self-review | Run the work-brief reviewer and fix serious issues | Downstream-ready work brief |
+| User review gate | Wait for explicit approval on the written brief | Approved handoff artifact |
+| Handoff | Update runtime mirrors when recording posture and recommend `pulse:workflow explore` as the next manual step | Clean pipeline transition |
 
 ---
 
@@ -44,15 +67,16 @@ This is not the path for trivial non-feature corrections already covered by ligh
 
 Create a task for each item and complete them in order:
 
-1. **Explore project context** — read files, docs, and recent commits relevant to the request
-2. **Assess scope** — is this one feature or multiple independent systems?
-3. **Ask clarifying questions** — one at a time; purpose, constraints, and success criteria
-4. **Propose 2–3 approaches** — with trade-offs and your recommendation
-5. **Present design** — in sections scaled to complexity; get user approval after each section
-6. **Write spec doc** — save the approved design to `works/epics/<epic-id>-<epic-slug>/<story-id>-<story-slug>/SPEC.md` and note the path
-7. **Spec self-review** — independent check for placeholders, contradictions, scope, and ambiguity
-8. **User reviews spec** — ask the user to confirm before proceeding
-9. **Handoff to `pulse:workflow explore`** — recommend `pulse:workflow explore` as the next manual step to lock implementation decisions
+1. **Load intake** — read the owning story `intake.md` before asking questions or shaping direction
+2. **Travel context** — read files, docs, and recent commits relevant to avoiding already-answerable questions
+3. **Assess scope** — is this one work boundary or multiple independent systems?
+4. **Ask clarifying questions** — one at a time; purpose, constraints, and success criteria
+5. **Propose 2–3 directions** — with trade-offs and your recommendation
+6. **Present brief sections** — in sections scaled to complexity; get user approval after each section when needed
+7. **Write work brief** — save the approved direction to `works/epics/<epic-id>-<epic-slug>/<story-id>-<story-slug>/work-brief.md` and note the path
+8. **Work-brief self-review** — independent check for placeholders, contradictions, scope, implementation leakage, and ambiguity
+9. **User reviews work brief** — ask the user to confirm before proceeding
+10. **Handoff to `pulse:workflow explore`** — recommend `pulse:workflow explore` as the next manual step; do not invoke it by default
 
 ---
 
@@ -60,48 +84,52 @@ Create a task for each item and complete them in order:
 
 ```dot
 digraph brainstorming {
-    "Explore project context" [shape=box];
-    "Multi-system?" [shape=diamond];
-    "Decompose first" [shape=box];
+    "Load intake" [shape=box];
+    "Travel context" [shape=box];
+    "Multi-system or boundary mismatch?" [shape=diamond];
+    "Decompose within confirmed boundary or stop" [shape=box];
     "Ask clarifying questions" [shape=box];
-    "Propose 2-3 approaches" [shape=box];
-    "Present design sections" [shape=box];
-    "User approves design?" [shape=diamond];
-    "Write spec doc" [shape=box];
-    "Spec self-review" [shape=box];
-    "User reviews spec?" [shape=diamond];
+    "Propose 2-3 directions" [shape=box];
+    "Present work-brief sections" [shape=box];
+    "User approves direction?" [shape=diamond];
+    "Write work-brief.md" [shape=box];
+    "Work-brief self-review" [shape=box];
+    "User reviews brief?" [shape=diamond];
     "Recommend pulse:workflow explore handoff" [shape=doublecircle];
 
-    "Explore project context" -> "Multi-system?";
-    "Multi-system?" -> "Decompose first" [label="yes"];
-    "Multi-system?" -> "Ask clarifying questions" [label="no"];
-    "Decompose first" -> "Ask clarifying questions";
-    "Ask clarifying questions" -> "Propose 2-3 approaches";
-    "Propose 2-3 approaches" -> "Present design sections";
-    "Present design sections" -> "User approves design?";
-    "User approves design?" -> "Present design sections" [label="no, revise"];
-    "User approves design?" -> "Write spec doc" [label="yes"];
-    "Write spec doc" -> "Spec self-review";
-    "Spec self-review" -> "User reviews spec?";
-    "User reviews spec?" -> "Write spec doc" [label="changes requested"];
-    "User reviews spec?" -> "Recommend pulse:workflow explore handoff" [label="approved"];
+    "Load intake" -> "Travel context";
+    "Travel context" -> "Multi-system or boundary mismatch?";
+    "Multi-system or boundary mismatch?" -> "Decompose within confirmed boundary or stop" [label="yes"];
+    "Multi-system or boundary mismatch?" -> "Ask clarifying questions" [label="no"];
+    "Decompose within confirmed boundary or stop" -> "Ask clarifying questions" [label="valid boundary found"];
+    "Ask clarifying questions" -> "Propose 2-3 directions";
+    "Propose 2-3 directions" -> "Present work-brief sections";
+    "Present work-brief sections" -> "User approves direction?";
+    "User approves direction?" -> "Present work-brief sections" [label="no, revise"];
+    "User approves direction?" -> "Write work-brief.md" [label="yes"];
+    "Write work-brief.md" -> "Work-brief self-review";
+    "Work-brief self-review" -> "User reviews brief?";
+    "User reviews brief?" -> "Write work-brief.md" [label="changes requested"];
+    "User reviews brief?" -> "Recommend pulse:workflow explore handoff" [label="approved"];
 }
 ```
 
-**The terminal state is an approved design artifact under `works/` plus `.pulse/runtime/STATE.md` update, with a recommendation to run `pulse:workflow explore` next.** Do NOT invoke planning, validating, or any execution command by default. After brainstorming, the only valid next step is `pulse:workflow explore`.
+**The terminal state is an approved `work-brief.md` under `works/` plus runtime mirror updates when workflow posture is recorded, with `pulse:workflow explore` recommended as the next manual step.** Do NOT invoke planning, validating, or any execution command by default. Do not invoke `pulse:workflow explore` unless the user explicitly asks to continue.
 
 ---
 
-## Phase 1: Explore context
+## Phase 1: Load intake and travel context
 
-Before asking any question, understand what already exists:
+Before asking any question, ground brainstorming in the confirmed intake result:
 
-- Read existing story artifacts under `works/` first when present, then inspect the smallest relevant repo docs or code paths needed for the request.
+- Read the owning story `intake.md` first. Treat its input type, correlation outcome, boundary, lane, risk flags, affected surfaces, artifact obligations, and recommended next command as the admission context for this brainstorming session.
+- If the owning story `intake.md` is missing or the target story boundary is unclear, stop and ask the operator to return to intake or identify the confirmed story boundary before continuing.
+- Read existing story artifacts under `works/` next when present, then inspect the smallest relevant repo docs or code paths needed for the request.
 - Reuse established glossary and terminology from story artifacts or code when present; do not invent new terms when established names already exist.
-- Before asking, eliminate questions the repo can already answer. Read docs, code, and recent repo history first, then ask only for unresolved design intent.
+- Before asking, eliminate questions the repo can already answer. Read docs, code, and recent repo history first, then ask only for unresolved direction or intent.
 - Check relevant files, docs, and the last few commits related to the topic.
-- Identify existing patterns, components, or decisions that constrain the design.
-- Note what can be reused versus what needs to be created from scratch.
+- Identify existing patterns, components, or decisions that constrain the direction, but do not lock repo-grounded implementation design here.
+- Note what appears reusable, risky, or uncertain as open assumptions for downstream workflow.
 
 Build an internal picture first. It makes clarifying questions concrete instead of generic.
 
@@ -109,16 +137,18 @@ Build an internal picture first. It makes clarifying questions concrete instead 
 
 ## Phase 2: Scope assessment
 
-Before asking detailed questions, assess whether the request is one feature or several.
+Before asking detailed questions, assess whether the request is one confirmed work boundary or several.
 
-**One feature** — scoped work with a clear boundary. Continue normally.
+**One work boundary** — scoped work with a clear confirmed boundary. Continue normally.
 
 **Multiple independent systems** — for example, "build a platform with auth, billing, and analytics."
 Flag this immediately:
 
 > "This covers [A], [B], and [C] — three independent systems. Each needs its own brainstorming session. Let's start with [most foundational]. I'll note the others for later."
 
-Then brainstorm the first subsystem through the full flow. Each subsystem gets its own spec → explore → plan → execute cycle.
+Then brainstorm only the first subsystem that fits the confirmed boundary. Capture the rest as deferred ideas.
+
+If no subsystem fits the confirmed boundary, stop and ask for a corrected boundary before continuing. Do not write `work-brief.md` under the wrong story.
 
 ### Step-back move — use selectively
 
@@ -126,9 +156,9 @@ Before detailed questioning, decide whether the request needs one brief step-bac
 
 Use it only when one of these is true:
 - the request names a solution but not the problem it should solve
-- multiple feature shapes could satisfy the request
-- the user is jumping quickly into screens, components, or flows before the core outcome is clear
-- you notice yourself optimizing a local detail before the product goal is concrete
+- multiple work directions could satisfy the request
+- the user is jumping quickly into screens, components, patterns, schema, or flows before the core outcome is clear
+- you notice yourself optimizing implementation detail before the work outcome is concrete
 
 If you use the move, do it once, briefly, before Phase 3:
 1. name the core outcome in plain language
@@ -141,7 +171,7 @@ Keep the output internal unless a short external framing statement will help the
 Example internal frame:
 - Outcome: "Help a first-time user complete X confidently."
 - Decision axes: primary user, success event, scope boundary, failure tolerance
-- Not yet: exact layout, polish details, implementation mechanics
+- Not yet: exact layout, concrete schema, module ownership, implementation mechanics
 
 ---
 
@@ -163,16 +193,18 @@ This gate is non-negotiable.
 - Multiple-choice is preferred over open-ended when possible.
 - Start broad — what, why, for whom — then narrow toward constraints, edge cases, and success criteria.
 - For every question, include a clearly labeled recommended answer when a strong default exists.
-- Keep walking the decision tree until each design-critical branch is chosen, rejected, delegated, or explicitly deferred.
-- Do not stop after collecting preferences if a downstream planner would still need to guess.
-- If the request is still shapeless after context review, use one brief step-back move before the next question so the question targets the real decision instead of a local detail.
+- Keep walking the direction tree until each brief-critical branch is chosen, rejected, delegated, or explicitly deferred.
+- Do not stop after collecting preferences if downstream workflow would still need to guess the approved direction.
+- If the request is still shapeless after context review, use one brief step-back move before the next question so the question targets the real direction instead of a local detail.
 - After 3–4 questions on one area, checkpoint with the structured question tool when available: "More questions about [area], or move on?"
 - Do not mix plain-text questions and tool-based questions arbitrarily inside the same session.
 
 **Question patterns:**
 
-- **Product intent / constraints** → structured multiple-choice or short open-ended question via the harness question tool when available.
-- **Competing layouts / hierarchy / flows** → ask the decision through the harness question tool when available, using concise text choices instead of visual mode.
+- **Outcome / constraints** → structured multiple-choice or short open-ended question via the harness question tool when available.
+- **Competing directions / hierarchy / flows** → ask the decision through the harness question tool when available, using concise text choices instead of visual mode.
+- **Technical pattern direction** → ask as a trade-off choice, not as implementation design.
+- **Data/domain direction** → ask about ownership, isolation, and conceptual model; do not ask the user to approve concrete schema here.
 - **Trade-off choice** → keep it in text and ask through the harness question tool when available.
 - **Checkpointing** → after a few questions on one area, confirm whether to continue or advance with the harness question tool when available.
 
@@ -186,79 +218,88 @@ Examples:
 
 ---
 
-## Phase 4: Propose approaches
+## Phase 4: Propose directions
 
-Present 2–3 different approaches before committing to one:
+Present 2–3 different directions before committing to one:
 
 - Describe each option concisely with its trade-offs.
 - Lead with your recommended option and explain why.
+- For technical work, distinguish direction/pattern/principle choices from implementation design.
+- Capture assumptions that must be resolved later.
 - Invite the user to push back or ask about specific trade-offs.
 
-Do NOT start designing until the user picks a direction.
+Do NOT write the brief until the user picks a direction.
 
 ---
 
-## Phase 5: Present design
+## Phase 5: Present work-brief sections
 
-Once the direction is clear, present the design:
+Once the direction is clear, present the work brief sections:
 
 - Scale each section to its complexity — a few sentences if simple, 200–300 words if nuanced.
 - Ask "Does this look right so far?" after each section before moving to the next.
-- Cover architecture, key components, data flow, error handling, and testing strategy.
+- Cover outcome, motivation, chosen direction, expected behavior, scope boundary, constraints, open assumptions, and verification intent.
+- For technical work, include only directional technical notes: architectural intent, principles, pattern preference, conceptual responsibility split, and trade-offs.
 - Be ready to revise. If something does not make sense, go back and clarify.
 
-**Design for isolation:**
+**Direction for isolation:**
 
-- Break the system into units, each with one clear purpose and well-defined interfaces.
-- For each unit: what does it do, how do you use it, and what does it depend on?
-- For new feature work, define module ownership from the start so each unit can evolve and optimize independently.
+- Name conceptual responsibilities when useful, but do not assign final module/file ownership.
+- Identify which concerns should remain separate at the conceptual level.
+- For new work, define ownership intent at the conceptual level so later workflow can refine concrete boundaries.
 - A narrow first phase is acceptable only when the ownership model and final boundaries are already correct.
 - Do not collapse multiple future concerns into one temporary implementation just to ship an MVP-shaped first version.
-- Ask whether someone can understand a unit without reading its internals, and whether the internals can change without breaking consumers. If not, the boundaries need work.
+- If the direction requires a concrete repo boundary to be safe, record it as an open assumption instead of deciding it here.
 
 **Working in existing codebases:**
 
-- Follow existing patterns. Do not propose unrelated refactoring.
-- Where existing code has problems that affect the work, include targeted improvements as part of the design.
+- Respect existing patterns as context. Do not propose unrelated refactoring.
+- Where existing code appears to constrain the work, capture targeted open assumptions or constraints.
 - Stay focused on what serves the current goal.
 
 ---
 
-## Phase 6: Write spec doc
+## Phase 6: Write work brief
 
-After the user approves the design, write the spec.
+After the user approves the direction and brief content, write the work brief.
 
-**Path:** target story `SPEC.md` under `works/`, typically `works/epics/<epic-id>-<epic-slug>/<story-id>-<story-slug>/SPEC.md`
+**Path:** target story `work-brief.md` under `works/`, typically `works/epics/<epic-id>-<epic-slug>/<story-id>-<story-slug>/work-brief.md`
+
+**Template:** use [`work-brief.template.md`](work-brief.template.md) from this command directory.
 
 Rules:
+- Derive the target story path from the confirmed intake boundary and its owning `intake.md`.
 - If the canonical story path is already known, write directly there.
 - If the exact `works/` path is not yet known, confirm the target location with the user instead of inventing another artifact root.
 - Do not overwrite the story `README.md`; that file remains the durable story description, not the brainstorming output.
-- The brainstorm artifact is a sibling file named `SPEC.md` inside the story directory.
+- Do not write `SPEC.md` or `DESIGN.md` for brainstorm output.
+- The brainstorm artifact is a sibling file named `work-brief.md` inside the story directory.
 
-The spec must include the story-level design needed for downstream exploration:
-- problem statement and goals
+The work brief must include the direction-level information needed downstream:
+- outcome and motivation
 - approved direction summary
-- key components and behavior
-- data or control-flow expectations when relevant
-- error handling and fallback posture
-- testing or verification intent
-- explicit out-of-scope and deferred items
+- expected behavior at story/work level
+- optional directional technical notes when relevant
+- user-approved constraints and open assumptions
+- high-level verification intent
+- explicit in-scope, out-of-scope, and deferred items
 
-Do not write the spec before the user approves the direction.
+Do not write the work brief before the user approves the direction.
 
 ---
 
-## Phase 7: Spec self-review
+## Phase 7: Work-brief self-review
 
-After writing the spec, run an independent review using `spec-reviewer-prompt.md`.
+After writing the work brief, run an independent review using [`work-brief-reviewer-prompt.md`](work-brief-reviewer-prompt.md).
 
 Self-review must check for:
 - TODOs, placeholders, or incomplete sections
 - internal contradictions or conflicting requirements
 - ambiguity serious enough to cause the wrong thing to be built
-- scope that is too broad for a single feature cycle
+- scope that is too broad for a single work boundary
 - unrequested features or over-engineering
+- implementation leakage: concrete schema, ERD, file/module design, interfaces, migration plan, detailed test plan, or execution sequence
+- missing or unclear open assumptions
 
 If serious issues are found:
 - fix inline
@@ -269,9 +310,9 @@ If serious issues are found:
 
 ## Phase 8: User review gate
 
-After the spec self-review passes:
+After the work-brief self-review passes:
 
-> "Design spec written to `<works story SPEC.md path>`. Please review it and let me know if you want any changes before we start locking implementation decisions."
+> "Work brief written to `<works story work-brief.md path>`. Please review it and let me know if you want any changes before we continue."
 
 Wait for the user's response. If they request changes, make them, rerun the self-review loop when needed, and only proceed once the user approves.
 
@@ -279,26 +320,22 @@ Wait for the user's response. If they request changes, make them, rerun the self
 
 ## Phase 9: Handoff
 
-After user spec approval:
+After user work-brief approval:
 
-1. Update `.pulse/runtime/STATE.md`:
+1. Update `.pulse/runtime/state.json` and `.pulse/runtime/STATE.md` together if recording workflow posture:
    ```
-   Current: brainstorming complete for <feature>
-   Spec: <works story SPEC.md path>
-   Next: invoke pulse:workflow explore to lock implementation decisions
+   Current: brainstorming complete for <work>
+   Work brief: <works story work-brief.md path>
+   Next: invoke pulse:workflow explore
    ```
 
-2. Present to the user:
-   > "Spec approved. Next step: run `pulse:workflow explore` to extract implementation decisions — gray areas, scope boundaries, and locked choices — before planning begins."
+2. Present a concise next-action recommendation: `pulse:workflow explore`.
 
-3. Optional continue-now path:
-   - Only if the user explicitly asks to continue now, invoke `pulse:workflow explore` in the same session.
-   - Otherwise stop after the spec approval, `.pulse/runtime/STATE.md` update, and recommendation above.
+3. Do not invoke `pulse:workflow explore` by default. Ambiguous acknowledgements like “ok” or “approved” approve the brief only; they do not authorize chaining into another command.
 
 <HARD-GATE>
-Do NOT invoke `pulse:workflow plan`, create work items, or write any code.
-The terminal state of this command is a written, approved spec and state update.
-The only valid next step is `pulse:workflow explore`.
+Do NOT create work items, write code, plan, validate, execute, or chain into another workflow command. The only recommended next manual command is `pulse:workflow explore`.
+The terminal state of this command is a written, approved `work-brief.md` and synchronized runtime state when runtime posture is recorded.
 </HARD-GATE>
 
 ---
@@ -308,27 +345,32 @@ The only valid next step is `pulse:workflow explore`.
 - **One question at a time** — never overwhelm.
 - **Multiple-choice preferred** — easier to answer than open-ended.
 - **Question relentlessly, but only about decisions the repo cannot already answer.**
-- **Use visuals only when they clarify** — seeing options should remove ambiguity, not add noise.
+- **Use concise text diagrams or option labels only when they clarify** — seeing options should remove ambiguity, not add noise.
 - **Honor existing glossary first** — prefer established project terminology and call out conflicts early.
-- **YAGNI ruthlessly** — remove unrequested features from all designs.
-- **Always propose alternatives** — 2–3 approaches before settling.
-- **Incremental validation** — present design in sections, get approval before continuing.
+- **YAGNI ruthlessly** — remove unrequested features from all directions.
+- **Always propose alternatives** — 2–3 directions before settling.
+- **Incremental validation** — present brief sections, get approval before writing the artifact.
 - **Be ready to revise** — go back and clarify when something does not fit.
-- **Do not scaffold repo-level docs here** — brainstorming consumes existing context and writes only the approved story `SPEC.md`.
+- **Technical direction is allowed; technical design is not.**
+- **Do not scaffold repo-level docs here** — brainstorming consumes existing context and writes only the approved story `work-brief.md`.
 
 ---
 
 ## What this command does NOT do
 
-These are `pulse:workflow explore` responsibilities, not brainstorming responsibilities:
+These are not brainstorming responsibilities:
 
-- deep codebase research, beyond the quick context pass here
+- deep codebase research beyond what is needed to understand the direction
 - locking implementation decisions with stable IDs
 - gray-area extraction against domain probes
-- writing the downstream exploration context artifact
+- writing downstream context/planning artifacts
+- creating concrete technical design
+- defining concrete data schema, ERD, migrations, indexes, or partitioning strategy
+- defining exact interfaces/classes/modules/files
+- writing detailed test plans or validation command lists
 - creating work items
 
-Brainstorming delivers a design spec. Exploration delivers locked decisions. Planning consumes both.
+Brainstorming delivers an approved `work-brief.md`. Later workflow consumes it as the approved direction artifact.
 
 ---
 
@@ -336,34 +378,39 @@ Brainstorming delivers a design spec. Exploration delivers locked decisions. Pla
 
 Stop immediately if you catch yourself doing any of these:
 
-- writing code or pseudocode during the design phase
+- writing code or pseudocode during brainstorm
 - asking two questions in the same message
 - asking a plain-text question while `AskUserQuestion`, `AskMeTool`, or another structured question tool is available
-- skipping the spec because the feature "seems obvious"
+- skipping the work brief because the change "seems obvious"
 - answering a question you just asked
 - treating UI topics as requiring a separate visual mode instead of asking clear text questions
-- invoking planning or execution before the spec is approved
+- invoking or chaining into another workflow command
+- creating concrete technical design
+- defining concrete data schema, ERD, migrations, indexes, or partitioning strategy
+- defining exact interfaces/classes/modules/files
+- writing detailed test plans or validation command lists
 - creating work items or referencing non-workgraph item IDs
+- writing brainstorm output to `SPEC.md`, `DESIGN.md`, or story `README.md`
 
 ---
 
 ## Anti-patterns
 
 **"The user wants to move fast"**
-Speed comes from clarity. A 10-minute design session prevents hours of planning rework caused by wrong assumptions downstream.
+Speed comes from clarity. A 10-minute direction session prevents hours of downstream rework caused by wrong assumptions.
 
 **"I already know what to build"**
 Your assumptions are hypotheses until the user validates them.
 Run the clarifying flow and let the user confirm the direction.
 
 **"This is too small to document"**
-The spec can be three sentences. But it MUST exist so `pulse:workflow explore` has a stable target.
+The brief can be three sentences. But it MUST exist so downstream workflow has a stable direction artifact.
 
-**"This is a visual topic, so it needs a separate visual mode"**
-No. Keep brainstorming in the structured text flow; ask clear layout or hierarchy choices through the harness question tool when needed.
+**"This is technical, so brainstorm cannot discuss it"**
+No. Brainstorm may discuss technical direction, pattern preference, principles, and trade-offs. It must not produce concrete technical design or implementation shape.
 
----
+**"We selected a pattern, so the design is done"**
+No. Pattern selection in brainstorm is directional unless backed by later evidence and implementation shaping.
 
-## References
-
-- `spec-reviewer-prompt.md` — review prompt for spec document checking
+**"This needs an ERD now"**
+Usually no. Brainstorm may capture data ownership and isolation intent. Concrete schema, ERD, migration, and partitioning strategy are not brainstorm output.

@@ -1,6 +1,6 @@
 # Intake
 
-Use this template for the first intake entry in a boundary `INTAKE.md`.
+Use this template for the first intake entry in a boundary `intake.md`.
 
 Section completion rules:
 - Never leave a required section blank.
@@ -68,7 +68,7 @@ Section completion rules:
 
 ## Additional Intake (Append-Only)
 
-When appending new intake information to an existing `INTAKE.md`, do not overwrite prior sections.
+When appending new intake information to an existing `intake.md`, do not overwrite prior sections.
 Append a new dated block using this format:
 
 ### Additional Intake — YYYY-MM-DD
