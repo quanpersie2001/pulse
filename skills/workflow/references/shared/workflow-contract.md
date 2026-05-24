@@ -16,8 +16,9 @@ This document describes the Pulse workflow pipeline in router language.
 ```text
 pulse:workflow use
   -> pulse:workflow intake         (only when use reports an empty session and new user input exists)
-  -> pulse:workflow brainstorm     (optional when feature shape is still vague)
+  -> pulse:workflow brainstorm     (optional when work direction is still vague)
   -> pulse:workflow explore
+  -> pulse:workflow design
   -> pulse:workflow plan
   -> pulse:workflow validate
   -> pulse:workflow swarm | pulse:workflow execute
@@ -38,10 +39,11 @@ When execution gets stuck or needs deeper tactical support, reroute to standalon
 | --- | --- |
 | `use` | prepare the repo if needed, load the current session, and surface runtime posture |
 | `intake` | admit new user input only when the session is empty, then classify type, lane, artifact obligations, and next command |
-| `explore` | understand the codebase, current state, and implementation-relevant decision context |
-| `brainstorm` | shape vague intent into candidate approaches and an approved design before exploration |
-| `plan` | turn context into a concrete implementation shape |
-| `validate` | prove the shape is executable and expose risk before work starts |
+| `brainstorm` | shape vague intent into candidate directions and an approved `work-brief.md` |
+| `explore` | gather repo/domain/external evidence and surface design decision questions in `discovery.md` |
+| `design` | turn direction and discovery into approved final product/technical/solution decisions in `solution-design.md` |
+| `plan` | decompose approved solution design into tasks/current-work contracts without changing design |
+| `validate` | prove the planned work is executable and expose risk before work starts |
 | `swarm` | orchestrate validated multi-agent execution |
 | `execute` | implement a validated work item |
 | `review` | evaluate completed changes and enforce the final quality gate |
@@ -51,14 +53,25 @@ When execution gets stuck or needs deeper tactical support, reroute to standalon
 
 The router keeps the human-gate model attached to artifacts and runtime state.
 
-`intake` is a pre-gate admission checkpoint for new work. It can run only after `use` reports an empty session, and it does not replace Gate 1.
+`intake` is a pre-gate admission checkpoint for new work. It can run only after `use` reports an empty session.
 
-1. after `explore`, approve the context artifact
-2. after `plan`, approve the selected shape artifact
-3. after `validate`, explicitly approve execution
-4. after `review`, resolve blocking findings before merge or ship approval
+1. after `brainstorm` when used, approve direction in `work-brief.md`
+2. after `design`, approve final solution decisions in `solution-design.md`
+3. after `plan`, approve task breakdown/current-work shape
+4. after `validate`, explicitly approve execution
+5. after `review`, resolve blocking findings before merge or ship approval
 
-See `approval-gates.md` for the gate details.
+See `approval-gates.md` for gate details.
+
+## Design immutability after approval
+
+Once `solution-design.md` is approved:
+
+- `plan` may only decompose and sequence work
+- `validate` may only prove readiness or route back
+- `execute` may only implement the approved plan
+
+If any later phase discovers that product behavior, approach, architecture, schema, API, UX, migration, or verification strategy must change, it must stop and route back to `pulse:workflow design` or `pulse:workflow explore`.
 
 ## Router vs runtime boundary
 
@@ -68,7 +81,8 @@ Use `{{pulse_command}}` to inspect readiness and coordinate runtime reservations
 
 Examples:
 
-- `pulse:workflow plan` decides the shape of work.
+- `pulse:workflow design` decides the solution.
+- `pulse:workflow plan` decomposes approved design into work.
 - `{{pulse_command}} ready --repo-root <repo> --json` surfaces executable work.
 
 The router is conversational and decision-oriented.

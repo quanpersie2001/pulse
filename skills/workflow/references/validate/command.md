@@ -12,22 +12,22 @@ Determine whether approved current work is executable under real repository cons
 
 Run `pulse:workflow validate` when:
 
-- Gate 2 shape is explicitly approved
+- Gate 2 task plan is explicitly approved
 - current-work contract exists
 - execution has not started for this slice
 
 Do not run when:
 
-- shape approval is pending or ambiguous
+- task plan approval is pending or ambiguous
 - planning artifacts and runtime mirrors disagree on active slice
 - onboarding/readiness is stale or blocked
 
 ## Required inputs
 
-- approved story-scoped context/spec artifacts under `works/epics/<epic-id>-<epic-slug>/<story-id>-<story-slug>/` (`CONTEXT.md`, `SPEC.md`)
-- canonical planning artifacts in that same story directory (`DISCOVERY.md`, `APPROACH.md`)
-- approved shape artifact in that same story directory: `work-shape.md` | `phase-plan.md` | `epic-map.md`
-- current-work artifacts (shape-dependent) in that same story directory
+- approved story-scoped design/planning artifacts under `works/epics/<epic-id>-<epic-slug>/<story-id>-<story-slug>/` (`solution-design.md`, `PLAN.md`)
+- canonical discovery/design artifacts in that same story directory (`discovery.md`, `solution-design.md`)
+- approved task/current-work plan artifact in that same story directory, typically `PLAN.md` plus any current-work contract
+- current-work artifacts (plan-dependent) in that same story directory
 - `.pulse/runtime/STATE.md` and `.pulse/runtime/state.json`
 - existing current-slice workgraph items if already created (`.pulse/workgraph/items.jsonl`)
 
@@ -38,11 +38,11 @@ Do not run when:
 Confirm and present:
 
 - active mode
-- approved shape artifact and status
+- approved task plan artifact and status
 - current slice objective
 - mirror sync status (in-sync / out-of-sync / missing)
 
-Hard stop: if shape is not approved or mirrors conflict with artifact truth, route back to planning/state sync.
+Hard stop: if task plan is not approved or mirrors conflict with artifact truth, route back to planning/state sync.
 
 ### Phase 1 — Reality gate (fail fast)
 
@@ -53,7 +53,7 @@ Test whether planned work still fits current repo conditions:
 - dependency and boundary conditions still true
 - no safer smaller path being ignored without reason
 
-If reality fails, stop and route to `pulse:workflow plan` with exact repair targets.
+If reality fails because task decomposition is wrong, route to `pulse:workflow plan`. If the approved solution is wrong or incomplete, route to `pulse:workflow design`.
 
 ### Phase 2 — Feasibility matrix
 
@@ -82,16 +82,16 @@ For each current-slice execution item, verify required contract quality:
 - verification commands are concrete
 - evidence path is explicit
 - testing mode is coherent with risk
-- decision references map back to locked context
+- decision references map back to `solution-design.md`
 
 If schema defects are local and obvious, repair.
-If defects imply shape/contract change, route to planning.
+If defects imply task contract change, route to planning. If they imply solution change, route to design.
 
 ### Phase 4 — Structural coherence pass
 
 Validate end-to-end consistency across these dimensions:
 
-1. mode-shape coherence
+1. mode-plan coherence
 2. current-slice coverage and ordering
 3. dependency graph sanity
 4. scope isolation
@@ -150,7 +150,7 @@ Validate does not own:
 
 - implementation
 - final product quality signoff
-- changing approved shape without planning loop
+- changing approved plan without planning loop or approved solution design without design loop
 
 ## Pause/resume posture
 
@@ -162,7 +162,7 @@ If paused near context limits:
 
 ## Red flags
 
-- validating with unapproved shape
+- validating with unapproved task plan
 - treating mirrors as truth when artifacts disagree
 - approving with unresolved high-impact assumptions
 - running structural checks before feasibility clarity
@@ -176,7 +176,7 @@ Successful exit requires:
 - explicit readiness decision
 - explicit mode recommendation
 - Gate 3 approval outcome recorded
-- precise next command recommendation (`pulse:workflow swarm` or `pulse:workflow execute`, or `pulse:workflow plan` for repairs)
+- precise next command recommendation (`pulse:workflow swarm` or `pulse:workflow execute`, `pulse:workflow plan` for task repairs, or `pulse:workflow design` for solution repairs)
 
 ## References
 

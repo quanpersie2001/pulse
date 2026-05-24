@@ -4,45 +4,58 @@ Pulse keeps a human approval model attached to artifacts and workflow state.
 
 ## Pre-gate admission
 
-`pulse:workflow intake` is not Gate 1. It is a new-work admission checkpoint that can run only when `pulse:workflow use` reports an empty session. Intake classifies input type, lane, artifact obligations, and next command without approving context, shape, execution, or review state.
+`pulse:workflow intake` is not a solution/design/execution approval. It is a new-work admission checkpoint that can run only when `pulse:workflow use` reports an empty session.
 
 ## Gate model overview
 
 | Gate | When it happens | What gets approved | If not approved |
 | --- | --- | --- | --- |
-| Gate 1 | after `explore` | context artifact and locked decisions | stay in `explore` |
-| Gate 2 | after `plan` | selected execution shape artifact | stay in `plan` or revisit `brainstorm` |
+| Direction approval | after `brainstorm` when used | `work-brief.md` direction, scope, constraints | stay in `brainstorm` |
+| Gate 1 | after `design` | `solution-design.md` final product/technical/solution decisions | stay in `design` or return to `explore` |
+| Gate 2 | after `plan` | task breakdown/current-work shape derived from approved design | stay in `plan` or return to `design` if design gaps exist |
 | Gate 3 | after `validate` | current execution slice is feasible and safe to start | do not execute |
 | Gate 4 | after `review` | completed change is acceptable to merge or ship | fix findings before approval |
 
-## Gate 1 — Context approval
+## Direction approval — Work brief
 
 Purpose:
 
-- confirm the current problem framing
-- confirm constraints and decisions that later commands must honor
-- prevent planning from guessing at product or architecture intent
+- confirm the work direction before discovery and solution design
+- prevent discovery/design from optimizing the wrong outcome
 
 Typical artifact:
 
-- a context synthesis produced by `explore`
+- `work-brief.md` from `brainstorm`
+
+Default next command after approval:
+
+- `explore`
+
+## Gate 1 — Solution design approval
+
+Purpose:
+
+- approve all product, technical, architecture, data, interface, migration, UX, and verification decisions before task planning
+- prevent `plan` from inventing or changing solution approach
+
+Typical artifact:
+
+- `solution-design.md` from `design`
 
 Default next command after approval:
 
 - `plan`
 
-## Gate 2 — Shape approval
+## Gate 2 — Task plan approval
 
 Purpose:
 
-- confirm the proposed execution shape before validation or implementation
-- lock the work breakdown and artifact model the rest of the cycle will follow
+- confirm the task breakdown/current-work shape derived from approved solution design
+- lock execution packaging and validation mapping without changing design
 
 Typical artifacts:
 
-- work-shape
-- phase-plan
-- epic-map
+- `PLAN.md` or current-work/task breakdown artifacts under the story directory
 
 Default next command after approval:
 
@@ -96,8 +109,10 @@ A gate must never be marked approved without explicit user sign-off.
 
 ## Command posture around gates
 
-- `intake` may ask for routing confirmation, but it does not replace Gate 1 or start work when the session is not empty.
-- `brainstorm` may ask for directional sign-off, but it does not replace Gate 1 or Gate 2.
-- `plan` prepares the shape; it does not auto-approve it.
-- `validate` prepares the execution case; it does not auto-start implementation.
+- `intake` may ask for routing confirmation, but it does not approve direction, design, plan, execution, or review state.
+- `brainstorm` may ask for direction sign-off, but it does not approve solution design.
+- `explore` produces discovery evidence; it does not approve final solution design.
+- `design` prepares Gate 1; it does not auto-approve it.
+- `plan` prepares Gate 2 task breakdown; it must not change approved design.
+- `validate` prepares Gate 3; it does not auto-start implementation.
 - `review` prepares the merge or ship decision; it does not auto-merge.

@@ -85,7 +85,7 @@ Additional checks:
 
 Input set:
 - current work items from `.pulse/workgraph/items.jsonl`
-- story-scoped artifacts under `works/epics/<epic-id>-<epic-slug>/<story-id>-<story-slug>/`: `CONTEXT.md`, `SPEC.md`, `DISCOVERY.md`, `APPROACH.md`
+- story-scoped artifacts under `works/epics/<epic-id>-<epic-slug>/<story-id>-<story-slug>/`: `discovery.md`, `solution-design.md`, `PLAN.md`
 - approved shape artifact (`work-shape.md` | `phase-plan.md` | `epic-map.md`) and current-work contract docs in that same story directory
 
 PASS only when all dimensions pass:

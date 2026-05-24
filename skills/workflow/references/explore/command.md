@@ -1,201 +1,263 @@
 # `pulse:workflow explore`
 
-Operational decision-extraction manual for turning approved story intent into an execution-safe `CONTEXT.md` grounded in `works/` and current runtime state.
+Discovery and evidence-gathering manual for turning approved work direction into a durable research base for solution design.
 
-This is a gated exploration phase, not a lightweight summary.
+Explore answers:
+
+> What does the repo, domain, and external evidence say that design must account for?
+
+It does **not** choose the final solution, lock product/technical decisions, create task breakdowns, or prepare implementation work. Those decisions belong after discovery.
 
 ## Mission
 
-Remove planning-time guesswork by locking implementation-relevant decisions with stable IDs and producing a context artifact downstream phases can execute without inventing behavior.
+Produce a story-scoped `discovery.md` and any needed `references/*.md` research reports so the next workflow step can make final decisions without guessing.
+
+Explore gathers:
+- current repo behavior and architecture evidence
+- relevant docs, story artifacts, runtime state, and tests
+- existing patterns and constraints
+- contradictions or drift between artifacts and implementation
+- external/domain/library/provider/security evidence when needed
+- decision questions that must be resolved later
 
 ## Entry criteria
 
 Run `pulse:workflow explore` when:
 
-- implementation intent exists
-- behavior/constraints are still ambiguous enough to force planner assumptions
-- Gate 1 is not yet approved for this active story slice
+- intake has confirmed an owning work boundary
+- work direction exists, either directly from intake or from `work-brief.md`
+- discovery/evidence is needed before final solution decisions can be made
+- no later approved solution design already covers the exact current scope without drift
 
 Do not run when:
 
-- approved context already exists for the exact active story and no decision drift exists
-- work is pure implementation under Gate 3-approved current work
-- `pulse:workflow use` readiness is stale or blocked
+- repo readiness/session posture is stale or blocked
+- the work boundary is unclear
+- the request is asking to choose final design/solution without enough discovery
+- the request is task breakdown or implementation work
 
-## Required reads before questioning
+## Required reads before research
 
-Read in this order (if present):
+Read in this order when present:
 
-1. active story spec: `works/epics/<epic-id>-<epic-slug>/<story-id>-<story-slug>/SPEC.md`
-2. existing story context: `works/epics/<epic-id>-<epic-slug>/<story-id>-<story-slug>/CONTEXT.md`
-3. `.pulse/runtime/STATE.md` and `.pulse/runtime/state.json`
-4. minimal quick code scout targets required to resolve terminology/behavior contradictions
+1. owning story `intake.md`
+2. story `work-brief.md`
+3. existing story `discovery.md` if resuming or refreshing discovery
+4. `.pulse/runtime/STATE.md` and `.pulse/runtime/state.json`
+5. relevant story references under `works/epics/<epic>/<story>/references/`
+6. targeted repo docs, code, tests, runtime files, and recent history needed for the discovery scope
 
-Quick scout boundary: keep this shallow (targeted grep + 2–3 file reads). Deep codebase analysis belongs to `pulse:workflow plan`.
-
-Active story context is `works/**/CONTEXT.md`; do not route exploration truth through another artifact root.
-
-Rule: answer from repo evidence first; ask users only for decisions evidence cannot settle.
+Rule: answer from evidence first. Ask users only for research scope clarification or missing context evidence cannot provide.
 
 ## Command-local references
 
-- `gray-area-probes.md` — canonical SEE/CALL/RUN/READ/ORGANIZE probe bank
-- `context-template.md` — required structure for `works/**/CONTEXT.md`
-- `context-reviewer-prompt.md` — optional Phase 4.2 reviewer loop prompt
+- [`discovery.template.md`](discovery.template.md) — required `discovery.md` structure
+- [`context-reviewer-prompt.md`](context-reviewer-prompt.md) — discovery reviewer prompt
+- [`gray-area-probes.md`](gray-area-probes.md) — probe bank for discovery questions and decision surfaces
 
-## Phase model (mandatory order)
+## Phase model
 
-### Phase 0 — Scope and framing
+### Phase 0 — Scope and research depth
 
-1. Classify scope: `quick`, `standard`, or `deep`.
-2. If unclear, ask one disambiguation question.
-3. Detect multi-system requests; split into one foundational system per exploration pass.
-4. Optional one-time step-back framing:
-   - restate desired outcome
-   - list 2–4 decision axes
-   - state what is out of exploration scope
+Classify discovery depth:
 
-Stop condition: if work cannot be framed as one decision surface, narrow scope before probing.
+| Depth | Use when |
+| --- | --- |
+| `quick` | direction is clear and repo surface is small |
+| `standard` | normal code/docs/test discovery is needed |
+| `deep` | architecture, data, security, integration, migration, public contract, or external evidence materially affects later decisions |
 
-### Phase 1 — Domain classification
+If unclear, ask one scope question. Do not start broad research without knowing what decision surface the evidence must support.
 
-Classify affected behavior domains (can be multiple):
+Stop when:
+- no confirmed story boundary exists
+- the requested research belongs to another story
+- the user asks for final design instead of discovery
 
-- SEE (UI/presentation)
-- CALL (API/integration)
-- RUN (runtime/operations)
-- READ (data/state)
-- ORGANIZE (workflow/ownership)
+### Phase 1 — Evidence map
 
-Purpose: ensure probes target ambiguity that changes implementation behavior.
+Identify which evidence surfaces matter:
 
-### Phase 2 — Gray-area extraction
+- `ARTIFACTS` — intake, work brief, prior discovery, references
+- `CODE` — implementation paths, call sites, module boundaries
+- `TESTS` — existing coverage, fixtures, verification harness
+- `DATA` — schema, migrations, persistence, ownership model
+- `RUNTIME` — state, commands, operational behavior
+- `DOCS` — product docs, API contracts, README/reference docs
+- `EXTERNAL` — provider/library/domain/security/current-state research
 
-Generate 2–4 gray areas that would force planning assumptions if unresolved.
-Use domain-specific probes from `gray-area-probes.md`; select only those genuinely undecided for the active story.
+For each surface, record why it matters or why it is out of scope.
 
-A valid gray area must:
+### Phase 2 — Repo and artifact discovery
 
-- influence implementation behavior, boundaries, or acceptance criteria
-- be absent, contradictory, or overloaded in available sources
-- materially alter scope, verification, or dependency decisions
+Gather evidence without deciding the final solution:
 
-Filter out:
+- trace relevant existing behavior
+- identify established patterns and constraints
+- list reusable surfaces and risky coupling
+- find contradictions between artifacts, docs, code, tests, and runtime state
+- identify missing evidence
+- record paths and concrete observations
 
-- library/tool preferences without behavior impact
-- architecture ideation
-- speculative future capabilities
+Do not turn findings into final decisions. Write findings as evidence:
 
-### Phase 3 — Socratic lock loop (hard gate)
+```text
+Finding: Current request routing already uses direct handler-like functions in `path`.
+Implication for design: design should decide whether to preserve direct flow or introduce an abstraction.
+```
 
-Non-negotiable protocol:
+Not:
 
-- ask exactly one question per turn
-- wait for response before next question
-- prefer single-select options with a recommended default when credible
-- use concrete scenario probes for boundaries/edge cases
-- resolve terminology conflicts before locking
+```text
+Decision: Use direct handlers.
+```
 
-Locking protocol:
+### Phase 3 — Deep-research invocation when needed
 
-- assign stable IDs: `D1`, `D2`, `D3`...
-- after each resolved area: `Locking decision Dn: <exact decision>. Confirmed?`
-- never renumber prior IDs
-- after 3–4 questions in one gray area, checkpoint before continuing: `More questions on this area, or move to the next unresolved area?`
+Invoke or follow [`skills/deep-research/../../../deep-research/SKILL.md`](../../../deep-research/SKILL.md) when external evidence is needed for later design decisions.
 
-Scope discipline during loop:
+Use deep research for:
+- external provider/API behavior
+- library/framework trade-offs
+- security/privacy/compliance guidance
+- architecture or scaling patterns
+- data partitioning/multi-tenant strategies
+- market/domain/product conventions
+- current-state research that cannot be answered from repo artifacts
 
-- if user introduces a new capability outside current boundary, capture it under deferred ideas and return to the active gray area
-- if wording conflicts with story artifacts or code evidence, resolve the contradiction before locking
+Deep-research output must be saved under the owning story:
 
-Stop conditions:
+```text
+works/epics/<epic-id>-<epic-slug>/<story-id>-<story-slug>/references/<topic-slug>.md
+```
 
-- if multiple questions were bundled, reset and re-ask one
-- if contradiction remains unresolved, do not proceed to artifact writing
-- do not proceed until every blocking gray area is locked or explicitly deferred
+Reference file requirements:
+- research question
+- why it matters for this story
+- executive summary
+- key findings with citations
+- design implications, clearly labeled as implications rather than decisions
+- risks/gaps
+- sources and methodology
 
-### Phase 4 — Context assembly
+Do not rely on web snippets alone when external research affects design. Read key sources in full where practical.
 
-Write canonical story context:
+### Phase 4 — Decision surface extraction
 
-- `works/epics/<epic-id>-<epic-slug>/<story-id>-<story-slug>/CONTEXT.md`
+From the evidence, identify questions the later solution design must resolve.
 
-Populate from `context-template.md`.
+A valid design question:
+- materially affects product behavior, technical design, data shape, API/UX, migration, verification, or risk
+- is grounded in evidence or a documented gap
+- is within the confirmed story boundary
 
-Required sections:
+Write questions as decision inputs, not decisions:
 
-- intended outcome and explicit scope boundary
-- locked decisions with IDs (`D1...Dn`)
-- code/context evidence with concrete paths
-- constraints and non-goals
-- open questions split into:
-  - resolve before planning
-  - deferred to planning
-- terminology alignment (reused, corrected, missing)
+```text
+Design must decide:
+- whether to preserve direct handler flow or introduce a mediator-style abstraction
+- whether tenant ownership maps to existing Organization or needs a new concept
+```
 
-If repeated ambiguity is clearly story-level documentation drift, add a documentation follow-up as a proposal only.
+### Phase 5 — Assemble `discovery.md`
 
-Optional Phase 4.2 reviewer loop:
+Write:
 
-- run a fresh reviewer pass using `context-reviewer-prompt.md`
-- if issues are found, fix and re-run
-- after two failed reviewer iterations, ask for direct human review instead of churning
+```text
+works/epics/<epic-id>-<epic-slug>/<story-id>-<story-slug>/discovery.md
+```
 
-### Phase 5 — Quality check and Gate 1 handoff
+Use [`discovery.template.md`](discovery.template.md).
 
-Before handoff, verify:
+Required content:
+- research scope and depth
+- source inputs read
+- research questions investigated
+- evidence by surface with concrete paths/citations
+- external references created under `references/`
+- existing patterns and constraints
+- contradictions or drift
+- risks and confidence
+- candidate options surfaced by evidence, without selecting the final solution
+- decision surface for design
+- open questions split into blocking vs deferrable
 
-- every implementation-relevant choice is explicit or explicitly deferred
-- locked decisions are behaviorally concrete
-- decision IDs are complete and stable
-- no unresolved contradictions remain
+### Phase 6 — Discovery self-review
 
-Then, if runtime mirrors are touched, update them truthfully to a pre-approval state and present Gate 1 handoff.
+Run a self-review using [`context-reviewer-prompt.md`](context-reviewer-prompt.md).
 
-## Gate posture
+The review must catch:
+- unsourced claims
+- missing required evidence surfaces
+- final design decisions leaking into discovery
+- task planning/work breakdown leakage
+- missing deep-research references where external evidence is required
+- unresolved contradictions hidden as assumptions
+- unclear handoff questions for design
 
-`pulse:workflow explore` prepares Gate 1 only.
+Fix serious issues and rerun once. After two failed repair loops, stop and ask for direct user review.
 
-Gate 1 passes only after explicit user approval of `works/**/CONTEXT.md`. Until approved, shaping/execution commands are blocked.
+### Phase 7 — Handoff
+
+After discovery passes review:
+
+1. Update runtime mirrors together if recording workflow posture:
+   ```text
+   Current: exploration/discovery complete for <work>
+   Discovery: <works story discovery.md path>
+   References: <works story references/ paths if any>
+   Next: invoke pulse:workflow design
+   ```
+
+2. Present a concise handoff:
+   > Discovery complete. Next step: `pulse:workflow design` to turn evidence into final solution decisions.
+
+3. Do not invoke `pulse:workflow design` unless the user explicitly asks to continue.
 
 ## Role boundaries
 
 Explore owns:
-
-- ambiguity reduction and decision locking
-- context artifact integrity
+- discovery scope
+- evidence gathering
+- external research orchestration
+- source/citation quality
+- contradiction and risk surfacing
+- decision-question handoff for design
 
 Explore does not own:
-
-- implementation planning
-- work item execution
-- architecture/coding
+- final product decisions
+- final technical design
+- architecture/API/schema/UX selection
+- migration or rollout plan as final design
+- task breakdown
+- work item creation
+- implementation
 
 ## Pause/resume posture
 
 If pausing:
-
-- persist current exploration posture in `.pulse/runtime/STATE.md` (active gray area + next single question)
-- preserve already confirmed decision IDs
-- resume from the next unresolved decision, not from scratch
-
-Do not mark exploration complete while paused.
+- record current research depth, completed evidence surfaces, pending research questions, and next source to inspect
+- keep partial findings clearly marked as partial
+- do not mark discovery complete while blocking evidence is missing
 
 ## Red flags
 
-- batching unresolved questions
-- asking questions repo evidence already answers
-- drifting into solution design
-- writing `CONTEXT.md` before decisions are locked
-- mutating runtime/workgraph state as if Gate 1 already passed
-- writing active truth outside `works/**` + `pulse:workflow` routing
+Stop if you catch yourself:
+- writing final decisions instead of findings/implications
+- choosing architecture, schema, API, or UX solution as final
+- creating tasks or execution slices
+- treating external snippets as sufficient evidence for high-risk decisions
+- skipping deep-research when external/provider/security evidence is material
+- writing discovery outside the owning story directory
+- saving references outside `works/**/references/`
+- routing directly to plan
 
 ## Exit contract
 
 Successful exit requires:
-
-- `works/**/CONTEXT.md` written and internally consistent
-- explicit locked decision list (`D1...Dn`)
-- explicit Gate 1 approval request
-- no planning/execution actions taken before Gate 1 approval
-- next command recommendation: `pulse:workflow plan` (manual invoke by default)
+- `discovery.md` written under the owning story
+- all material claims backed by paths, citations, command output, or explicit gaps
+- external research saved under `references/<topic-slug>.md` when used
+- no final solution design or task breakdown in discovery
+- clear decision surface for `pulse:workflow design`
+- next command recommendation: `pulse:workflow design` (manual invoke by default)

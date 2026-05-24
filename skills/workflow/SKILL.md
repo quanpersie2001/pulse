@@ -35,11 +35,12 @@ Unknown input should not trigger hidden dispatch behavior.
 
 | Command | Category | Use when... | Reference | Usually next |
 | --- | --- | --- | --- | --- |
-| `use` | Session entrypoint | the repo needs readiness/onboarding if stale, session restoration, resume routing, repair, or runtime posture | [references/use/command.md](references/use/command.md) | `intake`, `explore`, `brainstorm`, `plan` |
-| `intake` | New-work admission | `use` reports an empty session and the user has new input to classify before any design, discovery, or planning | [references/intake/command.md](references/intake/command.md) | `brainstorm`, `explore`, `plan` |
-| `explore` | Discovery | the design direction is chosen but repo-grounded decisions and constraints still need investigation | [references/explore/command.md](references/explore/command.md) | `plan` |
-| `brainstorm` | Design | the user goal is real but the feature shape is still open | [references/brainstorm/command.md](references/brainstorm/command.md) | `explore` |
-| `plan` | Planning | explored context must become a concrete implementation shape | [references/plan/command.md](references/plan/command.md) | `validate` |
+| `use` | Session entrypoint | the repo needs readiness/onboarding if stale, session restoration, resume routing, repair, or runtime posture | [references/use/command.md](references/use/command.md) | `intake`, `brainstorm`, `explore`, `design`, `plan` |
+| `intake` | New-work admission | `use` reports an empty session and the user has new input to classify before direction, discovery, design, or planning | [references/intake/command.md](references/intake/command.md) | `brainstorm`, `explore`, `design` |
+| `brainstorm` | Direction | the user goal is real but the work direction is still open | [references/brainstorm/command.md](references/brainstorm/command.md) | `explore` |
+| `explore` | Discovery | approved direction needs repo/domain/external evidence before solution decisions | [references/explore/command.md](references/explore/command.md) | `design` |
+| `design` | Solution design | discovery evidence must become final product/technical/solution decisions before task planning | [references/design/command.md](references/design/command.md) | `plan` |
+| `plan` | Task planning | approved solution design must be decomposed into executable work | [references/plan/command.md](references/plan/command.md) | `validate` |
 | `validate` | Readiness | the proposed work needs proof before implementation starts | [references/validate/command.md](references/validate/command.md) | `swarm`, `execute`, `plan` |
 | `swarm` | Execution | validated work should be executed by multiple agents with explicit coordination | [references/swarm/command.md](references/swarm/command.md) | `execute`, `review` |
 | `execute` | Execution | a validated work item should be implemented and evidenced | [references/execute/command.md](references/execute/command.md) | `review` |

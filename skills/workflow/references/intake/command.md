@@ -23,7 +23,7 @@ Intake admits work into the workflow. It does not design the solution, lock impl
 - Intake is read-only until the operator presents a mutation package and receives explicit user confirmation.
 - Before confirmation, classification, correlation, blockers, runtime posture, and proposed boundary details live only in the operator response.
 - After confirmation, intake may mutate only the confirmed package: boundary package, runtime-only package, or no-write package.
-- Intake must not create executable `TASK` or `BUG` work, reservations, ready queue entries, or Gate 1-4 approvals.
+- Intake must not create executable `TASK` or `BUG` work, reservations, ready queue entries, or workflow gate approvals.
 - Intake must check existing durable work before proposing new work.
 - Weak proof never silently creates, reopens, or closes work; ask the minimum routing question instead.
 - Default continuation is manual. Do not invoke the recommended next command unless the user explicitly asks to continue.
@@ -412,7 +412,7 @@ Field rules:
 - use `state.intake.artifact_path` only after a durable intake artifact is written
 - for `already_satisfied`, record matched item IDs and evidence summary only after explicit runtime-only confirmation permits recording the terminal result
 - because `already_satisfied` is terminal, `state.intake.recommended_next_command` must be `null` (no downstream command)
-- gate state remains `none` or `pre_gate`; Gate 1 begins only after `pulse:workflow explore` produces an approvable context artifact
+- gate state remains `none` or `pre_gate`; Gate 1 begins only after `pulse:workflow design` produces an approvable solution design
 
 No-structural-mutation outcomes:
 
@@ -433,8 +433,8 @@ Recommend exactly one next command, one immediate hard-gate action, or no comman
 | repository/session readiness is unclear | `pulse:workflow use` |
 | structural workgraph or `works/` mutation is proposed | present the hard gate and stop until explicit approval |
 | new spec or initiative lacks a selected story shape after confirmed boundary handling | `pulse:workflow brainstorm` |
-| story intent exists but behavior/context decisions need locking after confirmed boundary handling | `pulse:workflow explore` |
-| tiny or clear low-risk work needs Pulse-managed durability | `pulse:workflow plan` under the owning or newly confirmed story boundary |
+| story intent exists but discovery evidence is needed after confirmed boundary handling | `pulse:workflow explore` |
+| tiny or clear low-risk work needs Pulse-managed durability | `pulse:workflow design` when solution decisions are needed, otherwise `pulse:workflow plan` under the owning or newly confirmed story boundary |
 | request maps to existing open work | propose reuse/update of the existing stream, hard-gate any artifact mutation, then recommend the next unmet command |
 | request appears already satisfied with strong evidence | stop and present evidence; no new execution command |
 | intake cannot safely classify or route | block and ask the routing question |
@@ -459,10 +459,10 @@ Do not conduct design discovery, implementation planning, or validation planning
 
 Intake is a pre-gate admission checkpoint, not Gate 1.
 
-`brainstorm` may follow intake when the work is real but the story shape, design direction, or first slice is still unclear. Brainstorm can ask for directional/spec approval, but it still does not replace Gate 1.
+`brainstorm` may follow intake when the work is real but the story shape, design direction, or first slice is still unclear. Brainstorm can ask for direction approval on `work-brief.md`, but it still does not replace solution design approval.
 
-- Brainstorm/spec approval remains before `explore` when needed.
-- Gate 1 remains after `explore`.
+- Brainstorm direction approval remains before `explore` when needed.
+- Gate 1 remains after `design`.
 - Gate 2 remains after `plan`.
 - Gate 3 remains after `validate`.
 - Gate 4 remains after `review`.

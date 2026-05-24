@@ -1,127 +1,109 @@
 # `pulse:workflow plan` Planning Reference
 
-Use when `pulse:workflow plan` needs quality rules or artifact schemas.
+Use when `pulse:workflow plan` needs task/current-work quality rules.
 
 ## Quality rules
 
-- Choose one mode first: `spike`, `small_change`, `standard_feature`, or `high_risk_feature`.
-- Use the least workflow that honestly protects the work.
-- Use phases only for observable milestones. Use epics when capability/risk areas explain tough work better.
-- `high_risk_feature` defaults to an epic map unless a phase plan is plainly clearer.
-- Stories are end-to-end outcomes, not architecture layers.
-- Execution work items are worker-sized units for validated current work, not speculative future planning.
-- MEDIUM/HIGH unknowns need validating proof or a spike before execution items.
+- Plan from approved `solution-design.md`; do not change solution decisions.
+- Every task must trace to one or more design decision IDs or planning constraints.
+- Tasks are worker-sized units for validated current work, not speculative future backlog.
+- Use phases only for observable execution sequencing.
+- Keep current work bounded; prepare one current slice for validation.
+- MEDIUM/HIGH unknowns must be represented as validation evidence or routed back to design/explore if they change solution decisions.
 
 Trace:
 
 ```text
-mode -> shape -> current work -> work item?
+solution-design.md -> PLAN.md -> current work -> work item?
 ```
 
-## Mode gate
+## Planning modes
 
-| Mode | Use when | Shape |
+| Mode | Use when | Planning shape |
 |---|---|---|
-| `spike` | one assumption decides path | yes/no question + proof |
-| `small_change` | <=3 files, LOW risk, no API/data model change | one work shape |
-| `standard_feature` | ordered user/system capability | phase plan or epic map |
-| `high_risk_feature` | hard-to-reverse, external/security/data, broad blast | epic map + feasibility proof |
+| `spike` | one approved-design assumption needs proof before execution | proof task/current work |
+| `small_change` | <=3 files, LOW risk, approved design is simple | compact task plan |
+| `standard_feature` | ordered user/system capability | phased task plan |
+| `high_risk_feature` | hard-to-reverse, external/security/data, broad blast | risk-first task plan + validation emphasis |
 
 Above `small_change`, record why smaller modes are insufficient.
 
-## Discovery and approach
+## PLAN.md artifact
 
-`DISCOVERY.md` is a canonical planning artifact in each story directory and should capture only facts needed for the plan:
+`PLAN.md` is the canonical task-planning artifact in each story directory.
 
-- architecture snapshot: areas, entry points, key files
-- constraints: runtime/framework versions, dependencies, quality gates
-- summary: what exists, what is missing, warnings
+It should capture:
 
-`APPROACH.md` is a canonical planning artifact in each story directory and should capture:
+- approved design source: `solution-design.md`
+- planning mode and rationale
+- task breakdown
+- task dependencies and sequencing
+- current-work slice
+- validation mapping
+- execution mode recommendation
+- explicit design decision references
 
-- recommended approach and rejected alternatives
-- risk map: component, LOW/MEDIUM/HIGH, reason, proof needed
-- likely file/order boundaries
-- relevant learnings and validating questions
+It must not capture new solution design, rejected design alternatives, schema/API/UX decisions, or architecture decisions not already approved in `solution-design.md`.
 
-Canonical story-level planning artifacts:
-
-- `DISCOVERY.md`
-- `APPROACH.md`
-- one approved shape document: `work-shape.md` | `phase-plan.md` | `epic-map.md`
-
-## Shape artifacts
-
-For spike or small work:
+## Compact task plan template
 
 ```markdown
-# Work Shape: <Feature>
-Mode: `<mode>`
-Why this mode: <why smaller/bigger workflow is unnecessary>
-Current work: <outcome or yes/no spike question>
-Proof: `<command>` or observable check
-Out of scope: <not solved>
-Approval (Gate 2): set `PENDING` and stop for explicit approval.
-```
+# Plan: <Work>
 
-For milestone-shaped work:
+**Mode:** spike | small_change | standard_feature | high_risk_feature
+**Source design:** `solution-design.md`
+**Approval status:** PENDING | APPROVED
 
-```markdown
-# Phase Plan: <Feature>
-Mode: `standard_feature` | `high_risk_feature`
-Feature summary: <2-4 sentences>
-Phase overview: Phase | What Changes | Why Now | Demo | Unlocks
-Order check: first phase is obvious; later phases build on it; no technical buckets.
-Approval summary: current phase, picture after it, deferred work.
-```
+## Design Decisions Referenced
 
-For tough capability/risk-shaped work:
+- D1 — <why relevant>
+- D2 — <why relevant>
 
-```markdown
-# Epic Map: <Feature>
-Mode: `standard_feature` | `high_risk_feature`
-Feature outcome: <what is true when all epics finish>
-Architecture / reality basis: <repo facts, stack constraints, external limits>
-Epics: Epic | Capability/Risk Area | Why It Exists | Stories | Proof Needed
-Story queue: Story | Epic | Outcome | Depends On | Feasibility Status
-Current story to prepare: <story, why now, testable exit>
+## Task Breakdown
+
+| Task | Outcome | Depends On | Design IDs | Evidence |
+| --- | --- | --- | --- | --- |
+| T1 | ... | ... | D1 | ... |
+
+## Current Work
+
+- Entry state:
+- Exit state:
+- In scope:
+- Out of scope:
+- Validation evidence:
+
+## Sequencing / Parallelization
+
+- ...
+
+## Risks for Validate
+
+- ...
+
+## Gate 2 Approval
+
+Reply with explicit approval before validation begins.
 ```
 
 ## Current-work prep
 
-For epic-map work, prepare only the approved current story:
+Prepare only the approved current slice:
 
 ```markdown
-# Current Story Pack: <Story>
-Epic: <name>
-Entry state: <current repo truth>
-Exit state: <what must be true after execution>
-Files likely touched: <bounded list>
-Feasibility assumptions: <assumption | risk | proof needed>
-Verification: <commands/checks>
-Out of scope: <not solved>
-Work-item mapping: <created after validation accepts feasibility>
-```
+# Current Work: <Slice>
 
-For phase-shaped work, keep the contract/story-map pattern:
-
-```markdown
-# Phase Contract: Phase <N> - <Name>
+Source plan: `PLAN.md`
+Source design: `solution-design.md`
 Entry state: <observable truth>
 Exit state: <testable truth>
-Demo: <walkthrough/checks>
-Stories: Story | What Happens | Unlocks | Done
-Out/success/pivot: <scope boundary, proof, revise signal>
-
-# Story Map: Phase <N> - <Name>
-Dependency diagram: Entry -> Story 1 -> Story 2 -> Exit
-Story table: Story | Outcome | Contributes To | Creates | Done
-Story-to-work-item mapping: <work item id or pending validation>
+In scope: <bounded work>
+Out of scope: <not solved>
+Dependencies: <task/design dependencies>
+Verification: <evidence required>
+Work-item mapping: <created after validation accepts readiness, when applicable>
 ```
 
-## Pressure scenarios
+## Work item creation reminder
 
-- Small workflow-managed fix stays `small_change`; no phase or epic-map ceremony beyond the required owning story boundary. Tiny untracked direct edits are outside `pulse:workflow`.
-- Tough feature uses an epic map when capability/risk areas are clearer than 2-4 phases.
-- MEDIUM/HIGH unknown appears as proof needed before execution items; standard/high-risk work defers item creation until validating confirms feasibility and routes back.
-- Current story is small enough for feasibility validation and one bounded execution pass.
+Planning may prepare item definitions only when workflow posture allows it. Do not create speculative future-slice work items.

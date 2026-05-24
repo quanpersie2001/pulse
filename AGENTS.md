@@ -102,6 +102,7 @@ works/
 4. Keep `.pulse/runtime/state.json` and `.pulse/runtime/STATE.md` aligned.
 5. After compaction, re-read this file, run scout, then reopen handoff + runtime state before continuing.
 6. P1 review findings always block merge.
+7. Do not edit `dist/` generated skill outputs directly; update source files under `skills/` and regenerate with `scripts/build-skills.mjs`.
 
 ## Operator Cookbook
 
