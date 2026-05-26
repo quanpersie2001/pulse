@@ -38,8 +38,10 @@ This is the shortest concrete example of a standard Pulse v2 run.
    - stops for Gate 2 approval
 
 7. `pulse:workflow validate`
-   - verifies feasibility/readiness for selected current work
-   - runs spikes for risky items
+   - proves Gate 2-approved `plan.md` is active
+   - verifies materialized TASK/BUG contracts, runtime mirrors, and workgraph metadata are coherent
+   - verifies feasibility/readiness for the selected current slice
+   - runs bounded probes for risky assumptions
    - stops until execution is explicitly approved (Gate 3)
 
 8. `pulse:workflow swarm` or `pulse:workflow execute`

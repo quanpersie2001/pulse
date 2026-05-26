@@ -8,153 +8,88 @@
       "summary": "Prepare the repo if needed, load the current Pulse session, and route the next workflow move.",
       "hint": "Use first in any new, resumed, or suspiciously stale Pulse session, or whenever runtime/session posture is unclear.",
       "category": "session-entrypoint",
-      "produces": [
-        "readiness brief",
-        "session load",
-        "resume options",
-        "domain status",
-        "next-command recommendation"
-      ],
-      "next_commands": [
-        "intake",
-        "explore",
-        "brainstorm",
-        "plan"
-      ]
+      "produces": ["readiness brief", "session load", "resume options", "domain status", "next-command recommendation"],
+      "next_commands": ["intake", "brainstorm", "explore", "design", "plan"]
     },
     {
       "name": "intake",
       "summary": "Admit new user input only after an empty session, then classify type, lane, artifact obligations, and the next safe command.",
       "hint": "Use after pulse:workflow use reports no active work and the user provides new input to classify.",
       "category": "new-work-admission",
-      "produces": [
-        "intake package",
-        "input type",
-        "lane and risk flags",
-        "artifact obligations",
-        "next-command recommendation"
-      ],
-      "next_commands": [
-        "brainstorm",
-        "explore",
-        "plan"
-      ]
-    },
-    {
-      "name": "explore",
-      "summary": "Investigate the repo and lock implementation-relevant decisions against the chosen direction.",
-      "hint": "Use after a direction is chosen when the implementation context still needs evidence and decision locking.",
-      "category": "discovery",
-      "produces": [
-        "exploration findings",
-        "context synthesis",
-        "decision summary"
-      ],
-      "next_commands": [
-        "plan"
-      ]
+      "produces": ["intake package", "input type", "lane and risk flags", "artifact obligations", "next-command recommendation"],
+      "next_commands": ["brainstorm", "explore", "design"]
     },
     {
       "name": "brainstorm",
-      "summary": "Turn vague intent into candidate approaches and an approved design spec.",
-      "hint": "Use before explore when feature shape is still open.",
-      "category": "design",
-      "produces": [
-        "approach options",
-        "trade-off summary",
-        "approved design spec"
-      ],
-      "next_commands": [
-        "explore"
-      ]
+      "summary": "Turn under-shaped work into approved direction in work-brief.md.",
+      "hint": "Use before explore when work direction is still open.",
+      "category": "direction",
+      "produces": ["direction options", "trade-off summary", "approved work brief"],
+      "next_commands": ["explore"]
+    },
+    {
+      "name": "explore",
+      "summary": "Gather repo/domain/external evidence and surface design decision questions.",
+      "hint": "Use after direction exists when solution design needs discovery evidence.",
+      "category": "discovery",
+      "produces": ["discovery.md", "evidence ledger", "references reports", "decision surface"],
+      "next_commands": ["design"]
+    },
+    {
+      "name": "design",
+      "summary": "Turn direction and discovery evidence into approved final solution design.",
+      "hint": "Use after explore when all product/technical/solution decisions must be finalized before planning.",
+      "category": "solution-design",
+      "produces": ["solution-design.md", "decision log", "planning constraints"],
+      "next_commands": ["plan"]
     },
     {
       "name": "plan",
-      "summary": "Convert explored context into an implementation shape.",
-      "hint": "Use after context is locked and execution shape is the next decision.",
+      "summary": "Decompose approved solution design into task/current-work breakdown.",
+      "hint": "Use after solution-design.md is approved; plan must not change design.",
       "category": "planning",
-      "produces": [
-        "work breakdown",
-        "shape artifact",
-        "execution recommendation"
-      ],
-      "next_commands": [
-        "validate"
-      ]
+      "produces": ["task breakdown", "current-work contract", "validation mapping"],
+      "next_commands": ["validate"]
     },
     {
       "name": "validate",
       "summary": "Prove feasibility and expose blockers before execution starts.",
       "hint": "Use before coding when you need evidence that the proposed slice is safe to execute.",
       "category": "readiness",
-      "produces": [
-        "risk surface",
-        "blockers",
-        "execution-readiness call"
-      ],
-      "next_commands": [
-        "swarm",
-        "execute",
-        "plan"
-      ]
+      "produces": ["risk surface", "blockers", "execution-readiness call"],
+      "next_commands": ["swarm", "execute", "plan", "design"]
     },
     {
       "name": "swarm",
       "summary": "Coordinate validated multi-agent execution.",
       "hint": "Use only when work can be split cleanly and explicit coordination is worth the cost.",
       "category": "execution",
-      "produces": [
-        "worker boundaries",
-        "ownership plan",
-        "handoff rules"
-      ],
-      "next_commands": [
-        "execute",
-        "review"
-      ]
+      "produces": ["worker boundaries", "ownership plan", "handoff rules"],
+      "next_commands": ["execute", "review"]
     },
     {
       "name": "execute",
       "summary": "Implement a validated work item and produce evidence.",
       "hint": "Use after Gate 3 approval when the next move is to change code or state intentionally.",
       "category": "execution",
-      "produces": [
-        "implemented change",
-        "verification evidence",
-        "handoff notes"
-      ],
-      "next_commands": [
-        "review"
-      ]
+      "produces": ["implemented change", "verification evidence", "handoff notes"],
+      "next_commands": ["review"]
     },
     {
       "name": "review",
       "summary": "Evaluate completed changes before merge or ship approval.",
       "hint": "Use after execution to separate implementation from quality judgment.",
       "category": "quality",
-      "produces": [
-        "findings",
-        "severity calls",
-        "approval recommendation"
-      ],
-      "next_commands": [
-        "compound",
-        "execute"
-      ]
+      "produces": ["findings", "severity calls", "approval recommendation"],
+      "next_commands": ["compound", "execute"]
     },
     {
       "name": "compound",
       "summary": "Capture reusable learning after the workflow cycle.",
       "hint": "Use when the team should get better from the work that just completed.",
       "category": "learning",
-      "produces": [
-        "learnings",
-        "reusable patterns",
-        "workflow improvements"
-      ],
-      "next_commands": [
-        "plan"
-      ]
+      "produces": ["learnings", "reusable patterns", "workflow improvements"],
+      "next_commands": ["plan"]
     }
   ]
 }

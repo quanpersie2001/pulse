@@ -254,7 +254,16 @@ If production code was written before red check, rewrite within scope and re-run
 
 ## Step 5 — Verify
 
-Run item `verify` commands exactly as contracted.
+Run item `verify` commands exactly as contracted. No work item may close without fresh, scoped evidence from this execution pass.
+
+Each completed item must include evidence for:
+
+- commands/tests run
+- observed outputs
+- artifacts produced
+- unresolved gaps, explicitly `None.` when none remain
+
+Use [completion-report-contract.md](completion-report-contract.md) for the completion payload and minimum verification artifact shape.
 
 Before running, be able to state what success looks like in one or two lines. If not possible, item is under-specified and should be repaired.
 
@@ -273,6 +282,7 @@ Evidence record must include:
 - exit code per command
 - concise observed result per command
 - paths to generated proofs/logs/screenshots/findings
+- explicit unresolved gaps or `None.`
 
 If `testing_mode=tdd-required`, also record red command + observed failure signal and green command + observed passing signal.
 

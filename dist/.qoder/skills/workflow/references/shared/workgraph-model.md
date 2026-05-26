@@ -114,7 +114,7 @@ Typical attached paths include:
 
 ## Router implications
 
-- `plan` should produce shapes that can be turned into workgraph items later.
-- `validate` should test whether proposed items are ready for execution.
+- `plan` should produce lowercase `plan.md` shapes and materialize approved current-slice items through `node .qoder/skills/workflow/scripts/pulse.mjs workgraph`, never by hand-editing `.pulse/workgraph/items.jsonl`.
+- `validate` should test whether the Gate 2-approved `plan.md` and materialized TASK/BUG items are ready for execution, using `node .qoder/skills/workflow/scripts/pulse.mjs workgraph` output rather than hand-editing `.pulse/workgraph/items.jsonl`.
 - `swarm` and `execute` should respect owner and reservation boundaries.
 - `review` and `compound` should consume verification and lifecycle evidence rather than redefining metadata.

@@ -7,7 +7,7 @@ This appendix defines the operational contract for compounding.
 Read:
 
 - relevant work artifacts under `works/epics/**`, especially:
-  - story `README.md` and `SPEC.md`
+  - story `README.md`, `work-brief.md`, `discovery.md`, and `solution-design.md`
   - task / bug `README.md` and `verification.md`
   - `approach.md`, `execplan.md`, `validation.md`, `lifecycle-summary.md`, and `references/` when present
 - `.pulse/runtime/STATE.md`

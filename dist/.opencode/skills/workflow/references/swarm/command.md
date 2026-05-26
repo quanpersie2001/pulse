@@ -6,6 +6,8 @@ This command is orchestration only. It does not implement product code.
 
 ## Role boundary (non-negotiable)
 
+Use [execution-rules.md](execution-rules.md) for coordinator/worker boundaries, the coordination loop, commit-slot rule, and swarm failure posture.
+
 Coordinator owns:
 
 - spawning workers and preserving startup contract
@@ -168,7 +170,3 @@ Then route:
 - claiming completion while paused awaiting signals
 - promoting graph emptiness to feature completion without artifact/state confirmation
 
-## References
-
-- `swarming-appendix.md`
-- `runtime-adapter-spec.md`

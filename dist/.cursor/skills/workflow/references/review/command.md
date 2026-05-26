@@ -8,6 +8,16 @@ This phase is independent verification, not trust-based confirmation of executio
 
 Determine whether delivered scope is correct, safe, and complete against approved boundaries and evidence standards, then enforce Gate 4.
 
+Review must evaluate:
+
+- correctness against approved boundaries
+- regression risk and missing coverage
+- contract and policy violations
+- evidence freshness and reproducibility
+- severity-classified findings
+
+P1 findings or missing required evidence block Gate 4 approval.
+
 ## Entry criteria
 
 Run `pulse:workflow review` when:
@@ -35,7 +45,7 @@ Read before starting:
 - 4+1 review orchestration
 - severity mapping and review-item creation rules
 - Gate 4 hard-block behavior for P1
-- evidence verification contract
+- evidence freshness checks
 - UAT/acceptance routing
 - finishing checklist and closeout
 
@@ -135,8 +145,3 @@ Resume from next incomplete review phase, not memory-only recall.
 - mixing reviewer and implementer roles without explicit reroute
 - recommending release with unresolved mandatory blockers
 
-## References
-
-- `runtime-appendix.md`
-- `review-agent-prompts.md`
-- `review-item-template.md`

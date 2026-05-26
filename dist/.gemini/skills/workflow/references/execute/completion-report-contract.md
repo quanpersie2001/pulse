@@ -2,6 +2,21 @@
 
 Use this report contract immediately after successful close flow.
 
+Completion evidence must be fresh from the current execution pass. Do not close a TASK or BUG with copied, stale, partial, or non-specific evidence.
+
+## Minimum verification artifact
+
+Each closed TASK/BUG should have a non-empty verification artifact with at least:
+
+- `## Evidence Summary`
+- `## Commands Run`
+- `## Observed Outputs`
+- `## Attempts`
+- `## Artifacts`
+- `## Unresolved Gaps`
+
+`## Unresolved Gaps` must explicitly state remaining gaps or `None.`.
+
 ## Worker mode payload (`[DONE]`)
 
 Include all of:

@@ -249,7 +249,7 @@ function writeOnboardingReconstructionBriefs(repoRoot, normalization) {
       "",
       "- works/epics/<E-id>-<slug>/README.md",
       "- works/epics/<E-id>-<slug>/<S-id>-<slug>/README.md",
-      "- works/epics/<E-id>-<slug>/<S-id>-<slug>/SPEC.md",
+      "- works/epics/<E-id>-<slug>/<S-id>-<slug>/work-brief.md",
       "- works/epics/<E-id>-<slug>/<S-id>-<slug>/tasks/<item-id>-<slug>/README.md",
       "- works/epics/<E-id>-<slug>/<S-id>-<slug>/tasks/<item-id>-<slug>/verification.md",
       "",

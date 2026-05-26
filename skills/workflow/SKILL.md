@@ -26,7 +26,7 @@ Before choosing or executing a command:
 1. If repo readiness, runtime posture, or session context is unclear, start with [use](references/use/command.md).
 2. If the session is resuming active work, let `use` inspect the current runtime and handoff posture before routing onward.
 3. When a command is matched, load its command reference before acting.
-4. Load shared references whenever gates, workgraph semantics, swarm behavior, verification, or handoff rules matter.
+4. Load command-local or shared references only when the active section points to them, for example workgraph semantics, verification, handoff rules, or swarm coordination details.
 
 This router is intentionally strict.
 Unknown input should not trigger hidden dispatch behavior.
@@ -67,21 +67,44 @@ The runtime owns canonical mutable state.
 
 Do not flatten these layers into one file or one command.
 
+## Approval gates
+
+Pulse keeps human approval attached to artifacts and runtime state.
+
+`intake` is pre-gate admission: it may classify or confirm a boundary package, but it never approves direction, solution, plan, execution, or review.
+
+| Gate | When it happens | What gets approved | If not approved | Default next |
+| --- | --- | --- | --- | --- |
+| Direction approval | after `brainstorm` when used | `work-brief.md` direction, scope, constraints | stay in `brainstorm` | `explore` |
+| Gate 1 | after `design` | `solution-design.md` final product/technical/solution decisions | stay in `design` or return to `explore` | `plan` |
+| Gate 2 | after `plan` | task breakdown/current-work shape derived from approved design | stay in `plan` or return to `design` | `validate` |
+| Gate 3 | after `validate` | current execution slice is feasible and safe to start | do not execute | `swarm` or `execute` |
+| Gate 4 | after `review` | completed change is acceptable to merge or ship | fix findings before approval | `compound` |
+
+Gate rules:
+
+- A gate must never be marked approved without explicit user sign-off.
+- Runtime state should record the current gate, gate status, active command, recommended next command, and next action when a gate is approved or pending.
+- `brainstorm` may ask for direction approval, but it does not approve solution design.
+- `explore` produces evidence, but it does not approve final solution design.
+- `design` prepares Gate 1; it does not auto-approve it.
+- `plan` prepares Gate 2; it must not change approved design.
+- `validate` prepares Gate 3; it does not auto-start implementation.
+- `review` prepares Gate 4; it does not auto-merge or ship.
+- P1 review findings block Gate 4 approval until fixed.
+
 ## Shared references
 
-Use these references when the active command needs cross-cutting contract detail.
+Use shared references only for cross-cutting contracts that multiple commands must interpret consistently. Prefer command-local references for command-specific behavior.
 
 | Concern | Reference |
 | --- | --- |
-| Workflow pipeline and command responsibilities | [references/shared/workflow-contract.md](references/shared/workflow-contract.md) |
-| Plane separation and artifact ownership | [references/shared/planes-and-artifacts.md](references/shared/planes-and-artifacts.md) |
 | Work item vocabulary and ready semantics | [references/shared/workgraph-model.md](references/shared/workgraph-model.md) |
-| Human approval model | [references/shared/approval-gates.md](references/shared/approval-gates.md) |
-| Validation and evidence expectations | [references/shared/verification-contract.md](references/shared/verification-contract.md) |
-| Multi-agent orchestration rules | [references/shared/swarm-execution-rules.md](references/shared/swarm-execution-rules.md) |
 | Pause, handoff, and resume posture | [references/shared/handoff-and-resume.md](references/shared/handoff-and-resume.md) |
 | Harness architecture reference | [references/HARNESS.md](references/HARNESS.md) |
 | Harness backlog seed template | [templates/HARNESS_BACKLOG.md](templates/HARNESS_BACKLOG.md) |
+
+Command-local references include behavior that belongs to one command, for example [swarm execution rules](references/swarm/execution-rules.md).
 
 ## Operating principles
 
