@@ -2,7 +2,7 @@
 id: {{id}}
 ---
 
-# Verification
+# Verification — {{title}}
 
 ## Evidence Summary
 

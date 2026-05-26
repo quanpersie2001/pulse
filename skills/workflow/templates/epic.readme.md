@@ -1,8 +1,8 @@
 ---
-id: <epic-id>
+id: {{id}}
 ---
 
-# <Epic Title>
+# {{title}}
 
 ## Objective
 

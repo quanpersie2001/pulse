@@ -1,8 +1,8 @@
 ---
-id: <story-id>
+id: {{id}}
 ---
 
-# <Story Title>
+# {{title}}
 
 ## Request Summary
 

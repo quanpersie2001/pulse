@@ -25,10 +25,6 @@ export function getWorkflowTemplateDir(scriptDir) {
   return path.join(getWorkflowSkillDir(scriptDir), "templates");
 }
 
-export function getWorkflowWorksTemplateDir(scriptDir) {
-  return path.join(getWorkflowTemplateDir(scriptDir), "works");
-}
-
 export function getWorkflowSkillPath(scriptDir) {
   return path.join(getWorkflowSkillDir(scriptDir), "SKILL.md");
 }
