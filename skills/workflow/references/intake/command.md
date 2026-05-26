@@ -261,7 +261,7 @@ Rules:
 
 Intake first produces a proposed intake package and asks the user to confirm any structural boundary before writing durable files. A confirmed intake produces the durable intake package.
 
-Use [`intake.template.md`](intake.template.md) as the required shape for any boundary `intake.md` artifact.
+Use [intake.template.md](intake.template.md) as the required shape for any boundary `intake.md` artifact.
 
 Before confirmation, show the expected artifact path without creating files:
 
@@ -278,7 +278,7 @@ After confirmation, determine boundary path source by mutation type:
 - **New boundary creation path (`new_work`, `existing_closed_related_work`)**: use `dirname(item.content_path)` from the `{{pulse_command}} workgraph create --json` result as the source of truth for the concrete boundary directory. For example, `works/epics/E-1-example/S-1-slice/README.md` means the confirmed intake artifact is `works/epics/E-1-example/S-1-slice/intake.md`.
 - **Existing boundary update path (`existing_open_work`)**: do not run `workgraph create`. Use the matched item's existing `content_path` (and current status metadata) as the source of truth for the owning boundary directory, then target `<owning-boundary>/intake.md`.
 
-For `existing_open_work`, the confirmed intake note belongs to the existing owning boundary. If that boundary does not have `intake.md`, create it after confirmation. If `intake.md` already exists, append a dated `Additional Intake` section by default using the append-only format in [`intake.template.md`](intake.template.md) (do not overwrite previous intake material unless the user explicitly confirms replacement).
+For `existing_open_work`, the confirmed intake note belongs to the existing owning boundary. If that boundary does not have `intake.md`, create it after confirmation. If `intake.md` already exists, append a dated `Additional Intake` section by default using the append-only format in [intake.template.md](intake.template.md) (do not overwrite previous intake material unless the user explicitly confirms replacement).
 
 Artifact obligations by input type:
 
@@ -349,7 +349,7 @@ After the user confirms the hard gate:
 4. Apply only the confirmed boundary mutation path:
    - **New boundary creation path**: create the confirmed EPIC/STORY boundary using the workgraph CLI.
    - **Existing boundary update path (`existing_open_work`)**: do not create new EPIC/STORY items; reuse the matched open item boundary from its current `content_path`.
-5. Write or append boundary `intake.md` using [`intake.template.md`](intake.template.md) and the confirmed classification details.
+5. Write or append boundary `intake.md` using [intake.template.md](intake.template.md) and the confirmed classification details.
 6. Record matching runtime posture only as permitted by the confirmed package and only when explicitly confirmed.
 7. Recommend the next command.
 

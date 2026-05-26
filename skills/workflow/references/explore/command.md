@@ -51,9 +51,9 @@ Rule: answer from evidence first. Ask users only for research scope clarificatio
 
 ## Command-local references
 
-- [`discovery.template.md`](discovery.template.md) — required `discovery.md` structure
-- [`context-reviewer-prompt.md`](context-reviewer-prompt.md) — discovery reviewer prompt
-- [`gray-area-probes.md`](gray-area-probes.md) — probe bank for discovery questions and decision surfaces
+- [discovery.template.md](discovery.template.md) — required `discovery.md` structure
+- [context-reviewer-prompt.md](context-reviewer-prompt.md) — discovery reviewer prompt
+- [gray-area-probes.md](gray-area-probes.md) — probe bank for discovery questions and decision surfaces
 
 ## Phase model
 
@@ -114,7 +114,7 @@ Decision: Use direct handlers.
 
 ### Phase 3 — Deep-research invocation when needed
 
-Invoke or follow [`skills/deep-research/../../../deep-research/SKILL.md`](../../../deep-research/SKILL.md) when external evidence is needed for later design decisions.
+Invoke or follow [skills/deep-research/../../../deep-research/SKILL.md](../../../deep-research/SKILL.md) when external evidence is needed for later design decisions.
 
 Use deep research for:
 - external provider/API behavior
@@ -167,7 +167,7 @@ Write:
 works/epics/<epic-id>-<epic-slug>/<story-id>-<story-slug>/discovery.md
 ```
 
-Use [`discovery.template.md`](discovery.template.md).
+Use [discovery.template.md](discovery.template.md).
 
 Required content:
 - research scope and depth
@@ -184,7 +184,7 @@ Required content:
 
 ### Phase 6 — Discovery self-review
 
-Run a self-review using [`context-reviewer-prompt.md`](context-reviewer-prompt.md).
+Run a self-review using [context-reviewer-prompt.md](context-reviewer-prompt.md).
 
 The review must catch:
 - unsourced claims

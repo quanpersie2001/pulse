@@ -23,7 +23,7 @@ It does **not** replace the rendered runtime command.
 
 Before choosing or executing a command:
 
-1. If repo readiness, runtime posture, or session context is unclear, start with [`use`](references/use/command.md).
+1. If repo readiness, runtime posture, or session context is unclear, start with [use](references/use/command.md).
 2. If the session is resuming active work, let `use` inspect the current runtime and handoff posture before routing onward.
 3. When a command is matched, load its command reference before acting.
 4. Load shared references whenever gates, workgraph semantics, swarm behavior, verification, or handoff rules matter.

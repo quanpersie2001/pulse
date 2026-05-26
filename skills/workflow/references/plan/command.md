@@ -18,7 +18,7 @@ Produce an approved `plan.md` that validation and execution can follow without c
 
 - full task breakdown
 - mandatory docs impact
-- epic/story README enrichment
+- epic/story README handling
 - approved TASK/BUG materialization posture
 - validation plan
 - Gate 2 approval request
@@ -30,7 +30,7 @@ Run `pulse:workflow plan` when:
 - story `discovery.md` exists
 - story `solution-design.md` exists and is approved or explicitly approval-ready
 - runtime/workgraph posture identifies the active epic/story boundary
-- the next work is decomposition, docs impact, README enrichment, validation plan, and task materialization
+- the next work is decomposition, docs impact, README handling, validation plan, and task materialization
 
 Block planning when:
 
@@ -92,21 +92,119 @@ Mandatory docs impact does not mean reading all docs. First identify affected co
 
 Each required docs surface must still record an action, rationale, and validation evidence. Do not write “update docs if needed”.
 
-### Work content enrichment
+### Work content README handling
 
-Intake creates or matches EPIC/STORY boundaries and writes `intake.md`. Plan enriches content:
+Intake creates or matches EPIC/STORY boundaries and writes `intake.md`. Plan handles README content without creating duplicate work items:
 
-- enrich existing epic `README.md` from [`epic.readme.md`](./epic.readme.md) when needed
-- enrich existing story `README.md` from [`story.readme.md`](./story.readme.md)
-- create TASK/BUG README content from [`task.readme.md`](./task.readme.md) only after `workgraph create --json` returns the canonical `content_path`
+- create epic `README.md` from [epic.readme.md](./epic.readme.md) when the EPIC exists but README content is missing
+- enrich existing epic `README.md` from [epic.readme.md](./epic.readme.md) when useful content already exists
+- create story `README.md` from [story.readme.md](./story.readme.md) when the STORY exists but README content is missing
+- enrich existing story `README.md` from [story.readme.md](./story.readme.md) when useful content already exists
+- create TASK/BUG README content from [task.readme.md](./task.readme.md) only after `workgraph create --json` returns the canonical `content_path`
 
-Do not create duplicate EPIC/STORY items when intake already established the boundary.
+Do not create duplicate EPIC/STORY items when intake already established the boundary. README creation or enrichment is content handling, not boundary creation.
 
 ### Workgraph via CLI only
 
-Treat `.pulse/workgraph/items.jsonl` as database-like storage behind the CLI. Do not read or edit it during planning.
+Use `{{pulse_command}} workgraph ... --json` for all workgraph reads and mutations. Treat `plan.md` as the approved information artifact only: it records the items and edges to materialize, but it must not contain a generic operations/how-to table. Keep CLI usage guidance here in `command.md` so agents know exactly how to create the approved work after Gate 2.
 
-Use `{{pulse_command}} workgraph ... --json` for all workgraph reads and mutations. Use [`../shared/workgraph-model.md`](../shared/workgraph-model.md) when deciding dependency vs link semantics, readiness behavior, or owner/reservation boundaries.
+Use [workgraph-model.md](../shared/workgraph-model.md) when deciding dependency vs link semantics, readiness behavior, or owner/reservation boundaries.
+
+### Workgraph materialization CLI guide
+
+After explicit Gate 2 approval, materialize only the approved TASK/BUG rows and edge rows recorded in `plan.md`. Use the rendered `{{pulse_command}}` value from the installed workflow skill; do not call `scripts/pulse.mjs` by a guessed filesystem path.
+
+#### 1. Create approved TASK/BUG items
+
+For each approved item row, run one create command. Use the active STORY ID as `--parent`; TASK and BUG items must be children of a STORY.
+
+```bash
+{{pulse_command}} workgraph create \
+  --repo-root <repo> \
+  --kind TASK \
+  --parent <story-id> \
+  --title "<approved task title>" \
+  --label "<optional-label>" \
+  --risk "<optional-risk-flag>" \
+  --json
+```
+
+Use `--kind BUG` for bug items. Optional fields are available when approved: `--owner <owner>`, `--priority <n>`, repeated `--label <label>`, and repeated `--risk <flag>`.
+
+Read the JSON response and record the returned values before creating edges:
+
+- `item.id` — canonical work item ID to use instead of the plan temp ref (`W1`, `W2`, etc.)
+- `item.content_path` — canonical README path for the item
+- `item.verification_path` — canonical verification path for TASK/BUG items
+
+Maintain a temp-ref map while materializing, for example:
+
+```text
+W1 -> T-12, content_path=works/epics/<epic>/<story>/T-12-<slug>/README.md
+W2 -> T-13, content_path=works/epics/<epic>/<story>/T-13-<slug>/README.md
+```
+
+Do not invent IDs, slugs, or content paths. Use only the values returned by `workgraph create --json`.
+
+#### 2. Write TASK/BUG README content at returned paths
+
+After each create command returns, write or enrich the README at `item.content_path` using [task.readme.md](./task.readme.md) and the approved item information from `plan.md`. Preserve the returned path and ID. Do not write task README files before create returns.
+
+#### 3. Add approved dependency edges
+
+For each dependency edge row in `plan.md`, resolve temp refs through the temp-ref map, then run:
+
+```bash
+{{pulse_command}} workgraph dep add \
+  --repo-root <repo> \
+  <item-id> \
+  <depends-on-item-id> \
+  --json
+```
+
+Direction matters: `<item-id>` is blocked by `<depends-on-item-id>`. Use `dep add` only for blocking dependencies that affect readiness.
+
+Example: if `W2` depends on `W1`, and the temp-ref map is `W2 -> T-13`, `W1 -> T-12`, run:
+
+```bash
+{{pulse_command}} workgraph dep add --repo-root <repo> T-13 T-12 --json
+```
+
+#### 4. Add approved traceability links
+
+For each non-blocking traceability row in `plan.md`, resolve temp refs through the temp-ref map, then run:
+
+```bash
+{{pulse_command}} workgraph link add \
+  --repo-root <repo> \
+  <item-id> \
+  <linked-item-id> \
+  --json
+```
+
+Links are for related-item traceability only; they must not be used when readiness or execution order depends on another item.
+
+#### 5. Verify workgraph consistency
+
+After all approved items, README content, dependency edges, and links are materialized, run:
+
+```bash
+{{pulse_command}} workgraph doctor --repo-root <repo> --json
+```
+
+If doctor reports issues, repair only issues caused by the materialization pass. Do not create speculative items or unapproved edges while repairing.
+
+### Work item decomposition
+
+Plan must decompose the approved story into TASK/BUG items like a lightweight Jira plan:
+
+- each TASK/BUG has a clear title, purpose, file scope, verification expectation, and design decision refs
+- `depends_on` means one item cannot safely execute or complete until another item is closed
+- `link` means non-blocking traceability only; it must not affect readiness or execution order
+- item IDs and content paths are not hand-authored in `plan.md`; use placeholders until `{{pulse_command}} workgraph create ... --json` returns canonical values
+- before Gate 2 approval, record the intended TASK/BUG items and edge posture only
+- after Gate 2 approval, create items with `{{pulse_command}} workgraph create ... --json`, then add approved edges with `{{pulse_command}} workgraph dep add ... --json` and `{{pulse_command}} workgraph link add ... --json`
+- after materialization, run or request `{{pulse_command}} workgraph doctor --repo-root <repo> --json`
 
 ### Planning mode
 
@@ -149,7 +247,7 @@ Create or update:
 works/epics/<epic-id>-<epic-slug>/<story-id>-<story-slug>/plan.md
 ```
 
-Use [`plan.template.md`](./plan.template.md) as the starting structure for the story `plan.md`. Keep the artifact focused on implementation detail: what will be implemented, where, how, and how completion will be proven.
+Use [plan.template.md](./plan.template.md) as the starting structure for the story `plan.md`. Keep the artifact focused on implementation detail: what will be implemented, where, how, and how completion will be proven.
 
 Draft must include:
 
@@ -164,8 +262,8 @@ Draft must include:
 - sequencing/parallelization
 - scope and completion contract
 - validation plan
-- approved work item materialization posture
-- README enrichment posture when relevant
+- approved TASK/BUG items, dependency edges, and traceability links
+- README creation/enrichment posture when relevant
 - risks and repair posture
 
 ### Phase 2 — Self-review
@@ -181,8 +279,8 @@ Check `plan.md` before Gate 2 approval:
 - scope and completion contract defines the full plan boundary
 - validation plan includes proof strategy, test layers, fixtures, commands, expected results, and evidence to produce
 - docs impact covers `docs/ARCHITECTURE.md`, `docs/GLOSSARY.md`, `docs/decisions/`, and `docs/product/`
-- README enrichment reuses existing EPIC/STORY items and does not dominate the implementation plan
-- TASK/BUG materialization posture uses workgraph CLI only and avoids pre-approval mutations
+- README handling reuses existing EPIC/STORY items and does not dominate the implementation plan
+- TASK/BUG materialization posture includes planned `workgraph create`, `dep add`, and `link add` operations without pre-approval mutations
 - no product, architecture, schema, API, UX, migration, or verification-strategy decisions were added
 
 Fix issues once. If serious issues remain, stop and route as below.
@@ -191,7 +289,7 @@ Fix issues once. If serious issues remain, stop and route as below.
 
 Present `plan.md` for explicit Gate 2 approval.
 
-Gate 2 approves decomposition, docs impact, README enrichment, scope and completion boundary, and TASK/BUG materialization posture. It does not approve new solution decisions.
+Gate 2 approves decomposition, docs impact, README handling, scope and completion boundary, and TASK/BUG materialization posture. It does not approve new solution decisions.
 
 Before approval, `pulse:workflow plan` may produce or repair the approval-ready `plan.md`. It must not create TASK/BUG items, mutate workgraph metadata, mark the plan approved, or write task README files.
 
@@ -202,9 +300,9 @@ Continue only after explicit Gate 2 approval.
 After approval:
 
 1. mark `plan.md` approved
-2. enrich epic/story `README.md` content as approved, using the README templates only for the sections being enriched
+2. create or enrich epic/story `README.md` content as approved, using the README templates only for missing or enriched sections
 3. create approved TASK/BUG items through `{{pulse_command}} workgraph create ... --json`
-4. write task README content at each returned `content_path` using [`task.readme.md`](./task.readme.md)
+4. write task README content at each returned `content_path` using [task.readme.md](./task.readme.md)
 5. add approved dependency/link edges through `{{pulse_command}} workgraph dep/link ... --json`
 6. run or request `{{pulse_command}} workgraph doctor --repo-root <repo> --json`
 7. sync `.pulse/runtime/STATE.md` and `.pulse/runtime/state.json`
@@ -238,7 +336,7 @@ Before Gate 2 approval, a successful planning pass requires:
 
 - lowercase `plan.md` under the owning story
 - docs impact recorded for all required docs surfaces
-- epic/story README enrichment posture recorded
+- epic/story README creation/enrichment posture recorded
 - approved TASK/BUG materialization posture recorded without mutations
 - scope and completion contract
 - validation plan with observable evidence
@@ -249,7 +347,7 @@ Before Gate 2 approval, a successful planning pass requires:
 After explicit Gate 2 approval, a successful materialization pass requires:
 
 - approved lowercase `plan.md` under the owning story
-- epic/story README enrichment completed when approved
+- epic/story README creation/enrichment completed when approved
 - approved TASK/BUG materialization applied only through `{{pulse_command}} workgraph`
 - task README content written from returned `content_path` values
 - `.pulse/runtime` mirrors synchronized

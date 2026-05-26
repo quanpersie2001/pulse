@@ -206,18 +206,36 @@ Define how this approved plan will be proven complete. Keep validation planning 
 
 ## 13. Work Item Materialization
 
-Record the approved TASK/BUG items to create after explicit Gate 2 approval. Do not hand-author final IDs or content paths before the workgraph CLI returns them.
+Record the approved TASK/BUG items to create after explicit Gate 2 approval, similar to a Jira breakdown. Do not hand-author final IDs or content paths before the workgraph CLI returns them.
 
-| Kind | Title | Parent | Purpose | Files | Depends On | Links | Testing Mode | Design IDs | README Content |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| TASK / BUG | ... | `<story-id>` | ... | [`path`] | ... | ... | standard / tdd-required | D... | Create from [`task.readme.md`](./task.readme.md) after content path is returned |
+### Items to create after Gate 2 approval
 
-### Existing epic/story enrichment
+| Temp Ref | Kind | Title | Parent | Purpose | Files | Testing Mode | Design IDs | README Content |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| `W1` | TASK / BUG | ... | `<story-id>` | ... | [`path`] | standard / tdd-required | D... | Create from [task.readme.md](./task.readme.md) after content path is returned |
+
+### Dependency edges to add after item creation
+
+Use `depends_on` only when one item cannot safely execute or complete until another item is closed.
+
+| Item Temp Ref | Depends On Temp Ref / Existing ID | Reason |
+| --- | --- | --- |
+| `W2` | `W1` | ... |
+
+### Traceability links to add after item creation
+
+Use links for non-blocking traceability only; links must not affect readiness or execution order.
+
+| Item Temp Ref | Linked Temp Ref / Existing ID | Reason |
+| --- | --- | --- |
+| `W1` | `<existing-item-id>` | ... |
+
+### Existing epic/story README handling
 
 | Item | Content Path | Action | Reason |
 | --- | --- | --- | --- |
-| `<epic-id>` | `works/epics/<epic>/README.md` | Enrich / No change | ... |
-| `<story-id>` | `works/epics/<epic>/<story>/README.md` | Enrich / No change | ... |
+| `<epic-id>` | `works/epics/<epic>/README.md` | Create / Enrich / No change | ... |
+| `<story-id>` | `works/epics/<epic>/<story>/README.md` | Create / Enrich / No change | ... |
 
 ### Deferred items intentionally not created
 

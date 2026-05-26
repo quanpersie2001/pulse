@@ -56,7 +56,7 @@ This is not the path for trivial non-feature corrections already covered by ligh
 | Clarifying questions | Ask one question at a time to uncover purpose, constraints, and success criteria | Validated direction inputs |
 | Approaches | Present 2–3 viable directions with trade-offs | Chosen direction |
 | Brief sections | Present the work brief in sections and validate incrementally | Approved work direction |
-| Brief | Write the approved direction to `works/epics/<epic-id>-<epic-slug>/<story-id>-<story-slug>/work-brief.md` using [`work-brief.template.md`](work-brief.template.md) | Stable brief for downstream workflow |
+| Brief | Write the approved direction to `works/epics/<epic-id>-<epic-slug>/<story-id>-<story-slug>/work-brief.md` using [work-brief.template.md](work-brief.template.md) | Stable brief for downstream workflow |
 | Self-review | Run the work-brief reviewer and fix serious issues | Downstream-ready work brief |
 | User review gate | Wait for explicit approval on the written brief | Approved handoff artifact |
 | Handoff | Update runtime mirrors when recording posture and recommend `pulse:workflow explore` as the next manual step | Clean pipeline transition |
@@ -265,7 +265,7 @@ After the user approves the direction and brief content, write the work brief.
 
 **Path:** target story `work-brief.md` under `works/`, typically `works/epics/<epic-id>-<epic-slug>/<story-id>-<story-slug>/work-brief.md`
 
-**Template:** use [`work-brief.template.md`](work-brief.template.md) from this command directory.
+**Template:** use [work-brief.template.md](work-brief.template.md) from this command directory.
 
 Rules:
 - Derive the target story path from the confirmed intake boundary and its owning `intake.md`.
@@ -290,7 +290,7 @@ Do not write the work brief before the user approves the direction.
 
 ## Phase 7: Work-brief self-review
 
-After writing the work brief, run an independent review using [`work-brief-reviewer-prompt.md`](work-brief-reviewer-prompt.md).
+After writing the work brief, run an independent review using [work-brief-reviewer-prompt.md](work-brief-reviewer-prompt.md).
 
 Self-review must check for:
 - TODOs, placeholders, or incomplete sections
