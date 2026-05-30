@@ -1,4 +1,0 @@
-interface:
-  display_name: "Pulse Preflight"
-  short_description: "Validate tool and runtime readiness before Pulse flow"
-  default_prompt: "Run Pulse preflight for the current project. Validate required tools, determine pass, degraded, or fail status, choose the recommended execution mode, and write the tooling status before continuing."
