@@ -3,7 +3,7 @@
 /**
  * Purpose: Build Pulse session-start context for Claude Code hook/bootstrap messages.
  * Caller/flow: Used by runtime hooks to remind agents to run pulse:workflow use and surface current posture.
- * Reads/Writes: Reads workflow skill text, onboarding state, runtime status, memory markers, and GitNexus readiness; no writes.
+ * Reads/Writes: Reads workflow skill text, onboarding state, runtime status, and memory markers; no writes.
  * CLI args: None (module API).
  * Ownership: Advisory context builder only; does not mutate Pulse state or choose workflow gates.
  * Repo root rule: findPulseRepoRoot walks upward from the hook cwd and prefers .pulse/runtime/onboarding.json before .git.
@@ -18,7 +18,6 @@ import {
   getScriptDir,
   getWorkflowSkillPath,
 } from "../core/package-paths.mjs";
-import { readGitNexusReadiness } from "./gitnexus-readiness.mjs";
 import { readPulseStatus } from "./read-model.mjs";
 
 const SCRIPT_DIR = getScriptDir(import.meta.url);
@@ -152,15 +151,6 @@ export async function collectPulseSessionStartNotes(repoRoot, _options = {}) {
   if (fs.existsSync(criticalPatterns)) {
     notes.push(
       "If you move into planning, start with .pulse/memory/critical-patterns.md and then use runtime status recall pointers for narrower learnings, corrections, and ratchet rules.",
-    );
-  }
-
-  const gitNexusReadiness = await readGitNexusReadiness(repoRoot);
-  if (gitNexusReadiness.configured) {
-    notes.push(`gitnexus readiness: ${gitNexusReadiness.recommended_action}`);
-  } else {
-    notes.push(
-      "GitNexus is not configured for this repo/session, so architecture discovery should use grep/file inspection fallback unless the MCP server is added.",
     );
   }
 

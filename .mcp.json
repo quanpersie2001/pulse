@@ -1,17 +1,16 @@
 {
   "mcpServers": {
-    "gitnexus": {
-      "type": "stdio",
-      "command": "npx",
-      "args": ["-y", "gitnexus@latest", "mcp"]
-    },
     "exa": {
       "type": "http",
       "url": "https://mcp.exa.ai/mcp"
     },
     "playwright": {
       "command": "npx",
-      "args": ["-y", "@playwright/mcp@0.0.69", "--extension"]
+      "args": [
+        "-y",
+        "@playwright/mcp@0.0.69",
+        "--extension"
+      ]
     }
   }
 }

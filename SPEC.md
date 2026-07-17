@@ -51,7 +51,6 @@ The following are public Pulse skills, but they are **not** workflow phases and 
 - `pulse:dev-note`
 - `pulse:dev-note-distil`
 - `pulse:prompt-leverage`
-- `pulse:gitnexus`
 
 These skills belong to a different mental model than the happy-path workflow pipeline. They must remain directly invokable and must not be documented as required workflow stages.
 
@@ -119,7 +118,6 @@ If any useful behavior from `dream` survives, it must be absorbed deliberately e
 The following remain public standalone skills outside the workflow router:
 
 - `prompt-leverage`
-- `gitnexus`
 
 The following are removed from the target packaged surface:
 
@@ -331,7 +329,6 @@ pulse/
 |   |-- architecture-rescue/
 |   |-- dev-note/
 |   |-- dev-note-distil/
-|   |-- gitnexus/
 |   |-- prompt-leverage/
 |   `-- systematic-debug-fix/
 |-- tests/
@@ -441,7 +438,7 @@ If Pulse v2 later defines a track/ignore policy for downstream or self-hosted ta
 The skill classification is locked as follows:
 
 - the workflow pipeline collapses into `pulse:workflow`
-- `architecture-rescue`, `systematic-debug-fix`, `dev-note`, `dev-note-distil`, `prompt-leverage`, and `gitnexus` remain standalone public utility skills
+- `architecture-rescue`, `systematic-debug-fix`, `dev-note`, `dev-note-distil`, `prompt-leverage`
 - `bootstrap-project-context`, `dream`, `refresh-project-docs`, and `writing-pulse-skills` are removed from the target packaged surface
 - `skill-catalog.json` remains only a legacy artifact until cleanup and is not a source of truth from this phase onward
 
@@ -497,7 +494,6 @@ The following remain standalone public skills and are **not** workflow router su
 - `pulse:dev-note`
 - `pulse:dev-note-distil`
 - `pulse:prompt-leverage`
-- `pulse:gitnexus`
 
 Their source-of-truth behavior lives in their own skill directories, not under `skills/workflow/references/`.
 
@@ -520,7 +516,7 @@ The public surface maps from the old model as follows:
 - `dev-note-distil` → `pulse:dev-note-distil`
 - `bootstrap-project-context` → removed
 - `prompt-leverage` → `pulse:prompt-leverage`
-- `gitnexus` → `pulse:gitnexus`
+
 - `dream` → removed
 - `refresh-project-docs` → removed
 - `writing-pulse-skills` → removed
@@ -1545,7 +1541,7 @@ Deliver:
 - removal of legacy packaged workflow skills
 - removal of `dream`
 - removal of `skill-catalog.json`
-- retention of `prompt-leverage` and `gitnexus` as standalone public skills
+- retention of `prompt-leverage` as standalone public skills
 - removal of `refresh-project-docs` and `writing-pulse-skills` from the packaged public surface
 
 ### Phase 5 — docs, hooks, evals, and tests
@@ -1618,7 +1614,6 @@ Required public-surface tests:
 - `pulse:dev-note` remains packaged as a standalone skill, not a workflow command
 - `pulse:dev-note-distil` remains packaged as a standalone skill, not a workflow command
 - `pulse:prompt-leverage` remains packaged as a standalone skill, not a workflow command
-- `pulse:gitnexus` remains packaged as a standalone skill, not a workflow command
 - `refresh-project-docs` and `writing-pulse-skills` are not packaged as public skills
 
 ### 21.3 Unit coverage
@@ -1691,7 +1686,7 @@ Pulse v2 v1 is acceptable only when all of the following are true.
 
 - the only packaged workflow router skill is `pulse:workflow`
 - all supported workflow phases route through `pulse:workflow <command>`
-- `architecture-rescue`, `systematic-debug-fix`, `dev-note`, `dev-note-distil`, `prompt-leverage`, and `gitnexus` remain standalone public utility skills outside the workflow router
+- `architecture-rescue`, `systematic-debug-fix`, `dev-note`, `dev-note-distil`, `prompt-leverage`
 - `preflight`, `bootstrap-project-context`, `dream`, `refresh-project-docs`, and `writing-pulse-skills` are not shipped as packaged public surfaces
 - `skill-catalog.json` does not exist
 
@@ -1756,7 +1751,7 @@ Recommended implementation order:
 5. implement `works/` scaffolding and markdown templates
 6. move runtime state to `.pulse/runtime/` and collapse duplicated runtime mirrors
 7. update onboarding and readiness into `pulse:workflow onboard`
-8. update standalone utility surfaces so they remain separate from the workflow router, with `prompt-leverage` and `gitnexus` retained while `bootstrap-project-context`, `refresh-project-docs`, and `writing-pulse-skills` are removed
+8. update standalone utility surfaces so they remain separate from the workflow router, with `prompt-leverage` retained while `bootstrap-project-context`, `refresh-project-docs`, and `writing-pulse-skills` are removed
 9. rewire docs, hooks, examples, manifests, and evals away from the legacy workflow-skill surface
 10. write the manual migration blueprint
 11. add router, golden, unit, and integration tests, then remove remaining legacy assumptions
@@ -1768,7 +1763,7 @@ Recommended implementation order:
 This spec locks these implementation decisions for Pulse v2 v1:
 
 - `pulse:workflow` is the only packaged workflow router surface
-- `pulse:architecture-rescue`, `pulse:systematic-debug-fix`, `pulse:dev-note`, `pulse:dev-note-distil`, `pulse:prompt-leverage`, and `pulse:gitnexus` remain standalone public utility skills
+- `pulse:architecture-rescue`, `pulse:systematic-debug-fix`, `pulse:dev-note`, `pulse:dev-note-distil` remain standalone public utility skills
 - `pulse-work` is the runtime CLI name
 - `skills/workflow/SKILL.md` is the workflow router source of truth
 - workflow-command behavior lives under `skills/workflow/references/<command>/`
@@ -1788,7 +1783,7 @@ This spec locks these implementation decisions for Pulse v2 v1:
 - `HARNESS.md` is a workflow reference source, not a runtime template
 - `HARNESS_BACKLOG.md` is a template source materialized into `.pulse/harness/`
 - `preflight`, `dream`, and `skill-catalog.json` are removed from the target architecture
-- `prompt-leverage` and `gitnexus` remain standalone public skills outside the workflow router
+- `prompt-leverage` remain standalone public skills outside the workflow router
 - `bootstrap-project-context`, `refresh-project-docs`, and `writing-pulse-skills` are removed from the target packaged surface
 - Pulse v2 remains zero-service and repo-local
 

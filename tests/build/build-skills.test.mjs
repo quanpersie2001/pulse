@@ -108,7 +108,6 @@ test("runtime-facing source docs use the semantic runtime command placeholder", 
     "README.md",
     "docs/ARCHITECTURE.md",
     "docs/examples/golden-path.md",
-    "skills/gitnexus/SKILL.md",
     "skills/workflow/SKILL.md",
     "skills/workflow/references/execute/command.md",
     "skills/workflow/references/swarm/command.md",
@@ -128,7 +127,6 @@ test("runtime-facing source docs use the semantic runtime command placeholder", 
     "README.md",
     "docs/ARCHITECTURE.md",
     "docs/examples/golden-path.md",
-    "skills/gitnexus/SKILL.md",
     "skills/workflow/references/execute/command.md",
     "skills/workflow/references/swarm/command.md",
   ];
@@ -148,7 +146,6 @@ test("representative rendered docs contain concrete runtime commands", () => {
     const routerOverview = path.join(DIST_DIR, provider.configDir, "skills", WORKFLOW_SKILL_NAME, "SKILL.md");
     const commandDocs = [
       path.join(DIST_DIR, provider.configDir, "skills", WORKFLOW_SKILL_NAME, "references", "execute", "command.md"),
-      path.join(DIST_DIR, provider.configDir, "skills", "gitnexus", "SKILL.md"),
     ];
 
     const escapedPulseCommand = pulseCommand.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");

@@ -1,43 +1,160 @@
 # `pulse:workflow compound`
 
-If onboarding/readiness is missing, stale, or blocked (check `.pulse/runtime/tooling-status.json`), stop and invoke `pulse:workflow use` before continuing.
+Post-cycle learning pass that turns completed Pulse work into reusable memory for future planning and execution.
 
-Compounding turns completed Pulse work into reusable memory for future planning and execution.
+Compound answers:
 
-Compounding is the canonical post-cycle, machine-readable learning pass for completed Pulse work. Use `pulse:dev-note` or `pulse:dev-note-distil` for in-flight capture; use `compound` after outcomes are known. Do not turn `compound` into a generic runtime-consolidation route.
+> What durable, reusable knowledge emerged from this completed work slice, and where should it live so future planning and execution benefit?
 
-## When to Use
+Compound is the canonical post-cycle learning extraction. It produces machine-readable learnings, corrections, and ratchets. It does not consolidate runtime state, repair artifacts, or re-execute work.
 
-- after `pulse:workflow review` completes and the outcome is known
-- after execution, `pulse:architecture-rescue`, or `pulse:systematic-debug-fix` work reveals non-obvious reusable lessons
-- after abandoned or constrained work that still produced durable learning
+## Mission
 
-Skip only when no durable or reusable learning emerged.
+Extract, classify, and propagate durable knowledge from a completed work cycle so that future planning and execution can reuse proven patterns, avoid repeated mistakes, and honor earned non-regression rules.
 
-## Runtime Contract
+## Entry criteria
 
-All operational rules live in `runtime-appendix.md`. Treat that file as canonical for:
+Run `pulse:workflow compound` when:
 
-- context sources across `works/`, `.pulse/runtime/*`, `.pulse/workgraph/*`, and verification artifacts
-- 3-stream analysis (`pattern`, `decision`, `failure`)
-- synthesis quality bar (`applicable-when` must stay specific)
-- propagation taxonomy and routing destinations
-- promotion rules for `.pulse/memory/critical-patterns.md`
-- durable memory capture behavior in `.pulse/memory/*`
-- state updates and handoff outputs
+- `pulse:workflow review` has completed and the outcome is known
+- the completed work produced non-obvious reusable lessons, or the user explicitly requests a learning pass
+- work artifacts, verification evidence, and review findings are available for analysis
 
-## Minimum Flow
+Do not run when:
 
-1. Gather context from work artifacts, verification evidence, runtime state, and workgraph state.
-2. Run three analysis streams and collect outputs.
-3. Synthesize one learnings file at `.pulse/memory/learnings/YYYYMMDD-<slug>.md`.
-4. Classify each learning by propagation type and route to destination.
-5. Promote only truly global-critical learnings.
-6. Update `.pulse/runtime/STATE.md` and `.pulse/runtime/state.json`.
+- execution is still in flight
+- review is incomplete or ambiguous
+- no durable or reusable learning emerged (skip with explicit note)
 
-## References
+If entry criteria fail, route precisely:
 
-- `runtime-appendix.md` — canonical runtime contract
-- `learnings-template.md` — learnings file structure
-- `analysis-prompts.md` — prompts for pattern/decision/failure analysis
-- `corrections-and-ratchets.md` — correction and ratchet file structures
+- review incomplete → `pulse:workflow review`
+- execution still in flight → `pulse:workflow execute` or `pulse:workflow swarm`
+- runtime/session posture unclear → `pulse:workflow use`
+
+## Command-local references
+
+- [runtime-appendix.md](runtime-appendix.md) — context sources, analysis stream prompts, synthesis quality bar, propagation taxonomy, promotion rules, memory destinations, and state update contract
+- [learnings-template.md](learnings-template.md) — learnings file structure and examples
+- [analysis-prompts.md](analysis-prompts.md) — prompts for pattern, decision, and failure analysis streams
+- [corrections-and-ratchets.md](corrections-and-ratchets.md) — correction and ratchet file structures
+
+## Phase flow
+
+```text
+Gather Context -> Analyze (3 streams) -> Synthesize Learnings -> Classify & Route -> Promote Critical -> Update State
+```
+
+### Phase 1 — Gather context
+
+Read work artifacts, verification evidence, runtime state, and workgraph metadata for the completed slice.
+
+Minimum reads:
+
+- story `README.md`, `work-brief.md`, `discovery.md`, `solution-design.md`
+- task/bug `README.md` and `verification.md`
+- `.pulse/runtime/STATE.md` and `.pulse/runtime/state.json`
+- `.pulse/workgraph/items.jsonl` or workgraph views when structure clarifies the completed slice
+- review findings and relevant verification artifacts
+
+Fallback if work artifacts are partial: session summary plus recent diff.
+
+Context source details are in [runtime-appendix.md](runtime-appendix.md#gather-context).
+
+### Phase 2 — Analyze (3 streams)
+
+Run three analysis streams in parallel and collect outputs:
+
+1. **Pattern extractor** — reusable code, architecture, process, and integration patterns
+2. **Decision analyst** — good calls, bad calls, surprises, and tradeoffs
+3. **Failure analyst** — bugs, blockers, wasted effort, and missing prerequisites
+
+Use [analysis-prompts.md](analysis-prompts.md) for stream prompts.
+
+### Phase 3 — Synthesize learnings
+
+Write one learnings file per completed feature or work slice:
+
+```text
+.pulse/memory/learnings/YYYYMMDD-<slug>.md
+```
+
+Use [learnings-template.md](learnings-template.md) for file structure.
+
+Synthesis quality bar:
+
+- each learning must have `domain`, `severity`, `category`, and `applicable-when`
+- `applicable-when` must name a concrete technical trigger, not a lifecycle phase
+- reject vague or non-actionable guidance
+
+Quality details are in [runtime-appendix.md](runtime-appendix.md#synthesis-quality-bar).
+
+### Phase 4 — Classify and route
+
+Classify each learning into exactly one propagation route:
+
+| Route | Meaning | Destination |
+|-------|---------|-------------|
+| `global-critical` | cross-feature planner-visible rule | `.pulse/memory/critical-patterns.md` (candidate) |
+| `correction` | tactical guardrail for repeated/expensive mistake | `.pulse/memory/corrections/` |
+| `ratchet` | non-regression must-check from repeated/costly miss | `.pulse/memory/ratchet/` |
+| `work-item-local` | attach to future work via item `memory_hooks.learnings` | learnings file only |
+| `planner-only` | planning/decomposition heuristic | learnings file only |
+
+Propagation behavior:
+
+- planners read `global-critical` directly
+- planners attach `work-item-local`, `correction`, and `ratchet` refs into future item `memory_hooks` when triggers match
+- workers consume only routed memory hooks plus approved handoff context, not the whole memory corpus
+
+Use [corrections-and-ratchets.md](corrections-and-ratchets.md) for correction and ratchet file structures.
+
+### Phase 5 — Promote critical learnings
+
+Promote to `.pulse/memory/critical-patterns.md` only when all are true:
+
+- cross-feature value
+- meaningful waste prevented if known earlier
+- generalizable beyond a narrow implementation detail
+- concise enough for a planner-read file
+- not just work-item-local implementation guidance
+
+Append promoted entries with a link back to the full learnings file.
+
+### Phase 6 — Update state
+
+Update `.pulse/runtime/STATE.md` and `.pulse/runtime/state.json` with:
+
+- feature or completed slice
+- date
+- learnings file path
+- count of critical promotions
+- count of work-item-local learnings
+
+Output a handoff summary:
+
+- learnings path
+- critical promotion count
+- work-item-local count
+- statement that future planning now has expanded memory
+
+State update details are in [runtime-appendix.md](runtime-appendix.md#state-update).
+
+## Gate posture
+
+Compound is post-cycle. It does not approve or block execution, review, or merge.
+
+Compound produces memory artifacts that inform future `plan` and `validate` cycles. It does not change the completed work, reopen closed items, or alter workgraph metadata.
+
+## Recommended next
+
+After compound completes, the normal next command is `pulse:workflow plan` for the next work cycle, or `pulse:workflow use` to end the session.
+
+## Red flags
+
+- skipping compounding without artifact review
+- promoting too many narrow items to `global-critical`
+- writing generic non-actionable learnings
+- fabricating learnings instead of reporting none when nothing durable emerged
+- assuming workers should read the whole memory corpus directly
+- not flagging propagation failures when relevant item `memory_hooks` were never attached

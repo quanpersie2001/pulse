@@ -212,7 +212,7 @@ Record the approved TASK/BUG items to create after explicit Gate 2 approval, sim
 
 | Temp Ref | Kind | Title | Parent | Purpose | Files | Testing Mode | Design IDs | README Content |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| `W1` | TASK / BUG | ... | `<story-id>` | ... | [`path`] | standard / tdd-required | D... | Create from [task.readme.md](./task.readme.md) after content path is returned |
+| `W1` | TASK / BUG | ... | `<story-id>` | ... | [`path`] | standard / tdd-required | D... | Create from [task.readme.md](../../templates/task.readme.md) after content path is returned |
 
 ### Dependency edges to add after item creation
 

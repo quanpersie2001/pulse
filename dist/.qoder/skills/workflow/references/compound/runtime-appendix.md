@@ -1,72 +1,55 @@
-# Compounding Runtime Appendix (Canonical)
+# `pulse:workflow compound` Runtime Appendix
 
-This appendix defines the operational contract for compounding.
+Use this appendix for operational detail referenced by `command.md`. The command file owns the phase flow; this file should stay compact and avoid repeating the procedure.
 
-## 1) Gather Context
+## Gather context
 
-Read:
+Read from these sources for the completed slice:
 
-- relevant work artifacts under `works/epics/**`, especially:
-  - story `README.md`, `work-brief.md`, `discovery.md`, and `solution-design.md`
-  - task / bug `README.md` and `verification.md`
-  - `approach.md`, `execplan.md`, `validation.md`, `lifecycle-summary.md`, and `references/` when present
-- `.pulse/runtime/STATE.md`
-- `.pulse/runtime/state.json`
-- `.pulse/runtime/handoffs/manifest.json` (+ relevant owner files)
-- `.pulse/workgraph/items.jsonl`
-- `.pulse/workgraph/items.jsonl` and `.pulse/workgraph/views/graph.json` when workgraph structure clarifies the completed slice
-- review findings, note / note-distill outputs, and relevant verification artifacts
+- story artifacts: `README.md`, `work-brief.md`, `discovery.md`, `solution-design.md`
+- task/bug artifacts: `README.md`, `verification.md`
+- optional when present: `approach.md`, `execplan.md`, `validation.md`, `lifecycle-summary.md`, `references/`
+- `.pulse/runtime/STATE.md` and `.pulse/runtime/state.json`
+- `.pulse/runtime/handoffs/manifest.json` and relevant owner handoff files
+- `.pulse/workgraph/items.jsonl` or `.pulse/workgraph/views/graph.json`
+- review findings, note outputs, and relevant verification artifacts
 
-Fallback if work artifacts are partial: session summary + recent diff.
+Fallback if work artifacts are partial: session summary plus recent diff.
 
-## 2) Analysis Streams (Pattern / Decision / Failure)
+## Analysis streams
 
-Run three analysis streams and write temporary outputs:
+Three streams run in parallel. Use [analysis-prompts.md](analysis-prompts.md) for prompt contracts.
 
-- pattern extractor -> `/tmp/compounding-patterns.md`
-- decision analyst -> `/tmp/compounding-decisions.md`
-- failure analyst -> `/tmp/compounding-failures.md`
+| Stream | Output file | Focus |
+|--------|-------------|-------|
+| Pattern extractor | `/tmp/compounding-patterns.md` | reusable code, architecture, process, integration patterns |
+| Decision analyst | `/tmp/compounding-decisions.md` | good calls, bad calls, surprises, tradeoffs |
+| Failure analyst | `/tmp/compounding-failures.md` | bugs, blockers, wasted effort, missing prerequisites |
 
-Use `references/analysis-prompts.md` for prompt contracts.
+## Synthesis quality bar
 
-## 3) Synthesis Quality Bar
-
-For each learning, include:
+Each learning entry must include:
 
 - `domain`
 - `severity` (`critical` or `standard`)
 - `category` (`pattern` | `decision` | `failure`)
-- `applicable-when` (specific technical trigger)
+- `applicable-when` — a concrete technical trigger, not a lifecycle phase
 
-Reject vague guidance. `applicable-when` must identify a concrete trigger state, not a lifecycle phase.
+Reject vague guidance. If `applicable-when` cannot name a specific trigger state, the learning is not reusable.
 
-Write one file per completed feature or work slice:
-
-- `.pulse/memory/learnings/YYYYMMDD-<slug>.md`
-
-Use `references/learnings-template.md`.
-
-## 4) Propagation Taxonomy (must preserve)
+## Propagation taxonomy
 
 Classify each learning into exactly one route:
 
-- `global-critical`
-  - planner-visible global rule
-  - candidate for `.pulse/memory/critical-patterns.md`
-- `correction`
-  - tactical guardrail for a repeated or expensive mistake
-  - write under `.pulse/memory/corrections/`
-- `ratchet`
-  - non-regression must-check from repeated or costly misses
-  - write under `.pulse/memory/ratchet/`
-- `work-item-local`
-  - attach to future work through item `memory_hooks.learnings`
-- `planner-only`
-  - planning/decomposition heuristic; not worker default context
+- `global-critical` — cross-feature planner-visible rule; candidate for `.pulse/memory/critical-patterns.md`
+- `correction` — tactical guardrail for a repeated or expensive mistake; write under `.pulse/memory/corrections/`
+- `ratchet` — non-regression must-check from repeated or costly miss; write under `.pulse/memory/ratchet/`
+- `work-item-local` — attach to future work through item `memory_hooks.learnings`
+- `planner-only` — planning/decomposition heuristic; not worker default context
 
-## 5) Promotion Rules for Global-Critical
+## Promotion rules
 
-Promote only when all are true:
+Promote to `.pulse/memory/critical-patterns.md` only when all are true:
 
 - cross-feature value
 - meaningful waste prevented if known earlier
@@ -74,22 +57,24 @@ Promote only when all are true:
 - concise enough for a planner-read file
 - not just work-item-local implementation guidance
 
-Append promoted entries to `.pulse/memory/critical-patterns.md` with a link back to the full learning file.
+Append promoted entries with a link back to the full learnings file.
 
-## 6) Durable Memory Destinations and Meanings (must preserve)
+## Memory destinations
 
-- `.pulse/memory/learnings/` -> per-feature durable learning bundle
-- `.pulse/memory/critical-patterns.md` -> compact planner-read global-critical index
-- `.pulse/memory/corrections/` -> tactical corrective rules for repeated mistakes
-- `.pulse/memory/ratchet/` -> trigger-bound must-check non-regression rules
+| Destination | Meaning |
+|-------------|---------|
+| `.pulse/memory/learnings/` | per-feature durable learning bundle |
+| `.pulse/memory/critical-patterns.md` | compact planner-read global-critical index |
+| `.pulse/memory/corrections/` | tactical corrective rules for repeated mistakes |
+| `.pulse/memory/ratchet/` | trigger-bound must-check non-regression rules |
 
 Propagation behavior:
 
-- planners read global-critical directly
-- planners attach work-item-local / correction / ratchet refs into future item `memory_hooks` when triggers match
+- planners read `global-critical` directly
+- planners attach `work-item-local` / `correction` / `ratchet` refs into future item `memory_hooks` when triggers match
 - workers consume only routed memory hooks plus approved handoff context, not the whole memory corpus
 
-## 7) State Update + Handoff
+## State update
 
 Update `.pulse/runtime/STATE.md` and `.pulse/runtime/state.json` with:
 
@@ -105,12 +90,3 @@ Output handoff summary:
 - critical promotion count
 - work-item-local count
 - statement that future planning now has expanded memory
-
-## 8) Red Flags
-
-- skipping compounding without artifact review
-- promoting too many narrow items to global-critical
-- writing generic non-actionable learnings
-- fabricating learnings instead of reporting none
-- assuming workers should read the whole memory corpus directly
-- not flagging propagation failures when relevant item `memory_hooks` were never attached

@@ -1,10 +1,10 @@
 import fs from "node:fs";
 import path from "node:path";
 
-import { getScriptDir, getWorkflowWorksTemplateDir } from "../core/package-paths.mjs";
+import { getScriptDir, getWorkflowTemplateDir } from "../core/package-paths.mjs";
 import { moveItemDirectory, toFilesystemPath } from "./paths.mjs";
 
-const TEMPLATE_DIR = getWorkflowWorksTemplateDir(getScriptDir(import.meta.url));
+const TEMPLATE_DIR = getWorkflowTemplateDir(getScriptDir(import.meta.url));
 
 function resolveTemplateDir() {
   if (!fs.existsSync(TEMPLATE_DIR)) {
@@ -27,12 +27,12 @@ function renderTemplate(template, item) {
 function readmeTemplateForKind(kind) {
   switch (kind) {
     case "EPIC":
-      return readTemplateFile("epic-README.md");
+      return readTemplateFile("epic.readme.md");
     case "STORY":
-      return readTemplateFile("story-README.md");
+      return readTemplateFile("story.readme.md");
     case "TASK":
     case "BUG":
-      return readTemplateFile("task-README.md");
+      return readTemplateFile("task.readme.md");
     default:
       throw new Error(`Unsupported item kind: ${kind}`);
   }

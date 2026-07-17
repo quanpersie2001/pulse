@@ -96,11 +96,11 @@ Each required docs surface must still record an action, rationale, and validatio
 
 Intake creates or matches EPIC/STORY boundaries and writes `intake.md`. Plan handles README content without creating duplicate work items:
 
-- create epic `README.md` from [epic.readme.md](./epic.readme.md) when the EPIC exists but README content is missing
-- enrich existing epic `README.md` from [epic.readme.md](./epic.readme.md) when useful content already exists
-- create story `README.md` from [story.readme.md](./story.readme.md) when the STORY exists but README content is missing
-- enrich existing story `README.md` from [story.readme.md](./story.readme.md) when useful content already exists
-- create TASK/BUG README content from [task.readme.md](./task.readme.md) only after `workgraph create --json` returns the canonical `content_path`
+- create epic `README.md` from [epic.readme.md](../../templates/epic.readme.md) when the EPIC exists but README content is missing
+- enrich existing epic `README.md` from [epic.readme.md](../../templates/epic.readme.md) when useful content already exists
+- create story `README.md` from [story.readme.md](../../templates/story.readme.md) when the STORY exists but README content is missing
+- enrich existing story `README.md` from [story.readme.md](../../templates/story.readme.md) when useful content already exists
+- create TASK/BUG README content from [task.readme.md](../../templates/task.readme.md) only after `workgraph create --json` returns the canonical `content_path`
 
 Do not create duplicate EPIC/STORY items when intake already established the boundary. README creation or enrichment is content handling, not boundary creation.
 
@@ -148,7 +148,7 @@ Do not invent IDs, slugs, or content paths. Use only the values returned by `wor
 
 #### 2. Write TASK/BUG README content at returned paths
 
-After each create command returns, write or enrich the README at `item.content_path` using [task.readme.md](./task.readme.md) and the approved item information from `plan.md`. Preserve the returned path and ID. Do not write task README files before create returns.
+After each create command returns, write or enrich the README at `item.content_path` using [task.readme.md](../../templates/task.readme.md) and the approved item information from `plan.md`. Preserve the returned path and ID. Do not write task README files before create returns.
 
 #### 3. Add approved dependency edges
 
@@ -302,7 +302,7 @@ After approval:
 1. mark `plan.md` approved
 2. create or enrich epic/story `README.md` content as approved, using the README templates only for missing or enriched sections
 3. create approved TASK/BUG items through `node .trae-cn/skills/workflow/scripts/pulse.mjs workgraph create ... --json`
-4. write task README content at each returned `content_path` using [task.readme.md](./task.readme.md)
+4. write task README content at each returned `content_path` using [task.readme.md](../../templates/task.readme.md)
 5. add approved dependency/link edges through `node .trae-cn/skills/workflow/scripts/pulse.mjs workgraph dep/link ... --json`
 6. run or request `node .trae-cn/skills/workflow/scripts/pulse.mjs workgraph doctor --repo-root <repo> --json`
 7. sync `.pulse/runtime/STATE.md` and `.pulse/runtime/state.json`

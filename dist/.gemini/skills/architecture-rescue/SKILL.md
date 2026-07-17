@@ -40,9 +40,6 @@ For the target scope (whole repo or named subsystem), read:
 1. project operating docs (`CLAUDE.md`, `AGENTS.md`, and nearby module docs)
 2. relevant `history/<feature>/CONTEXT.md` decisions when present
 3. `.pulse/memory/*` entries that apply to architecture constraints, incidents, or non-regression rules
-4. `pulse:gitnexus` and GitNexus context if available
-
-If GitNexus is configured, prefer it for topology, process flow, and impact/breadth evidence before manual grep.
 
 ## Architecture lens
 

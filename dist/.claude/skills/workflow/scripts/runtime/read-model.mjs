@@ -1,7 +1,7 @@
 /**
  * Purpose: Build structured Pulse status payload consumed by scout output.
  * Caller/flow: Used by cli/status.mjs and onboarding/readiness flows.
- * Reads/Writes: Reads runtime state, handoffs, reservations, memory, and gitnexus readiness; no writes.
+ * Reads/Writes: Reads runtime state, handoffs, reservations, and memory; no writes.
  * CLI args: None (module API).
  * Ownership: Status aggregation only; does not own rendering or direct CLI I/O.
  * Repo root rule: Caller provides repo root and module reads within that boundary.
@@ -24,7 +24,6 @@ import {
   summarizeCurrentFeature,
   summarizeRuntimeSnapshot,
 } from "./derivations.mjs";
-import { readGitNexusReadiness } from "./gitnexus-readiness.mjs";
 import { summarizeHandoffManifest } from "./handoffs.mjs";
 import { buildSessionLoad } from "./session-load.mjs";
 
@@ -49,8 +48,6 @@ export async function readPulseStatus(repoRoot) {
   const derivedRuntime = derivePulseRuntimeArtifacts(repoRoot);
   const handoffManifest = readJsonIfExists(paths.handoffManifest);
   const sessionLoad = buildSessionLoad(repoRoot);
-
-  const gitNexusReadiness = await readGitNexusReadiness(repoRoot);
 
   const stateJsonSummary = {
     exists: Boolean(stateJson),
@@ -94,7 +91,6 @@ export async function readPulseStatus(repoRoot) {
     session_load: sessionLoad,
     handoff_manifest: handoffManifestSummary,
     critical_patterns_exists: fs.existsSync(paths.criticalPatterns),
-    gitnexus_readiness: gitNexusReadiness,
     memory_recall: null,
     next_reads: [],
     recommended_actions: [],

@@ -62,7 +62,6 @@ function buildPulseRuntimeArtifacts(repoRoot) {
     runtime_snapshot: summarizeRuntimeSnapshot(null),
     reservations: summarizeReservationStatusForState(repoRoot),
     handoff_manifest: summarizeHandoffManifest(handoffManifest),
-    gitnexus_readiness: null,
     critical_patterns_exists: fs.existsSync(paths.criticalPatterns),
     memory_recall: null,
     next_reads: [],

@@ -22,8 +22,7 @@
     "./skills/systematic-debug",
     "./skills/dev-note",
     "./skills/dev-note-distil",
-    "./skills/prompt-leverage",
-    "./skills/gitnexus"
+    "./skills/prompt-leverage"
   ],
   "mcpServers": "./.mcp.json"
 }

@@ -28,7 +28,7 @@ Pulse ships one public workflow router skill, **`pulse:workflow`**, plus package
 
 Workflow subcommands are: onboard, explore, brainstorm, plan, validate, swarm, execute, review, and compound. Runtime status, readiness, and reservations run through **`{{pulse_command}}`**, which renders to provider-specific `node <provider-skills-root>/workflow/scripts/pulse.mjs ...` commands. Canonical state lives in **`.pulse/runtime/`** and canonical metadata in **`.pulse/workgraph/items.jsonl`**.
 
-Standalone utility skills remain packaged separately for focused non-router tasks: `architecture-rescue`, `systematic-debug-fix`, `dev-note`, `dev-note-distil`, `prompt-leverage`, and `gitnexus`.
+Standalone utility skills remain packaged separately for focused non-router tasks: `architecture-rescue`, `systematic-debug-fix`, `dev-note`, `dev-note-distil`, `prompt-leverage`.
 
 ## The Delivery Chain
 

@@ -22,7 +22,6 @@ Plan này được cập nhật theo các quyết định mới đã chốt:
   - `pulse:dev-note`
   - `pulse:dev-note-distil`
   - `pulse:prompt-leverage`
-  - `pulse:gitnexus`
 - `pulse-work` là **runtime CLI** riêng cho workgraph/runtime state, không phải public conversational surface.
 - `preflight` bị loại bỏ; bootstrap/readiness được hấp thụ vào `pulse:workflow onboard`.
 - `dream` bị loại bỏ khỏi packaged public surface.
@@ -65,7 +64,6 @@ Các skill sau vẫn là public surface, nhưng **không thuộc workflow pipeli
 - `pulse:dev-note`
 - `pulse:dev-note-distil`
 - `pulse:prompt-leverage`
-- `pulse:gitnexus`
 
 Lý do:
 
@@ -194,7 +192,6 @@ pulse/
 |   |-- dream/
 |   |-- executing/
 |   |-- exploring/
-|   |-- gitnexus/
 |   |-- planning/
 |   |-- preflight/
 |   |-- prompt-leverage/
@@ -349,7 +346,6 @@ pulse/
 |   |-- architecture-rescue/
 |   |-- dev-note/
 |   |-- dev-note-distil/
-|   |-- gitnexus/
 |   |-- prompt-leverage/
 |   `-- systematic-debug-fix/
 |-- tests/
@@ -370,7 +366,7 @@ pulse/
 - workflow commands đi theo command modules ở `skills/workflow/references/<command>/`
 - runtime source canonical nằm trong workflow skill tree ở `skills/workflow/scripts/runtime/`
 - `.pulse/scripts/` chỉ là installed mirror cho runtime-facing scripts
-- standalone public skills vẫn tồn tại ở `skills/architecture-rescue/`, `skills/systematic-debug-fix/`, `skills/dev-note/`, `skills/dev-note-distil/`, `skills/prompt-leverage/`, và `skills/gitnexus/`
+- standalone public skills vẫn tồn tại ở `skills/architecture-rescue/`, `skills/systematic-debug-fix/`, `skills/dev-note/`, `skills/dev-note-distil/`, `skills/prompt-leverage/`
 - `refresh-project-docs` và `writing-pulse-skills` bị loại khỏi target packaged surface thay vì được giữ như một lớp utility riêng
 - `HARNESS.md` là reference source, còn `HARNESS_BACKLOG.md` là template source
 - brainstorm là story-scoped; output của nó là `SPEC.md` dưới `works/`, còn story `README.md` vẫn là description artifact riêng
@@ -417,7 +413,6 @@ Public standalone utility surface:
 - `pulse:dev-note`
 - `pulse:dev-note-distil`
 - `pulse:prompt-leverage`
-- `pulse:gitnexus`
 
 Removed legacy utility surface:
 
@@ -455,7 +450,6 @@ Standalone utility mapping:
 - `dev-note-distil` → `pulse:dev-note-distil`
 - `bootstrap-project-context` → remove
 - `prompt-leverage` → `pulse:prompt-leverage`
-- `gitnexus` → `pulse:gitnexus`
 
 Removed:
 
@@ -527,7 +521,6 @@ Các skill ngoài workflow router không nên bị gom chung vào một nhóm m�
 Keep như standalone public skills:
 
 - `prompt-leverage`
-- `gitnexus`
 
 Remove khỏi target packaged surface:
 
@@ -536,7 +529,7 @@ Remove khỏi target packaged surface:
 
 Kết luận:
 
-- `prompt-leverage` và `gitnexus` phải ở lại dưới `skills/` như standalone public skills
+- `prompt-leverage` phải ở lại dưới `skills/` như standalone public skills
 - `refresh-project-docs` và `writing-pulse-skills` phải bị loại khỏi packaged surface
 
 ---
@@ -737,7 +730,6 @@ Thu gọn workflow surface về `pulse:workflow` trong khi giữ các standalone
 - `skills/architecture-rescue/**`
 - `skills/dev-note/**`
 - `skills/dev-note-distil/**`
-- `skills/gitnexus/**`
 - `skills/prompt-leverage/**`
 - `skills/systematic-debug-fix/**`
 - `skills/refresh-project-docs/**`
@@ -746,7 +738,7 @@ Thu gọn workflow surface về `pulse:workflow` trong khi giữ các standalone
 ### Việc cần làm
 
 1. migrate nội dung workflow skills cũ sang `skills/workflow/references/`
-2. giữ `architecture-rescue`, `systematic-debug-fix`, `dev-note`, `dev-note-distil`, `prompt-leverage`, và `gitnexus` thành standalone public skills
+2. giữ `architecture-rescue`, `systematic-debug-fix`, `dev-note`, `dev-note-distil`, `prompt-leverage` thành standalone public skills
 3. update các standalone skills để docs của chúng không giả định chúng là workflow phases
 4. xóa các workflow skill public cũ sau khi router mới đã usable
 5. xóa hẳn `dream`
@@ -795,7 +787,6 @@ Thu gọn workflow surface về `pulse:workflow` trong khi giữ các standalone
    - `pulse:dev-note`
    - `pulse:dev-note-distil`
    - `pulse:prompt-leverage`
-   - `pulse:gitnexus`
 5. bỏ `bv`-specific hook guard
 6. update tests cho:
    - workflow router
@@ -932,7 +923,6 @@ Cần bảo đảm ít nhất:
 - `pulse:dev-note` vẫn là standalone public skill hợp lệ
 - `pulse:dev-note-distil` vẫn là standalone public skill hợp lệ
 - `pulse:prompt-leverage` vẫn là standalone public skill hợp lệ
-- `pulse:gitnexus` vẫn là standalone public skill hợp lệ
 - docs/help/manifests không mô tả các skill này như workflow phases
 
 ### 9.3 Runtime / workgraph tests
@@ -1039,7 +1029,7 @@ Plan này được coi là đạt mục tiêu khi repo có thể chứng minh đ
 - workflow command behavior được tổ chức rõ theo `skills/workflow/references/<command>/`
 - `pulse-work` tồn tại như runtime CLI riêng, có vị trí rõ ràng ở `skills/workflow/scripts/runtime/`
 - bootstrap bằng `pulse:workflow onboard`, không cần `pulse:preflight` hay `pulse:using-pulse`
-- `architecture-rescue`, `systematic-debug-fix`, `dev-note`, `dev-note-distil`, `prompt-leverage`, và `gitnexus` vẫn tồn tại như standalone public skills
+- `architecture-rescue`, `systematic-debug-fix`, `dev-note`, `dev-note-distil`, `prompt-leverage` vẫn tồn tại như standalone public skills
 - `dream`, `refresh-project-docs`, và `writing-pulse-skills` không còn tồn tại như packaged public skills
 - `skill-catalog.json` không còn tồn tại
 - `HARNESS.md` nằm đúng ở `skills/workflow/references/HARNESS.md`
@@ -1057,6 +1047,6 @@ Hướng mới của Pulse không còn là “một router cho mọi capability�
 - **một nhóm standalone public skills cho rescue/debug/note/support utilities**
 - **runtime thật tách ra thành `pulse-work` + `.pulse/workgraph` + `.pulse/runtime`**
 - **loại bỏ các lớp dư thừa như `preflight`, `dream`, `skill-catalog.json`**
-- **giữ `prompt-leverage` và `gitnexus` như standalone public skills và loại `bootstrap-project-context`, `refresh-project-docs`, `writing-pulse-skills` khỏi packaged surface**
+- **giữ `prompt-leverage` như standalone public skills và loại `bootstrap-project-context`, `refresh-project-docs`, `writing-pulse-skills` khỏi packaged surface**
 
 Đây là hướng sạch hơn về mental model: workflow là workflow, utility là utility, runtime là runtime.

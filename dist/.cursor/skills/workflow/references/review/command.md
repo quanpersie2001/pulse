@@ -1,147 +1,212 @@
 # `pulse:workflow review`
 
-Final quality-gate manual for assessing completed current-slice work before release/merge closeout.
+Gate 4 quality-review manual for assessing a completed Gate 3 execution slice before merge, release, closeout, or compounding.
 
-This phase is independent verification, not trust-based confirmation of execution claims.
+Review answers:
+
+> Did the completed current slice satisfy the approved plan/design, produce trustworthy evidence, surface implementation gaps, and avoid blocking quality risks?
+
+Review is independent verification. It does not trust execution claims, silently fix findings, reopen design choices, or approve merge/release by implication.
 
 ## Mission
 
-Determine whether delivered scope is correct, safe, and complete against approved boundaries and evidence standards, then enforce Gate 4.
-
-Review must evaluate:
-
-- correctness against approved boundaries
-- regression risk and missing coverage
-- contract and policy violations
-- evidence freshness and reproducibility
-- severity-classified findings
+Evaluate completed `TASK`/`BUG` work against approved story boundaries, item contracts, verification evidence, implementation gap logs, and the actual change set; classify findings; create explicit remediation items when needed; and enforce Gate 4.
 
 P1 findings or missing required evidence block Gate 4 approval.
 
 ## Entry criteria
 
-Run `pulse:workflow review` when:
+Run `pulse:workflow review` only when all are true:
 
-- execution for the approved current slice is complete
-- verification evidence exists for all claimed completed work
-- no upstream gate ambiguity remains for active slice
+- Gate 3-approved current-slice execution is complete
+- no worker, reservation, or commit queue remains in flight for the slice
+- every claimed completed `TASK`/`BUG` is `CLOSED` in the workgraph
+- each completed item has fresh verification evidence at its `verification_path`
+- any `implement-gap.md` created during execution is present and surfaced
+- runtime state, workgraph metadata, and story artifacts agree on the active epic/story/slice
 
-Do not run while execution is still in flight, boundaries are disputed, or onboarding/readiness is stale.
+Do not run while execution is still active, item boundaries are disputed, Gate 3 is ambiguous, or onboarding/runtime posture is stale.
 
-## Required inputs
+If entry fails, reroute precisely:
 
-Read before starting:
+| Failure | Reroute |
+| --- | --- |
+| Runtime/session posture unclear or stale | `pulse:workflow use` |
+| Execution still in flight or evidence incomplete | `pulse:workflow execute` or `pulse:workflow swarm` |
+| Item contract or slice boundary mismatch | `pulse:workflow plan` |
+| Approved solution/design mismatch discovered before review can proceed | `pulse:workflow design` |
 
-- active current-slice artifacts under `works/`
-- `.pulse/runtime/state.json` and `.pulse/runtime/STATE.md`
-- lifecycle summary for the active story/slice when present
-- completed change set and verification evidence artifacts
-- minimal existing repo docs or code paths when needed for correctness checks
+## Command-local references
 
-## Runtime contract
+- [runtime-appendix.md](runtime-appendix.md) — concise review checklists for severity, evidence, implementation gaps, findings, Gate 4, UAT, closeout, and handoff
+- [review-agent-prompts.md](review-agent-prompts.md) — focused specialist review prompts
+- [review-item-template.md](review-item-template.md) — remediation item shape for accepted findings
 
-`runtime-appendix.md` is canonical for:
+## Core invariants
 
-- 4+1 review orchestration
-- severity mapping and review-item creation rules
-- Gate 4 hard-block behavior for P1
-- evidence freshness checks
-- UAT/acceptance routing
-- finishing checklist and closeout
+- Review evaluates; it does not implement fixes unless explicitly rerouted to execute.
+- Approved `solution-design.md`, approved `plan.md`, item README contracts, verification evidence, and implementation gap logs are the review baseline.
+- A closed workgraph item is not proof of correctness. Evidence and diff must still be checked.
+- `implement-gap.md` entries must be evaluated, not ignored as notes.
+- P1 findings block Gate 4 until fixed or explicitly acknowledged under the project’s gate policy.
+- P2/P3/P4 findings may be deferred only when they are explicit, owned, and traceable.
 
-## Minimum flow (mandatory)
+## Phase flow
 
-1. Run specialist review pass (4+1 model).
-2. Verify promised artifacts and evidence freshness.
-3. Normalize findings, deduplicate overlap, assign owner + severity.
-4. Convert accepted findings into explicit fix work items.
-5. Enforce Gate 4: any P1 blocks approval.
-6. Run UAT/acceptance checks unless explicitly skipped with compensating evidence.
-7. Execute finishing checklist and update runtime state artifacts.
-8. Recommend next command with manual default continuation.
+```text
+Orient -> Scope & Evidence Audit -> Specialist Review -> Normalize Findings
+  -> Create Fix Items -> Gate 4 Decision -> Acceptance/UAT -> Closeout Handoff
+```
 
-## Phase details
+## Phase 1 — Orient and prove review readiness
 
-### Phase 1 — Scope conformance audit
+Read in this order:
 
-Confirm delivered changes stayed within approved current-slice boundaries and locked decisions.
+1. `AGENTS.md`
+2. `node .cursor/skills/workflow/scripts/pulse.mjs status --repo-root <repo> --json`
+3. `.pulse/runtime/state.json`
+4. `.pulse/runtime/STATE.md`
+5. active story `plan.md`
+6. active story `solution-design.md`
+7. item README files for completed current-slice `TASK`/`BUG` items
+8. each item `verification_path`
+9. each item `implement-gap.md` when present
+10. current git diff or committed range for the completed slice
 
-If material mismatch exists, block and route to `pulse:workflow plan` or `pulse:workflow execute` as appropriate.
+Then confirm:
 
-### Phase 2 — Specialist quality pass
+- active epic/story/slice pointers match workgraph output
+- all current-slice executable items are closed or intentionally excluded from this review
+- no active reservations or handoffs indicate in-flight execution
+- verification evidence and implementation gap logs belong to this execution pass
 
-Assess behavior correctness, regressions, boundary integrity, security posture, and contract adherence.
+If readiness cannot be proven, stop and reroute. Do not review from stale or guessed context.
 
-Reviewers do not silently fix and approve in one motion. Findings must remain explicit.
+## Phase 2 — Scope and evidence audit
 
-Use `review-agent-prompts.md` to run consistent specialist prompts.
+Check delivered scope against:
 
-### Phase 3 — Evidence integrity pass
+- `solution-design.md` decision IDs
+- approved `plan.md` scope, docs impact, and validation plan
+- each item README contract
+- actual changed files
+- verification evidence
+- `implement-gap.md` entries
 
-For each closed work item, confirm evidence is:
+Reject review readiness when required evidence is missing or stale.
 
-- present
-- fresh
-- relevant
-- reproducible enough for audit
+If implementation gaps record an approved deviation, verify the approval is explicit and the implementation matches it. If a gap records an unapproved behavior, architecture, file-scope, verification, risk, or public-contract change, classify it as a finding and usually P1/P2 depending on impact.
 
-Reject stale or non-specific evidence.
+## Phase 3 — Specialist review pass
 
-### Phase 4 — Finding normalization and severity
+Run focused review passes using [review-agent-prompts.md](review-agent-prompts.md):
 
-Deduplicate overlaps, assign ownership, and classify severity.
+1. behavior correctness
+2. regression and boundary integrity
+3. security and misuse risk
+4. evidence and implementation-gap integrity
+5. release-readiness synthesis
 
-Severity contract:
+Agents/review passes should lead with findings and cite concrete evidence: file paths, line numbers, item IDs, verification artifacts, gap logs, or command outputs.
 
-- P1 = mandatory blocker
-- P2/P3/P4 may be staged, never hidden
+Do not ask reviewers to rewrite code. Findings must remain review artifacts until routed to execute/plan/design.
 
-When accepted findings need remediation, create explicit fix work items using `review-item-template.md`.
+## Phase 4 — Normalize findings
 
-### Phase 5 — Gate 4 enforcement
+Deduplicate overlap, assign severity, owner, affected item IDs, and reroute target.
 
-If any P1 exists:
+Severity rules are in [runtime-appendix.md](runtime-appendix.md#severity-policy).
 
-- Gate 4 fails
-- publish blocking item IDs and required remediation path
-- do not recommend approval
+Each accepted finding must include:
 
-If no P1 remains and evidence is sufficient, Gate 4 may pass.
+- severity `P1|P2|P3|P4`
+- affected item/story
+- evidence path or file/line reference
+- failure scenario or concrete risk
+- smallest credible fix or repair path
+- recommended reroute: `execute`, `plan`, `design`, `explore`, or `none`
 
-### Phase 6 — Acceptance/UAT posture
+## Phase 5 — Create explicit remediation items
 
-Run acceptance checks unless skipped by explicit instruction.
+When a finding requires implementation work, create or propose a workgraph `BUG` or `TASK` under the active story using `node .cursor/skills/workflow/scripts/pulse.mjs workgraph create ... --json`, but only when the user/project policy permits review to materialize fix work.
 
-If skipped, record compensating evidence and residual risk.
+Use [review-item-template.md](review-item-template.md) for the README/body shape.
 
-If acceptance fails, route back with targeted repair scope.
+Rules:
 
-### Phase 7 — Closeout handoff
+- P1 findings become blocking fix items unless immediately fixed through a user-approved execute reroute.
+- P2/P3/P4 findings may become non-blocking follow-up items or linked traceability when deferrable.
+- Do not attach unrelated future cleanup as current-slice blockers.
+- Do not use `linked_items` when readiness or Gate 4 depends on the fix; use dependencies/blocking status where appropriate.
+- Do not silently create fix items for design/plan changes; reroute to the owning command when the fix changes shape or solution.
+
+## Phase 6 — Gate 4 decision
+
+Return exactly one Gate 4 decision:
+
+- `pass`
+- `pass-with-follow-ups`
+- `fail`
+
+Gate 4 passes only when:
+
+- no P1 remains
+- required verification evidence is fresh and sufficient
+- implementation gaps are reviewed and either accepted, fixed, or explicitly deferred
+- acceptance/UAT posture is explicit
+
+Gate 4 fails when any P1 remains, required evidence is missing, or acceptance/UAT fails.
+
+Record the rationale, finding inventory, and next command.
+
+## Phase 7 — Acceptance/UAT posture
+
+Run acceptance checks when the slice has user-visible behavior, workflow-visible behavior, docs/contract changes, or explicit UAT criteria in the plan.
+
+If UAT is skipped, record:
+
+- who/what skipped it
+- reason
+- compensating evidence
+- residual risk
+
+UAT failure is a finding and normally routes to `pulse:workflow execute` with a targeted fix item.
+
+## Phase 8 — Closeout handoff
 
 Publish:
 
-- approve/block decision
-- finding inventory by severity and owner
+- Gate 4 decision
+- reviewed story/slice and item IDs
+- evidence summary
+- implementation gap summary
+- findings inventory by severity and owner
+- fix item IDs when created
 - exact next command recommendation:
-  - `pulse:workflow execute` for fixes
-  - `pulse:workflow plan` for scope/shape repair
-  - `pulse:workflow compound` after clean pass
+  - `pulse:workflow execute` for implementation fixes
+  - `pulse:workflow plan` for task/scope repair
+  - `pulse:workflow design` for solution repair
+  - `pulse:workflow compound` after clean pass or accepted follow-ups
 
-Default continuation is `manual_invoke` unless user asks continue-now.
+Update `.pulse/runtime/state.json` and `.pulse/runtime/STATE.md` together when recording Gate 4 posture.
 
-Update `.pulse/runtime/state.json` and `.pulse/runtime/STATE.md` to reflect Gate 4 outcome.
+Default continuation is `manual_invoke` unless the user explicitly asks to continue now.
 
 ## Pause/resume posture
 
-If review pauses, write review-owned handoff, persist it under `.pulse/runtime/handoffs/`, and register in `.pulse/runtime/handoffs/manifest.json`.
+If review pauses, write a review-owned handoff under `.pulse/runtime/handoffs/` and register it in `.pulse/runtime/handoffs/manifest.json`.
 
-Resume from next incomplete review phase, not memory-only recall.
+Resume from Phase 1 orientation, then continue at the next incomplete phase. Do not resume review from memory-only recall.
 
 ## Red flags
 
-- approving because execution said “done”
-- accepting stale/partial evidence
+Stop if you catch yourself:
+
+- approving because execution said `[DONE]`
+- accepting stale, missing, or non-specific evidence
+- ignoring `implement-gap.md`
+- marking an unapproved deviation as acceptable without an explicit decision
 - blurring P1/P2 boundaries
 - mixing reviewer and implementer roles without explicit reroute
-- recommending release with unresolved mandatory blockers
-
+- recommending `compound` with unresolved mandatory blockers
+- creating unplanned fix work without user/project authorization

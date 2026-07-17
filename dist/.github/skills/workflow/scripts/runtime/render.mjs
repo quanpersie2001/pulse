@@ -18,27 +18,6 @@ function deriveFeature(status) {
   return focus === "(none)" ? "" : focus;
 }
 
-function renderGitNexusReadinessLines(status) {
-  const readiness = status.gitnexus_readiness && typeof status.gitnexus_readiness === "object"
-    ? status.gitnexus_readiness
-    : null;
-  if (!readiness) {
-    return [];
-  }
-
-  const matchedSources =
-    Array.isArray(readiness.matched_sources) && readiness.matched_sources.length > 0
-      ? readiness.matched_sources.join(", ")
-      : "none";
-
-  return [
-    "gitnexus readiness:",
-    `- Configured: ${readiness.configured ? "yes" : "no"}`,
-    `- Matched sources: ${matchedSources}`,
-    `- Recommended action: ${readiness.recommended_action || "n/a"}`,
-  ];
-}
-
 function renderOperatorSurfaceLines(status) {
   const lines = ["Operator surface:"];
   const currentFeature = status.current_feature && typeof status.current_feature === "object"
@@ -184,8 +163,6 @@ export function renderPulseStatus(status) {
     `Active handoffs: ${status.handoff_manifest.active_count}`,
     "",
     ...renderOperatorSurfaceLines(status),
-    "",
-    ...renderGitNexusReadinessLines(status),
     "",
     "Next reads:",
     ...status.next_reads.map((item) => `- ${item}`),

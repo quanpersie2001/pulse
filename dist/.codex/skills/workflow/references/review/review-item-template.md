@@ -1,33 +1,55 @@
 # Review Fix Item Template
 
-Use this template when review findings require remediation items.
+Use this template when review findings require a remediation `TASK` or `BUG`.
 
 ## Title
 
 `[REVIEW][<severity>] <short issue summary>`
 
-## Scope
+## Parent
 
-- affected area:
-- observed issue:
-- expected behavior:
+- Story: `<story-id>`
+- Related item(s): `<T/B-id>`
+- Source review: `pulse:workflow review`
+
+## Plain-Language Summary
+
+<1-3 sentences explaining the issue and why it matters.>
 
 ## Severity
 
-- level: `P1 | P2 | P3 | P4`
-- rationale:
+- Level: `P1 | P2 | P3 | P4`
+- Rationale: <why this severity is correct>
+- Gate 4 impact: `blocks | follow-up | informational`
 
 ## Evidence
 
-- source finding:
-- reproduction or proof path:
+- Finding source: <review pass / reviewer>
+- File/line or artifact: `<path>`
+- Verification evidence: `<verification_path or N/A>`
+- Implementation gap log: `<implement-gap.md or N/A>`
+- Failure scenario: <specific reproducible or credible scenario>
 
-## Verification contract
+## Approved Contract Violated
 
-- commands to run:
-- evidence target path under `works/.../verification.md`:
+- Decision refs: `D...` or `N/A`
+- Plan/task contract: <section or item README reference>
+- Expected behavior: <what should happen>
+- Actual behavior/risk: <what happens or could happen>
 
-## Ownership
+## Proposed Fix
 
-- suggested owner:
-- dependencies:
+- Recommended smallest fix: <concrete repair>
+- Tradeoff: <if any>
+- Reroute: `execute | plan | design | explore | none`
+
+## Acceptance Criteria
+
+- [ ] <specific testable condition>
+- [ ] Verification evidence updated at `<path>`
+- [ ] `implement-gap.md` updated if the fix requires a new decision, deviation, or tradeoff
+
+## Dependencies / Links
+
+- Blocking dependencies: []
+- Non-blocking links: []

@@ -128,7 +128,6 @@ Treat these as blockers for v2 readiness:
 Use `DEGRADED` only when the workflow remains safe but reduced. Examples:
 
 - swarm coordination is unavailable, but single-worker execution is safe
-- optional GitNexus discovery is not configured, but file-based discovery is available
 - a domain is non-compliant, but use can back it up and rebuild the v2 shape safely
 
 Do not use `DEGRADED` to bypass a blocker.

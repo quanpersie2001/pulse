@@ -95,7 +95,6 @@ Pulse is documented and operated as one router with subcommands:
 - `dev-note`
 - `dev-note-distil`
 - `prompt-leverage`
-- `gitnexus`
 
 ### Runtime command
 

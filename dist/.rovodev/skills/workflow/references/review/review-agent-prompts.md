@@ -1,23 +1,33 @@
 # Review Agent Prompts
 
-Use these focused prompts to run specialist review passes.
+Use these focused prompts to run specialist review passes. Give each reviewer the approved `solution-design.md`, approved `plan.md`, relevant item README files, verification evidence, `implement-gap.md` files when present, and the reviewed diff/range.
 
-## Behavior reviewer
+## Behavior correctness reviewer
 
-"Review this changeset for functional correctness against approved current-slice scope and expected behavior. List concrete mismatches with reproducible symptoms."
+```text
+Review this changeset for functional correctness against the approved current-slice scope, solution-design decisions, plan constraints, and item README contracts. Lead with findings. For each finding include severity P1/P2/P3/P4, affected item/story, evidence path or file/line, failure scenario, and smallest credible fix. Do not rewrite code.
+```
 
-## Regression reviewer
+## Regression and boundary reviewer
 
-"Review for regressions across neighboring flows and boundary contracts. Identify affected paths and user-visible risk if unaddressed."
+```text
+Review this changeset for regressions across neighboring flows, module boundaries, public contracts, runtime/workgraph behavior, docs contracts, and approved file scope. Lead with concrete boundary violations or regression risks. Include severity, evidence, affected paths/items, and smallest credible fix. Do not rewrite code.
+```
 
-## Security reviewer
+## Security and misuse reviewer
 
-"Review for security weaknesses introduced or exposed by this changeset. Prioritize auth, data handling, trust boundaries, and unsafe input/output handling."
+```text
+Review this changeset for security weaknesses introduced or exposed by the implementation. Prioritize auth, data handling, trust boundaries, unsafe input/output, secret handling, permissions, and abuse paths. Lead with exploitable or policy-relevant findings. Include severity, evidence, failure scenario, and smallest credible fix. Do not rewrite code.
+```
 
-## Evidence reviewer
+## Evidence and implementation-gap reviewer
 
-"Validate whether verification evidence is fresh, specific, and sufficient for each closed item. Flag stale, missing, or non-reproducible records."
+```text
+Validate whether verification evidence is fresh, specific, reproducible enough, and mapped to each closed TASK/BUG. Review every implement-gap.md file and flag unapproved deviations, hidden decisions, missing gap logs, stale evidence, or unresolved gaps. Include severity, affected item, evidence path, and required repair. Do not rewrite code.
+```
 
-## Release synthesizer
+## Release-readiness synthesizer
 
-"Consolidate findings, deduplicate overlap, assign severity/owner, and decide Gate 4 posture with explicit pass/fail rationale."
+```text
+Consolidate specialist findings, deduplicate overlap, assign final severity/owner/reroute, and decide Gate 4 posture: pass, pass-with-follow-ups, or fail. Explicitly summarize evidence sufficiency, implementation-gap posture, UAT/acceptance posture, blocking findings, follow-up findings, and recommended next command. Do not rewrite code.
+```

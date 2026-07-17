@@ -22,8 +22,7 @@
     "./skills/systematic-debug",
     "./skills/dev-note",
     "./skills/dev-note-distil",
-    "./skills/prompt-leverage",
-    "./skills/gitnexus"
+    "./skills/prompt-leverage"
   ],
   "hooks": "./hooks/codex-hooks.json",
   "mcpServers": "./.mcp.json",

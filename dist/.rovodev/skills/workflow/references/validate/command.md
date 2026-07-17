@@ -1,6 +1,8 @@
 # `pulse:workflow validate`
 
-Readiness command for proving an approved story `plan.md` and its current-slice TASK/BUG work items are executable under real repository constraints before implementation begins.
+Readiness command for proving an approved `plan.md` and its current-slice work items are executable before implementation begins.
+
+`pulse:workflow validate` sits after plan approval and before execution.
 
 Validate answers:
 
@@ -46,11 +48,11 @@ If entry criteria fail, route precisely:
 - missing discovery/evidence needed to decide feasibility → `pulse:workflow explore`
 - stale or conflicting runtime/workgraph posture → `pulse:workflow use`
 
-## Required inputs
+## Inputs
 
 Read only the artifacts needed to prove readiness for the active story/slice. Validation proof must be current, observable, and tied to the active story/slice; stale prior-run evidence and uncited confidence notes do not satisfy readiness.
 
-Minimum story inputs:
+### Minimum story inputs
 
 - `works/epics/<epic-id>-<epic-slug>/<story-id>-<story-slug>/discovery.md`
 - `works/epics/<epic-id>-<epic-slug>/<story-id>-<story-slug>/solution-design.md`
@@ -58,7 +60,7 @@ Minimum story inputs:
 - TASK/BUG README files returned by workgraph `content_path` for the current slice
 - TASK/BUG verification paths returned by workgraph `verification_path`, when already present or required
 
-Runtime and workgraph inputs:
+### Runtime and workgraph inputs
 
 - `.pulse/runtime/state.json`
 - `.pulse/runtime/STATE.md`
@@ -66,7 +68,7 @@ Runtime and workgraph inputs:
 - `node .rovodev/skills/workflow/scripts/pulse.mjs workgraph list --repo-root <repo> --json` or a narrower workgraph read when supported
 - `node .rovodev/skills/workflow/scripts/pulse.mjs workgraph doctor --repo-root <repo> --json`
 
-Optional targeted inputs:
+### Optional targeted inputs
 
 - relevant repo files named by `plan.md` or TASK/BUG README file scope
 - relevant test/config files needed to prove commands exist and are runnable
@@ -75,53 +77,33 @@ Optional targeted inputs:
 
 Do not hand-edit `.pulse/workgraph/items.jsonl`. Treat it as database-like storage behind `node .rovodev/skills/workflow/scripts/pulse.mjs workgraph`.
 
+## Command-local references
+
+- [runtime-appendix.md](runtime-appendix.md) — orientation fields, consistency gate, reality gate, feasibility matrix, TASK/BUG contract checklist, and probe protocol
+
 ## Core contracts
 
 ### Gate 2 is required input
 
-Validate consumes the approved task/current-work shape. It must not mark Gate 2 approved, invent a plan approval, or materialize approved TASK/BUG items that planning failed to create.
-
-If `plan.md` is approval-ready but not explicitly approved, stop for `pulse:workflow plan`. If the plan is approved but its approved TASK/BUG items or edges were not materialized, route back to the post-approval materialization portion of `pulse:workflow plan`.
+Validate must not mark Gate 2 approved, invent a plan approval, or materialize TASK/BUG items that planning failed to create. See [Phase 0](#phase-0--orientation-and-gate-2-proof) for enforcement.
 
 ### Plan and design are immutable during validation
 
-Validate may test, inspect, and locally clarify execution readiness. It must not change solution decisions, task decomposition, docs impact, dependency shape, or verification strategy.
-
-Allowed local repairs are limited to obvious non-semantic defects in TASK/BUG README content or runtime mirror wording when the approved plan and workgraph metadata are already clear. Examples: fixing a missing returned `verification_path` copied from workgraph output, or tightening a vague evidence record path that is already specified by `plan.md`.
-
-Route instead of repairing when a defect changes any of:
-
-- solution decision or planning constraint → `pulse:workflow design`
-- task scope, sequencing, dependency, docs impact, or validation plan → `pulse:workflow plan`
-- discovery evidence or external proof basis → `pulse:workflow explore`
-- active runtime/workgraph ownership → `pulse:workflow use`
+Validate may test, inspect, and locally clarify execution readiness. It must not change solution decisions, task decomposition, docs impact, dependency shape, or verification strategy. Allowed local repairs are limited to obvious non-semantic defects (e.g., tightening a vague evidence path already specified by `plan.md`). Route instead of repairing — see [Reroutes](#reroutes).
 
 ### Workgraph via CLI only
 
-Use `node .rovodev/skills/workflow/scripts/pulse.mjs workgraph ... --json` for workgraph reads and consistency checks. Do not treat generated views or raw JSONL as writable truth. Use [workgraph-model.md](../shared/workgraph-model.md) for dependency, link, owner, reservation, and readiness semantics.
-
-Validate may inspect workgraph output to confirm:
-
-- active story and TASK/BUG IDs
-- parent/child relationships
-- blocking dependencies and non-blocking links
-- `content_path` and `verification_path`
-- status/readiness posture
-- doctor output
-
-Validate must not create speculative items, add unapproved edges, or close work.
+Use `node .rovodev/skills/workflow/scripts/pulse.mjs workgraph ... --json` for reads and consistency checks. Do not treat generated views or raw JSONL as writable truth. Validate must not create speculative items, add unapproved edges, or close work. Use [workgraph-model.md](../shared/workgraph-model.md) for semantics.
 
 ### Probes are feasibility proof, not implementation
 
-A probe/spike exists only to answer a readiness-blocking yes/no question. It must not implement the feature or silently alter the approved plan.
-
-If a probe proves the plan needs different work, route back to `plan` or `design` with the finding.
+A probe exists only to answer a readiness-blocking yes/no question. It must not implement the feature or silently alter the approved plan. See [Phase 3](#phase-3--feasibility-matrix-and-probes) for probe protocol.
 
 ## Phase model
 
 ### Phase 0 — Orientation and Gate 2 proof
 
-Use the orientation template in [runtime-appendix.md](runtime-appendix.md#A-orientation-and-gate-2-proof-template), then confirm and present:
+Use the orientation fields in [runtime-appendix.md](runtime-appendix.md#a-orientation-and-gate-2-proof), then confirm and present:
 
 - active mode from `plan.md`
 - active epic/story and selected current slice
@@ -142,7 +124,7 @@ Hard stop when:
 
 ### Phase 1 — Runtime and workgraph consistency gate
 
-Use the runtime/workgraph consistency template in [runtime-appendix.md](runtime-appendix.md#B-runtimeworkgraph-consistency-gate), then verify the active story/slice can be trusted:
+Use the runtime/workgraph consistency template in [runtime-appendix.md](runtime-appendix.md#b-runtimeworkgraph-consistency-gate), then verify the active story/slice can be trusted:
 
 - runtime active epic/story/item IDs match workgraph output
 - TASK/BUG items are children of the active story
@@ -156,7 +138,7 @@ If this fails because metadata is stale or conflicted, route to `pulse:workflow 
 
 ### Phase 2 — Reality gate
 
-Use the reality gate report shape in [runtime-appendix.md](runtime-appendix.md#C-reality-gate-template), then test whether the approved slice still fits real repository conditions:
+Use the reality gate dimensions in [runtime-appendix.md](runtime-appendix.md#c-reality-gate), then test whether the approved slice still fits real repository conditions:
 
 - mode still matches size, risk, and current constraints
 - planned files/modules/commands still exist or the plan accounts for creating them
@@ -169,7 +151,7 @@ If the reality failure is task decomposition, route to `pulse:workflow plan`. If
 
 ### Phase 3 — Feasibility matrix and probes
 
-Use the feasibility matrix and probe protocol in [runtime-appendix.md](runtime-appendix.md#D-feasibility-matrix) and [runtime-appendix.md](runtime-appendix.md#G-probe--spike-protocol), then build an assumption-by-assumption matrix for the current slice:
+Use the feasibility matrix and probe protocol in [runtime-appendix.md](runtime-appendix.md#d-feasibility-matrix) and [runtime-appendix.md](runtime-appendix.md#f-probe--spike-protocol), then build an assumption-by-assumption matrix for the current slice:
 
 - assumption statement
 - risk level
@@ -197,7 +179,7 @@ Probe timebox policy:
 
 ### Phase 4 — TASK/BUG contract gate
 
-Use the TASK/BUG contract checklist in [runtime-appendix.md](runtime-appendix.md#E-taskbug-contract-checklist). For each current-slice TASK/BUG, verify contract quality from workgraph output and the item README:
+Use the TASK/BUG contract checklist in [runtime-appendix.md](runtime-appendix.md#e-taskbug-contract-checklist). For each current-slice TASK/BUG, verify contract quality from workgraph output and the item README:
 
 - parent story is correct
 - source plan and decision refs map back to `plan.md` and `solution-design.md`
@@ -215,7 +197,7 @@ If defects are local and obvious, repair once. If defects imply a task contract 
 
 ### Phase 5 — Structural coherence pass
 
-Use the structural checker contract in [runtime-appendix.md](runtime-appendix.md#F-structural-checker-contract), then validate end-to-end consistency across:
+Validate end-to-end consistency across:
 
 1. mode-plan coherence
 2. current-slice coverage and ordering
@@ -231,7 +213,7 @@ Maximum correction loops: 3. After the third unresolved failure, stop and escala
 
 ### Phase 6 — Readiness decision
 
-Use the readiness decision template in [runtime-appendix.md](runtime-appendix.md#H-readiness-decision-template), then return exactly one readiness decision:
+Return exactly one readiness decision:
 
 - `ready`
 - `ready-with-constraints`
@@ -256,7 +238,7 @@ Execution mode guidance:
 
 ### Phase 7 — Gate 3 approval hard stop
 
-Execution cannot proceed without explicit user approval. Use the final approval prompt and runtime approval record in [runtime-appendix.md](runtime-appendix.md#I-final-approval-prompt-gate-3) and [runtime-appendix.md](runtime-appendix.md#J-runtime-approval-record).
+Execution cannot proceed without explicit user approval.
 
 Present the Gate 3 approval request with:
 
@@ -338,20 +320,14 @@ Stop if you catch yourself:
 - using vague `not-ready` language without an actionable repair path
 - recommending `swarm` without parallel-safe validated item boundaries
 
-## Exit contract
+## Reroutes
 
-Successful exit requires:
+Each phase specifies its own routing. Summary:
 
-- explicit readiness decision: `ready`, `ready-with-constraints`, or `not-ready`
-- evidence summary and missing-proof list
-- exact blocker/reroute path when not ready
-- explicit execution mode recommendation
-- Gate 3 approval outcome recorded when approved
-- precise next command recommendation:
-  - `pulse:workflow swarm`
-  - `pulse:workflow execute`
-  - `pulse:workflow plan`
-  - `pulse:workflow design`
-  - `pulse:workflow explore`
-  - `pulse:workflow use`
+| Target | When |
+|--------|------|
+| `pulse:workflow plan` | incomplete TASK/BUG materialization; task scope/sequencing/dependency/docs/validation-plan change; reality gate fails on task decomposition |
+| `pulse:workflow design` | solution decision wrong/incomplete/infeasible; reality gate fails on approved solution; probe proves plan needs different work |
+| `pulse:workflow explore` | discovery evidence missing; external/provider/security research needed |
+| `pulse:workflow use` | runtime/workgraph posture stale/blocked/conflicts; mirrors disagree with artifacts or workgraph |
 

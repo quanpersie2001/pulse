@@ -104,7 +104,7 @@ Use shared references only for cross-cutting contracts that multiple commands mu
 | Harness architecture reference | [references/HARNESS.md](references/HARNESS.md) |
 | Harness backlog seed template | [templates/HARNESS_BACKLOG.md](templates/HARNESS_BACKLOG.md) |
 
-Command-local references include behavior that belongs to one command, for example [swarm execution rules](references/swarm/execution-rules.md).
+Command-local references include behavior that belongs to one command, for example [swarm event protocol](references/swarm/runtime-appendix.md).
 
 ## Operating principles
 
