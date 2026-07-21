@@ -5,9 +5,10 @@ use std::path::{Component, Path, PathBuf};
 pub fn canonicalize_existing_dir(path: &Path) -> Result<PathBuf> {
     let canonical = fs::canonicalize(path).map_err(|error| PulseError::io(path, error))?;
     if !canonical.is_dir() {
-        return Err(PulseError::Validation {
-            message: format!("path is not a directory: {}", canonical.display()),
-        });
+        return Err(PulseError::validation(
+            "invalid_path",
+            format!("path is not a directory: {}", canonical.display()),
+        ));
     }
     Ok(canonical)
 }

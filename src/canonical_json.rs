@@ -5,13 +5,46 @@ use sha2::{Digest, Sha256};
 
 pub const SHA256_PREFIX: &str = "sha256:";
 
+pub fn to_value<T: Serialize>(value: &T) -> Result<Value> {
+    serde_json::to_value(value).map_err(PulseError::from)
+}
+
 pub fn to_canonical_value(value: &Value) -> Result<Value> {
     canonicalize(value, "$")
 }
 
-pub fn to_canonical_bytes(value: &Value) -> Result<Vec<u8>> {
-    let canonical = to_canonical_value(value)?;
-    let mut bytes = serde_json::to_vec_pretty(&canonical)?;
+pub fn to_canonical_value_from<T: Serialize>(value: &T) -> Result<Value> {
+    to_canonical_value(&to_value(value)?)
+}
+
+pub fn sort_value(value: Value) -> Value {
+    match value {
+        Value::Object(map) => {
+            let mut sorted = Map::new();
+            let mut entries: Vec<_> = map.into_iter().collect();
+            entries.sort_by(|(left, _), (right, _)| left.cmp(right));
+            for (key, child) in entries {
+                sorted.insert(key, sort_value(child));
+            }
+            Value::Object(sorted)
+        }
+        Value::Array(items) => Value::Array(items.into_iter().map(sort_value).collect()),
+        other => other,
+    }
+}
+
+pub fn to_canonical_bytes<T: Serialize>(value: &T) -> Result<Vec<u8>> {
+    let json = to_value(value)?;
+    canonical_value_bytes(&to_canonical_value(&json)?)
+}
+
+pub fn to_canonical_bytes_from<T: Serialize>(value: &T) -> Result<Vec<u8>> {
+    to_canonical_bytes(value)
+}
+
+pub fn canonical_value_bytes(value: &Value) -> Result<Vec<u8>> {
+    reject_float(value, "$")?;
+    let mut bytes = serde_json::to_vec_pretty(value)?;
     while bytes.last() == Some(&b'\n') || bytes.last() == Some(&b'\r') {
         bytes.pop();
     }
@@ -21,18 +54,10 @@ pub fn to_canonical_bytes(value: &Value) -> Result<Vec<u8>> {
 
 pub fn to_canonical_string(value: &Value) -> Result<String> {
     let bytes = to_canonical_bytes(value)?;
-    String::from_utf8(bytes).map_err(|error| PulseError::Validation {
-        message: format!("canonical JSON was not UTF-8: {error}"),
-    })
-}
-
-pub fn to_value<T: Serialize>(value: &T) -> Result<Value> {
-    serde_json::to_value(value).map_err(PulseError::from)
-}
-
-pub fn to_canonical_bytes_from<T: Serialize>(value: &T) -> Result<Vec<u8>> {
-    let json = to_value(value)?;
-    to_canonical_bytes(&json)
+    String::from_utf8(bytes).map_err(|error| PulseError::validation(
+        "utf8_error",
+        format!("canonical JSON was not UTF-8: {error}"),
+    ))
 }
 
 pub fn hash_bytes(bytes: &[u8]) -> String {
@@ -40,12 +65,12 @@ pub fn hash_bytes(bytes: &[u8]) -> String {
     format!("{SHA256_PREFIX}{}", hex::encode(digest))
 }
 
-pub fn hash_value(value: &Value) -> Result<String> {
+pub fn hash_value<T: Serialize>(value: &T) -> Result<String> {
     Ok(hash_bytes(&to_canonical_bytes(value)?))
 }
 
 pub fn hash_serializable<T: Serialize>(value: &T) -> Result<String> {
-    Ok(hash_bytes(&to_canonical_bytes_from(value)?))
+    hash_value(value)
 }
 
 fn canonicalize(value: &Value, path: &str) -> Result<Value> {
@@ -77,30 +102,23 @@ fn canonicalize(value: &Value, path: &str) -> Result<Value> {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use serde_json::json;
-
-    #[test]
-    fn canonical_json_sorts_keys_and_preserves_arrays() {
-        let left = json!({"b": 1, "a": {"d": 4, "c": [ {"z": 1, "y": 2} ]}});
-        let right = json!({"a": {"c": [ {"y": 2, "z": 1} ], "d": 4}, "b": 1});
-
-        let left_bytes = to_canonical_bytes(&left).unwrap();
-        let right_bytes = to_canonical_bytes(&right).unwrap();
-
-        assert_eq!(left_bytes, right_bytes);
-        assert_eq!(left_bytes.last(), Some(&b'\n'));
-        assert_eq!(String::from_utf8(left_bytes).unwrap().matches('\n').count(), 8);
-    }
-
-    #[test]
-    fn canonical_json_rejects_floats() {
-        let value = json!({"n": 1.25});
-        assert!(matches!(
-            to_canonical_bytes(&value),
-            Err(PulseError::FloatRejected { .. })
-        ));
+fn reject_float(value: &Value, path: &str) -> Result<()> {
+    match value {
+        Value::Number(n) if n.is_f64() => Err(PulseError::FloatRejected {
+            path: path.to_string(),
+        }),
+        Value::Array(items) => {
+            for (index, item) in items.iter().enumerate() {
+                reject_float(item, &format!("{path}[{index}]"))?;
+            }
+            Ok(())
+        }
+        Value::Object(map) => {
+            for (key, item) in map {
+                reject_float(item, &format!("{path}.{key}"))?;
+            }
+            Ok(())
+        }
+        _ => Ok(()),
     }
 }

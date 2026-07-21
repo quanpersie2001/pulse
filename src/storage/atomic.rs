@@ -14,8 +14,11 @@ pub struct AtomicWriteReport {
 }
 
 pub fn atomic_replace(path: &Path, bytes: &[u8]) -> Result<AtomicWriteReport> {
-    let parent = path.parent().ok_or_else(|| PulseError::Validation {
-        message: format!("target has no parent directory: {}", path.display()),
+    let parent = path.parent().ok_or_else(|| {
+        PulseError::validation(
+            "invalid_path",
+            format!("target has no parent directory: {}", path.display()),
+        )
     })?;
     fs::create_dir_all(parent).map_err(|error| PulseError::io(parent, error))?;
 
