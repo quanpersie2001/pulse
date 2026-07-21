@@ -1,0 +1,31 @@
+[package]
+name = "pulse"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.78"
+
+[lib]
+name = "pulse"
+path = "src/lib.rs"
+
+[[bin]]
+name = "pulse"
+path = "src/bin/pulse.rs"
+
+[dependencies]
+chrono = { version = "0.4", default-features = false, features = [
+  "clock",
+  "serde",
+  "std",
+] }
+fs2 = "0.4"
+hex = "0.4"
+rand = "0.8"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+thiserror = "1"
+ulid = "1"
+
+[dev-dependencies]
+tempfile = "3"
