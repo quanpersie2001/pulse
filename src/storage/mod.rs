@@ -5,9 +5,13 @@ pub mod transaction;
 
 use crate::canonical_json;
 use crate::error::{PulseError, Result};
+use serde::de::DeserializeOwned;
 use serde_json::json;
-use std::fs;
-use std::path::{Path, PathBuf};
+use std::fs::{self, OpenOptions};
+use std::io::Write;
+use std::path::{Component, Path, PathBuf};
+
+pub use lock::WriteGuard;
 
 pub const MANIFEST_JSON: &str = r#"{
   "schema_version": 1,
@@ -198,4 +202,50 @@ pub fn default_manifest_value() -> serde_json::Value {
       "content_root": "../../works",
       "id_pattern": "^(EP|ST|TK|DEC)-[0-9]{3,}$"
     })
+}
+
+pub fn atomic_write(path: &Path, bytes: &[u8]) -> Result<()> {
+    atomic::atomic_replace(path, bytes).map(|_| ())
+}
+
+pub fn create_new(path: &Path, bytes: &[u8]) -> Result<()> {
+    let parent = path.parent().ok_or_else(|| {
+        PulseError::validation(
+            "invalid_path",
+            format!("path has no parent: {}", path.display()),
+        )
+    })?;
+    fs::create_dir_all(parent).map_err(|error| PulseError::io(parent, error))?;
+    let mut file = OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .open(path)
+        .map_err(|error| PulseError::io(path, error))?;
+    file.write_all(bytes)
+        .map_err(|error| PulseError::io(path, error))?;
+    file.sync_all().map_err(|error| PulseError::io(path, error))?;
+    Ok(())
+}
+
+pub fn read_json<T: DeserializeOwned>(path: &Path) -> Result<T> {
+    let bytes = fs::read(path).map_err(|error| PulseError::io(path, error))?;
+    serde_json::from_slice(&bytes).map_err(|error| PulseError::json(path, error))
+}
+
+pub fn safe_repo_relative(path: &str) -> Result<PathBuf> {
+    let path_ref = Path::new(path);
+    paths::validate_relative_path(path_ref)?;
+    let mut out = PathBuf::new();
+    for component in path_ref.components() {
+        match component {
+            Component::Normal(part) => out.push(part),
+            Component::CurDir => {}
+            _ => {
+                return Err(PulseError::PathTraversal {
+                    path: path_ref.to_path_buf(),
+                });
+            }
+        }
+    }
+    Ok(out)
 }
