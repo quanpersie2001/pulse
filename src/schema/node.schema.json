@@ -1,0 +1,53 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Pulse Work Graph Node",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "id",
+    "kind",
+    "revision",
+    "title",
+    "status",
+    "content_dir",
+    "created_at",
+    "updated_at"
+  ],
+  "properties": {
+    "content_dir": {
+      "type": "string"
+    },
+    "created_at": {
+      "format": "date-time",
+      "type": "string"
+    },
+    "id": {
+      "pattern": "^(EP|ST|TK|DEC)-[0-9]{3,}$",
+      "type": "string"
+    },
+    "kind": {
+      "enum": ["epic", "story", "ticket", "decision"],
+      "type": "string"
+    },
+    "revision": {
+      "minimum": 1,
+      "type": "integer"
+    },
+    "schema_version": {
+      "const": 1
+    },
+    "status": {
+      "enum": ["draft", "shaped", "ready", "active", "verifying", "done", "rework", "blocked", "superseded"],
+      "type": "string"
+    },
+    "title": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "updated_at": {
+      "format": "date-time",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false
+}

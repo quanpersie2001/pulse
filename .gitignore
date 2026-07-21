@@ -8,10 +8,13 @@ vitest.config.ts
 # bv (beads viewer) local config and caches
 .bv/
 .beads
-.pulse
 .spike
 history
 .spikes
+
+# Pulse local-only planes; canonical workgraph and events remain trackable.
+.pulse/runtime/
+.pulse/cache/
 
 # references (local-only upstream snapshots)
 references/**
