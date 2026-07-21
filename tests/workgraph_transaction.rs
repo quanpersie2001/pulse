@@ -170,13 +170,23 @@ fn concurrent_same_revision_edit_has_one_success_and_one_cas_conflict() {
     let left_id = node.id.clone();
     let right_id = node.id.clone();
     let left = thread::spawn(move || {
-        JsonGraphStore::new(left_repo).edit_title_with_context(&left_id, 1, "Left".into(), ctx("left", 2))
+        JsonGraphStore::new(left_repo).edit_title_with_context(
+            &left_id,
+            1,
+            "Left".into(),
+            ctx("left", 2),
+        )
     });
     let right = thread::spawn(move || {
-        JsonGraphStore::new(right_repo).edit_title_with_context(&right_id, 1, "Right".into(), ctx("right", 3))
+        JsonGraphStore::new(right_repo).edit_title_with_context(
+            &right_id,
+            1,
+            "Right".into(),
+            ctx("right", 3),
+        )
     });
 
-    let results = vec![left.join().unwrap(), right.join().unwrap()];
+    let results = [left.join().unwrap(), right.join().unwrap()];
     assert_eq!(results.iter().filter(|result| result.is_ok()).count(), 1);
     assert_eq!(
         results
@@ -206,10 +216,20 @@ fn concurrent_different_node_edits_both_succeed_without_shared_canonical_file() 
     let left_repo = repo.clone();
     let right_repo = repo.clone();
     let left = thread::spawn(move || {
-        JsonGraphStore::new(left_repo).edit_title_with_context(&first.id, 1, "First updated".into(), ctx("left", 3))
+        JsonGraphStore::new(left_repo).edit_title_with_context(
+            &first.id,
+            1,
+            "First updated".into(),
+            ctx("left", 3),
+        )
     });
     let right = thread::spawn(move || {
-        JsonGraphStore::new(right_repo).edit_title_with_context(&second.id, 1, "Second updated".into(), ctx("right", 4))
+        JsonGraphStore::new(right_repo).edit_title_with_context(
+            &second.id,
+            1,
+            "Second updated".into(),
+            ctx("right", 4),
+        )
     });
 
     assert!(left.join().unwrap().is_ok());
@@ -225,7 +245,15 @@ fn transaction_count(root: &std::path::Path) -> usize {
     }
     fs::read_dir(dir)
         .unwrap()
-        .filter(|entry| entry.as_ref().unwrap().path().extension().and_then(|ext| ext.to_str()) == Some("json"))
+        .filter(|entry| {
+            entry
+                .as_ref()
+                .unwrap()
+                .path()
+                .extension()
+                .and_then(|ext| ext.to_str())
+                == Some("json")
+        })
         .count()
 }
 

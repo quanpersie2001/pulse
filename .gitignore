@@ -22,3 +22,6 @@ references/**
 !references/lineage/**
 
 .gitnexus
+
+# Rust build artifacts
+target/

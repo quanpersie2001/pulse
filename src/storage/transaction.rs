@@ -57,12 +57,20 @@ pub struct TransactionIntent {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RecoveryAction {
-    RolledBack { intent_path: PathBuf },
-    EventCompleted { intent_path: PathBuf, event_path: PathBuf },
-    CleanedComplete { intent_path: PathBuf },
+    RolledBack {
+        intent_path: PathBuf,
+    },
+    EventCompleted {
+        intent_path: PathBuf,
+        event_path: PathBuf,
+    },
+    CleanedComplete {
+        intent_path: PathBuf,
+    },
 }
 
 impl TransactionIntent {
+    #[allow(clippy::too_many_arguments)]
     pub fn prepared(
         event_id: impl Into<String>,
         operation: impl Into<String>,
@@ -109,9 +117,15 @@ pub fn persist_intent(repo_root: &Path, intent: &TransactionIntent) -> Result<Pa
     Ok(path)
 }
 
-pub fn prepare_transaction(repo_root: &Path, intent: TransactionIntent) -> Result<PreparedTransaction> {
+pub fn prepare_transaction(
+    repo_root: &Path,
+    intent: TransactionIntent,
+) -> Result<PreparedTransaction> {
     let intent_path = persist_intent(repo_root, &intent)?;
-    Ok(PreparedTransaction { intent, intent_path })
+    Ok(PreparedTransaction {
+        intent,
+        intent_path,
+    })
 }
 
 pub fn complete_and_cleanup_intent(intent_path: &Path, intent: &TransactionIntent) -> Result<()> {
@@ -231,10 +245,12 @@ fn recover_one(intent_path: &Path, intent: &TransactionIntent) -> Result<Recover
                 intent_path: intent_path.to_path_buf(),
             })
         }
-        (ObservedTarget::Before, ObservedEvent::Matching) => Err(PulseError::AmbiguousTransaction {
-            transaction_id: intent.transaction_id.clone(),
-            message: "event exists but canonical target is still at before state".to_string(),
-        }),
+        (ObservedTarget::Before, ObservedEvent::Matching) => {
+            Err(PulseError::AmbiguousTransaction {
+                transaction_id: intent.transaction_id.clone(),
+                message: "event exists but canonical target is still at before state".to_string(),
+            })
+        }
         (_, ObservedEvent::Mismatch { actual_hash }) => Err(PulseError::EventMismatch {
             transaction_id: intent.transaction_id.clone(),
             message: format!(
@@ -364,7 +380,7 @@ pub fn event_matches_intent(intent: &TransactionIntent) -> Result<bool> {
     if !intent.event_path.exists() {
         return Ok(false);
     }
-    let bytes = fs::read(&intent.event_path)
-        .map_err(|error| PulseError::io(&intent.event_path, error))?;
+    let bytes =
+        fs::read(&intent.event_path).map_err(|error| PulseError::io(&intent.event_path, error))?;
     Ok(hash_bytes(&bytes) == intent.event_hash)
 }

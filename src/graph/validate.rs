@@ -1,13 +1,13 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::Path;
 
-use serde::{Deserialize, Serialize};
 use crate::graph::edge::{deterministic_edge_id, Edge, EdgeType};
 use crate::graph::manifest::Manifest;
 use crate::graph::node::Node;
 use crate::id::validate_id_for_kind;
 use crate::storage::safe_repo_relative;
 use crate::{PulseError, PulseResult};
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ValidationReport {
@@ -71,19 +71,31 @@ pub fn validate_graph(
 ) -> ValidationReport {
     let mut report = ValidationReport::ok();
     if manifest.schema_version != 1 {
-        report.push_error("unsupported_manifest_version", "manifest schema_version must be 1");
+        report.push_error(
+            "unsupported_manifest_version",
+            "manifest schema_version must be 1",
+        );
     }
     if manifest.node_schema != "schemas/node.schema.json" {
-        report.push_error("invalid_manifest", "manifest node_schema must be schemas/node.schema.json");
+        report.push_error(
+            "invalid_manifest",
+            "manifest node_schema must be schemas/node.schema.json",
+        );
     }
     if manifest.edge_schema != "schemas/edge.schema.json" {
-        report.push_error("invalid_manifest", "manifest edge_schema must be schemas/edge.schema.json");
+        report.push_error(
+            "invalid_manifest",
+            "manifest edge_schema must be schemas/edge.schema.json",
+        );
     }
 
     let mut ids = BTreeSet::new();
     for node in nodes {
         if !ids.insert(node.id.clone()) {
-            report.push_error("duplicate_node_id", format!("duplicate node id {}", node.id));
+            report.push_error(
+                "duplicate_node_id",
+                format!("duplicate node id {}", node.id),
+            );
         }
         if let Err(e) = validate_node(repo_root, manifest, node) {
             report.push_error(e.code(), e.to_string());
@@ -94,7 +106,10 @@ pub fn validate_graph(
     let mut parent_by_child: BTreeMap<String, String> = BTreeMap::new();
     for edge in edges {
         if !edge_ids.insert(edge.id.clone()) {
-            report.push_error("duplicate_edge_id", format!("duplicate edge id {}", edge.id));
+            report.push_error(
+                "duplicate_edge_id",
+                format!("duplicate edge id {}", edge.id),
+            );
         }
         if let Err(e) = validate_edge_schema_semantics(edge) {
             report.push_error(e.code(), e.to_string());
@@ -102,7 +117,10 @@ pub fn validate_graph(
         if !ids.contains(&edge.from) || !ids.contains(&edge.to) {
             report.push_error(
                 "dangling_edge",
-                format!("edge {} references missing endpoint {} -> {}", edge.id, edge.from, edge.to),
+                format!(
+                    "edge {} references missing endpoint {} -> {}",
+                    edge.id, edge.from, edge.to
+                ),
             );
         }
         let expected = deterministic_edge_id(edge.edge_type, &edge.from, &edge.to);
@@ -115,20 +133,30 @@ pub fn validate_graph(
         if edge.edge_type == EdgeType::Related && edge.to < edge.from {
             report.push_error(
                 "edge_endpoint_order_mismatch",
-                format!("related edge {} must store endpoints in lexical order", edge.id),
+                format!(
+                    "related edge {} must store endpoints in lexical order",
+                    edge.id
+                ),
             );
         }
         if edge.edge_type == EdgeType::Parent {
             if let Some(existing) = parent_by_child.insert(edge.from.clone(), edge.to.clone()) {
                 report.push_error(
                     "multiple_parents",
-                    format!("node {} has parents {} and {}", edge.from, existing, edge.to),
+                    format!(
+                        "node {} has parents {} and {}",
+                        edge.from, existing, edge.to
+                    ),
                 );
             }
         }
     }
 
-    for ty in [EdgeType::Parent, EdgeType::BlockedBy, EdgeType::SupersededBy] {
+    for ty in [
+        EdgeType::Parent,
+        EdgeType::BlockedBy,
+        EdgeType::SupersededBy,
+    ] {
         if let Some(cycle) = find_cycle(edges, ty) {
             report.push_error(
                 "cycle_detected",
@@ -161,36 +189,57 @@ pub fn validate_node(repo_root: &Path, manifest: &Manifest, node: &Node) -> Puls
 
 pub fn validate_node_schema_semantics(node: &Node) -> PulseResult<()> {
     if node.schema_version != 1 {
-        return Err(PulseError::validation("unsupported_node_version", "node schema_version must be 1"));
+        return Err(PulseError::validation(
+            "unsupported_node_version",
+            "node schema_version must be 1",
+        ));
     }
     validate_id_for_kind(&node.id, node.kind)?;
     if node.revision < 1 {
-        return Err(PulseError::validation("invalid_revision", "revision must be >= 1"));
+        return Err(PulseError::validation(
+            "invalid_revision",
+            "revision must be >= 1",
+        ));
     }
     if node.title.trim().is_empty() {
-        return Err(PulseError::validation("invalid_title", "title must not be empty"));
+        return Err(PulseError::validation(
+            "invalid_title",
+            "title must not be empty",
+        ));
     }
     Ok(())
 }
 
 pub fn validate_edge_schema_semantics(edge: &Edge) -> PulseResult<()> {
     if edge.schema_version != 1 {
-        return Err(PulseError::validation("unsupported_edge_version", "edge schema_version must be 1"));
+        return Err(PulseError::validation(
+            "unsupported_edge_version",
+            "edge schema_version must be 1",
+        ));
     }
     crate::id::validate_work_id(&edge.from)?;
     crate::id::validate_work_id(&edge.to)?;
     if edge.revision < 1 {
-        return Err(PulseError::validation("invalid_revision", "edge revision must be >= 1"));
+        return Err(PulseError::validation(
+            "invalid_revision",
+            "edge revision must be >= 1",
+        ));
     }
     if edge.created_by.trim().is_empty() {
-        return Err(PulseError::validation("invalid_actor", "created_by must not be empty"));
+        return Err(PulseError::validation(
+            "invalid_actor",
+            "created_by must not be empty",
+        ));
     }
     Ok(())
 }
 
 pub fn validate_node_filename(path: &Path, node: &Node) -> PulseResult<()> {
     let stem = path.file_stem().and_then(|s| s.to_str()).ok_or_else(|| {
-        PulseError::validation("invalid_filename", format!("invalid node filename {}", path.display()))
+        PulseError::validation(
+            "invalid_filename",
+            format!("invalid node filename {}", path.display()),
+        )
     })?;
     if stem != node.id {
         return Err(PulseError::validation(
@@ -203,7 +252,10 @@ pub fn validate_node_filename(path: &Path, node: &Node) -> PulseResult<()> {
 
 pub fn validate_edge_filename(path: &Path, edge: &Edge) -> PulseResult<()> {
     let stem = path.file_stem().and_then(|s| s.to_str()).ok_or_else(|| {
-        PulseError::validation("invalid_filename", format!("invalid edge filename {}", path.display()))
+        PulseError::validation(
+            "invalid_filename",
+            format!("invalid edge filename {}", path.display()),
+        )
     })?;
     if stem != edge.id {
         return Err(PulseError::validation(
@@ -214,11 +266,18 @@ pub fn validate_edge_filename(path: &Path, edge: &Edge) -> PulseResult<()> {
     Ok(())
 }
 
-pub fn validate_edge_for_add(nodes: &BTreeMap<String, Node>, edges: &[Edge], new_edge: &Edge) -> PulseResult<()> {
+pub fn validate_edge_for_add(
+    nodes: &BTreeMap<String, Node>,
+    edges: &[Edge],
+    new_edge: &Edge,
+) -> PulseResult<()> {
     if !nodes.contains_key(&new_edge.from) || !nodes.contains_key(&new_edge.to) {
         return Err(PulseError::validation(
             "dangling_edge",
-            format!("edge references missing endpoint {} -> {}", new_edge.from, new_edge.to),
+            format!(
+                "edge references missing endpoint {} -> {}",
+                new_edge.from, new_edge.to
+            ),
         ));
     }
     let mut all = edges.to_vec();
@@ -238,7 +297,9 @@ pub fn validate_edge_for_add(nodes: &BTreeMap<String, Node>, edges: &[Edge], new
 fn find_cycle(edges: &[Edge], ty: EdgeType) -> Option<Vec<String>> {
     let mut adj: HashMap<&str, Vec<&str>> = HashMap::new();
     for edge in edges.iter().filter(|e| e.edge_type == ty) {
-        adj.entry(edge.from.as_str()).or_default().push(edge.to.as_str());
+        adj.entry(edge.from.as_str())
+            .or_default()
+            .push(edge.to.as_str());
     }
     let mut visiting = HashSet::new();
     let mut visited = HashSet::new();

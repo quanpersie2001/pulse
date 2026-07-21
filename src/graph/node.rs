@@ -35,7 +35,10 @@ pub enum NodeStatus {
 impl Node {
     pub fn new(id: String, kind: WorkKind, title: String, now: DateTime<Utc>) -> PulseResult<Self> {
         if title.trim().is_empty() {
-            return Err(PulseError::validation("invalid_title", "title must not be empty"));
+            return Err(PulseError::validation(
+                "invalid_title",
+                "title must not be empty",
+            ));
         }
         Ok(Self {
             schema_version: 1,

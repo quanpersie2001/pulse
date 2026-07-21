@@ -87,7 +87,9 @@ pub fn build_projection(
         match edge.edge_type {
             EdgeType::Parent => push_sorted(&mut inverse.children, &edge.to, &edge.from),
             EdgeType::BlockedBy => push_sorted(&mut inverse.blocks, &edge.to, &edge.from),
-            EdgeType::PreferredAfter => push_sorted(&mut inverse.preferred_before, &edge.to, &edge.from),
+            EdgeType::PreferredAfter => {
+                push_sorted(&mut inverse.preferred_before, &edge.to, &edge.from)
+            }
             EdgeType::SupersededBy => push_sorted(&mut inverse.supersedes, &edge.to, &edge.from),
             EdgeType::Duplicates => push_sorted(&mut inverse.has_duplicate, &edge.to, &edge.from),
             EdgeType::Related => {

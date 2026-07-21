@@ -102,6 +102,7 @@ enum EdgeCommand {
 }
 
 #[cfg(debug_assertions)]
+#[allow(clippy::enum_variant_names)]
 #[derive(Clone, ValueEnum)]
 #[value(rename_all = "snake_case")]
 enum FailpointArg {
@@ -193,7 +194,11 @@ fn run(store: JsonGraphStore, command: Command) -> Result<(), PulseError> {
             WorkCommand::Show { id, json } => {
                 let node = store.show_node(&id)?;
                 let human = node.title.clone();
-                render(json, &json!({"schema_version": 1, "code": "ok", "node": node}), human)
+                render(
+                    json,
+                    &json!({"schema_version": 1, "code": "ok", "node": node}),
+                    human,
+                )
             }
             WorkCommand::List { kind, json } => {
                 let out = store.list_nodes(kind.map(Into::into))?;
@@ -233,7 +238,11 @@ fn run(store: JsonGraphStore, command: Command) -> Result<(), PulseError> {
             GraphCommand::Validate { json } => {
                 let report = store.validate()?;
                 let ok = report.valid;
-                render(json, &report, if ok { "valid" } else { "invalid" }.to_string())?;
+                render(
+                    json,
+                    &report,
+                    if ok { "valid" } else { "invalid" }.to_string(),
+                )?;
                 if ok {
                     Ok(())
                 } else {

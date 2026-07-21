@@ -31,7 +31,9 @@ fn two_processes_editing_same_revision_have_one_winner() {
     let repo = tempfile::tempdir().unwrap();
     let created = run_ok(
         &repo,
-        &["work", "create", "--kind", "ticket", "--title", "Original", "--json"],
+        &[
+            "work", "create", "--kind", "ticket", "--title", "Original", "--json",
+        ],
     );
     let id = created["value"]["id"].as_str().unwrap().to_string();
 
@@ -81,11 +83,15 @@ fn two_processes_editing_different_nodes_both_commit() {
     let repo = tempfile::tempdir().unwrap();
     let a = run_ok(
         &repo,
-        &["work", "create", "--kind", "ticket", "--title", "A", "--json"],
+        &[
+            "work", "create", "--kind", "ticket", "--title", "A", "--json",
+        ],
     );
     let b = run_ok(
         &repo,
-        &["work", "create", "--kind", "ticket", "--title", "B", "--json"],
+        &[
+            "work", "create", "--kind", "ticket", "--title", "B", "--json",
+        ],
     );
     let a_id = a["value"]["id"].as_str().unwrap().to_string();
     let b_id = b["value"]["id"].as_str().unwrap().to_string();
@@ -124,8 +130,22 @@ fn two_processes_editing_different_nodes_both_commit() {
     assert!(first.wait().unwrap().success());
     assert!(second.wait().unwrap().success());
 
-    assert_eq!(run_ok(&repo, &["work", "show", &a_id, "--json"])["node"]["title"], "A2");
-    assert_eq!(run_ok(&repo, &["work", "show", &b_id, "--json"])["node"]["title"], "B2");
-    assert!(repo.path().join(".pulse/workgraph/nodes").join(format!("{a_id}.json")).exists());
-    assert!(repo.path().join(".pulse/workgraph/nodes").join(format!("{b_id}.json")).exists());
+    assert_eq!(
+        run_ok(&repo, &["work", "show", &a_id, "--json"])["node"]["title"],
+        "A2"
+    );
+    assert_eq!(
+        run_ok(&repo, &["work", "show", &b_id, "--json"])["node"]["title"],
+        "B2"
+    );
+    assert!(repo
+        .path()
+        .join(".pulse/workgraph/nodes")
+        .join(format!("{a_id}.json"))
+        .exists());
+    assert!(repo
+        .path()
+        .join(".pulse/workgraph/nodes")
+        .join(format!("{b_id}.json"))
+        .exists());
 }

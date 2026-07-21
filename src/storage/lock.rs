@@ -27,6 +27,7 @@ impl WriteGuard {
             .read(true)
             .write(true)
             .create(true)
+            .truncate(false)
             .open(&lock_path)
             .map_err(|error| PulseError::io(&lock_path, error))?;
 
@@ -55,7 +56,7 @@ impl WriteGuard {
 
 impl Drop for WriteGuard {
     fn drop(&mut self) {
-        let _ = self.file.unlock();
+        let _ = fs2::FileExt::unlock(&self.file);
     }
 }
 

@@ -3,8 +3,8 @@ use pulse::error::PulseError;
 use pulse::storage::atomic::atomic_replace;
 use pulse::storage::paths::{configured_content_root, resolve_content_path, resolve_repo_relative};
 use pulse::storage::transaction::{
-    persist_intent, recover_prepared_transactions, write_event_create_new, FileState, RecoveryAction,
-    TransactionIntent,
+    persist_intent, recover_prepared_transactions, write_event_create_new, FileState,
+    RecoveryAction, TransactionIntent,
 };
 use pulse::storage::{bootstrap, MANIFEST_JSON};
 use serde_json::json;
@@ -38,7 +38,9 @@ fn bootstrap_is_idempotent_and_does_not_overwrite_user_files() {
 
     let first = bootstrap(repo).unwrap();
     assert!(repo.join(".pulse/workgraph/manifest.json").exists());
-    assert!(repo.join(".pulse/workgraph/schemas/node.schema.json").exists());
+    assert!(repo
+        .join(".pulse/workgraph/schemas/node.schema.json")
+        .exists());
     assert!(repo.join(".pulse/runtime/transactions").is_dir());
     assert_eq!(
         first.proposed_ignore_entries,
@@ -49,10 +51,13 @@ fn bootstrap_is_idempotent_and_does_not_overwrite_user_files() {
     fs::write(&manifest_path, b"user-owned manifest\n").unwrap();
     let second = bootstrap(repo).unwrap();
     assert_eq!(fs::read(&manifest_path).unwrap(), b"user-owned manifest\n");
-    assert!(second.preserved.contains(&manifest_path));
+    let canonical_manifest_path = fs::canonicalize(&manifest_path).unwrap();
+    assert!(second.preserved.contains(&canonical_manifest_path));
 
     let template_value: serde_json::Value = serde_json::from_str(MANIFEST_JSON).unwrap();
-    assert!(to_canonical_bytes(&template_value).unwrap().ends_with(b"\n"));
+    assert!(to_canonical_bytes(&template_value)
+        .unwrap()
+        .ends_with(b"\n"));
 }
 
 #[test]
@@ -65,7 +70,10 @@ fn safe_paths_reject_traversal_and_symlink_escape() {
     assert!(matches!(traversal, PulseError::PathTraversal { .. }));
 
     let content_escape = resolve_content_path(repo, ".pulse/workgraph").unwrap_err();
-    assert!(matches!(content_escape, PulseError::ContentRootViolation { .. }));
+    assert!(matches!(
+        content_escape,
+        PulseError::ContentRootViolation { .. }
+    ));
 
     let content_root = configured_content_root(repo, "../../works").unwrap();
     assert_eq!(content_root, fs::canonicalize(repo).unwrap().join("works"));
@@ -246,7 +254,11 @@ fn transaction_recovery_hard_fails_event_mismatch() {
     .unwrap();
     persist_intent(repo, &intent).unwrap();
     fs::create_dir_all(event_path.parent().unwrap()).unwrap();
-    fs::write(&event_path, to_canonical_bytes(&json!({"event": "different"})).unwrap()).unwrap();
+    fs::write(
+        &event_path,
+        to_canonical_bytes(&json!({"event": "different"})).unwrap(),
+    )
+    .unwrap();
 
     let error = recover_prepared_transactions(repo).unwrap_err();
     assert!(matches!(error, PulseError::EventMismatch { .. }));

@@ -54,10 +54,12 @@ pub fn canonical_value_bytes(value: &Value) -> Result<Vec<u8>> {
 
 pub fn to_canonical_string(value: &Value) -> Result<String> {
     let bytes = to_canonical_bytes(value)?;
-    String::from_utf8(bytes).map_err(|error| PulseError::validation(
-        "utf8_error",
-        format!("canonical JSON was not UTF-8: {error}"),
-    ))
+    String::from_utf8(bytes).map_err(|error| {
+        PulseError::validation(
+            "utf8_error",
+            format!("canonical JSON was not UTF-8: {error}"),
+        )
+    })
 }
 
 pub fn hash_bytes(bytes: &[u8]) -> String {
@@ -78,7 +80,7 @@ fn canonicalize(value: &Value, path: &str) -> Result<Value> {
         Value::Object(object) => {
             let mut sorted = Map::new();
             let mut entries: Vec<_> = object.iter().collect();
-            entries.sort_by(|(left, _), (right, _)| left.cmp(right));
+            entries.sort_by_key(|(left, _)| *left);
             for (key, child) in entries {
                 sorted.insert(key.clone(), canonicalize(child, &format!("{path}.{key}"))?);
             }

@@ -40,7 +40,10 @@ pub enum PulseError {
     ContentRootViolation { path: PathBuf },
 
     #[error("repository write lock timed out after {timeout:?}: {lock_path:?}")]
-    LockTimeout { lock_path: PathBuf, timeout: Duration },
+    LockTimeout {
+        lock_path: PathBuf,
+        timeout: Duration,
+    },
 
     #[error("durability support boundary: {message}")]
     DurabilityUnsupported { message: String },
@@ -64,10 +67,7 @@ pub enum PulseError {
     Failpoint { name: &'static str },
 
     #[error("validation failed: {message}")]
-    Validation {
-        code: &'static str,
-        message: String,
-    },
+    Validation { code: &'static str, message: String },
 
     #[error("CAS conflict for {subject}: expected revision {expected_revision}, current revision {current_revision}")]
     CasConflict {

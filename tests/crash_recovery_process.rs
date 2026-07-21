@@ -37,7 +37,15 @@ fn event_count(repo: &TempDir) -> usize {
     fs::read_dir(events)
         .unwrap()
         .flat_map(|date| fs::read_dir(date.unwrap().path()).unwrap())
-        .filter(|entry| entry.as_ref().unwrap().path().extension().and_then(|s| s.to_str()) == Some("json"))
+        .filter(|entry| {
+            entry
+                .as_ref()
+                .unwrap()
+                .path()
+                .extension()
+                .and_then(|s| s.to_str())
+                == Some("json")
+        })
         .count()
 }
 
@@ -63,8 +71,18 @@ fn kill_at_failpoint(repo: &TempDir, failpoint: &str, id: &str) {
         .expect("spawn failpoint command");
 
     let start = Instant::now();
-    while repo.path().join(".pulse/runtime/transactions").read_dir().unwrap().next().is_none() {
-        assert!(start.elapsed() < Duration::from_secs(5), "transaction intent was not persisted");
+    while repo
+        .path()
+        .join(".pulse/runtime/transactions")
+        .read_dir()
+        .unwrap()
+        .next()
+        .is_none()
+    {
+        assert!(
+            start.elapsed() < Duration::from_secs(5),
+            "transaction intent was not persisted"
+        );
         thread::sleep(Duration::from_millis(20));
     }
     thread::sleep(Duration::from_millis(100));
@@ -77,7 +95,9 @@ fn killed_after_intent_recovers_by_cleaning_uncommitted_transaction() {
     let repo = tempfile::tempdir().unwrap();
     let created = run_ok(
         &repo,
-        &["work", "create", "--kind", "ticket", "--title", "Before", "--json"],
+        &[
+            "work", "create", "--kind", "ticket", "--title", "Before", "--json",
+        ],
     );
     let id = created["value"]["id"].as_str().unwrap().to_string();
     let before_events = event_count(&repo);
@@ -96,7 +116,9 @@ fn killed_after_canonical_recovers_missing_event_without_reapplying_node() {
     let repo = tempfile::tempdir().unwrap();
     let created = run_ok(
         &repo,
-        &["work", "create", "--kind", "ticket", "--title", "Before", "--json"],
+        &[
+            "work", "create", "--kind", "ticket", "--title", "Before", "--json",
+        ],
     );
     let id = created["value"]["id"].as_str().unwrap().to_string();
     let before_events = event_count(&repo);
@@ -121,7 +143,9 @@ fn killed_after_event_recovers_by_cleaning_intent_without_duplicate_event() {
     let repo = tempfile::tempdir().unwrap();
     let created = run_ok(
         &repo,
-        &["work", "create", "--kind", "ticket", "--title", "Before", "--json"],
+        &[
+            "work", "create", "--kind", "ticket", "--title", "Before", "--json",
+        ],
     );
     let id = created["value"]["id"].as_str().unwrap().to_string();
     let before_events = event_count(&repo);

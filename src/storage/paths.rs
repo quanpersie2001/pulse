@@ -74,7 +74,10 @@ pub fn resolve_content_path_under(
     Ok(resolved)
 }
 
-pub fn configured_content_root(repo_root: &Path, manifest_content_root: impl AsRef<Path>) -> Result<PathBuf> {
+pub fn configured_content_root(
+    repo_root: &Path,
+    manifest_content_root: impl AsRef<Path>,
+) -> Result<PathBuf> {
     let repo_root = canonicalize_existing_dir(repo_root)?;
     let workgraph_root = repo_root.join(".pulse/workgraph");
     let content_root = manifest_content_root.as_ref();
@@ -107,12 +110,34 @@ fn normalize_future_path(path: &Path) -> Result<PathBuf> {
     if path.exists() {
         return fs::canonicalize(path).map_err(|error| PulseError::io(path, error));
     }
-    if let Some(parent) = nearest_existing_parent(path) {
-        let canonical_parent = fs::canonicalize(&parent).map_err(|error| PulseError::io(parent, error))?;
-        let suffix = path.strip_prefix(&parent).unwrap_or(Path::new(""));
+    let normalized = normalize_components(path)?;
+    if let Some(parent) = nearest_existing_parent(&normalized) {
+        let canonical_parent =
+            fs::canonicalize(&parent).map_err(|error| PulseError::io(&parent, error))?;
+        let suffix = normalized.strip_prefix(&parent).unwrap_or(Path::new(""));
         return Ok(canonical_parent.join(suffix));
     }
-    Ok(path.to_path_buf())
+    Ok(normalized)
+}
+
+fn normalize_components(path: &Path) -> Result<PathBuf> {
+    let mut out = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::Prefix(prefix) => out.push(prefix.as_os_str()),
+            Component::RootDir => out.push(component.as_os_str()),
+            Component::CurDir => {}
+            Component::Normal(part) => out.push(part),
+            Component::ParentDir => {
+                if !out.pop() {
+                    return Err(PulseError::PathTraversal {
+                        path: path.to_path_buf(),
+                    });
+                }
+            }
+        }
+    }
+    Ok(out)
 }
 
 fn nearest_existing_parent(path: &Path) -> Option<PathBuf> {
@@ -134,7 +159,10 @@ pub fn validate_relative_path(path: &Path) -> Result<()> {
     for component in path.components() {
         match component {
             Component::Normal(_) => {}
-            Component::CurDir | Component::ParentDir | Component::RootDir | Component::Prefix(_) => {
+            Component::CurDir
+            | Component::ParentDir
+            | Component::RootDir
+            | Component::Prefix(_) => {
                 return Err(PulseError::PathTraversal {
                     path: path.to_path_buf(),
                 });

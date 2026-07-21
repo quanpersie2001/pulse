@@ -32,8 +32,10 @@ pub fn atomic_replace(path: &Path, bytes: &[u8]) -> Result<AtomicWriteReport> {
     let result = (|| -> Result<()> {
         temp.write_all(bytes)
             .map_err(|error| PulseError::io(&temp_path, error))?;
-        temp.flush().map_err(|error| PulseError::io(&temp_path, error))?;
-        temp.sync_all().map_err(|error| PulseError::io(&temp_path, error))?;
+        temp.flush()
+            .map_err(|error| PulseError::io(&temp_path, error))?;
+        temp.sync_all()
+            .map_err(|error| PulseError::io(&temp_path, error))?;
         drop(temp);
 
         replace_file(&temp_path, path)?;

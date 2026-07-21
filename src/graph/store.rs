@@ -94,7 +94,8 @@ impl JsonGraphStore {
         let wg = self.workgraph_dir();
         fs::create_dir_all(wg.join("nodes")).map_err(|e| PulseError::io(wg.join("nodes"), e))?;
         fs::create_dir_all(wg.join("edges")).map_err(|e| PulseError::io(wg.join("edges"), e))?;
-        fs::create_dir_all(wg.join("schemas")).map_err(|e| PulseError::io(wg.join("schemas"), e))?;
+        fs::create_dir_all(wg.join("schemas"))
+            .map_err(|e| PulseError::io(wg.join("schemas"), e))?;
         self.write_if_absent(&wg.join("manifest.json"), &Manifest::default())?;
         self.write_bytes_if_absent(&wg.join("schemas/node.schema.json"), NODE_SCHEMA.as_bytes())?;
         self.write_bytes_if_absent(&wg.join("schemas/edge.schema.json"), EDGE_SCHEMA.as_bytes())?;
@@ -190,7 +191,10 @@ impl JsonGraphStore {
         ctx: OperationContext,
     ) -> PulseResult<MutationOutcome<Node>> {
         if title.trim().is_empty() {
-            return Err(PulseError::validation("invalid_title", "title must not be empty"));
+            return Err(PulseError::validation(
+                "invalid_title",
+                "title must not be empty",
+            ));
         }
         let _guard = WriteGuard::acquire(&self.repo_root)?;
         self.bootstrap_unlocked()?;
@@ -202,7 +206,8 @@ impl JsonGraphStore {
             });
         }
         let before_bytes = fs::read(&path).map_err(|error| PulseError::io(&path, error))?;
-        let mut node: Node = serde_json::from_slice(&before_bytes).map_err(|error| PulseError::json(&path, error))?;
+        let mut node: Node = serde_json::from_slice(&before_bytes)
+            .map_err(|error| PulseError::json(&path, error))?;
         if node.revision != expected_revision {
             return Err(PulseError::CasConflict {
                 subject: id.to_string(),
@@ -213,8 +218,15 @@ impl JsonGraphStore {
         node.title = title;
         node.revision += 1;
         node.updated_at = ctx.now;
-        let node_values = self.load_nodes_with_override(node.clone())?.into_values().collect::<Vec<_>>();
-        let edge_values = self.load_edges()?.iter().map(|(_, e)| e.clone()).collect::<Vec<_>>();
+        let node_values = self
+            .load_nodes_with_override(node.clone())?
+            .into_values()
+            .collect::<Vec<_>>();
+        let edge_values = self
+            .load_edges()?
+            .iter()
+            .map(|(_, e)| e.clone())
+            .collect::<Vec<_>>();
         validate_graph(
             &self.repo_root,
             &self.manifest()?,
@@ -287,7 +299,11 @@ impl JsonGraphStore {
         }
         let edge = Edge::new(edge_type, from, to, ctx.actor.clone(), ctx.now)?;
         let nodes = self.load_nodes()?;
-        let edges = self.load_edges()?.into_iter().map(|(_, e)| e).collect::<Vec<_>>();
+        let edges = self
+            .load_edges()?
+            .into_iter()
+            .map(|(_, e)| e)
+            .collect::<Vec<_>>();
         validate_edge_for_add(&nodes, &edges, &edge)?;
         let after_bytes = to_canonical_bytes(&edge)?;
         self.commit_mutation(
@@ -336,14 +352,15 @@ impl JsonGraphStore {
         let manifest = self.manifest()?;
         let node_files = self.load_node_files()?;
         let edge_files = self.load_edge_files()?;
-        let node_values = node_files.iter().map(|(_, n)| n.clone()).collect::<Vec<_>>();
-        let edge_values = edge_files.iter().map(|(_, e)| e.clone()).collect::<Vec<_>>();
-        let mut report = validate_graph(
-            &self.repo_root,
-            &manifest,
-            &node_values,
-            &edge_values,
-        );
+        let node_values = node_files
+            .iter()
+            .map(|(_, n)| n.clone())
+            .collect::<Vec<_>>();
+        let edge_values = edge_files
+            .iter()
+            .map(|(_, e)| e.clone())
+            .collect::<Vec<_>>();
+        let mut report = validate_graph(&self.repo_root, &manifest, &node_values, &edge_values);
         self.validate_manifest_files(&manifest, &mut report);
         for (path, node) in &node_files {
             if let Err(e) = validate_node_filename(path, node) {
@@ -383,6 +400,7 @@ impl JsonGraphStore {
         Ok(())
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn commit_mutation(
         &self,
         event_type: &str,
@@ -395,8 +413,18 @@ impl JsonGraphStore {
         canonical_bytes: &[u8],
         now: DateTime<Utc>,
     ) -> PulseResult<()> {
-        debug_assert_eq!(current_file_state(target_path, file_state_revision(&before))?, before);
-        let event = EventEnvelope::new(new_event_id(), event_type, actor.clone(), subject, payload, now);
+        debug_assert_eq!(
+            current_file_state(target_path, file_state_revision(&before))?,
+            before
+        );
+        let event = EventEnvelope::new(
+            new_event_id(),
+            event_type,
+            actor.clone(),
+            subject,
+            payload,
+            now,
+        );
         let intent = TransactionIntent::prepared(
             event.id.clone(),
             event_type,
@@ -416,11 +444,15 @@ impl JsonGraphStore {
     }
 
     fn node_path(&self, id: &str) -> PathBuf {
-        self.workgraph_dir().join("nodes").join(format!("{id}.json"))
+        self.workgraph_dir()
+            .join("nodes")
+            .join(format!("{id}.json"))
     }
 
     fn edge_path(&self, id: &str) -> PathBuf {
-        self.workgraph_dir().join("edges").join(format!("{id}.json"))
+        self.workgraph_dir()
+            .join("edges")
+            .join(format!("{id}.json"))
     }
 
     fn manifest(&self) -> PulseResult<Manifest> {
@@ -439,7 +471,10 @@ impl JsonGraphStore {
                 code,
                 format!("{} is not in canonical JSON byte form", path.display()),
             ),
-            (Err(error), _) => report.push_error("io_error", format!("cannot read {}: {error}", path.display())),
+            (Err(error), _) => report.push_error(
+                "io_error",
+                format!("cannot read {}: {error}", path.display()),
+            ),
             (_, Err(error)) => report.push_error(error.code(), error.to_string()),
             _ => {}
         }
@@ -460,28 +495,47 @@ impl JsonGraphStore {
     }
 
     fn validate_manifest_files(&self, manifest: &Manifest, report: &mut ValidationReport) {
-        match crate::storage::paths::configured_content_root(&self.repo_root, &manifest.content_root) {
-            Ok(root) => match crate::storage::paths::configured_content_root(&self.repo_root, "../../works") {
-                Ok(expected) if root != expected => report.push_error(
-                    "content_root_violation",
-                    format!(
-                        "manifest content_root must resolve to repository works/ root, got {}",
-                        manifest.content_root
+        match crate::storage::paths::configured_content_root(
+            &self.repo_root,
+            &manifest.content_root,
+        ) {
+            Ok(root) => {
+                match crate::storage::paths::configured_content_root(&self.repo_root, "../../works")
+                {
+                    Ok(expected) if root != expected => report.push_error(
+                        "content_root_violation",
+                        format!(
+                            "manifest content_root must resolve to repository works/ root, got {}",
+                            manifest.content_root
+                        ),
                     ),
-                ),
-                Ok(_) => {}
-                Err(error) => report.push_error(error.code(), error.to_string()),
-            },
+                    Ok(_) => {}
+                    Err(error) => report.push_error(error.code(), error.to_string()),
+                }
+            }
             Err(error) => report.push_error(error.code(), error.to_string()),
         }
         if manifest.id_pattern != "^(EP|ST|TK|DEC)-[0-9]{3,}$" {
             report.push_error(
                 "invalid_manifest",
-                format!("manifest id_pattern is unsupported: {}", manifest.id_pattern),
+                format!(
+                    "manifest id_pattern is unsupported: {}",
+                    manifest.id_pattern
+                ),
             );
         }
-        self.validate_schema_file(&manifest.node_schema, "node_schema_drift", NODE_SCHEMA, report);
-        self.validate_schema_file(&manifest.edge_schema, "edge_schema_drift", EDGE_SCHEMA, report);
+        self.validate_schema_file(
+            &manifest.node_schema,
+            "node_schema_drift",
+            NODE_SCHEMA,
+            report,
+        );
+        self.validate_schema_file(
+            &manifest.edge_schema,
+            "edge_schema_drift",
+            EDGE_SCHEMA,
+            report,
+        );
     }
 
     fn validate_schema_file(
@@ -501,24 +555,32 @@ impl JsonGraphStore {
         let full = self.workgraph_dir().join(rel);
         match fs::read(&full) {
             Ok(bytes) => match serde_json::from_slice::<serde_json::Value>(&bytes) {
-                Ok(repo_schema) => match serde_json::from_str::<serde_json::Value>(expected_embedded_schema) {
-                    Ok(embedded_schema) if repo_schema != embedded_schema => report.push_error(
-                        drift_code,
-                        format!("schema {} differs from slice schema template", full.display()),
-                    ),
-                    Ok(_) => match to_canonical_bytes(&repo_schema) {
-                        Ok(canonical) if canonical != bytes => report.push_warning(
-                            "schema_canonical_drift",
-                            format!("schema {} is not in canonical JSON byte form", full.display()),
+                Ok(repo_schema) => {
+                    match serde_json::from_str::<serde_json::Value>(expected_embedded_schema) {
+                        Ok(embedded_schema) if repo_schema != embedded_schema => report.push_error(
+                            drift_code,
+                            format!(
+                                "schema {} differs from slice schema template",
+                                full.display()
+                            ),
                         ),
-                        Err(error) => report.push_error(error.code(), error.to_string()),
-                        _ => {}
-                    },
-                    Err(e) => report.push_error(
-                        "embedded_schema_parse_error",
-                        format!("embedded schema is not valid JSON: {e}"),
-                    ),
-                },
+                        Ok(_) => match to_canonical_bytes(&repo_schema) {
+                            Ok(canonical) if canonical != bytes => report.push_warning(
+                                "schema_canonical_drift",
+                                format!(
+                                    "schema {} is not in canonical JSON byte form",
+                                    full.display()
+                                ),
+                            ),
+                            Err(error) => report.push_error(error.code(), error.to_string()),
+                            _ => {}
+                        },
+                        Err(e) => report.push_error(
+                            "embedded_schema_parse_error",
+                            format!("embedded schema is not valid JSON: {e}"),
+                        ),
+                    }
+                }
                 Err(e) => report.push_error(
                     "schema_parse_error",
                     format!("schema {} is not valid JSON: {}", full.display(), e),
@@ -538,7 +600,12 @@ impl JsonGraphStore {
             .map_err(|e| PulseError::io(self.workgraph_dir().join("nodes"), e))?
         {
             let entry = entry.map_err(|e| PulseError::io(self.workgraph_dir().join("nodes"), e))?;
-            let Some(stem) = entry.path().file_stem().and_then(|s| s.to_str()).map(str::to_string) else {
+            let Some(stem) = entry
+                .path()
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .map(str::to_string)
+            else {
                 continue;
             };
             if let Some(n) = parse_numeric(&stem, prefix) {
@@ -617,7 +684,9 @@ impl JsonGraphStore {
     }
 
     fn rel_path(&self, path: &Path) -> PathBuf {
-        path.strip_prefix(&self.repo_root).unwrap_or(path).to_path_buf()
+        path.strip_prefix(&self.repo_root)
+            .unwrap_or(path)
+            .to_path_buf()
     }
 
     fn write_if_absent<T: Serialize>(&self, path: &Path, value: &T) -> PulseResult<()> {

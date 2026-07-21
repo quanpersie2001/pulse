@@ -148,7 +148,8 @@ pub fn create_new(path: &Path, bytes: &[u8]) -> Result<()> {
         .map_err(|error| PulseError::io(path, error))?;
     file.write_all(bytes)
         .map_err(|error| PulseError::io(path, error))?;
-    file.sync_all().map_err(|error| PulseError::io(path, error))?;
+    file.sync_all()
+        .map_err(|error| PulseError::io(path, error))?;
     Ok(())
 }
 
