@@ -87,7 +87,10 @@ pub struct SupersededWork {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub edge: Option<Edge>,
     pub target: SupersessionTarget,
-    pub assertion: SupersessionAssertion,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub assertion: Option<SupersessionAssertion>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reconciliation_receipt: Option<crate::evidence::model::ReceiptReference>,
 }
 
 #[derive(Debug, Clone)]
@@ -124,6 +127,14 @@ impl JsonGraphStore {
             repo_root: repo_root.into(),
             failpoint: Some(failpoint),
         }
+    }
+
+    pub fn repo_root(&self) -> &Path {
+        &self.repo_root
+    }
+
+    pub fn failpoint(&self) -> Option<TransactionFailpoint> {
+        self.failpoint
     }
 
     pub fn bootstrap(&self) -> PulseResult<()> {
@@ -471,7 +482,8 @@ impl JsonGraphStore {
                         node: old,
                         edge: existing,
                         target,
-                        assertion,
+                        assertion: Some(assertion),
+                        reconciliation_receipt: None,
                     },
                 });
             }
@@ -499,7 +511,8 @@ impl JsonGraphStore {
                         node: old,
                         edge: existing,
                         target,
-                        assertion,
+                        assertion: Some(assertion),
+                        reconciliation_receipt: None,
                     },
                 });
             }
@@ -690,7 +703,8 @@ impl JsonGraphStore {
                 node: old,
                 edge,
                 target,
-                assertion,
+                assertion: Some(assertion),
+                reconciliation_receipt: None,
             },
         })
     }
@@ -715,6 +729,258 @@ impl JsonGraphStore {
                 now: Utc::now(),
             },
         )
+    }
+
+    pub fn supersede_work_with_receipt(
+        &self,
+        old_id: &str,
+        target: SupersessionTarget,
+        expected_revision: u64,
+        reason: String,
+        receipt_id: String,
+        actor: String,
+    ) -> PulseResult<MutationOutcome<SupersededWork>> {
+        let _guard = WriteGuard::acquire(&self.repo_root)?;
+        self.bootstrap_unlocked()?;
+        recover_prepared_transactions(&self.repo_root)?;
+        crate::evidence::manifest::bootstrap(&self.repo_root)?;
+        let old_path = self.node_path(old_id);
+        if !old_path.exists() {
+            return Err(PulseError::NotFound {
+                subject: old_id.to_string(),
+            });
+        }
+        let before_bytes = fs::read(&old_path).map_err(|error| PulseError::io(&old_path, error))?;
+        let mut old: Node = serde_json::from_slice(&before_bytes)
+            .map_err(|error| PulseError::json(&old_path, error))?;
+        let nodes = self.load_nodes()?;
+        let edges = self
+            .load_edges()?
+            .into_iter()
+            .map(|(_, e)| e)
+            .collect::<Vec<_>>();
+        let target_id = match &target {
+            SupersessionTarget::Replacement { id } | SupersessionTarget::Decision { id } => {
+                id.clone()
+            }
+        };
+        if old.revision != expected_revision {
+            if let Some((existing_edge, receipt_ref)) =
+                self.same_supersession_receipt(old_id, &target, &receipt_id, &edges)?
+            {
+                return Ok(MutationOutcome {
+                    schema_version: 1,
+                    code: "unchanged".to_string(),
+                    status: MutationStatus::Unchanged,
+                    value: SupersededWork {
+                        node: old,
+                        edge: existing_edge,
+                        target,
+                        assertion: None,
+                        reconciliation_receipt: Some(receipt_ref),
+                    },
+                });
+            }
+            return Err(PulseError::CasConflict {
+                subject: old_id.to_string(),
+                expected_revision,
+                current_revision: old.revision,
+            });
+        }
+        if reason.trim().is_empty() {
+            return Err(PulseError::validation(
+                "reason_required",
+                "supersession requires a non-empty reason",
+            ));
+        }
+        let target_node = nodes.get(&target_id).ok_or_else(|| PulseError::NotFound {
+            subject: target_id.clone(),
+        })?;
+        let receipt_ref = crate::evidence::receipt::validate_for_supersession(
+            &self.repo_root,
+            &receipt_id,
+            old_id,
+            expected_revision,
+            &target_id,
+            target_node.revision,
+        )?;
+        let existing_outgoing = superseded_by_edges(&edges, old_id);
+        if old.status == NodeStatus::Superseded {
+            if let Some((existing_edge, receipt_ref)) =
+                self.same_supersession_receipt(old_id, &target, &receipt_id, &edges)?
+            {
+                return Ok(MutationOutcome {
+                    schema_version: 1,
+                    code: "unchanged".to_string(),
+                    status: MutationStatus::Unchanged,
+                    value: SupersededWork {
+                        node: old,
+                        edge: existing_edge,
+                        target,
+                        assertion: None,
+                        reconciliation_receipt: Some(receipt_ref),
+                    },
+                });
+            }
+            return Err(PulseError::validation(
+                "supersession_conflict",
+                "work is already superseded by a different target or receipt",
+            ));
+        }
+        if !matches!(
+            old.status,
+            NodeStatus::Draft | NodeStatus::Shaped | NodeStatus::Ready | NodeStatus::Blocked
+        ) {
+            return Err(PulseError::validation(
+                "supersession_unavailable",
+                format!("status {:?} cannot be superseded", old.status),
+            ));
+        }
+        if !existing_outgoing.is_empty() {
+            return Err(PulseError::validation(
+                "supersession_conflict",
+                "work already has an outgoing superseded_by edge",
+            ));
+        }
+        let edge = match &target {
+            SupersessionTarget::Replacement { id } => {
+                if id == old_id {
+                    return Err(PulseError::validation(
+                        "supersession_cycle",
+                        "work cannot supersede itself",
+                    ));
+                }
+                let replacement = nodes.get(id).ok_or_else(|| PulseError::NotFound {
+                    subject: id.clone(),
+                })?;
+                if matches!(
+                    replacement.status,
+                    NodeStatus::Cancelled | NodeStatus::Superseded
+                ) {
+                    return Err(PulseError::validation(
+                        "invalid_supersession_target",
+                        "replacement must not be cancelled or superseded",
+                    ));
+                }
+                let planned_edge = Edge::new(
+                    EdgeType::SupersededBy,
+                    old_id.to_string(),
+                    id.clone(),
+                    actor.clone(),
+                    Utc::now(),
+                )?;
+                let mut all_edges = edges.clone();
+                all_edges.push(planned_edge.clone());
+                if supersession_reaches(&all_edges, id, old_id) {
+                    return Err(PulseError::validation(
+                        "supersession_cycle",
+                        "supersession edge would create a cycle",
+                    ));
+                }
+                Some(planned_edge)
+            }
+            SupersessionTarget::Decision { id } => {
+                if target_node.kind != WorkKind::Decision {
+                    return Err(PulseError::validation(
+                        "invalid_supersession_target",
+                        "decision target must have kind Decision",
+                    ));
+                }
+                let _ = id;
+                None
+            }
+        };
+        let now = Utc::now();
+        old.status = NodeStatus::Superseded;
+        old.status_reason = Some(StatusReason::new(
+            "superseded",
+            reason.clone(),
+            match &target {
+                SupersessionTarget::Replacement { .. } => None,
+                SupersessionTarget::Decision { id } => Some(id.clone()),
+            },
+        )?);
+        old.revision += 1;
+        old.updated_at = now;
+        let old_after_bytes = to_canonical_bytes(&old)?;
+        let event = EventEnvelope::new(
+            new_event_id(),
+            "work.node.superseded",
+            actor.clone(),
+            old_id,
+            json!({
+                "old_id": old_id, "expected_revision": expected_revision, "new_revision": old.revision, "target": target, "reason": reason,
+                "reconciliation_receipt": receipt_ref, "gate_coverage": ["supersession_preconditions", "receipt_identity", "graph_integrity"]
+            }),
+            now,
+        );
+        match &edge {
+            Some(edge) => {
+                let edge_after_bytes = to_canonical_bytes(edge)?;
+                let targets = vec![
+                    TransactionTarget::new(
+                        old_path.clone(),
+                        FileState::Present {
+                            hash: hash_bytes(&before_bytes),
+                            revision: expected_revision,
+                        },
+                        FileState::Present {
+                            hash: hash_bytes(&old_after_bytes),
+                            revision: expected_revision + 1,
+                        },
+                        &old_after_bytes,
+                    ),
+                    TransactionTarget::new(
+                        self.edge_path(&edge.id),
+                        FileState::Absent,
+                        FileState::Present {
+                            hash: hash_bytes(&edge_after_bytes),
+                            revision: edge.revision,
+                        },
+                        &edge_after_bytes,
+                    ),
+                ];
+                let intent = MultiTargetTransactionIntent::prepared(
+                    event.id.clone(),
+                    event.event_type.clone(),
+                    actor,
+                    targets,
+                    event_path(&self.repo_root, &event),
+                    serde_json::to_value(&event)?,
+                )?;
+                let prepared = prepare_multi_target_transaction(&self.repo_root, intent)?;
+                commit_prepared_multi_target_transaction(&prepared, self.failpoint)?;
+            }
+            None => self.commit_mutation(
+                "work.node.superseded",
+                actor,
+                old_id,
+                serde_json::to_value(&event.payload)?,
+                &old_path,
+                FileState::Present {
+                    hash: hash_bytes(&before_bytes),
+                    revision: expected_revision,
+                },
+                FileState::Present {
+                    hash: hash_bytes(&old_after_bytes),
+                    revision: expected_revision + 1,
+                },
+                &old_after_bytes,
+                now,
+            )?,
+        }
+        Ok(MutationOutcome {
+            schema_version: 1,
+            code: "superseded".to_string(),
+            status: MutationStatus::Updated,
+            value: SupersededWork {
+                node: old,
+                edge,
+                target,
+                assertion: None,
+                reconciliation_receipt: Some(receipt_ref),
+            },
+        })
     }
 
     pub fn add_edge_with_context(
@@ -1428,6 +1694,52 @@ impl JsonGraphStore {
             }
         }
         false
+    }
+
+    fn same_supersession_receipt(
+        &self,
+        old_id: &str,
+        target: &SupersessionTarget,
+        receipt_id: &str,
+        edges: &[Edge],
+    ) -> PulseResult<Option<(Option<Edge>, crate::evidence::model::ReceiptReference)>> {
+        let events_dir = self.repo_root.join(".pulse/events");
+        let Ok(date_dirs) = fs::read_dir(events_dir) else {
+            return Ok(None);
+        };
+        let target_value = serde_json::to_value(target)?;
+        for date_dir in date_dirs.flatten() {
+            let Ok(entries) = fs::read_dir(date_dir.path()) else {
+                continue;
+            };
+            for entry in entries.flatten() {
+                if entry.path().extension().and_then(|ext| ext.to_str()) != Some("json") {
+                    continue;
+                }
+                let Ok(event) = storage::read_json::<EventEnvelope>(&entry.path()) else {
+                    continue;
+                };
+                let Some(receipt_value) = event.payload.get("reconciliation_receipt") else {
+                    continue;
+                };
+                if event.event_type == "work.node.superseded"
+                    && event.subject == old_id
+                    && event.payload.get("target") == Some(&target_value)
+                    && receipt_value.get("id").and_then(|v| v.as_str()) == Some(receipt_id)
+                {
+                    let receipt_ref: crate::evidence::model::ReceiptReference =
+                        serde_json::from_value(receipt_value.clone())?;
+                    let edge = match target {
+                        SupersessionTarget::Replacement { .. } => {
+                            superseded_by_edges(edges, old_id).into_iter().next()
+                        }
+                        SupersessionTarget::Decision { .. } => None,
+                    };
+                    return Ok(Some((edge, receipt_ref)));
+                }
+            }
+        }
+        Ok(None)
     }
 }
 

@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Pulse documentation validation receipt payload v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "payload_version"
+  ],
+  "properties": {
+    "payload_version": {
+      "const": 1
+    }
+  }
+}

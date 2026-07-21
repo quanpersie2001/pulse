@@ -1,0 +1,112 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Pulse receipt envelope v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "receipt_version",
+    "id",
+    "kind",
+    "result",
+    "actor",
+    "recorded_at",
+    "subject",
+    "bindings",
+    "payload"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "receipt_version": {
+      "const": 1
+    },
+    "id": {
+      "type": "string",
+      "pattern": "^rcpt_[0-9A-HJKMNP-TV-Z]{26}$"
+    },
+    "kind": {
+      "enum": [
+        "supersession_reconciliation",
+        "shaping_validation",
+        "documentation_validation"
+      ]
+    },
+    "result": {
+      "enum": [
+        "passed",
+        "failed",
+        "inconclusive"
+      ]
+    },
+    "actor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "id"
+      ],
+      "properties": {
+        "kind": {
+          "enum": [
+            "human",
+            "agent",
+            "system"
+          ]
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        }
+      }
+    },
+    "recorded_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "subject": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "id"
+      ],
+      "properties": {
+        "kind": {
+          "type": "string",
+          "minLength": 1
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "bindings": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "work": {
+          "type": "array"
+        },
+        "source": {
+          "type": "object"
+        },
+        "content": {
+          "type": "array"
+        },
+        "artifacts": {
+          "type": "array"
+        },
+        "graph_fingerprint_observed": {
+          "type": "string"
+        }
+      }
+    },
+    "payload": {
+      "type": "object"
+    }
+  }
+}

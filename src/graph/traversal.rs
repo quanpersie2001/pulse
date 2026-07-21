@@ -228,7 +228,10 @@ fn adjacent_edges<'a>(
 }
 
 fn relation_matches(filter: Option<EdgeType>, relation: EdgeType) -> bool {
-    filter.is_none_or(|wanted| wanted == relation)
+    match filter {
+        Some(wanted) => wanted == relation,
+        None => true,
+    }
 }
 
 fn hierarchy_related(projection: &GraphProjection, subject: &str) -> Vec<AffectedNode> {

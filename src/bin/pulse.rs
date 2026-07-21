@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 
 use clap::{Parser, Subcommand, ValueEnum};
+use pulse::evidence::model::{ReceiptKind, ReceiptResult};
 use pulse::graph::edge::EdgeType;
 use pulse::graph::lifecycle::TransitionReason;
 use pulse::graph::node::NodeStatus;
@@ -33,6 +34,10 @@ enum Command {
     Graph {
         #[command(subcommand)]
         command: GraphCommand,
+    },
+    Evidence {
+        #[command(subcommand)]
+        command: EvidenceCommand,
     },
 }
 
@@ -77,7 +82,9 @@ enum WorkCommand {
         #[arg(long)]
         reason: String,
         #[arg(long)]
-        assertion: PathBuf,
+        assertion: Option<PathBuf>,
+        #[arg(long)]
+        reconciliation_receipt: Option<String>,
         #[arg(long)]
         actor: String,
         #[arg(long)]
@@ -107,6 +114,81 @@ enum WorkCommand {
     },
     Rollup {
         id: String,
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+#[derive(Subcommand)]
+enum EvidenceCommand {
+    Bootstrap {
+        #[arg(long)]
+        json: bool,
+    },
+    Artifact {
+        #[command(subcommand)]
+        command: ArtifactCommand,
+    },
+    Receipt {
+        #[command(subcommand)]
+        command: ReceiptCommand,
+    },
+}
+
+#[derive(Subcommand)]
+enum ArtifactCommand {
+    Put {
+        path: PathBuf,
+        #[arg(long)]
+        kind: String,
+        #[arg(long)]
+        media_type: Option<String>,
+        #[arg(long)]
+        original_name: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
+    Show {
+        digest: String,
+        #[arg(long)]
+        json: bool,
+    },
+    Verify {
+        digest: String,
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+#[derive(Subcommand)]
+enum ReceiptCommand {
+    Record {
+        #[arg(long)]
+        file: PathBuf,
+        #[arg(long)]
+        json: bool,
+    },
+    Show {
+        id: String,
+        #[arg(long)]
+        json: bool,
+    },
+    List {
+        #[arg(long)]
+        kind: Option<ReceiptKindArg>,
+        #[arg(long)]
+        subject: Option<String>,
+        #[arg(long)]
+        result: Option<ReceiptResultArg>,
+        #[arg(long)]
+        json: bool,
+    },
+    Verify {
+        id: String,
+        #[arg(long)]
+        current: bool,
+        #[arg(long)]
+        source: Option<String>,
         #[arg(long)]
         json: bool,
     },
@@ -266,6 +348,42 @@ impl From<EdgeTypeArg> for EdgeType {
     }
 }
 
+#[derive(Clone, ValueEnum)]
+#[value(rename_all = "snake_case")]
+enum ReceiptKindArg {
+    SupersessionReconciliation,
+    ShapingValidation,
+    DocumentationValidation,
+}
+
+impl From<ReceiptKindArg> for ReceiptKind {
+    fn from(value: ReceiptKindArg) -> Self {
+        match value {
+            ReceiptKindArg::SupersessionReconciliation => ReceiptKind::SupersessionReconciliation,
+            ReceiptKindArg::ShapingValidation => ReceiptKind::ShapingValidation,
+            ReceiptKindArg::DocumentationValidation => ReceiptKind::DocumentationValidation,
+        }
+    }
+}
+
+#[derive(Clone, ValueEnum)]
+#[value(rename_all = "snake_case")]
+enum ReceiptResultArg {
+    Passed,
+    Failed,
+    Inconclusive,
+}
+
+impl From<ReceiptResultArg> for ReceiptResult {
+    fn from(value: ReceiptResultArg) -> Self {
+        match value {
+            ReceiptResultArg::Passed => ReceiptResult::Passed,
+            ReceiptResultArg::Failed => ReceiptResult::Failed,
+            ReceiptResultArg::Inconclusive => ReceiptResult::Inconclusive,
+        }
+    }
+}
+
 fn main() {
     let cli = Cli::parse();
     let repo_root = cli
@@ -321,6 +439,7 @@ fn run(store: JsonGraphStore, command: Command) -> Result<(), PulseError> {
                 expected_revision,
                 reason,
                 assertion,
+                reconciliation_receipt,
                 actor,
                 json,
             } => {
@@ -334,18 +453,37 @@ fn run(store: JsonGraphStore, command: Command) -> Result<(), PulseError> {
                         ));
                     }
                 };
-                let assertion_bytes = std::fs::read(&assertion)
-                    .map_err(|error| PulseError::io(assertion.clone(), error))?;
-                let assertion: SupersessionAssertion = serde_json::from_slice(&assertion_bytes)
-                    .map_err(|error| PulseError::json(assertion.clone(), error))?;
-                let out = store.supersede_work(
-                    &old_id,
-                    target,
-                    expected_revision,
-                    reason,
-                    assertion,
-                    actor,
-                )?;
+                let out = match (reconciliation_receipt, assertion) {
+                    (Some(receipt_id), None) => store.supersede_work_with_receipt(
+                        &old_id,
+                        target,
+                        expected_revision,
+                        reason,
+                        receipt_id,
+                        actor,
+                    )?,
+                    (None, Some(assertion)) => {
+                        let assertion_bytes = std::fs::read(&assertion)
+                            .map_err(|error| PulseError::io(assertion.clone(), error))?;
+                        let assertion: SupersessionAssertion =
+                            serde_json::from_slice(&assertion_bytes)
+                                .map_err(|error| PulseError::json(assertion.clone(), error))?;
+                        store.supersede_work(
+                            &old_id,
+                            target,
+                            expected_revision,
+                            reason,
+                            assertion,
+                            actor,
+                        )?
+                    }
+                    _ => {
+                        return Err(PulseError::validation(
+                            "supersession_receipt_mismatch",
+                            "choose exactly one of --reconciliation-receipt or --assertion",
+                        ))
+                    }
+                };
                 render(json, &out, format!("{} {}", out.code, out.value.node.id))
             }
             WorkCommand::Transition {
@@ -393,6 +531,93 @@ fn run(store: JsonGraphStore, command: Command) -> Result<(), PulseError> {
                 let out = store.rollup(&id)?;
                 render(json, &out, format!("rollup {}", out.subject))
             }
+        },
+        Command::Evidence { command } => match command {
+            EvidenceCommand::Bootstrap { json } => {
+                let out = pulse::evidence::bootstrap(store.repo_root())?;
+                render(json, &out, "evidence bootstrapped".to_string())
+            }
+            EvidenceCommand::Artifact { command } => match command {
+                ArtifactCommand::Put {
+                    path,
+                    kind,
+                    media_type,
+                    original_name,
+                    json,
+                } => {
+                    let manifest = pulse::evidence::manifest::load(store.repo_root())?;
+                    let out = pulse::evidence::put_artifact(
+                        store.repo_root(),
+                        store.failpoint(),
+                        &path,
+                        kind,
+                        media_type,
+                        original_name,
+                        manifest.max_artifact_bytes,
+                    )?;
+                    render(json, &out, format!("{} {}", out.code, out.artifact.digest))
+                }
+                ArtifactCommand::Show { digest, json } => {
+                    let out = pulse::evidence::show_artifact(store.repo_root(), &digest)?;
+                    render(json, &out, out.digest.clone())
+                }
+                ArtifactCommand::Verify { digest, json } => {
+                    let out = pulse::evidence::verify_artifact(store.repo_root(), &digest)?;
+                    render(json, &out, out.code.clone())
+                }
+            },
+            EvidenceCommand::Receipt { command } => match command {
+                ReceiptCommand::Record { file, json } => {
+                    let out = pulse::evidence::record_receipt(
+                        store.repo_root(),
+                        store.failpoint(),
+                        &file,
+                    )?;
+                    render(json, &out, format!("{} {}", out.code, out.receipt.id))
+                }
+                ReceiptCommand::Show { id, json } => {
+                    let out = pulse::evidence::show_receipt(store.repo_root(), &id)?;
+                    render(json, &out, out.receipt.id.clone())
+                }
+                ReceiptCommand::List {
+                    kind,
+                    subject,
+                    result,
+                    json,
+                } => {
+                    let out = pulse::evidence::list_receipts(
+                        store.repo_root(),
+                        kind.map(Into::into),
+                        subject,
+                        result.map(Into::into),
+                    )?;
+                    render(json, &out, format!("{} receipts", out.receipts.len()))
+                }
+                ReceiptCommand::Verify {
+                    id,
+                    current,
+                    source,
+                    json,
+                } => {
+                    let out = pulse::evidence::verify_receipt(
+                        store.repo_root(),
+                        &id,
+                        current,
+                        source.as_deref(),
+                    )?;
+                    let ok = out.integrity.status == "valid"
+                        && (!current || out.bindings.status == "current");
+                    render(json, &out, out.integrity.status.clone())?;
+                    if ok {
+                        Ok(())
+                    } else {
+                        Err(PulseError::validation(
+                            "receipt_hash_mismatch",
+                            "receipt verification failed",
+                        ))
+                    }
+                }
+            },
         },
         Command::Graph { command } => match command {
             GraphCommand::Edge { command } => match command {

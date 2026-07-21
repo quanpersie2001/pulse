@@ -285,7 +285,12 @@ pub fn commit_prepared_transaction(
         trigger_failpoint("after_intent")?;
     }
 
-    atomic::atomic_replace(&prepared.intent.target_path, canonical_bytes)?;
+    write_target_respecting_before(
+        &prepared.intent.target_path,
+        &prepared.intent.before,
+        &prepared.intent.after,
+        canonical_bytes,
+    )?;
     #[cfg(debug_assertions)]
     if failpoint == Some(TransactionFailpoint::AfterCanonical) {
         trigger_failpoint("after_canonical")?;
@@ -310,7 +315,12 @@ pub fn commit_prepared_multi_target_transaction(
     }
 
     for (index, target) in prepared.intent.targets.iter().enumerate() {
-        atomic::atomic_replace(&target.path, &target.after_bytes()?)?;
+        write_target_respecting_before(
+            &target.path,
+            &target.before,
+            &target.after,
+            &target.after_bytes()?,
+        )?;
         #[cfg(debug_assertions)]
         if index == 0 && failpoint == Some(TransactionFailpoint::AfterMultiTargetFirst) {
             trigger_failpoint("after_multi_target_first")?;
@@ -494,7 +504,12 @@ fn recover_one_multi_target(
         }
         (written, total, ObservedEvent::Absent) if written < total => {
             for target in intent.targets.iter().skip(written) {
-                atomic::atomic_replace(&target.path, &target.after_bytes()?)?;
+                write_target_respecting_before(
+                    &target.path,
+                    &target.before,
+                    &target.after,
+                    &target.after_bytes()?,
+                )?;
             }
             write_event_create_new_multi(intent)?;
             fs::remove_file(intent_path).map_err(|error| PulseError::io(intent_path, error))?;
@@ -567,6 +582,27 @@ fn observed_target_state(
         Ok(ObservedTarget::After)
     } else {
         Ok(ObservedTarget::Other)
+    }
+}
+
+fn write_target_respecting_before(
+    path: &Path,
+    before: &FileState,
+    after: &FileState,
+    bytes: &[u8],
+) -> Result<()> {
+    let observed = observed_target_state(path, before, after)?;
+    match (before, observed) {
+        (FileState::Absent, ObservedTarget::Before) => crate::storage::create_new(path, bytes),
+        (_, ObservedTarget::Before) => atomic::atomic_replace(path, bytes).map(|_| ()),
+        (_, ObservedTarget::After) => Ok(()),
+        (_, ObservedTarget::Other) => Err(PulseError::AmbiguousTransaction {
+            transaction_id: "commit_precondition".to_string(),
+            message: format!(
+                "target {} no longer matches prepared before state",
+                path.display()
+            ),
+        }),
     }
 }
 
