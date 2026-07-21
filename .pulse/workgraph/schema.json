@@ -1,0 +1,179 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Pulse Workgraph Item",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "kind",
+    "title",
+    "slug",
+    "status",
+    "parent_id",
+    "epic_id",
+    "depends_on",
+    "priority",
+    "owner",
+    "labels",
+    "risk_flags",
+    "blocked_reason",
+    "content_path",
+    "verification_path",
+    "created_at",
+    "updated_at",
+    "closed_at"
+  ],
+  "properties": {
+    "id": {
+      "type": "string",
+      "pattern": "^[ESBT]-[0-9A-Z]+(?:-[0-9]+)?$"
+    },
+    "kind": {
+      "enum": [
+        "EPIC",
+        "STORY",
+        "TASK",
+        "BUG"
+      ]
+    },
+    "title": {
+      "type": "string",
+      "minLength": 1
+    },
+    "slug": {
+      "type": "string",
+      "minLength": 1
+    },
+    "status": {
+      "enum": [
+        "OPEN",
+        "IN_PROGRESS",
+        "BLOCKED",
+        "CLOSED"
+      ]
+    },
+    "parent_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "epic_id": {
+      "type": "string"
+    },
+    "depends_on": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "uniqueItems": true
+    },
+    "priority": {
+      "type": "integer"
+    },
+    "owner": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "labels": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "uniqueItems": true
+    },
+    "risk_flags": {
+      "type": "array",
+      "items": {
+        "enum": [
+          "AUTH",
+          "DATA",
+          "SECURITY",
+          "MIGRATION",
+          "EXISTING_BEHAVIOR",
+          "EXTERNAL_API",
+          "PERFORMANCE",
+          "UX",
+          "CI",
+          "UNKNOWN"
+        ]
+      },
+      "uniqueItems": true
+    },
+    "blocked_reason": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "content_path": {
+      "type": "string",
+      "pattern": "^works/"
+    },
+    "verification_path": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "updated_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "closed_at": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "format": "date-time"
+    }
+  },
+  "x_workgraph_rules": {
+    "hierarchy": {
+      "EPIC": {
+        "parent_id": null,
+        "epic_id": "self"
+      },
+      "STORY": {
+        "parent_kind": [
+          "EPIC"
+        ],
+        "epic_id": "ancestor_epic"
+      },
+      "TASK": {
+        "parent_kind": [
+          "STORY"
+        ],
+        "epic_id": "ancestor_epic"
+      },
+      "BUG": {
+        "parent_kind": [
+          "STORY"
+        ],
+        "epic_id": "ancestor_epic"
+      }
+    },
+    "lifecycle": {
+      "blocked_reason_required_for": [
+        "BLOCKED"
+      ],
+      "closed_at_required_for": [
+        "CLOSED"
+      ],
+      "close_requires_verification_kinds": [
+        "TASK",
+        "BUG"
+      ]
+    },
+    "dependencies": {
+      "allow_cross_epic": true,
+      "allow_cycles": false
+    }
+  }
+}
