@@ -299,6 +299,9 @@ pub fn validate_node_schema_semantics(node: &Node) -> PulseResult<()> {
             format!("status {:?} must not persist status_reason", node.status),
         ));
     }
+    if let Some(documentation) = &node.documentation {
+        documentation.validate(false)?;
+    }
     Ok(())
 }
 

@@ -12,7 +12,10 @@ use crate::graph::edge::{canonical_endpoints, deterministic_edge_id, Edge, EdgeT
 use crate::graph::executability::{structural_executability, StructuralExecutabilityReport};
 use crate::graph::lifecycle::{status_requires_reason, validate_transition, TransitionReason};
 use crate::graph::manifest::{Manifest, EDGE_SCHEMA, NODE_SCHEMA};
-use crate::graph::node::{Node, NodeStatus, StatusReason};
+use crate::graph::node::{
+    DocumentationImpact, DocumentationImpactPosture, DocumentationMetadata, DocumentationRouting,
+    Node, NodeStatus, StatusReason,
+};
 use crate::graph::projection::PROJECTION_SCHEMA_VERSION;
 use crate::graph::projection::{export_with_cache, GraphProjection};
 use crate::graph::rollup::{rollup, RollupReport};
@@ -33,6 +36,8 @@ use crate::{PulseError, PulseResult};
 
 const SLICE1_NODE_SCHEMA_HASH: &str =
     "sha256:1590def10b4715549d6d735352f2033bb128808dab7e56a138689bb0a46af589";
+const SLICE3_NODE_SCHEMA_HASH: &str =
+    "sha256:b327203245e5a9ecbcc11182ceff1decb3aaf575e99b0ada12994cba81e33f8f";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -55,6 +60,17 @@ pub struct ListOutcome<T> {
     pub schema_version: u32,
     pub code: String,
     pub items: Vec<T>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DocumentationImpactUpdate {
+    pub posture: DocumentationImpactPosture,
+    pub rationale: Option<String>,
+    pub required_documents: Vec<String>,
+    pub deferred_to: Vec<String>,
+    pub paths: Vec<String>,
+    pub domains: Vec<String>,
+    pub labels: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -325,6 +341,132 @@ impl JsonGraphStore {
         title: String,
     ) -> PulseResult<MutationOutcome<Node>> {
         self.edit_title_with_context(id, expected_revision, title, OperationContext::default())
+    }
+
+    pub fn update_documentation_impact_with_context(
+        &self,
+        ticket_id: &str,
+        expected_revision: u64,
+        update: DocumentationImpactUpdate,
+        ctx: OperationContext,
+    ) -> PulseResult<MutationOutcome<Node>> {
+        let documentation = DocumentationMetadata {
+            impact: DocumentationImpact {
+                posture: update.posture,
+                rationale: update.rationale,
+                required_documents: update.required_documents,
+                deferred_to: update.deferred_to,
+            },
+            routing: DocumentationRouting {
+                paths: update.paths,
+                domains: update.domains,
+                labels: update.labels,
+            },
+        };
+        documentation.validate(true)?;
+        let _guard = WriteGuard::acquire(&self.repo_root)?;
+        self.bootstrap_unlocked()?;
+        recover_prepared_transactions(&self.repo_root)?;
+        let path = self.node_path(ticket_id);
+        if !path.exists() {
+            return Err(PulseError::NotFound {
+                subject: ticket_id.to_string(),
+            });
+        }
+        let before_bytes = fs::read(&path).map_err(|error| PulseError::io(&path, error))?;
+        let mut node: Node = serde_json::from_slice(&before_bytes)
+            .map_err(|error| PulseError::json(&path, error))?;
+        if node.kind != WorkKind::Ticket {
+            return Err(PulseError::validation(
+                "documentation_impact_requires_ticket",
+                format!("documentation impact can only be set on tickets: {ticket_id}"),
+            ));
+        }
+        if node.revision != expected_revision {
+            return Err(PulseError::CasConflict {
+                subject: ticket_id.to_string(),
+                expected_revision,
+                current_revision: node.revision,
+            });
+        }
+        let nodes = self.load_nodes()?;
+        for target in &documentation.impact.deferred_to {
+            if !nodes.contains_key(target) {
+                return Err(PulseError::validation(
+                    "documentation_defer_target_missing",
+                    format!("deferred documentation target does not exist: {target}"),
+                ));
+            }
+        }
+        let previous_documentation = node.documentation.clone();
+        node.documentation = Some(documentation.clone());
+        node.revision += 1;
+        node.updated_at = ctx.now;
+        let node_values = self
+            .load_nodes_with_override(node.clone())?
+            .into_values()
+            .collect::<Vec<_>>();
+        let edge_values = self
+            .load_edges()?
+            .iter()
+            .map(|(_, e)| e.clone())
+            .collect::<Vec<_>>();
+        validate_graph(
+            &self.repo_root,
+            &self.manifest()?,
+            &node_values,
+            &edge_values,
+        )
+        .into_result()?;
+        let after_bytes = to_canonical_bytes(&node)?;
+        self.commit_mutation(
+            "work.documentation_impact.updated",
+            ctx.actor,
+            ticket_id,
+            json!({
+                "ticket_id": ticket_id,
+                "expected_revision": expected_revision,
+                "new_revision": node.revision,
+                "previous_documentation": previous_documentation,
+                "documentation": documentation,
+                "gate_coverage": ["ticket_kind", "node_revision_cas", "documentation_impact_validation", "deferred_work_refs", "graph_integrity"]
+            }),
+            &path,
+            FileState::Present {
+                hash: hash_bytes(&before_bytes),
+                revision: expected_revision,
+            },
+            FileState::Present {
+                hash: hash_bytes(&after_bytes),
+                revision: expected_revision + 1,
+            },
+            &after_bytes,
+            ctx.now,
+        )?;
+        Ok(MutationOutcome {
+            schema_version: 1,
+            code: "updated".to_string(),
+            status: MutationStatus::Updated,
+            value: node,
+        })
+    }
+
+    pub fn update_documentation_impact(
+        &self,
+        ticket_id: &str,
+        expected_revision: u64,
+        update: DocumentationImpactUpdate,
+        actor: String,
+    ) -> PulseResult<MutationOutcome<Node>> {
+        self.update_documentation_impact_with_context(
+            ticket_id,
+            expected_revision,
+            update,
+            OperationContext {
+                actor,
+                now: Utc::now(),
+            },
+        )
     }
 
     pub fn transition_node_with_context(
@@ -1306,12 +1448,12 @@ impl JsonGraphStore {
             return Ok(());
         }
         let current_hash = hash_bytes(&current);
-        if current_hash != SLICE1_NODE_SCHEMA_HASH {
+        if ![SLICE1_NODE_SCHEMA_HASH, SLICE3_NODE_SCHEMA_HASH].contains(&current_hash.as_str()) {
             return Err(PulseError::validation(
                 "node_schema_upgrade_refused",
                 format!(
-                    "refusing to overwrite unknown node schema {}; expected Slice 1 predecessor {}",
-                    current_hash, SLICE1_NODE_SCHEMA_HASH
+                    "refusing to overwrite unknown node schema {}; expected known predecessor",
+                    current_hash
                 ),
             ));
         }

@@ -9,6 +9,77 @@
       "format": "date-time",
       "type": "string"
     },
+    "documentation": {
+      "additionalProperties": false,
+      "properties": {
+        "impact": {
+          "additionalProperties": false,
+          "properties": {
+            "deferred_to": {
+              "items": {
+                "pattern": "^(EP|ST|TK|DEC)-[0-9]{3,}$",
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "posture": {
+              "enum": [
+                "unknown",
+                "required",
+                "none",
+                "deferred"
+              ],
+              "type": "string"
+            },
+            "rationale": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "required_documents": {
+              "items": {
+                "pattern": "^DOC-[A-Z0-9][A-Z0-9-]{2,63}$",
+                "type": "string"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "posture"
+          ],
+          "type": "object"
+        },
+        "routing": {
+          "additionalProperties": false,
+          "properties": {
+            "domains": {
+              "items": {
+                "pattern": "^[a-z0-9][a-z0-9-]*[a-z0-9]$|^[a-z0-9]$",
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "labels": {
+              "items": {
+                "pattern": "^[a-z0-9][a-z0-9-]*[a-z0-9]$|^[a-z0-9]$",
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "paths": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          },
+          "type": "object"
+        }
+      },
+      "required": [
+        "impact"
+      ],
+      "type": "object"
+    },
     "id": {
       "pattern": "^(EP|ST|TK|DEC)-[0-9]{3,}$",
       "type": "string"

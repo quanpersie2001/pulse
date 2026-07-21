@@ -13,7 +13,7 @@ use crate::storage::WriteGuard;
 use crate::{PulseError, Result};
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
-use serde_json::json;
+use serde_json::{json, Value};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -213,8 +213,26 @@ pub fn verify_receipt(
     } else {
         Vec::new()
     };
+    let bindings = ValidationDimension {
+        status: if !current {
+            "not_checked"
+        } else if binding_codes.is_empty() {
+            "current"
+        } else {
+            "stale"
+        }
+        .to_string(),
+        reason_codes: binding_codes,
+    };
+    let (registry, policy, authorization, gate_eligible) = docs_validation_dimensions(
+        repo_root,
+        &receipt,
+        current,
+        integrity.is_empty(),
+        bindings.status == "current",
+    )?;
     Ok(ValidationReport {
-        schema_version: 1,
+        schema_version: 2,
         receipt_id: id.to_string(),
         receipt_hash: hash,
         integrity: ValidationDimension {
@@ -226,22 +244,11 @@ pub fn verify_receipt(
             .to_string(),
             reason_codes: integrity,
         },
-        bindings: ValidationDimension {
-            status: if !current {
-                "not_checked"
-            } else if binding_codes.is_empty() {
-                "current"
-            } else {
-                "stale"
-            }
-            .to_string(),
-            reason_codes: binding_codes,
-        },
-        authorization: ValidationDimension {
-            status: "not_evaluated".to_string(),
-            reason_codes: vec!["authority_resolver_unavailable".to_string()],
-        },
-        gate_eligible: false,
+        bindings,
+        registry,
+        policy,
+        authorization,
+        gate_eligible,
     })
 }
 
@@ -443,19 +450,22 @@ fn validate_docs_payload(
         ));
     }
     for doc in &p.documents {
-        if !receipt
-            .bindings
-            .content
-            .iter()
-            .any(|c| c.path == doc.path && c.sha256 == doc.content_hash)
-        {
+        validate_document_id(&doc.document_id)?;
+        if doc.document_revision == 0 {
             return Err(PulseError::validation(
-                "content_binding_missing",
-                doc.path.clone(),
+                "document_receipt_registry_mismatch",
+                "document revision must be positive",
             ));
         }
+        validate_document_entry_common(receipt, &doc.path, &doc.content_hash)?;
     }
     for check in &p.checks {
+        if check.kind.trim().is_empty() {
+            return Err(PulseError::validation(
+                "receipt_schema_invalid",
+                "check kind is required",
+            ));
+        }
         if let Some(d) = &check.artifact {
             if !receipt.bindings.artifacts.iter().any(|a| &a.sha256 == d) {
                 return Err(PulseError::validation("artifact_not_found", d.clone()));
@@ -463,6 +473,202 @@ fn validate_docs_payload(
         }
     }
     Ok(())
+}
+
+fn validate_document_entry_common(
+    receipt: &ReceiptEnvelope,
+    path: &str,
+    content_hash: &str,
+) -> Result<()> {
+    crate::storage::safe_repo_relative(path)?;
+    if !content_hash.starts_with("sha256:") || content_hash.len() != 71 {
+        return Err(PulseError::validation(
+            "receipt_schema_invalid",
+            "content hash must be sha256:<hex>",
+        ));
+    }
+    if !receipt
+        .bindings
+        .content
+        .iter()
+        .any(|c| c.path == path && c.sha256 == content_hash)
+    {
+        return Err(PulseError::validation(
+            "content_binding_missing",
+            path.to_string(),
+        ));
+    }
+    Ok(())
+}
+
+fn docs_validation_dimensions(
+    repo_root: &Path,
+    receipt: &ReceiptEnvelope,
+    current: bool,
+    integrity_valid: bool,
+    bindings_current: bool,
+) -> Result<(
+    ValidationDimension,
+    ValidationDimension,
+    ValidationDimension,
+    bool,
+)> {
+    let ReceiptPayload::DocumentationValidation(payload) = &receipt.payload else {
+        return Ok((
+            ValidationDimension {
+                status: "not_applicable".to_string(),
+                reason_codes: Vec::new(),
+            },
+            ValidationDimension {
+                status: "not_applicable".to_string(),
+                reason_codes: Vec::new(),
+            },
+            ValidationDimension {
+                status: "not_evaluated".to_string(),
+                reason_codes: vec!["authority_resolver_unavailable".to_string()],
+            },
+            false,
+        ));
+    };
+
+    if payload.payload_version != 1 {
+        return Ok((
+            ValidationDimension {
+                status: "invalid".to_string(),
+                reason_codes: vec!["receipt_version_unsupported".to_string()],
+            },
+            ValidationDimension {
+                status: "not_evaluated".to_string(),
+                reason_codes: Vec::new(),
+            },
+            ValidationDimension {
+                status: "not_evaluated".to_string(),
+                reason_codes: vec!["authority_resolver_unavailable".to_string()],
+            },
+            false,
+        ));
+    }
+
+    let registry = load_docs_registry(repo_root)?;
+    let mut registry_codes = Vec::new();
+    let mut policies = BTreeSet::new();
+    for doc in &payload.documents {
+        let Some(record) = registry
+            .documents
+            .iter()
+            .find(|candidate| candidate.id == doc.document_id)
+        else {
+            registry_codes.push("document_receipt_registry_mismatch".to_string());
+            if registry
+                .documents
+                .iter()
+                .any(|candidate| candidate.path == doc.path)
+            {
+                registry_codes.push("document_receipt_wrong_id_for_path".to_string());
+            }
+            continue;
+        };
+        policies.insert(record.review_policy.clone());
+        if record.path != doc.path {
+            registry_codes.push("document_receipt_registry_mismatch".to_string());
+        }
+        if record.revision != doc.document_revision {
+            registry_codes.push("document_receipt_revision_stale".to_string());
+        }
+        match current_content_hash(repo_root, &record.path)? {
+            Some(current_hash) if current_hash == doc.content_hash => {}
+            Some(_) => registry_codes.push("document_receipt_registry_mismatch".to_string()),
+            None => registry_codes.push("document_receipt_registry_mismatch".to_string()),
+        }
+        match record.lifecycle.as_str() {
+            "current" => {}
+            "retired" => registry_codes.push("document_retired".to_string()),
+            "superseded" => registry_codes.push("document_superseded".to_string()),
+            "stale" | "suspected_stale" => registry_codes.push("document_stale".to_string()),
+            _ => registry_codes.push("document_receipt_registry_mismatch".to_string()),
+        }
+    }
+    registry_codes.sort();
+    registry_codes.dedup();
+
+    let mut policy_codes = Vec::new();
+    let mut authorization_codes = vec!["authority_resolver_unavailable".to_string()];
+    let mut authorization_status = "not_evaluated";
+    for policy in &policies {
+        match policy.as_str() {
+            "none" => {}
+            "light" => require_passed_checks(payload, &["content_review"], &mut policy_codes),
+            "standard" => require_passed_checks(
+                payload,
+                &["link_check", "semantic_review"],
+                &mut policy_codes,
+            ),
+            "independent" => {
+                require_passed_checks(
+                    payload,
+                    &["link_check", "semantic_review"],
+                    &mut policy_codes,
+                );
+                authorization_status = "unresolved";
+                authorization_codes.push("independent_authorization_unresolved".to_string());
+            }
+            "human" => {
+                policy_codes.push("human_approval_unresolved".to_string());
+                authorization_status = "unresolved";
+                authorization_codes.push("human_approval_unresolved".to_string());
+            }
+            _ => policy_codes.push("document_receipt_policy_incomplete".to_string()),
+        }
+    }
+    policy_codes.sort();
+    policy_codes.dedup();
+    authorization_codes.sort();
+    authorization_codes.dedup();
+
+    let registry_dimension = ValidationDimension {
+        status: if !current {
+            "not_checked"
+        } else if registry_codes.is_empty() {
+            "current"
+        } else if registry_codes.iter().any(|code| {
+            matches!(
+                code.as_str(),
+                "document_retired" | "document_superseded" | "document_stale"
+            )
+        }) {
+            "not_current"
+        } else {
+            "mismatch"
+        }
+        .to_string(),
+        reason_codes: if current { registry_codes } else { Vec::new() },
+    };
+    let policy_dimension = ValidationDimension {
+        status: if policy_codes.is_empty() {
+            "structurally_satisfied"
+        } else {
+            "incomplete"
+        }
+        .to_string(),
+        reason_codes: policy_codes,
+    };
+    let authorization_dimension = ValidationDimension {
+        status: authorization_status.to_string(),
+        reason_codes: authorization_codes,
+    };
+    let gate_eligible = integrity_valid
+        && bindings_current
+        && registry_dimension.status == "current"
+        && policy_dimension.status == "structurally_satisfied"
+        && authorization_dimension.status == "not_evaluated"
+        && policies.iter().all(|policy| policy == "none");
+
+    Ok((
+        registry_dimension,
+        policy_dimension,
+        authorization_dimension,
+        gate_eligible,
+    ))
 }
 
 fn binding_staleness(
@@ -542,6 +748,119 @@ fn code_to_static(code: &str) -> &'static str {
         "repository_identity_mismatch" => "repository_identity_mismatch",
         "artifact_not_found" => "artifact_not_found",
         _ => "receipt_schema_invalid",
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DocsRegistrySnapshot {
+    #[serde(default)]
+    documents: Vec<DocsRegistryDocument>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DocsRegistryDocument {
+    id: String,
+    revision: u64,
+    path: String,
+    lifecycle: String,
+    review_policy: String,
+}
+
+fn load_docs_registry(repo_root: &Path) -> Result<DocsRegistrySnapshot> {
+    let path = repo_root.join(".pulse/docs/registry.json");
+    if !path.exists() {
+        return Ok(DocsRegistrySnapshot {
+            documents: Vec::new(),
+        });
+    }
+    let value: Value = crate::storage::read_json(&path)?;
+    let documents_value = value
+        .get("documents")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let mut documents = Vec::new();
+    for document in documents_value {
+        documents.push(DocsRegistryDocument {
+            id: required_string(&document, "id")?,
+            revision: document
+                .get("revision")
+                .and_then(Value::as_u64)
+                .ok_or_else(|| {
+                    PulseError::validation("docs_registry_schema_invalid", "missing revision")
+                })?,
+            path: required_string(&document, "path")?,
+            lifecycle: optional_string(&document, "lifecycle", "current")?,
+            review_policy: optional_string(&document, "review_policy", "none")?,
+        });
+    }
+    Ok(DocsRegistrySnapshot { documents })
+}
+
+fn required_string(value: &Value, field: &'static str) -> Result<String> {
+    value
+        .get(field)
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .ok_or_else(|| PulseError::validation("docs_registry_schema_invalid", field))
+}
+
+fn optional_string(value: &Value, field: &'static str, default: &str) -> Result<String> {
+    match value.get(field) {
+        Some(value) => value
+            .as_str()
+            .map(str::to_string)
+            .ok_or_else(|| PulseError::validation("docs_registry_schema_invalid", field)),
+        None => Ok(default.to_string()),
+    }
+}
+
+fn current_content_hash(repo_root: &Path, path: &str) -> Result<Option<String>> {
+    let rel = crate::storage::safe_repo_relative(path)?;
+    let path = repo_root.join(rel);
+    match fs::read(&path) {
+        Ok(bytes) => Ok(Some(hash_bytes(&bytes))),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(PulseError::io(path, error)),
+    }
+}
+
+fn require_passed_checks(
+    payload: &DocumentationValidationPayload,
+    required: &[&str],
+    policy_codes: &mut Vec<String>,
+) {
+    for required_kind in required {
+        if !payload
+            .checks
+            .iter()
+            .any(|check| check.kind == *required_kind && check.result == ReceiptResult::Passed)
+        {
+            policy_codes.push("document_receipt_policy_incomplete".to_string());
+        }
+    }
+}
+
+fn validate_document_id(id: &str) -> Result<()> {
+    let Some(rest) = id.strip_prefix("DOC-") else {
+        return Err(PulseError::validation(
+            "document_receipt_registry_mismatch",
+            "document id must start with DOC-",
+        ));
+    };
+    if (3..=64).contains(&rest.len())
+        && rest
+            .chars()
+            .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '-')
+    {
+        Ok(())
+    } else {
+        Err(PulseError::validation(
+            "document_receipt_registry_mismatch",
+            "invalid document id",
+        ))
     }
 }
 

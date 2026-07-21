@@ -125,26 +125,29 @@ fn default_manifest(repo_root: &Path) -> Result<EvidenceManifest> {
         },
     );
     let mut receipt_kinds = BTreeMap::new();
-    for (kind, path, schema) in [
+    for (kind, version, path, schema) in [
         (
             "supersession_reconciliation",
+            "1",
             "schemas/supersession-reconciliation.v1.schema.json",
             SUPERSESSION_SCHEMA,
         ),
         (
             "shaping_validation",
+            "1",
             "schemas/shaping-validation.v1.schema.json",
             SHAPING_SCHEMA,
         ),
         (
             "documentation_validation",
+            "1",
             "schemas/documentation-validation.v1.schema.json",
             DOCUMENTATION_SCHEMA,
         ),
     ] {
         let mut versions = BTreeMap::new();
         versions.insert(
-            "1".to_string(),
+            version.to_string(),
             SchemaRef {
                 schema: path.to_string(),
                 schema_hash: schema_hash(schema)?,

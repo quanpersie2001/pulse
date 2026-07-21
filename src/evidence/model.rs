@@ -193,16 +193,16 @@ pub struct ApprovalAssertion {
 pub struct DocumentationValidationPayload {
     pub payload_version: u32,
     #[serde(default)]
-    pub documents: Vec<DocumentValidationEntry>,
+    pub documents: Vec<DocumentationValidationDocument>,
     #[serde(default)]
     pub checks: Vec<DocumentCheck>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
-pub struct DocumentValidationEntry {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub proposed_document_id: Option<String>,
+pub struct DocumentationValidationDocument {
+    pub document_id: String,
+    pub document_revision: u64,
     pub path: String,
     pub content_hash: String,
     pub result: ReceiptResult,
@@ -230,6 +230,8 @@ pub struct ValidationReport {
     pub receipt_hash: String,
     pub integrity: ValidationDimension,
     pub bindings: ValidationDimension,
+    pub registry: ValidationDimension,
+    pub policy: ValidationDimension,
     pub authorization: ValidationDimension,
     pub gate_eligible: bool,
 }

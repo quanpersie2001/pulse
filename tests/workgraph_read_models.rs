@@ -17,6 +17,7 @@ fn node(id: &str, kind: WorkKind, status: NodeStatus) -> Node {
         title: id.to_string(),
         status,
         status_reason: None,
+        documentation: None,
         content_dir: format!("works/{id}"),
         created_at: now,
         updated_at: now,

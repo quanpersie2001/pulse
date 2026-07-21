@@ -1,11 +1,14 @@
 use std::path::PathBuf;
 
 use clap::{Parser, Subcommand, ValueEnum};
+use pulse::docs::model::{
+    DocumentAuthority, DocumentKind, DocumentLifecycle, DocumentPatch, DocumentRecord,
+};
 use pulse::evidence::model::{ReceiptKind, ReceiptResult};
 use pulse::graph::edge::EdgeType;
 use pulse::graph::lifecycle::TransitionReason;
-use pulse::graph::node::NodeStatus;
-use pulse::graph::store::{SupersessionAssertion, SupersessionTarget};
+use pulse::graph::node::{DocumentationImpactPosture, NodeStatus};
+use pulse::graph::store::{DocumentationImpactUpdate, SupersessionAssertion, SupersessionTarget};
 use pulse::id::WorkKind;
 #[cfg(debug_assertions)]
 use pulse::storage::transaction::TransactionFailpoint;
@@ -31,6 +34,10 @@ enum Command {
         #[command(subcommand)]
         command: WorkCommand,
     },
+    Docs {
+        #[command(subcommand)]
+        command: DocsCommand,
+    },
     Graph {
         #[command(subcommand)]
         command: GraphCommand,
@@ -39,6 +46,205 @@ enum Command {
         #[command(subcommand)]
         command: EvidenceCommand,
     },
+}
+
+#[derive(Subcommand)]
+enum DocsCommand {
+    Register {
+        #[arg(long)]
+        file: PathBuf,
+        #[arg(long)]
+        expected_registry_revision: u64,
+        #[arg(long)]
+        actor: String,
+        #[arg(long)]
+        json: bool,
+    },
+    Edit {
+        document_id: String,
+        #[arg(long)]
+        patch: PathBuf,
+        #[arg(long)]
+        expected_registry_revision: u64,
+        #[arg(long)]
+        expected_document_revision: u64,
+        #[arg(long)]
+        actor: String,
+        #[arg(long)]
+        json: bool,
+    },
+    Retire {
+        document_id: String,
+        #[arg(long)]
+        reason: String,
+        #[arg(long)]
+        expected_registry_revision: u64,
+        #[arg(long)]
+        expected_document_revision: u64,
+        #[arg(long)]
+        actor: String,
+        #[arg(long)]
+        json: bool,
+    },
+    Supersede {
+        old_id: String,
+        #[arg(long = "by")]
+        replacement_id: String,
+        #[arg(long)]
+        reason: String,
+        #[arg(long)]
+        expected_registry_revision: u64,
+        #[arg(long)]
+        expected_document_revision: u64,
+        #[arg(long)]
+        actor: String,
+        #[arg(long)]
+        json: bool,
+    },
+    List {
+        #[arg(long)]
+        kind: Option<DocKindArg>,
+        #[arg(long)]
+        authority: Option<DocAuthorityArg>,
+        #[arg(long)]
+        lifecycle: Option<DocLifecycleArg>,
+        #[arg(long)]
+        json: bool,
+    },
+    Show {
+        document_id: String,
+        #[arg(long)]
+        json: bool,
+    },
+    Validate {
+        #[arg(long)]
+        json: bool,
+    },
+    Applicable {
+        #[arg(long = "work")]
+        work_id: String,
+        #[arg(long)]
+        include_draft: bool,
+        #[arg(long)]
+        include_stale: bool,
+        #[arg(long)]
+        json: bool,
+    },
+    Impact {
+        ticket_id: String,
+        #[arg(long)]
+        expected_revision: u64,
+        #[arg(long)]
+        posture: DocumentationPostureArg,
+        #[arg(long)]
+        rationale: Option<String>,
+        #[arg(long = "required-doc")]
+        required_doc: Vec<String>,
+        #[arg(long = "deferred-to")]
+        deferred_to: Vec<String>,
+        #[arg(long = "path")]
+        path: Vec<String>,
+        #[arg(long = "domain")]
+        domain: Vec<String>,
+        #[arg(long = "label")]
+        label: Vec<String>,
+        #[arg(long)]
+        actor: String,
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+#[derive(Clone, ValueEnum)]
+#[value(rename_all = "snake_case")]
+enum DocumentationPostureArg {
+    Required,
+    None,
+    Deferred,
+}
+
+impl From<DocumentationPostureArg> for DocumentationImpactPosture {
+    fn from(value: DocumentationPostureArg) -> Self {
+        match value {
+            DocumentationPostureArg::Required => DocumentationImpactPosture::Required,
+            DocumentationPostureArg::None => DocumentationImpactPosture::None,
+            DocumentationPostureArg::Deferred => DocumentationImpactPosture::Deferred,
+        }
+    }
+}
+
+#[derive(Clone, ValueEnum)]
+#[value(rename_all = "snake_case")]
+enum DocKindArg {
+    RepositoryMap,
+    Policy,
+    Product,
+    Architecture,
+    Domain,
+    Operations,
+    Reference,
+    DecisionProjection,
+    Generated,
+    Informational,
+}
+
+impl From<DocKindArg> for DocumentKind {
+    fn from(value: DocKindArg) -> Self {
+        match value {
+            DocKindArg::RepositoryMap => DocumentKind::RepositoryMap,
+            DocKindArg::Policy => DocumentKind::Policy,
+            DocKindArg::Product => DocumentKind::Product,
+            DocKindArg::Architecture => DocumentKind::Architecture,
+            DocKindArg::Domain => DocumentKind::Domain,
+            DocKindArg::Operations => DocumentKind::Operations,
+            DocKindArg::Reference => DocumentKind::Reference,
+            DocKindArg::DecisionProjection => DocumentKind::DecisionProjection,
+            DocKindArg::Generated => DocumentKind::Generated,
+            DocKindArg::Informational => DocumentKind::Informational,
+        }
+    }
+}
+
+#[derive(Clone, ValueEnum)]
+#[value(rename_all = "snake_case")]
+enum DocAuthorityArg {
+    Draft,
+    Approved,
+    Informational,
+    Generated,
+}
+
+impl From<DocAuthorityArg> for DocumentAuthority {
+    fn from(value: DocAuthorityArg) -> Self {
+        match value {
+            DocAuthorityArg::Draft => DocumentAuthority::Draft,
+            DocAuthorityArg::Approved => DocumentAuthority::Approved,
+            DocAuthorityArg::Informational => DocumentAuthority::Informational,
+            DocAuthorityArg::Generated => DocumentAuthority::Generated,
+        }
+    }
+}
+
+#[derive(Clone, ValueEnum)]
+#[value(rename_all = "snake_case")]
+enum DocLifecycleArg {
+    Current,
+    SuspectedStale,
+    Stale,
+    Retired,
+    Superseded,
+}
+
+impl From<DocLifecycleArg> for DocumentLifecycle {
+    fn from(value: DocLifecycleArg) -> Self {
+        match value {
+            DocLifecycleArg::Current => DocumentLifecycle::Current,
+            DocLifecycleArg::SuspectedStale => DocumentLifecycle::SuspectedStale,
+            DocLifecycleArg::Stale => DocumentLifecycle::Stale,
+            DocLifecycleArg::Retired => DocumentLifecycle::Retired,
+            DocLifecycleArg::Superseded => DocumentLifecycle::Superseded,
+        }
+    }
 }
 
 #[derive(Subcommand)]
@@ -530,6 +736,221 @@ fn run(store: JsonGraphStore, command: Command) -> Result<(), PulseError> {
             WorkCommand::Rollup { id, json } => {
                 let out = store.rollup(&id)?;
                 render(json, &out, format!("rollup {}", out.subject))
+            }
+        },
+        Command::Docs { command } => match command {
+            DocsCommand::Register {
+                file,
+                expected_registry_revision,
+                actor,
+                json,
+            } => {
+                let bytes =
+                    std::fs::read(&file).map_err(|error| PulseError::io(file.clone(), error))?;
+                let document: DocumentRecord = serde_json::from_slice(&bytes)
+                    .map_err(|error| PulseError::json(file.clone(), error))?;
+                let out = pulse::docs::register(
+                    store.repo_root(),
+                    expected_registry_revision,
+                    document,
+                    actor,
+                )?;
+                render(json, &out, format!("registered {}", out.value.id))
+            }
+            DocsCommand::Edit {
+                document_id,
+                patch,
+                expected_registry_revision,
+                expected_document_revision,
+                actor,
+                json,
+            } => {
+                let bytes =
+                    std::fs::read(&patch).map_err(|error| PulseError::io(patch.clone(), error))?;
+                let patch_value: DocumentPatch = serde_json::from_slice(&bytes)
+                    .map_err(|error| PulseError::json(patch.clone(), error))?;
+                let out = pulse::docs::edit(
+                    store.repo_root(),
+                    &document_id,
+                    expected_registry_revision,
+                    expected_document_revision,
+                    patch_value,
+                    actor,
+                )?;
+                render(json, &out, format!("updated {}", out.value.id))
+            }
+            DocsCommand::Retire {
+                document_id,
+                reason,
+                expected_registry_revision,
+                expected_document_revision,
+                actor,
+                json,
+            } => {
+                let out = pulse::docs::retire(
+                    store.repo_root(),
+                    &document_id,
+                    expected_registry_revision,
+                    expected_document_revision,
+                    reason,
+                    actor,
+                )?;
+                render(json, &out, format!("retired {}", out.value.id))
+            }
+            DocsCommand::Supersede {
+                old_id,
+                replacement_id,
+                reason,
+                expected_registry_revision,
+                expected_document_revision,
+                actor,
+                json,
+            } => {
+                let out = pulse::docs::supersede(
+                    store.repo_root(),
+                    &old_id,
+                    &replacement_id,
+                    expected_registry_revision,
+                    expected_document_revision,
+                    reason,
+                    actor,
+                )?;
+                render(json, &out, format!("superseded {}", out.value.id))
+            }
+            DocsCommand::List {
+                kind,
+                authority,
+                lifecycle,
+                json,
+            } => {
+                let mut documents = pulse::docs::list(store.repo_root())?;
+                if let Some(kind) = kind {
+                    let kind: DocumentKind = kind.into();
+                    documents.retain(|document| document.kind == kind);
+                }
+                if let Some(authority) = authority {
+                    let authority: DocumentAuthority = authority.into();
+                    documents.retain(|document| document.authority == authority);
+                }
+                if let Some(lifecycle) = lifecycle {
+                    let lifecycle: DocumentLifecycle = lifecycle.into();
+                    documents.retain(|document| document.lifecycle == lifecycle);
+                }
+                documents.sort_by(|left, right| left.id.cmp(&right.id));
+                let out = json!({"schema_version": 1, "code": "ok", "documents": documents});
+                let count = out["documents"]
+                    .as_array()
+                    .map(|items| items.len())
+                    .unwrap_or(0);
+                render(json, &out, format!("{count} documents"))
+            }
+            DocsCommand::Show { document_id, json } => {
+                let document = pulse::docs::show(store.repo_root(), &document_id)?;
+                render(
+                    json,
+                    &json!({"schema_version": 1, "code": "ok", "document": document}),
+                    document_id,
+                )
+            }
+            DocsCommand::Validate { json } => {
+                let registry = pulse::docs::registry::load_registry_unvalidated(store.repo_root())?;
+                let report = pulse::docs::validate_registry(
+                    store.repo_root(),
+                    &registry.repository_id,
+                    &registry,
+                )?;
+                let ok = report.valid;
+                render(
+                    json,
+                    &report,
+                    if ok { "valid" } else { "invalid" }.to_string(),
+                )?;
+                if ok {
+                    Ok(())
+                } else {
+                    Err(PulseError::validation(
+                        "invalid_docs_registry",
+                        "docs registry is invalid",
+                    ))
+                }
+            }
+            DocsCommand::Applicable {
+                work_id,
+                include_draft,
+                include_stale,
+                json,
+            } => {
+                let node = store.show_node(&work_id)?;
+                let work = node
+                    .documentation
+                    .as_ref()
+                    .map(|documentation| {
+                        pulse::docs::WorkDocumentationContext::from((
+                            node.id.as_str(),
+                            node.revision,
+                            documentation,
+                        ))
+                    })
+                    .unwrap_or_else(|| {
+                        pulse::docs::WorkDocumentationContext::unknown(
+                            node.id.clone(),
+                            node.revision,
+                        )
+                    });
+                let registry = pulse::docs::load_registry(store.repo_root())?;
+                let resolver = pulse::docs::FsContentResolver::new(store.repo_root());
+                let out = pulse::docs::applicable_docs(
+                    &work,
+                    &registry,
+                    &resolver,
+                    pulse::docs::ApplicabilityOptions {
+                        include_draft,
+                        include_stale,
+                    },
+                )?;
+                render(
+                    json,
+                    &out,
+                    format!(
+                        "{} required, {} optional, gate {}",
+                        out.required.len(),
+                        out.optional.len(),
+                        out.gate.status
+                    ),
+                )
+            }
+            DocsCommand::Impact {
+                ticket_id,
+                expected_revision,
+                posture,
+                rationale,
+                required_doc,
+                deferred_to,
+                path,
+                domain,
+                label,
+                actor,
+                json,
+            } => {
+                let out = store.update_documentation_impact(
+                    &ticket_id,
+                    expected_revision,
+                    DocumentationImpactUpdate {
+                        posture: posture.into(),
+                        rationale,
+                        required_documents: required_doc,
+                        deferred_to,
+                        paths: path,
+                        domains: domain,
+                        labels: label,
+                    },
+                    actor,
+                )?;
+                render(
+                    json,
+                    &out,
+                    format!("updated documentation impact {}", out.value.id),
+                )
             }
         },
         Command::Evidence { command } => match command {
