@@ -2,6 +2,7 @@ use crate::canonical_json::{self, hash_bytes};
 use crate::error::{PulseError, Result};
 use crate::id::new_transaction_id;
 use crate::storage::atomic;
+use base64::prelude::*;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::fs::{self, OpenOptions};
@@ -14,12 +15,20 @@ use std::time::Duration;
 pub enum TransactionFailpoint {
     AfterIntent,
     AfterCanonical,
+    AfterMultiTargetFirst,
+    AfterMultiTargetAll,
     AfterEvent,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PreparedTransaction {
     pub intent: TransactionIntent,
+    pub intent_path: PathBuf,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PreparedMultiTargetTransaction {
+    pub intent: MultiTargetTransactionIntent,
     pub intent_path: PathBuf,
 }
 
@@ -48,6 +57,49 @@ pub struct TransactionIntent {
     pub event_path: PathBuf,
     pub before: FileState,
     pub after: FileState,
+    pub event_hash: String,
+    pub event_payload: serde_json::Value,
+    pub state: IntentState,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TransactionTarget {
+    pub path: PathBuf,
+    pub before: FileState,
+    pub after: FileState,
+    pub after_bytes_base64: String,
+}
+
+impl TransactionTarget {
+    pub fn new(path: PathBuf, before: FileState, after: FileState, after_bytes: &[u8]) -> Self {
+        Self {
+            path,
+            before,
+            after,
+            after_bytes_base64: BASE64_STANDARD.encode(after_bytes),
+        }
+    }
+
+    pub fn after_bytes(&self) -> Result<Vec<u8>> {
+        BASE64_STANDARD
+            .decode(&self.after_bytes_base64)
+            .map_err(|error| PulseError::InvalidTransaction {
+                message: format!("stored after payload is not base64: {error}"),
+            })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MultiTargetTransactionIntent {
+    pub schema_version: u32,
+    pub transaction_id: String,
+    pub event_id: String,
+    pub operation: String,
+    pub actor: String,
+    pub targets: Vec<TransactionTarget>,
+    pub event_path: PathBuf,
     pub event_hash: String,
     pub event_payload: serde_json::Value,
     pub state: IntentState,
@@ -108,7 +160,70 @@ impl TransactionIntent {
     }
 }
 
+impl MultiTargetTransactionIntent {
+    pub fn prepared(
+        event_id: impl Into<String>,
+        operation: impl Into<String>,
+        actor: impl Into<String>,
+        mut targets: Vec<TransactionTarget>,
+        event_path: PathBuf,
+        event_payload: serde_json::Value,
+    ) -> Result<Self> {
+        if targets.is_empty() {
+            return Err(PulseError::InvalidTransaction {
+                message: "multi-target transaction requires at least one target".to_string(),
+            });
+        }
+        targets.sort_by(|left, right| left.path.cmp(&right.path));
+        for target in &targets {
+            let bytes = target.after_bytes()?;
+            if !observed_hash_matches(Some(&hash_bytes(&bytes)), &target.after) {
+                return Err(PulseError::InvalidTransaction {
+                    message: format!(
+                        "after payload hash does not match planned state for {}",
+                        target.path.display()
+                    ),
+                });
+            }
+        }
+        let event_hash = canonical_json::hash_value(&event_payload)?;
+        let now = Utc::now();
+        Ok(Self {
+            schema_version: 2,
+            transaction_id: new_transaction_id(),
+            event_id: event_id.into(),
+            operation: operation.into(),
+            actor: actor.into(),
+            targets,
+            event_path,
+            event_hash,
+            event_payload,
+            state: IntentState::Prepared,
+            created_at: now,
+            updated_at: now,
+        })
+    }
+
+    pub fn intent_path(&self, repo_root: &Path) -> PathBuf {
+        repo_root
+            .join(".pulse/runtime/transactions")
+            .join(format!("{}.json", self.transaction_id))
+    }
+}
+
 pub fn persist_intent(repo_root: &Path, intent: &TransactionIntent) -> Result<PathBuf> {
+    let directory = repo_root.join(".pulse/runtime/transactions");
+    fs::create_dir_all(&directory).map_err(|error| PulseError::io(&directory, error))?;
+    let path = intent.intent_path(repo_root);
+    let bytes = canonical_json::to_canonical_bytes_from(intent)?;
+    atomic::atomic_replace(&path, &bytes)?;
+    Ok(path)
+}
+
+pub fn persist_multi_target_intent(
+    repo_root: &Path,
+    intent: &MultiTargetTransactionIntent,
+) -> Result<PathBuf> {
     let directory = repo_root.join(".pulse/runtime/transactions");
     fs::create_dir_all(&directory).map_err(|error| PulseError::io(&directory, error))?;
     let path = intent.intent_path(repo_root);
@@ -128,7 +243,30 @@ pub fn prepare_transaction(
     })
 }
 
+pub fn prepare_multi_target_transaction(
+    repo_root: &Path,
+    intent: MultiTargetTransactionIntent,
+) -> Result<PreparedMultiTargetTransaction> {
+    let intent_path = persist_multi_target_intent(repo_root, &intent)?;
+    Ok(PreparedMultiTargetTransaction {
+        intent,
+        intent_path,
+    })
+}
+
 pub fn complete_and_cleanup_intent(intent_path: &Path, intent: &TransactionIntent) -> Result<()> {
+    let mut complete = intent.clone();
+    complete.state = IntentState::Complete;
+    complete.updated_at = Utc::now();
+    let bytes = canonical_json::to_canonical_bytes_from(&complete)?;
+    atomic::atomic_replace(intent_path, &bytes)?;
+    fs::remove_file(intent_path).map_err(|error| PulseError::io(intent_path, error))
+}
+
+pub fn complete_and_cleanup_multi_target_intent(
+    intent_path: &Path,
+    intent: &MultiTargetTransactionIntent,
+) -> Result<()> {
     let mut complete = intent.clone();
     complete.state = IntentState::Complete;
     complete.updated_at = Utc::now();
@@ -160,6 +298,37 @@ pub fn commit_prepared_transaction(
     }
 
     complete_and_cleanup_intent(&prepared.intent_path, &prepared.intent)
+}
+
+pub fn commit_prepared_multi_target_transaction(
+    prepared: &PreparedMultiTargetTransaction,
+    failpoint: Option<TransactionFailpoint>,
+) -> Result<()> {
+    #[cfg(debug_assertions)]
+    if failpoint == Some(TransactionFailpoint::AfterIntent) {
+        trigger_failpoint("after_intent")?;
+    }
+
+    for (index, target) in prepared.intent.targets.iter().enumerate() {
+        atomic::atomic_replace(&target.path, &target.after_bytes()?)?;
+        #[cfg(debug_assertions)]
+        if index == 0 && failpoint == Some(TransactionFailpoint::AfterMultiTargetFirst) {
+            trigger_failpoint("after_multi_target_first")?;
+        }
+    }
+
+    #[cfg(debug_assertions)]
+    if failpoint == Some(TransactionFailpoint::AfterMultiTargetAll) {
+        trigger_failpoint("after_multi_target_all")?;
+    }
+
+    write_event_create_new_multi(&prepared.intent)?;
+    #[cfg(debug_assertions)]
+    if failpoint == Some(TransactionFailpoint::AfterEvent) {
+        trigger_failpoint("after_event")?;
+    }
+
+    complete_and_cleanup_multi_target_intent(&prepared.intent_path, &prepared.intent)
 }
 
 #[cfg(debug_assertions)]
@@ -194,8 +363,17 @@ pub fn recover_prepared_transactions(repo_root: &Path) -> Result<Vec<RecoveryAct
             continue;
         }
         let bytes = fs::read(&path).map_err(|error| PulseError::io(&path, error))?;
-        let intent: TransactionIntent = serde_json::from_slice(&bytes)?;
-        let action = recover_one(&path, &intent)?;
+        let schema_version = serde_json::from_slice::<serde_json::Value>(&bytes)?
+            .get("schema_version")
+            .and_then(|value| value.as_u64())
+            .unwrap_or(1);
+        let action = if schema_version == 2 {
+            let intent: MultiTargetTransactionIntent = serde_json::from_slice(&bytes)?;
+            recover_one_multi_target(&path, &intent)?
+        } else {
+            let intent: TransactionIntent = serde_json::from_slice(&bytes)?;
+            recover_one(&path, &intent)?
+        };
         actions.push(action);
     }
     Ok(actions)
@@ -265,6 +443,98 @@ fn recover_one(intent_path: &Path, intent: &TransactionIntent) -> Result<Recover
     }
 }
 
+fn recover_one_multi_target(
+    intent_path: &Path,
+    intent: &MultiTargetTransactionIntent,
+) -> Result<RecoveryAction> {
+    if intent.state == IntentState::Complete {
+        fs::remove_file(intent_path).map_err(|error| PulseError::io(intent_path, error))?;
+        return Ok(RecoveryAction::CleanedComplete {
+            intent_path: intent_path.to_path_buf(),
+        });
+    }
+
+    let mut observed = Vec::with_capacity(intent.targets.len());
+    for target in &intent.targets {
+        observed.push(observed_target_state(
+            &target.path,
+            &target.before,
+            &target.after,
+        )?);
+    }
+    let event_state = observed_event_state(&intent.event_path, &intent.event_hash)?;
+
+    let after_prefix = observed
+        .iter()
+        .take_while(|state| **state == ObservedTarget::After)
+        .count();
+    let planned_shape = observed[..after_prefix]
+        .iter()
+        .all(|state| *state == ObservedTarget::After)
+        && observed[after_prefix..]
+            .iter()
+            .all(|state| *state == ObservedTarget::Before);
+    if !planned_shape {
+        return Err(PulseError::AmbiguousTransaction {
+            transaction_id: intent.transaction_id.clone(),
+            message: "multi-target canonical state is not all-before, prefix-after, or all-after"
+                .to_string(),
+        });
+    }
+
+    match (after_prefix, intent.targets.len(), event_state) {
+        (0, _, ObservedEvent::Absent) => {
+            for target in &intent.targets {
+                cleanup_target_temp(&target.path)?;
+            }
+            fs::remove_file(intent_path).map_err(|error| PulseError::io(intent_path, error))?;
+            Ok(RecoveryAction::RolledBack {
+                intent_path: intent_path.to_path_buf(),
+            })
+        }
+        (written, total, ObservedEvent::Absent) if written < total => {
+            for target in intent.targets.iter().skip(written) {
+                atomic::atomic_replace(&target.path, &target.after_bytes()?)?;
+            }
+            write_event_create_new_multi(intent)?;
+            fs::remove_file(intent_path).map_err(|error| PulseError::io(intent_path, error))?;
+            Ok(RecoveryAction::EventCompleted {
+                intent_path: intent_path.to_path_buf(),
+                event_path: intent.event_path.clone(),
+            })
+        }
+        (written, total, ObservedEvent::Absent) if written == total => {
+            write_event_create_new_multi(intent)?;
+            fs::remove_file(intent_path).map_err(|error| PulseError::io(intent_path, error))?;
+            Ok(RecoveryAction::EventCompleted {
+                intent_path: intent_path.to_path_buf(),
+                event_path: intent.event_path.clone(),
+            })
+        }
+        (written, total, ObservedEvent::Matching) if written == total => {
+            fs::remove_file(intent_path).map_err(|error| PulseError::io(intent_path, error))?;
+            Ok(RecoveryAction::CleanedComplete {
+                intent_path: intent_path.to_path_buf(),
+            })
+        }
+        (_, _, ObservedEvent::Matching) => Err(PulseError::AmbiguousTransaction {
+            transaction_id: intent.transaction_id.clone(),
+            message: "event exists before all multi-target files reached after state".to_string(),
+        }),
+        (_, _, ObservedEvent::Mismatch { actual_hash }) => Err(PulseError::EventMismatch {
+            transaction_id: intent.transaction_id.clone(),
+            message: format!(
+                "event file hash {actual_hash} does not match prepared hash {}",
+                intent.event_hash
+            ),
+        }),
+        _ => Err(PulseError::AmbiguousTransaction {
+            transaction_id: intent.transaction_id.clone(),
+            message: "unrecognized multi-target recovery state".to_string(),
+        }),
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum ObservedTarget {
     Before,
@@ -322,45 +592,67 @@ fn observed_hash_matches(observed_hash: Option<&str>, expected: &FileState) -> b
 }
 
 pub fn write_event_create_new(intent: &TransactionIntent) -> Result<()> {
-    let bytes = canonical_json::to_canonical_bytes(&intent.event_payload)?;
+    write_event_create_new_parts(
+        &intent.transaction_id,
+        &intent.event_path,
+        &intent.event_hash,
+        &intent.event_payload,
+    )
+}
+
+pub fn write_event_create_new_multi(intent: &MultiTargetTransactionIntent) -> Result<()> {
+    write_event_create_new_parts(
+        &intent.transaction_id,
+        &intent.event_path,
+        &intent.event_hash,
+        &intent.event_payload,
+    )
+}
+
+fn write_event_create_new_parts(
+    transaction_id: &str,
+    event_path: &Path,
+    event_hash: &str,
+    event_payload: &serde_json::Value,
+) -> Result<()> {
+    let bytes = canonical_json::to_canonical_bytes(event_payload)?;
     let actual_hash = hash_bytes(&bytes);
-    if actual_hash != intent.event_hash {
+    if actual_hash != event_hash {
         return Err(PulseError::InvalidTransaction {
             message: format!(
-                "prepared event payload hash changed from {} to {actual_hash}",
-                intent.event_hash
+                "prepared event payload hash changed from {event_hash} to {actual_hash}"
             ),
         });
     }
-    if let Some(parent) = intent.event_path.parent() {
+    if let Some(parent) = event_path.parent() {
         fs::create_dir_all(parent).map_err(|error| PulseError::io(parent, error))?;
     }
     let mut file = match OpenOptions::new()
         .write(true)
         .create_new(true)
-        .open(&intent.event_path)
+        .open(event_path)
     {
         Ok(file) => file,
         Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
-            if event_matches_intent(intent)? {
+            if event_matches_parts(event_path, event_hash)? {
                 return Ok(());
             }
             return Err(PulseError::EventMismatch {
-                transaction_id: intent.transaction_id.clone(),
+                transaction_id: transaction_id.to_string(),
                 message: format!(
                     "event file already exists at {} with different content",
-                    intent.event_path.display()
+                    event_path.display()
                 ),
             });
         }
-        Err(error) => return Err(PulseError::io(&intent.event_path, error)),
+        Err(error) => return Err(PulseError::io(event_path, error)),
     };
     file.write_all(&bytes)
-        .map_err(|error| PulseError::io(&intent.event_path, error))?;
+        .map_err(|error| PulseError::io(event_path, error))?;
     file.flush()
-        .map_err(|error| PulseError::io(&intent.event_path, error))?;
+        .map_err(|error| PulseError::io(event_path, error))?;
     file.sync_all()
-        .map_err(|error| PulseError::io(&intent.event_path, error))?;
+        .map_err(|error| PulseError::io(event_path, error))?;
     Ok(())
 }
 
@@ -377,10 +669,13 @@ fn cleanup_orphan_transaction_temps(directory: &Path) -> Result<()> {
 }
 
 pub fn event_matches_intent(intent: &TransactionIntent) -> Result<bool> {
-    if !intent.event_path.exists() {
+    event_matches_parts(&intent.event_path, &intent.event_hash)
+}
+
+fn event_matches_parts(event_path: &Path, event_hash: &str) -> Result<bool> {
+    if !event_path.exists() {
         return Ok(false);
     }
-    let bytes =
-        fs::read(&intent.event_path).map_err(|error| PulseError::io(&intent.event_path, error))?;
-    Ok(hash_bytes(&bytes) == intent.event_hash)
+    let bytes = fs::read(event_path).map_err(|error| PulseError::io(event_path, error))?;
+    Ok(hash_bytes(&bytes) == event_hash)
 }

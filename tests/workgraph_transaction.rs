@@ -4,12 +4,14 @@ use std::thread;
 use chrono::{TimeZone, Utc};
 use pulse::canonical_json::{hash_bytes, to_canonical_bytes};
 use pulse::event::EventEnvelope;
-use pulse::graph::edge::EdgeType;
+use pulse::graph::edge::{Edge, EdgeType};
+use pulse::graph::node::{Node, NodeStatus, StatusReason};
 use pulse::graph::store::OperationContext;
 use pulse::id::WorkKind;
 use pulse::storage::atomic::atomic_replace;
 use pulse::storage::transaction::{
-    persist_intent, recover_prepared_transactions, FileState, RecoveryAction, TransactionIntent,
+    persist_intent, persist_multi_target_intent, recover_prepared_transactions, FileState,
+    MultiTargetTransactionIntent, RecoveryAction, TransactionIntent, TransactionTarget,
 };
 use pulse::{JsonGraphStore, PulseError};
 
@@ -112,6 +114,126 @@ fn mutation_recovers_prior_after_canonical_intent_before_allocating_next_id() {
     assert!(intent.event_path.exists());
     assert_eq!(transaction_count(repo), 0);
     assert_eq!(read_events(repo).len(), 2);
+}
+
+#[test]
+fn multi_target_recovery_rolls_forward_prefix_after_and_writes_event() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+    JsonGraphStore::new(repo).bootstrap().unwrap();
+
+    let old = Node::new(
+        "TK-001".to_string(),
+        WorkKind::Ticket,
+        "Old".to_string(),
+        Utc.timestamp_opt(1, 0).unwrap(),
+    )
+    .unwrap();
+    let replacement = Node::new(
+        "TK-002".to_string(),
+        WorkKind::Ticket,
+        "Replacement".to_string(),
+        Utc.timestamp_opt(1, 0).unwrap(),
+    )
+    .unwrap();
+    let old_path = repo.join(".pulse/workgraph/nodes/TK-001.json");
+    let replacement_path = repo.join(".pulse/workgraph/nodes/TK-002.json");
+    let old_before = to_canonical_bytes(&old).unwrap();
+    fs::write(&old_path, &old_before).unwrap();
+    fs::write(&replacement_path, to_canonical_bytes(&replacement).unwrap()).unwrap();
+
+    let mut old_after = old.clone();
+    old_after.status = NodeStatus::Superseded;
+    old_after.status_reason = Some(StatusReason::new("superseded", "absorbed", None).unwrap());
+    old_after.revision = 2;
+    let old_after_bytes = to_canonical_bytes(&old_after).unwrap();
+    let edge = Edge::new(
+        EdgeType::SupersededBy,
+        old.id.clone(),
+        replacement.id.clone(),
+        "test".into(),
+        Utc.timestamp_opt(2, 0).unwrap(),
+    )
+    .unwrap();
+    let edge_path = repo
+        .join(".pulse/workgraph/edges")
+        .join(format!("{}.json", edge.id));
+    let edge_bytes = to_canonical_bytes(&edge).unwrap();
+    let event_payload = serde_json::json!({"schema_version":1,"id":"evt_multi","event_type":"work.node.superseded","actor":"test","occurred_at":"1970-01-01T00:00:02Z","subject":"TK-001","payload":{"ok":true}});
+    let event_path = repo.join(".pulse/events/1970-01-01/evt_multi.json");
+    let intent = MultiTargetTransactionIntent::prepared(
+        "evt_multi",
+        "work.node.superseded",
+        "test",
+        vec![
+            TransactionTarget::new(
+                old_path.clone(),
+                FileState::Present {
+                    hash: hash_bytes(&old_before),
+                    revision: 1,
+                },
+                FileState::Present {
+                    hash: hash_bytes(&old_after_bytes),
+                    revision: 2,
+                },
+                &old_after_bytes,
+            ),
+            TransactionTarget::new(
+                edge_path.clone(),
+                FileState::Absent,
+                FileState::Present {
+                    hash: hash_bytes(&edge_bytes),
+                    revision: 1,
+                },
+                &edge_bytes,
+            ),
+        ],
+        event_path.clone(),
+        event_payload,
+    )
+    .unwrap();
+    let first_target_path = intent.targets[0].path.clone();
+    let first_target_bytes = intent.targets[0].after_bytes().unwrap();
+    let intent_path = persist_multi_target_intent(repo, &intent).unwrap();
+    atomic_replace(&first_target_path, &first_target_bytes).unwrap();
+
+    let actions = recover_prepared_transactions(repo).unwrap();
+    assert_eq!(
+        actions,
+        vec![RecoveryAction::EventCompleted {
+            intent_path,
+            event_path: event_path.clone()
+        }]
+    );
+    assert_eq!(fs::read(&edge_path).unwrap(), edge_bytes);
+    assert!(event_path.exists());
+}
+
+#[test]
+fn multi_target_recovery_stops_on_ambiguous_manual_edit() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+    JsonGraphStore::new(repo).bootstrap().unwrap();
+    let first = repo.join(".pulse/workgraph/nodes/TK-001.json");
+    let second = repo.join(".pulse/workgraph/edges/superseded-by--TK-001--TK-002.json");
+    fs::write(&first, b"{\"revision\":999}\n").unwrap();
+    let after = b"{\"revision\":1}\n";
+    let intent = MultiTargetTransactionIntent::prepared(
+        "evt_ambiguous",
+        "work.node.superseded",
+        "test",
+        vec![
+            TransactionTarget::new(first.clone(), FileState::Absent, FileState::Present { hash: hash_bytes(after), revision: 1 }, after),
+            TransactionTarget::new(second, FileState::Absent, FileState::Present { hash: hash_bytes(after), revision: 1 }, after),
+        ],
+        repo.join(".pulse/events/1970-01-01/evt_ambiguous.json"),
+        serde_json::json!({"schema_version":1,"id":"evt_ambiguous","event_type":"work.node.superseded","actor":"test","occurred_at":"1970-01-01T00:00:01Z","subject":"TK-001","payload":{}}),
+    ).unwrap();
+    let intent_path = persist_multi_target_intent(repo, &intent).unwrap();
+
+    let err = recover_prepared_transactions(repo).unwrap_err();
+    assert_eq!(err.code(), "ambiguous_transaction");
+    assert!(intent_path.exists());
 }
 
 #[test]

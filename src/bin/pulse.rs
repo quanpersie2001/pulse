@@ -2,6 +2,9 @@ use std::path::PathBuf;
 
 use clap::{Parser, Subcommand, ValueEnum};
 use pulse::graph::edge::EdgeType;
+use pulse::graph::lifecycle::TransitionReason;
+use pulse::graph::node::NodeStatus;
+use pulse::graph::store::{SupersessionAssertion, SupersessionTarget};
 use pulse::id::WorkKind;
 #[cfg(debug_assertions)]
 use pulse::storage::transaction::TransactionFailpoint;
@@ -63,6 +66,50 @@ enum WorkCommand {
         #[arg(long)]
         json: bool,
     },
+    Supersede {
+        old_id: String,
+        #[arg(long = "by", conflicts_with = "decision")]
+        by: Option<String>,
+        #[arg(long, conflicts_with = "by")]
+        decision: Option<String>,
+        #[arg(long)]
+        expected_revision: u64,
+        #[arg(long)]
+        reason: String,
+        #[arg(long)]
+        assertion: PathBuf,
+        #[arg(long)]
+        actor: String,
+        #[arg(long)]
+        json: bool,
+    },
+    Transition {
+        id: String,
+        #[arg(long = "to")]
+        to: StatusArg,
+        #[arg(long)]
+        expected_revision: u64,
+        #[arg(long)]
+        actor: String,
+        #[arg(long)]
+        reason_code: Option<String>,
+        #[arg(long = "reason")]
+        reason: Option<String>,
+        #[arg(long)]
+        reference: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
+    Executability {
+        id: String,
+        #[arg(long)]
+        json: bool,
+    },
+    Rollup {
+        id: String,
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -75,11 +122,29 @@ enum GraphCommand {
         #[arg(long)]
         json: bool,
     },
+    Bootstrap {
+        #[arg(long)]
+        json: bool,
+    },
     Validate {
         #[arg(long)]
         json: bool,
     },
     Export {
+        #[arg(long)]
+        json: bool,
+    },
+    Neighborhood {
+        id: String,
+        #[arg(long, default_value_t = 1)]
+        depth: usize,
+        #[arg(long)]
+        json: bool,
+    },
+    AffectedBy {
+        id: String,
+        #[arg(long = "relation")]
+        relation: Option<EdgeTypeArg>,
         #[arg(long)]
         json: bool,
     },
@@ -108,6 +173,8 @@ enum EdgeCommand {
 enum FailpointArg {
     AfterIntent,
     AfterCanonical,
+    AfterMultiTargetFirst,
+    AfterMultiTargetAll,
     AfterEvent,
 }
 
@@ -117,6 +184,8 @@ impl From<FailpointArg> for TransactionFailpoint {
         match value {
             FailpointArg::AfterIntent => TransactionFailpoint::AfterIntent,
             FailpointArg::AfterCanonical => TransactionFailpoint::AfterCanonical,
+            FailpointArg::AfterMultiTargetFirst => TransactionFailpoint::AfterMultiTargetFirst,
+            FailpointArg::AfterMultiTargetAll => TransactionFailpoint::AfterMultiTargetAll,
             FailpointArg::AfterEvent => TransactionFailpoint::AfterEvent,
         }
     }
@@ -128,6 +197,38 @@ enum KindArg {
     Story,
     Ticket,
     Decision,
+}
+
+#[derive(Clone, ValueEnum)]
+#[value(rename_all = "snake_case")]
+enum StatusArg {
+    Draft,
+    Shaped,
+    Ready,
+    Active,
+    Verifying,
+    Done,
+    Rework,
+    Blocked,
+    Cancelled,
+    Superseded,
+}
+
+impl From<StatusArg> for NodeStatus {
+    fn from(value: StatusArg) -> Self {
+        match value {
+            StatusArg::Draft => NodeStatus::Draft,
+            StatusArg::Shaped => NodeStatus::Shaped,
+            StatusArg::Ready => NodeStatus::Ready,
+            StatusArg::Active => NodeStatus::Active,
+            StatusArg::Verifying => NodeStatus::Verifying,
+            StatusArg::Done => NodeStatus::Done,
+            StatusArg::Rework => NodeStatus::Rework,
+            StatusArg::Blocked => NodeStatus::Blocked,
+            StatusArg::Cancelled => NodeStatus::Cancelled,
+            StatusArg::Superseded => NodeStatus::Superseded,
+        }
+    }
 }
 
 impl From<KindArg> for WorkKind {
@@ -213,6 +314,85 @@ fn run(store: JsonGraphStore, command: Command) -> Result<(), PulseError> {
                 let out = store.edit_title(&id, expected_revision, title)?;
                 render(json, &out, format!("updated {}", out.value.id))
             }
+            WorkCommand::Supersede {
+                old_id,
+                by,
+                decision,
+                expected_revision,
+                reason,
+                assertion,
+                actor,
+                json,
+            } => {
+                let target = match (by, decision) {
+                    (Some(id), None) => SupersessionTarget::Replacement { id },
+                    (None, Some(id)) => SupersessionTarget::Decision { id },
+                    _ => {
+                        return Err(PulseError::validation(
+                            "invalid_supersession_target_form",
+                            "choose exactly one of --by or --decision",
+                        ));
+                    }
+                };
+                let assertion_bytes = std::fs::read(&assertion)
+                    .map_err(|error| PulseError::io(assertion.clone(), error))?;
+                let assertion: SupersessionAssertion = serde_json::from_slice(&assertion_bytes)
+                    .map_err(|error| PulseError::json(assertion.clone(), error))?;
+                let out = store.supersede_work(
+                    &old_id,
+                    target,
+                    expected_revision,
+                    reason,
+                    assertion,
+                    actor,
+                )?;
+                render(json, &out, format!("{} {}", out.code, out.value.node.id))
+            }
+            WorkCommand::Transition {
+                id,
+                to,
+                expected_revision,
+                actor,
+                reason_code,
+                reason,
+                reference,
+                json,
+            } => {
+                let transition_reason = match (reason_code, reason, reference) {
+                    (None, None, None) => None,
+                    (Some(code), Some(summary), reference) => Some(TransitionReason {
+                        code,
+                        summary,
+                        reference,
+                    }),
+                    _ => {
+                        return Err(PulseError::validation(
+                            "missing_status_reason",
+                            "transition reason requires --reason-code and --reason together",
+                        ));
+                    }
+                };
+                let out = store.transition_node(
+                    &id,
+                    to.into(),
+                    expected_revision,
+                    transition_reason,
+                    actor,
+                )?;
+                render(json, &out, format!("transitioned {}", out.value.id))
+            }
+            WorkCommand::Executability { id, json } => {
+                let out = store.executability(&id)?;
+                render(
+                    json,
+                    &out,
+                    format!("{:?} {}", out.structural_state, out.subject),
+                )
+            }
+            WorkCommand::Rollup { id, json } => {
+                let out = store.rollup(&id)?;
+                render(json, &out, format!("rollup {}", out.subject))
+            }
         },
         Command::Graph { command } => match command {
             GraphCommand::Edge { command } => match command {
@@ -235,6 +415,14 @@ fn run(store: JsonGraphStore, command: Command) -> Result<(), PulseError> {
                     "recovered".to_string(),
                 )
             }
+            GraphCommand::Bootstrap { json } => {
+                store.bootstrap()?;
+                render(
+                    json,
+                    &json!({"schema_version": 1, "code": "bootstrapped"}),
+                    "bootstrapped".to_string(),
+                )
+            }
             GraphCommand::Validate { json } => {
                 let report = store.validate()?;
                 let ok = report.valid;
@@ -252,6 +440,14 @@ fn run(store: JsonGraphStore, command: Command) -> Result<(), PulseError> {
             GraphCommand::Export { json } => {
                 let projection = store.export()?;
                 render(json, &projection, projection.graph_fingerprint.clone())
+            }
+            GraphCommand::Neighborhood { id, depth, json } => {
+                let out = store.neighborhood(&id, depth)?;
+                render(json, &out, format!("neighborhood {}", out.subject))
+            }
+            GraphCommand::AffectedBy { id, relation, json } => {
+                let out = store.affected_by(&id, relation.map(Into::into))?;
+                render(json, &out, format!("affected-by {}", out.subject))
             }
         },
     }

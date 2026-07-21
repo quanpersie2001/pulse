@@ -1,18 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "Pulse Work Graph Node",
-  "type": "object",
-  "required": [
-    "schema_version",
-    "id",
-    "kind",
-    "revision",
-    "title",
-    "status",
-    "content_dir",
-    "created_at",
-    "updated_at"
-  ],
+  "additionalProperties": false,
   "properties": {
     "content_dir": {
       "type": "string"
@@ -26,7 +14,12 @@
       "type": "string"
     },
     "kind": {
-      "enum": ["epic", "story", "ticket", "decision"],
+      "enum": [
+        "epic",
+        "story",
+        "ticket",
+        "decision"
+      ],
       "type": "string"
     },
     "revision": {
@@ -37,8 +30,41 @@
       "const": 1
     },
     "status": {
-      "enum": ["draft", "shaped", "ready", "active", "verifying", "done", "rework", "blocked", "superseded"],
+      "enum": [
+        "draft",
+        "shaped",
+        "ready",
+        "active",
+        "verifying",
+        "done",
+        "rework",
+        "blocked",
+        "cancelled",
+        "superseded"
+      ],
       "type": "string"
+    },
+    "status_reason": {
+      "additionalProperties": false,
+      "properties": {
+        "code": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "reference": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "summary": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "code",
+        "summary"
+      ],
+      "type": "object"
     },
     "title": {
       "minLength": 1,
@@ -49,5 +75,17 @@
       "type": "string"
     }
   },
-  "additionalProperties": false
+  "required": [
+    "schema_version",
+    "id",
+    "kind",
+    "revision",
+    "title",
+    "status",
+    "content_dir",
+    "created_at",
+    "updated_at"
+  ],
+  "title": "Pulse Work Graph Node",
+  "type": "object"
 }

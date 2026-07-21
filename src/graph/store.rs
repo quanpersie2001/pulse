@@ -9,20 +9,30 @@ use serde_json::json;
 use crate::canonical_json::{hash_bytes, to_canonical_bytes};
 use crate::event::{event_path, EventEnvelope};
 use crate::graph::edge::{canonical_endpoints, deterministic_edge_id, Edge, EdgeType};
+use crate::graph::executability::{structural_executability, StructuralExecutabilityReport};
+use crate::graph::lifecycle::{status_requires_reason, validate_transition, TransitionReason};
 use crate::graph::manifest::{Manifest, EDGE_SCHEMA, NODE_SCHEMA};
-use crate::graph::node::Node;
+use crate::graph::node::{Node, NodeStatus, StatusReason};
+use crate::graph::projection::PROJECTION_SCHEMA_VERSION;
 use crate::graph::projection::{export_with_cache, GraphProjection};
+use crate::graph::rollup::{rollup, RollupReport};
+use crate::graph::traversal::{affected_by, neighborhood, AffectedByReport, NeighborhoodReport};
 use crate::graph::validate::{
     validate_edge_filename, validate_edge_for_add, validate_graph, validate_node_filename,
     ValidationReport,
 };
 use crate::id::{format_id, new_event_id, parse_numeric, validate_id_for_kind, WorkKind};
 use crate::storage::transaction::{
-    commit_prepared_transaction, current_file_state, prepare_transaction,
-    recover_prepared_transactions, FileState, TransactionFailpoint, TransactionIntent,
+    commit_prepared_multi_target_transaction, commit_prepared_transaction, current_file_state,
+    prepare_multi_target_transaction, prepare_transaction, recover_prepared_transactions,
+    FileState, MultiTargetTransactionIntent, TransactionFailpoint, TransactionIntent,
+    TransactionTarget,
 };
 use crate::storage::{self, WriteGuard};
 use crate::{PulseError, PulseResult};
+
+const SLICE1_NODE_SCHEMA_HASH: &str =
+    "sha256:1590def10b4715549d6d735352f2033bb128808dab7e56a138689bb0a46af589";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -45,6 +55,39 @@ pub struct ListOutcome<T> {
     pub schema_version: u32,
     pub code: String,
     pub items: Vec<T>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct SupersessionAssertion {
+    pub assertion_version: u32,
+    pub asserted_by: String,
+    pub source_revisions: Vec<String>,
+    pub claim: SupersessionClaim,
+    pub references: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SupersessionClaim {
+    Absorbed,
+    FollowUpRequired,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SupersessionTarget {
+    Replacement { id: String },
+    Decision { id: String },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SupersededWork {
+    pub node: Node,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub edge: Option<Edge>,
+    pub target: SupersessionTarget,
+    pub assertion: SupersessionAssertion,
 }
 
 #[derive(Debug, Clone)]
@@ -97,7 +140,7 @@ impl JsonGraphStore {
         fs::create_dir_all(wg.join("schemas"))
             .map_err(|e| PulseError::io(wg.join("schemas"), e))?;
         self.write_if_absent(&wg.join("manifest.json"), &Manifest::default())?;
-        self.write_bytes_if_absent(&wg.join("schemas/node.schema.json"), NODE_SCHEMA.as_bytes())?;
+        self.write_or_upgrade_node_schema_unlocked()?;
         self.write_bytes_if_absent(&wg.join("schemas/edge.schema.json"), EDGE_SCHEMA.as_bytes())?;
         Ok(())
     }
@@ -159,7 +202,9 @@ impl JsonGraphStore {
     }
 
     pub fn show_node(&self, id: &str) -> PulseResult<Node> {
+        let _guard = WriteGuard::acquire(&self.repo_root)?;
         self.bootstrap_unlocked()?;
+        recover_prepared_transactions(&self.repo_root)?;
         let path = self.node_path(id);
         if !path.exists() {
             return Err(PulseError::NotFound {
@@ -170,7 +215,9 @@ impl JsonGraphStore {
     }
 
     pub fn list_nodes(&self, kind: Option<WorkKind>) -> PulseResult<ListOutcome<Node>> {
+        let _guard = WriteGuard::acquire(&self.repo_root)?;
         self.bootstrap_unlocked()?;
+        recover_prepared_transactions(&self.repo_root)?;
         let mut nodes: Vec<_> = self.load_nodes()?.into_values().collect();
         if let Some(kind) = kind {
             nodes.retain(|n| n.kind == kind);
@@ -269,6 +316,407 @@ impl JsonGraphStore {
         self.edit_title_with_context(id, expected_revision, title, OperationContext::default())
     }
 
+    pub fn transition_node_with_context(
+        &self,
+        id: &str,
+        to: crate::graph::node::NodeStatus,
+        expected_revision: u64,
+        reason: Option<TransitionReason>,
+        ctx: OperationContext,
+    ) -> PulseResult<MutationOutcome<Node>> {
+        let _guard = WriteGuard::acquire(&self.repo_root)?;
+        self.bootstrap_unlocked()?;
+        recover_prepared_transactions(&self.repo_root)?;
+        let path = self.node_path(id);
+        if !path.exists() {
+            return Err(PulseError::NotFound {
+                subject: id.to_string(),
+            });
+        }
+        let before_bytes = fs::read(&path).map_err(|error| PulseError::io(&path, error))?;
+        let mut node: Node = serde_json::from_slice(&before_bytes)
+            .map_err(|error| PulseError::json(&path, error))?;
+        if node.revision != expected_revision {
+            return Err(PulseError::CasConflict {
+                subject: id.to_string(),
+                expected_revision,
+                current_revision: node.revision,
+            });
+        }
+        let from = node.status;
+        let exp = validate_transition(from, to, reason.as_ref())?;
+        let transition_reason = reason.clone();
+        node.status = to;
+        node.status_reason = if status_requires_reason(to) {
+            Some(
+                reason
+                    .clone()
+                    .ok_or_else(|| {
+                        PulseError::validation(
+                            "missing_status_reason",
+                            "transition requires a non-empty reason",
+                        )
+                    })?
+                    .into_status_reason(),
+            )
+        } else {
+            None
+        };
+        node.revision += 1;
+        node.updated_at = ctx.now;
+        let node_values = self
+            .load_nodes_with_override(node.clone())?
+            .into_values()
+            .collect::<Vec<_>>();
+        let edge_values = self
+            .load_edges()?
+            .iter()
+            .map(|(_, e)| e.clone())
+            .collect::<Vec<_>>();
+        validate_graph(
+            &self.repo_root,
+            &self.manifest()?,
+            &node_values,
+            &edge_values,
+        )
+        .into_result()?;
+        let after_bytes = to_canonical_bytes(&node)?;
+        self.commit_mutation(
+            "work.node.transitioned",
+            ctx.actor,
+            id,
+            json!({
+                "from": from,
+                "to": to,
+                "expected_revision": expected_revision,
+                "reason": transition_reason,
+                "gate_coverage": ["transition_direction", "graph_integrity"],
+                "target_requires_status_reason": exp.target_requires_status_reason,
+            }),
+            &path,
+            FileState::Present {
+                hash: hash_bytes(&before_bytes),
+                revision: expected_revision,
+            },
+            FileState::Present {
+                hash: hash_bytes(&after_bytes),
+                revision: expected_revision + 1,
+            },
+            &after_bytes,
+            ctx.now,
+        )?;
+        Ok(MutationOutcome {
+            schema_version: 1,
+            code: "transitioned".to_string(),
+            status: MutationStatus::Updated,
+            value: node,
+        })
+    }
+
+    pub fn transition_node(
+        &self,
+        id: &str,
+        to: crate::graph::node::NodeStatus,
+        expected_revision: u64,
+        reason: Option<TransitionReason>,
+        actor: String,
+    ) -> PulseResult<MutationOutcome<Node>> {
+        self.transition_node_with_context(
+            id,
+            to,
+            expected_revision,
+            reason,
+            OperationContext {
+                actor,
+                now: Utc::now(),
+            },
+        )
+    }
+
+    pub fn supersede_work_with_context(
+        &self,
+        old_id: &str,
+        target: SupersessionTarget,
+        expected_revision: u64,
+        reason: String,
+        assertion: SupersessionAssertion,
+        ctx: OperationContext,
+    ) -> PulseResult<MutationOutcome<SupersededWork>> {
+        let _guard = WriteGuard::acquire(&self.repo_root)?;
+        self.bootstrap_unlocked()?;
+        recover_prepared_transactions(&self.repo_root)?;
+        let old_path = self.node_path(old_id);
+        if !old_path.exists() {
+            return Err(PulseError::NotFound {
+                subject: old_id.to_string(),
+            });
+        }
+        let before_bytes = fs::read(&old_path).map_err(|error| PulseError::io(&old_path, error))?;
+        let mut old: Node = serde_json::from_slice(&before_bytes)
+            .map_err(|error| PulseError::json(&old_path, error))?;
+
+        let nodes = self.load_nodes()?;
+        let edges = self
+            .load_edges()?
+            .into_iter()
+            .map(|(_, e)| e)
+            .collect::<Vec<_>>();
+        if old.revision != expected_revision {
+            if let Some(existing) = self.same_supersession(&old, &target, &assertion, &edges) {
+                return Ok(MutationOutcome {
+                    schema_version: 1,
+                    code: "unchanged".to_string(),
+                    status: MutationStatus::Unchanged,
+                    value: SupersededWork {
+                        node: old,
+                        edge: existing,
+                        target,
+                        assertion,
+                    },
+                });
+            }
+            return Err(PulseError::CasConflict {
+                subject: old_id.to_string(),
+                expected_revision,
+                current_revision: old.revision,
+            });
+        }
+        if reason.trim().is_empty() {
+            return Err(PulseError::validation(
+                "reason_required",
+                "supersession requires a non-empty reason",
+            ));
+        }
+        validate_supersession_assertion(&assertion, &nodes)?;
+        let existing_outgoing = superseded_by_edges(&edges, old_id);
+        if old.status == NodeStatus::Superseded {
+            if let Some(existing) = self.same_supersession(&old, &target, &assertion, &edges) {
+                return Ok(MutationOutcome {
+                    schema_version: 1,
+                    code: "unchanged".to_string(),
+                    status: MutationStatus::Unchanged,
+                    value: SupersededWork {
+                        node: old,
+                        edge: existing,
+                        target,
+                        assertion,
+                    },
+                });
+            }
+            return Err(PulseError::validation(
+                "supersession_conflict",
+                "work is already superseded by a different target or assertion",
+            ));
+        }
+        if !matches!(
+            old.status,
+            NodeStatus::Draft | NodeStatus::Shaped | NodeStatus::Ready | NodeStatus::Blocked
+        ) {
+            return Err(PulseError::validation(
+                "supersession_unavailable",
+                format!("status {:?} cannot be superseded in Slice 2", old.status),
+            ));
+        }
+        if !existing_outgoing.is_empty() {
+            return Err(PulseError::validation(
+                "supersession_conflict",
+                "work already has an outgoing superseded_by edge",
+            ));
+        }
+
+        let edge = match &target {
+            SupersessionTarget::Replacement { id } => {
+                let replacement = nodes.get(id).ok_or_else(|| PulseError::NotFound {
+                    subject: id.clone(),
+                })?;
+                if id == old_id {
+                    return Err(PulseError::validation(
+                        "supersession_cycle",
+                        "work cannot supersede itself",
+                    ));
+                }
+                if matches!(
+                    replacement.status,
+                    NodeStatus::Cancelled | NodeStatus::Superseded
+                ) {
+                    return Err(PulseError::validation(
+                        "invalid_supersession_target",
+                        "replacement must not be cancelled or superseded",
+                    ));
+                }
+                let planned_edge = Edge::new(
+                    EdgeType::SupersededBy,
+                    old_id.to_string(),
+                    id.clone(),
+                    ctx.actor.clone(),
+                    ctx.now,
+                )?;
+                let mut all_edges = edges.clone();
+                all_edges.push(planned_edge.clone());
+                if supersession_reaches(&all_edges, id, old_id) {
+                    return Err(PulseError::validation(
+                        "supersession_cycle",
+                        "supersession edge would create a cycle",
+                    ));
+                }
+                Some(planned_edge)
+            }
+            SupersessionTarget::Decision { id } => {
+                let decision = nodes.get(id).ok_or_else(|| PulseError::NotFound {
+                    subject: id.clone(),
+                })?;
+                if decision.kind != WorkKind::Decision {
+                    return Err(PulseError::validation(
+                        "invalid_supersession_target",
+                        "decision target must have kind Decision",
+                    ));
+                }
+                None
+            }
+        };
+
+        old.status = NodeStatus::Superseded;
+        old.status_reason = Some(StatusReason::new(
+            "superseded",
+            reason.clone(),
+            match &target {
+                SupersessionTarget::Replacement { .. } => None,
+                SupersessionTarget::Decision { id } => Some(id.clone()),
+            },
+        )?);
+        old.revision += 1;
+        old.updated_at = ctx.now;
+
+        let mut all_nodes = nodes.clone();
+        all_nodes.insert(old.id.clone(), old.clone());
+        let mut all_edges = edges.clone();
+        if let Some(edge) = &edge {
+            all_edges.push(edge.clone());
+        }
+        validate_graph(
+            &self.repo_root,
+            &self.manifest()?,
+            &all_nodes.values().cloned().collect::<Vec<_>>(),
+            &all_edges,
+        )
+        .into_result()?;
+
+        let old_after_bytes = to_canonical_bytes(&old)?;
+        let event = EventEnvelope::new(
+            new_event_id(),
+            "work.node.superseded",
+            ctx.actor.clone(),
+            old_id,
+            json!({
+                "old_id": old_id,
+                "expected_revision": expected_revision,
+                "new_revision": old.revision,
+                "target": target,
+                "reason": reason,
+                "assertion": assertion,
+                "gate_coverage": ["supersession_preconditions", "assertion_identity", "graph_integrity"],
+            }),
+            ctx.now,
+        );
+        match &edge {
+            Some(edge) => {
+                let edge_path = self.edge_path(&edge.id);
+                if edge_path.exists() {
+                    return Err(PulseError::AlreadyExists {
+                        subject: edge.id.clone(),
+                    });
+                }
+                let edge_after_bytes = to_canonical_bytes(edge)?;
+                let targets = vec![
+                    TransactionTarget::new(
+                        old_path.clone(),
+                        FileState::Present {
+                            hash: hash_bytes(&before_bytes),
+                            revision: expected_revision,
+                        },
+                        FileState::Present {
+                            hash: hash_bytes(&old_after_bytes),
+                            revision: expected_revision + 1,
+                        },
+                        &old_after_bytes,
+                    ),
+                    TransactionTarget::new(
+                        edge_path,
+                        FileState::Absent,
+                        FileState::Present {
+                            hash: hash_bytes(&edge_after_bytes),
+                            revision: edge.revision,
+                        },
+                        &edge_after_bytes,
+                    ),
+                ];
+                let intent = MultiTargetTransactionIntent::prepared(
+                    event.id.clone(),
+                    event.event_type.clone(),
+                    ctx.actor,
+                    targets,
+                    event_path(&self.repo_root, &event),
+                    serde_json::to_value(&event)?,
+                )?;
+                let prepared = prepare_multi_target_transaction(&self.repo_root, intent)?;
+                commit_prepared_multi_target_transaction(&prepared, self.failpoint)?;
+            }
+            None => {
+                self.commit_mutation(
+                    "work.node.superseded",
+                    ctx.actor,
+                    old_id,
+                    serde_json::to_value(&event.payload)?,
+                    &old_path,
+                    FileState::Present {
+                        hash: hash_bytes(&before_bytes),
+                        revision: expected_revision,
+                    },
+                    FileState::Present {
+                        hash: hash_bytes(&old_after_bytes),
+                        revision: expected_revision + 1,
+                    },
+                    &old_after_bytes,
+                    ctx.now,
+                )?;
+            }
+        }
+
+        Ok(MutationOutcome {
+            schema_version: 1,
+            code: "superseded".to_string(),
+            status: MutationStatus::Updated,
+            value: SupersededWork {
+                node: old,
+                edge,
+                target,
+                assertion,
+            },
+        })
+    }
+
+    pub fn supersede_work(
+        &self,
+        old_id: &str,
+        target: SupersessionTarget,
+        expected_revision: u64,
+        reason: String,
+        assertion: SupersessionAssertion,
+        actor: String,
+    ) -> PulseResult<MutationOutcome<SupersededWork>> {
+        self.supersede_work_with_context(
+            old_id,
+            target,
+            expected_revision,
+            reason,
+            assertion,
+            OperationContext {
+                actor,
+                now: Utc::now(),
+            },
+        )
+    }
+
     pub fn add_edge_with_context(
         &self,
         edge_type: EdgeType,
@@ -276,6 +724,12 @@ impl JsonGraphStore {
         to: String,
         ctx: OperationContext,
     ) -> PulseResult<MutationOutcome<Edge>> {
+        if edge_type == EdgeType::SupersededBy {
+            return Err(PulseError::validation(
+                "superseded_by_lifecycle_owned",
+                "superseded_by edges are lifecycle-owned; use pulse work supersede",
+            ));
+        }
         let _guard = WriteGuard::acquire(&self.repo_root)?;
         self.bootstrap_unlocked()?;
         recover_prepared_transactions(&self.repo_root)?;
@@ -349,6 +803,7 @@ impl JsonGraphStore {
     pub fn validate(&self) -> PulseResult<ValidationReport> {
         let _guard = WriteGuard::acquire(&self.repo_root)?;
         self.bootstrap_unlocked()?;
+        recover_prepared_transactions(&self.repo_root)?;
         let manifest = self.manifest()?;
         let node_files = self.load_node_files()?;
         let edge_files = self.load_edge_files()?;
@@ -385,12 +840,48 @@ impl JsonGraphStore {
     }
 
     pub fn export(&self) -> PulseResult<GraphProjection> {
+        let _guard = WriteGuard::acquire(&self.repo_root)?;
         self.bootstrap_unlocked()?;
-        self.validate()?.into_result()?;
+        recover_prepared_transactions(&self.repo_root)?;
         let manifest = self.manifest()?;
+        let node_files = self.load_node_files()?;
+        let edge_files = self.load_edge_files()?;
+        let node_values = node_files
+            .iter()
+            .map(|(_, n)| n.clone())
+            .collect::<Vec<_>>();
+        let edge_values = edge_files
+            .iter()
+            .map(|(_, e)| e.clone())
+            .collect::<Vec<_>>();
+        validate_graph(&self.repo_root, &manifest, &node_values, &edge_values).into_result()?;
         let node_files = self.load_node_files_rel()?;
         let edge_files = self.load_edge_files_rel()?;
         export_with_cache(&self.repo_root, &manifest, &node_files, &edge_files)
+    }
+
+    pub fn executability(&self, id: &str) -> PulseResult<StructuralExecutabilityReport> {
+        let projection = self.export()?;
+        structural_executability(&projection, id)
+    }
+
+    pub fn rollup(&self, id: &str) -> PulseResult<RollupReport> {
+        let projection = self.export()?;
+        rollup(&projection, id)
+    }
+
+    pub fn neighborhood(&self, id: &str, depth: usize) -> PulseResult<NeighborhoodReport> {
+        let projection = self.export()?;
+        neighborhood(&projection, id, depth)
+    }
+
+    pub fn affected_by(
+        &self,
+        id: &str,
+        relation_filter: Option<EdgeType>,
+    ) -> PulseResult<AffectedByReport> {
+        let projection = self.export()?;
+        affected_by(&projection, id, relation_filter)
     }
 
     pub fn recover(&self) -> PulseResult<()> {
@@ -536,6 +1027,72 @@ impl JsonGraphStore {
             EDGE_SCHEMA,
             report,
         );
+    }
+
+    fn write_or_upgrade_node_schema_unlocked(&self) -> PulseResult<()> {
+        let path = self.workgraph_dir().join("schemas/node.schema.json");
+        if !path.exists() {
+            storage::atomic_write(&path, NODE_SCHEMA.as_bytes())?;
+            return Ok(());
+        }
+        let current = fs::read(&path).map_err(|error| PulseError::io(&path, error))?;
+        if current == NODE_SCHEMA.as_bytes() {
+            return Ok(());
+        }
+        let current_hash = hash_bytes(&current);
+        if current_hash != SLICE1_NODE_SCHEMA_HASH {
+            return Err(PulseError::validation(
+                "node_schema_upgrade_refused",
+                format!(
+                    "refusing to overwrite unknown node schema {}; expected Slice 1 predecessor {}",
+                    current_hash, SLICE1_NODE_SCHEMA_HASH
+                ),
+            ));
+        }
+        // Drain any prepared transaction before replacing the schema template so recovery
+        // evidence is interpreted against a stable predecessor contract.
+        recover_prepared_transactions(&self.repo_root)?;
+        // Prove every existing node still parses and validates under the typed Slice 2 model.
+        let manifest = self.manifest()?;
+        let node_files = self.load_node_files()?;
+        for (_, node) in &node_files {
+            validate_node_filename(&self.node_path(&node.id), node)?;
+            crate::graph::validate::validate_node(&self.repo_root, &manifest, node)?;
+        }
+        let event = EventEnvelope::new(
+            new_event_id(),
+            "work.schema.node.upgraded",
+            "system:pulse",
+            "schemas/node.schema.json",
+            json!({
+                "from_schema_hash": current_hash,
+                "to_schema_hash": hash_bytes(NODE_SCHEMA.as_bytes()),
+                "node_count": node_files.len(),
+                "projection_schema_version": PROJECTION_SCHEMA_VERSION,
+                "gate_coverage": ["write_fence", "transaction_recovery", "known_predecessor_schema", "typed_node_parse"]
+            }),
+            Utc::now(),
+        );
+        let event_path = event_path(&self.repo_root, &event);
+        let intent = TransactionIntent::prepared(
+            event.id.clone(),
+            "work.schema.node.upgraded",
+            "system:pulse",
+            path.clone(),
+            event_path,
+            FileState::Present {
+                hash: current_hash,
+                revision: 0,
+            },
+            FileState::Present {
+                hash: hash_bytes(NODE_SCHEMA.as_bytes()),
+                revision: 0,
+            },
+            serde_json::to_value(event)?,
+        )?;
+        let prepared = prepare_transaction(&self.repo_root, intent)?;
+        commit_prepared_transaction(&prepared, NODE_SCHEMA.as_bytes(), self.failpoint)?;
+        Ok(())
     }
 
     fn validate_schema_file(
@@ -701,6 +1258,176 @@ impl JsonGraphStore {
             return Ok(());
         }
         storage::atomic_write(path, bytes)
+    }
+}
+
+fn superseded_by_edges(edges: &[Edge], from: &str) -> Vec<Edge> {
+    edges
+        .iter()
+        .filter(|edge| edge.edge_type == EdgeType::SupersededBy && edge.from == from)
+        .cloned()
+        .collect()
+}
+
+fn supersession_reaches(edges: &[Edge], start: &str, needle: &str) -> bool {
+    let mut current = start;
+    let mut seen = std::collections::BTreeSet::new();
+    while seen.insert(current.to_string()) {
+        let Some(next) = edges
+            .iter()
+            .find(|edge| edge.edge_type == EdgeType::SupersededBy && edge.from == current)
+            .map(|edge| edge.to.as_str())
+        else {
+            return false;
+        };
+        if next == needle {
+            return true;
+        }
+        current = next;
+    }
+    false
+}
+
+fn validate_supersession_assertion(
+    assertion: &SupersessionAssertion,
+    nodes: &BTreeMap<String, Node>,
+) -> PulseResult<()> {
+    if assertion.assertion_version != 1 {
+        return Err(PulseError::validation(
+            "invalid_supersession_assertion",
+            "assertion_version must be 1",
+        ));
+    }
+    if assertion.asserted_by.trim().is_empty() {
+        return Err(PulseError::validation(
+            "invalid_supersession_assertion",
+            "asserted_by must not be empty",
+        ));
+    }
+    for source in &assertion.source_revisions {
+        let (id, revision) = source.split_once('@').ok_or_else(|| {
+            PulseError::validation(
+                "invalid_supersession_assertion",
+                format!("source revision must be ID@revision: {source}"),
+            )
+        })?;
+        let revision = revision.parse::<u64>().map_err(|_| {
+            PulseError::validation(
+                "invalid_supersession_assertion",
+                format!("source revision must contain numeric revision: {source}"),
+            )
+        })?;
+        let node = nodes.get(id).ok_or_else(|| PulseError::NotFound {
+            subject: id.to_string(),
+        })?;
+        if node.revision != revision {
+            return Err(PulseError::validation(
+                "assertion_revision_mismatch",
+                format!(
+                    "assertion source {id}@{revision} does not match current revision {}",
+                    node.revision
+                ),
+            ));
+        }
+    }
+    for reference in &assertion.references {
+        if !nodes.contains_key(reference) {
+            return Err(PulseError::NotFound {
+                subject: reference.clone(),
+            });
+        }
+    }
+    if assertion.claim == SupersessionClaim::FollowUpRequired
+        && !assertion.references.iter().any(|reference| {
+            nodes
+                .get(reference)
+                .is_some_and(|node| node.kind != WorkKind::Decision)
+        })
+    {
+        return Err(PulseError::validation(
+            "follow_up_reference_required",
+            "follow_up_required assertions must reference at least one work item",
+        ));
+    }
+    Ok(())
+}
+
+impl JsonGraphStore {
+    fn same_supersession(
+        &self,
+        old: &Node,
+        target: &SupersessionTarget,
+        assertion: &SupersessionAssertion,
+        edges: &[Edge],
+    ) -> Option<Option<Edge>> {
+        if old.status != NodeStatus::Superseded
+            || !self.supersession_event_matches(&old.id, target, assertion)
+        {
+            return None;
+        }
+        match target {
+            SupersessionTarget::Replacement { id } => {
+                let outgoing = superseded_by_edges(edges, &old.id);
+                if outgoing.len() == 1 && outgoing[0].to == *id {
+                    Some(Some(outgoing[0].clone()))
+                } else {
+                    None
+                }
+            }
+            SupersessionTarget::Decision { id } => {
+                if old
+                    .status_reason
+                    .as_ref()
+                    .and_then(|reason| reason.reference.as_ref())
+                    == Some(id)
+                {
+                    Some(None)
+                } else {
+                    None
+                }
+            }
+        }
+    }
+
+    fn supersession_event_matches(
+        &self,
+        old_id: &str,
+        target: &SupersessionTarget,
+        assertion: &SupersessionAssertion,
+    ) -> bool {
+        let events_dir = self.repo_root.join(".pulse/events");
+        let Ok(date_dirs) = fs::read_dir(events_dir) else {
+            return false;
+        };
+        let target_value = match serde_json::to_value(target) {
+            Ok(value) => value,
+            Err(_) => return false,
+        };
+        let assertion_value = match serde_json::to_value(assertion) {
+            Ok(value) => value,
+            Err(_) => return false,
+        };
+        for date_dir in date_dirs.flatten() {
+            let Ok(entries) = fs::read_dir(date_dir.path()) else {
+                continue;
+            };
+            for entry in entries.flatten() {
+                if entry.path().extension().and_then(|ext| ext.to_str()) != Some("json") {
+                    continue;
+                }
+                let Ok(event) = storage::read_json::<EventEnvelope>(&entry.path()) else {
+                    continue;
+                };
+                if event.event_type == "work.node.superseded"
+                    && event.subject == old_id
+                    && event.payload.get("target") == Some(&target_value)
+                    && event.payload.get("assertion") == Some(&assertion_value)
+                {
+                    return true;
+                }
+            }
+        }
+        false
     }
 }
 

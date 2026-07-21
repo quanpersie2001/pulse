@@ -2,8 +2,9 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::Path;
 
 use crate::graph::edge::{deterministic_edge_id, Edge, EdgeType};
+use crate::graph::lifecycle::{status_requires_reason, validate_reason, TransitionReason};
 use crate::graph::manifest::Manifest;
-use crate::graph::node::Node;
+use crate::graph::node::{Node, NodeStatus};
 use crate::id::validate_id_for_kind;
 use crate::storage::safe_repo_relative;
 use crate::{PulseError, PulseResult};
@@ -165,6 +166,77 @@ pub fn validate_graph(
         }
     }
 
+    let nodes_by_id = nodes
+        .iter()
+        .map(|node| (node.id.as_str(), node))
+        .collect::<BTreeMap<_, _>>();
+    let mut superseded_by_count: BTreeMap<&str, usize> = BTreeMap::new();
+    for edge in edges
+        .iter()
+        .filter(|edge| edge.edge_type == EdgeType::SupersededBy)
+    {
+        *superseded_by_count.entry(edge.from.as_str()).or_default() += 1;
+        match nodes_by_id.get(edge.from.as_str()) {
+            Some(node) if node.status == NodeStatus::Superseded => {}
+            Some(_) => report.push_error(
+                "supersession_status_mismatch",
+                format!(
+                    "node {} has outgoing superseded_by edge but is not superseded",
+                    edge.from
+                ),
+            ),
+            None => {}
+        }
+        match nodes_by_id.get(edge.to.as_str()) {
+            Some(node) if matches!(node.status, NodeStatus::Done | NodeStatus::Cancelled) => {
+                report.push_error(
+                    "invalid_supersession_target",
+                    format!("supersession target {} is terminal", edge.to),
+                );
+            }
+            _ => {}
+        }
+    }
+    for node in nodes {
+        let outgoing = superseded_by_count
+            .get(node.id.as_str())
+            .copied()
+            .unwrap_or(0);
+        if outgoing > 1 {
+            report.push_error(
+                "multiple_supersession_targets",
+                format!("node {} has more than one superseded_by edge", node.id),
+            );
+        }
+        if node.status == NodeStatus::Superseded {
+            let decision_reference = node.status_reason.as_ref().and_then(|reason| {
+                reason
+                    .reference
+                    .as_ref()
+                    .and_then(|reference| nodes_by_id.get(reference.as_str()))
+                    .filter(|target| target.kind == crate::id::WorkKind::Decision)
+            });
+            match (outgoing, decision_reference) {
+                (1, None) => {}
+                (0, Some(_)) => {}
+                (1, Some(_)) => report.push_error(
+                    "ambiguous_supersession_target",
+                    format!(
+                        "node {} has both superseded_by edge and Decision status_reason reference",
+                        node.id
+                    ),
+                ),
+                _ => report.push_error(
+                    "missing_supersession_target",
+                    format!(
+                        "superseded node {} must have exactly one supersession target form",
+                        node.id
+                    ),
+                ),
+            }
+        }
+    }
+
     report
 }
 
@@ -205,6 +277,26 @@ pub fn validate_node_schema_semantics(node: &Node) -> PulseResult<()> {
         return Err(PulseError::validation(
             "invalid_title",
             "title must not be empty",
+        ));
+    }
+    match (&node.status_reason, status_requires_reason(node.status)) {
+        (Some(reason), _) => validate_reason(&TransitionReason {
+            code: reason.code.clone(),
+            summary: reason.summary.clone(),
+            reference: reason.reference.clone(),
+        })?,
+        (None, true) => {
+            return Err(PulseError::validation(
+                "missing_status_reason",
+                format!("status {:?} requires status_reason", node.status),
+            ));
+        }
+        (None, false) => {}
+    }
+    if node.status_reason.is_some() && !status_requires_reason(node.status) {
+        return Err(PulseError::validation(
+            "stale_status_reason",
+            format!("status {:?} must not persist status_reason", node.status),
         ));
     }
     Ok(())

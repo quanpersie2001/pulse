@@ -13,12 +13,51 @@ pub struct Node {
     pub revision: u64,
     pub title: String,
     pub status: NodeStatus,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub status_reason: Option<StatusReason>,
     pub content_dir: String,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct StatusReason {
+    pub code: String,
+    pub summary: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reference: Option<String>,
+}
+
+impl StatusReason {
+    pub fn new(
+        code: impl Into<String>,
+        summary: impl Into<String>,
+        reference: Option<String>,
+    ) -> PulseResult<Self> {
+        let code = code.into();
+        let summary = summary.into();
+        if code.trim().is_empty() {
+            return Err(PulseError::validation(
+                "invalid_status_reason",
+                "status reason code must not be empty",
+            ));
+        }
+        if summary.trim().is_empty() {
+            return Err(PulseError::validation(
+                "reason_required",
+                "status reason summary must not be empty",
+            ));
+        }
+        Ok(Self {
+            code,
+            summary,
+            reference,
+        })
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 #[serde(rename_all = "snake_case")]
 pub enum NodeStatus {
     Draft,
@@ -29,6 +68,7 @@ pub enum NodeStatus {
     Done,
     Rework,
     Blocked,
+    Cancelled,
     Superseded,
 }
 
@@ -48,6 +88,7 @@ impl Node {
             revision: 1,
             title,
             status: NodeStatus::Draft,
+            status_reason: None,
             created_at: now,
             updated_at: now,
         })

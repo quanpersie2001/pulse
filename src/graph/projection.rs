@@ -7,12 +7,16 @@ use serde_json::{json, Value};
 
 use crate::canonical_json::{hash_bytes, to_canonical_bytes};
 use crate::graph::edge::{Edge, EdgeType};
+use crate::graph::executability::{structural_executability, StructuralExecutabilityReport};
+use crate::graph::lifecycle::{status_class, StatusClass};
 use crate::graph::manifest::Manifest;
-use crate::graph::node::Node;
+use crate::graph::node::{Node, NodeStatus};
+use crate::graph::rollup::{rollup, RollupReport};
+use crate::id::WorkKind;
 use crate::storage;
 use crate::{PulseError, PulseResult};
 
-pub const PROJECTION_SCHEMA_VERSION: u32 = 1;
+pub const PROJECTION_SCHEMA_VERSION: u32 = 2;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct GraphProjection {
@@ -21,6 +25,15 @@ pub struct GraphProjection {
     pub nodes: Vec<Node>,
     pub edges: Vec<Edge>,
     pub inverse: InverseIndexes,
+    pub lifecycle: LifecycleProjection,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct LifecycleProjection {
+    pub status_classes: BTreeMap<StatusClass, Vec<String>>,
+    pub structural_executability: BTreeMap<String, StructuralExecutabilityReport>,
+    pub rollups: BTreeMap<String, RollupReport>,
+    pub by_status: BTreeMap<NodeStatus, Vec<String>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
@@ -99,12 +112,51 @@ pub fn build_projection(
         }
     }
 
-    GraphProjection {
+    let mut projection = GraphProjection {
         schema_version: PROJECTION_SCHEMA_VERSION,
         graph_fingerprint,
         nodes,
         edges,
         inverse,
+        lifecycle: LifecycleProjection::default(),
+    };
+    projection.lifecycle = build_lifecycle_projection(&projection);
+    projection
+}
+
+fn build_lifecycle_projection(projection: &GraphProjection) -> LifecycleProjection {
+    let mut lifecycle = LifecycleProjection::default();
+    for node in &projection.nodes {
+        push_sorted_enum(&mut lifecycle.by_status, node.status, &node.id);
+        push_sorted_enum(
+            &mut lifecycle.status_classes,
+            status_class(node.status),
+            &node.id,
+        );
+        if node.kind == WorkKind::Ticket {
+            if let Ok(report) = structural_executability(projection, &node.id) {
+                lifecycle
+                    .structural_executability
+                    .insert(node.id.clone(), report);
+            }
+        }
+        if matches!(node.kind, WorkKind::Epic | WorkKind::Story) {
+            if let Ok(report) = rollup(projection, &node.id) {
+                lifecycle.rollups.insert(node.id.clone(), report);
+            }
+        }
+    }
+    lifecycle
+}
+
+fn push_sorted_enum<K>(map: &mut BTreeMap<K, Vec<String>>, key: K, value: &str)
+where
+    K: Ord,
+{
+    let values = map.entry(key).or_default();
+    if values.iter().all(|existing| existing != value) {
+        values.push(value.to_string());
+        values.sort();
     }
 }
 
