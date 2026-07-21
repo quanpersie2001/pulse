@@ -60,6 +60,9 @@ pub enum PulseError {
     #[error("invalid transaction intent: {message}")]
     InvalidTransaction { message: String },
 
+    #[error("test failpoint reached: {name}")]
+    Failpoint { name: &'static str },
+
     #[error("validation failed: {message}")]
     Validation {
         code: &'static str,
@@ -95,6 +98,7 @@ impl PulseError {
             Self::AmbiguousTransaction { .. } => "ambiguous_transaction",
             Self::EventMismatch { .. } => "event_mismatch",
             Self::InvalidTransaction { .. } => "invalid_transaction",
+            Self::Failpoint { .. } => "failpoint",
             Self::Validation { code, .. } => code,
             Self::CasConflict { .. } => "cas_conflict",
             Self::NotFound { .. } => "not_found",

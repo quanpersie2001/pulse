@@ -1,9 +1,10 @@
 use pulse::canonical_json::{hash_bytes, to_canonical_bytes};
 use pulse::error::PulseError;
 use pulse::storage::atomic::atomic_replace;
-use pulse::storage::paths::{resolve_content_path, resolve_repo_relative};
+use pulse::storage::paths::{configured_content_root, resolve_content_path, resolve_repo_relative};
 use pulse::storage::transaction::{
-    persist_intent, recover_prepared_transactions, FileState, RecoveryAction, TransactionIntent,
+    persist_intent, recover_prepared_transactions, write_event_create_new, FileState, RecoveryAction,
+    TransactionIntent,
 };
 use pulse::storage::{bootstrap, MANIFEST_JSON};
 use serde_json::json;
@@ -65,6 +66,11 @@ fn safe_paths_reject_traversal_and_symlink_escape() {
 
     let content_escape = resolve_content_path(repo, ".pulse/workgraph").unwrap_err();
     assert!(matches!(content_escape, PulseError::ContentRootViolation { .. }));
+
+    let content_root = configured_content_root(repo, "../../works").unwrap();
+    assert_eq!(content_root, fs::canonicalize(repo).unwrap().join("works"));
+    let manifest_escape = configured_content_root(repo, "../../../outside").unwrap_err();
+    assert!(matches!(manifest_escape, PulseError::PathEscape { .. }));
 
     #[cfg(unix)]
     {
@@ -208,4 +214,83 @@ fn transaction_recovery_hard_fails_ambiguous_state() {
 
     let error = recover_prepared_transactions(repo).unwrap_err();
     assert!(matches!(error, PulseError::AmbiguousTransaction { .. }));
+}
+
+#[test]
+fn transaction_recovery_hard_fails_event_mismatch() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path();
+    bootstrap(repo).unwrap();
+
+    let target = repo.join(".pulse/workgraph/nodes/TK-001.json");
+    let before_bytes = to_canonical_bytes(&json!({"id": "TK-001", "revision": 1})).unwrap();
+    let after_bytes = to_canonical_bytes(&json!({"id": "TK-001", "revision": 2})).unwrap();
+    fs::write(&target, &after_bytes).unwrap();
+    let event_path = repo.join(".pulse/events/2026-01-01/evt_test_mismatch.json");
+    let intent = TransactionIntent::prepared(
+        "evt_test_mismatch",
+        "node.update",
+        "test",
+        target,
+        event_path.clone(),
+        FileState::Present {
+            hash: hash_bytes(&before_bytes),
+            revision: 1,
+        },
+        FileState::Present {
+            hash: hash_bytes(&after_bytes),
+            revision: 2,
+        },
+        json!({"event": "node_updated", "id": "TK-001"}),
+    )
+    .unwrap();
+    persist_intent(repo, &intent).unwrap();
+    fs::create_dir_all(event_path.parent().unwrap()).unwrap();
+    fs::write(&event_path, to_canonical_bytes(&json!({"event": "different"})).unwrap()).unwrap();
+
+    let error = recover_prepared_transactions(repo).unwrap_err();
+    assert!(matches!(error, PulseError::EventMismatch { .. }));
+    assert!(event_path.exists());
+    assert!(intent.intent_path(repo).exists());
+}
+
+#[test]
+fn transaction_recovery_cleans_after_event_before_intent_cleanup() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path();
+    bootstrap(repo).unwrap();
+
+    let target = repo.join(".pulse/workgraph/nodes/TK-001.json");
+    let before_bytes = to_canonical_bytes(&json!({"id": "TK-001", "revision": 1})).unwrap();
+    let after_bytes = to_canonical_bytes(&json!({"id": "TK-001", "revision": 2})).unwrap();
+    fs::write(&target, &after_bytes).unwrap();
+    let intent = TransactionIntent::prepared(
+        "evt_test_clean",
+        "node.update",
+        "test",
+        target,
+        repo.join(".pulse/events/2026-01-01/evt_test_clean.json"),
+        FileState::Present {
+            hash: hash_bytes(&before_bytes),
+            revision: 1,
+        },
+        FileState::Present {
+            hash: hash_bytes(&after_bytes),
+            revision: 2,
+        },
+        json!({"event": "node_updated", "id": "TK-001"}),
+    )
+    .unwrap();
+    let intent_path = persist_intent(repo, &intent).unwrap();
+    write_event_create_new(&intent).unwrap();
+
+    let actions = recover_prepared_transactions(repo).unwrap();
+    assert_eq!(
+        actions,
+        vec![RecoveryAction::CleanedComplete {
+            intent_path: intent_path.clone()
+        }]
+    );
+    assert!(!intent_path.exists());
+    assert!(intent.event_path.exists());
 }

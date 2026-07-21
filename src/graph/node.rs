@@ -5,6 +5,7 @@ use crate::id::WorkKind;
 use crate::{PulseError, PulseResult};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct Node {
     pub schema_version: u32,
     pub id: String,

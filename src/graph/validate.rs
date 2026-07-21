@@ -2,7 +2,6 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::Path;
 
 use serde::{Deserialize, Serialize};
-
 use crate::graph::edge::{deterministic_edge_id, Edge, EdgeType};
 use crate::graph::manifest::Manifest;
 use crate::graph::node::Node;
@@ -86,7 +85,7 @@ pub fn validate_graph(
         if !ids.insert(node.id.clone()) {
             report.push_error("duplicate_node_id", format!("duplicate node id {}", node.id));
         }
-        if let Err(e) = validate_node(repo_root, node) {
+        if let Err(e) = validate_node(repo_root, manifest, node) {
             report.push_error(e.code(), e.to_string());
         }
     }
@@ -96,6 +95,9 @@ pub fn validate_graph(
     for edge in edges {
         if !edge_ids.insert(edge.id.clone()) {
             report.push_error("duplicate_edge_id", format!("duplicate edge id {}", edge.id));
+        }
+        if let Err(e) = validate_edge_schema_semantics(edge) {
+            report.push_error(e.code(), e.to_string());
         }
         if !ids.contains(&edge.from) || !ids.contains(&edge.to) {
             report.push_error(
@@ -138,17 +140,8 @@ pub fn validate_graph(
     report
 }
 
-pub fn validate_node(repo_root: &Path, node: &Node) -> PulseResult<()> {
-    if node.schema_version != 1 {
-        return Err(PulseError::validation("unsupported_node_version", "node schema_version must be 1"));
-    }
-    validate_id_for_kind(&node.id, node.kind)?;
-    if node.revision < 1 {
-        return Err(PulseError::validation("invalid_revision", "revision must be >= 1"));
-    }
-    if node.title.trim().is_empty() {
-        return Err(PulseError::validation("invalid_title", "title must not be empty"));
-    }
+pub fn validate_node(repo_root: &Path, manifest: &Manifest, node: &Node) -> PulseResult<()> {
+    validate_node_schema_semantics(node)?;
     let rel = safe_repo_relative(&node.content_dir)?;
     if !rel.starts_with("works") {
         return Err(PulseError::validation(
@@ -162,9 +155,35 @@ pub fn validate_node(repo_root: &Path, node: &Node) -> PulseResult<()> {
             format!("content_dir must be works/{}", node.id),
         ));
     }
-    let full = repo_root.join(&rel);
-    if !full.exists() {
-        // Advisory for draft nodes per slice contract; callers collect warnings in file validation.
+    crate::storage::paths::resolve_content_path_under(repo_root, &manifest.content_root, &rel)?;
+    Ok(())
+}
+
+pub fn validate_node_schema_semantics(node: &Node) -> PulseResult<()> {
+    if node.schema_version != 1 {
+        return Err(PulseError::validation("unsupported_node_version", "node schema_version must be 1"));
+    }
+    validate_id_for_kind(&node.id, node.kind)?;
+    if node.revision < 1 {
+        return Err(PulseError::validation("invalid_revision", "revision must be >= 1"));
+    }
+    if node.title.trim().is_empty() {
+        return Err(PulseError::validation("invalid_title", "title must not be empty"));
+    }
+    Ok(())
+}
+
+pub fn validate_edge_schema_semantics(edge: &Edge) -> PulseResult<()> {
+    if edge.schema_version != 1 {
+        return Err(PulseError::validation("unsupported_edge_version", "edge schema_version must be 1"));
+    }
+    crate::id::validate_work_id(&edge.from)?;
+    crate::id::validate_work_id(&edge.to)?;
+    if edge.revision < 1 {
+        return Err(PulseError::validation("invalid_revision", "edge revision must be >= 1"));
+    }
+    if edge.created_by.trim().is_empty() {
+        return Err(PulseError::validation("invalid_actor", "created_by must not be empty"));
     }
     Ok(())
 }

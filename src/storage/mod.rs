@@ -5,6 +5,7 @@ pub mod transaction;
 
 use crate::canonical_json;
 use crate::error::{PulseError, Result};
+use crate::graph::manifest::{EDGE_SCHEMA, NODE_SCHEMA};
 use serde::de::DeserializeOwned;
 use serde_json::json;
 use std::fs::{self, OpenOptions};
@@ -23,84 +24,8 @@ pub const MANIFEST_JSON: &str = r#"{
 }
 "#;
 
-pub const NODE_SCHEMA_JSON: &str = r#"{
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "Pulse work graph node",
-  "type": "object",
-  "required": [
-    "schema_version",
-    "id",
-    "kind",
-    "revision",
-    "title",
-    "status",
-    "content_dir",
-    "created_at",
-    "updated_at"
-  ],
-  "properties": {
-    "schema_version": { "const": 1 },
-    "id": { "type": "string", "pattern": "^(EP|ST|TK|DEC)-[0-9]{3,}$" },
-    "kind": { "enum": ["epic", "story", "ticket", "decision"] },
-    "revision": { "type": "integer", "minimum": 1 },
-    "title": { "type": "string", "minLength": 1 },
-    "status": {
-      "enum": [
-        "draft",
-        "shaped",
-        "ready",
-        "active",
-        "verifying",
-        "done",
-        "rework",
-        "blocked",
-        "superseded"
-      ]
-    },
-    "content_dir": { "type": "string" },
-    "created_at": { "type": "string", "format": "date-time" },
-    "updated_at": { "type": "string", "format": "date-time" }
-  },
-  "additionalProperties": true
-}
-"#;
-
-pub const EDGE_SCHEMA_JSON: &str = r#"{
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "Pulse work graph edge",
-  "type": "object",
-  "required": [
-    "schema_version",
-    "id",
-    "type",
-    "from",
-    "to",
-    "revision",
-    "created_at",
-    "created_by"
-  ],
-  "properties": {
-    "schema_version": { "const": 1 },
-    "id": { "type": "string" },
-    "type": {
-      "enum": [
-        "parent",
-        "blocked_by",
-        "preferred_after",
-        "superseded_by",
-        "related",
-        "duplicates"
-      ]
-    },
-    "from": { "type": "string", "pattern": "^(EP|ST|TK|DEC)-[0-9]{3,}$" },
-    "to": { "type": "string", "pattern": "^(EP|ST|TK|DEC)-[0-9]{3,}$" },
-    "revision": { "type": "integer", "minimum": 1 },
-    "created_at": { "type": "string", "format": "date-time" },
-    "created_by": { "type": "string", "minLength": 1 }
-  },
-  "additionalProperties": true
-}
-"#;
+pub const NODE_SCHEMA_JSON: &str = NODE_SCHEMA;
+pub const EDGE_SCHEMA_JSON: &str = EDGE_SCHEMA;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BootstrapOutcome {

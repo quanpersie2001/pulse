@@ -6,16 +6,21 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
-use crate::canonical_json::to_canonical_bytes;
-use crate::event::emit_event;
+use crate::canonical_json::{hash_bytes, to_canonical_bytes};
+use crate::event::{event_path, EventEnvelope};
 use crate::graph::edge::{canonical_endpoints, deterministic_edge_id, Edge, EdgeType};
 use crate::graph::manifest::{Manifest, EDGE_SCHEMA, NODE_SCHEMA};
 use crate::graph::node::Node;
 use crate::graph::projection::{export_with_cache, GraphProjection};
 use crate::graph::validate::{
-    validate_edge_filename, validate_edge_for_add, validate_graph, validate_node_filename, ValidationReport,
+    validate_edge_filename, validate_edge_for_add, validate_graph, validate_node_filename,
+    ValidationReport,
 };
-use crate::id::{format_id, parse_numeric, validate_id_for_kind, WorkKind};
+use crate::id::{format_id, new_event_id, parse_numeric, validate_id_for_kind, WorkKind};
+use crate::storage::transaction::{
+    commit_prepared_transaction, current_file_state, prepare_transaction,
+    recover_prepared_transactions, FileState, TransactionFailpoint, TransactionIntent,
+};
 use crate::storage::{self, WriteGuard};
 use crate::{PulseError, PulseResult};
 
@@ -59,18 +64,30 @@ impl Default for OperationContext {
 
 pub struct JsonGraphStore {
     repo_root: PathBuf,
+    failpoint: Option<TransactionFailpoint>,
 }
 
 impl JsonGraphStore {
     pub fn new(repo_root: impl Into<PathBuf>) -> Self {
         Self {
             repo_root: repo_root.into(),
+            failpoint: None,
+        }
+    }
+
+    #[cfg(any(test, debug_assertions))]
+    pub fn with_failpoint(repo_root: impl Into<PathBuf>, failpoint: TransactionFailpoint) -> Self {
+        Self {
+            repo_root: repo_root.into(),
+            failpoint: Some(failpoint),
         }
     }
 
     pub fn bootstrap(&self) -> PulseResult<()> {
         let _guard = WriteGuard::acquire(&self.repo_root)?;
-        self.bootstrap_unlocked()
+        self.bootstrap_unlocked()?;
+        recover_prepared_transactions(&self.repo_root)?;
+        Ok(())
     }
 
     pub fn bootstrap_unlocked(&self) -> PulseResult<()> {
@@ -92,6 +109,7 @@ impl JsonGraphStore {
     ) -> PulseResult<MutationOutcome<Node>> {
         let _guard = WriteGuard::acquire(&self.repo_root)?;
         self.bootstrap_unlocked()?;
+        recover_prepared_transactions(&self.repo_root)?;
         let id = self.allocate_id(kind)?;
         let node = Node::new(id.clone(), kind, title, ctx.now)?;
         let nodes = self.load_nodes()?;
@@ -112,13 +130,19 @@ impl JsonGraphStore {
             &edge_values,
         )
         .into_result()?;
-        storage::atomic_write(&path, &to_canonical_bytes(&node)?)?;
-        emit_event(
-            &self.repo_root,
+        let after_bytes = to_canonical_bytes(&node)?;
+        self.commit_mutation(
             "work.node.created",
             ctx.actor,
             &node.id,
             json!({"node": node}),
+            &path,
+            FileState::Absent,
+            FileState::Present {
+                hash: hash_bytes(&after_bytes),
+                revision: node.revision,
+            },
+            &after_bytes,
             ctx.now,
         )?;
         Ok(MutationOutcome {
@@ -170,13 +194,15 @@ impl JsonGraphStore {
         }
         let _guard = WriteGuard::acquire(&self.repo_root)?;
         self.bootstrap_unlocked()?;
+        recover_prepared_transactions(&self.repo_root)?;
         let path = self.node_path(id);
         if !path.exists() {
             return Err(PulseError::NotFound {
                 subject: id.to_string(),
             });
         }
-        let mut node: Node = storage::read_json(&path)?;
+        let before_bytes = fs::read(&path).map_err(|error| PulseError::io(&path, error))?;
+        let mut node: Node = serde_json::from_slice(&before_bytes).map_err(|error| PulseError::json(&path, error))?;
         if node.revision != expected_revision {
             return Err(PulseError::CasConflict {
                 subject: id.to_string(),
@@ -196,13 +222,22 @@ impl JsonGraphStore {
             &edge_values,
         )
         .into_result()?;
-        storage::atomic_write(&path, &to_canonical_bytes(&node)?)?;
-        emit_event(
-            &self.repo_root,
+        let after_bytes = to_canonical_bytes(&node)?;
+        self.commit_mutation(
             "work.node.updated",
             ctx.actor,
             id,
             json!({"node": node, "expected_revision": expected_revision}),
+            &path,
+            FileState::Present {
+                hash: hash_bytes(&before_bytes),
+                revision: expected_revision,
+            },
+            FileState::Present {
+                hash: hash_bytes(&after_bytes),
+                revision: expected_revision + 1,
+            },
+            &after_bytes,
             ctx.now,
         )?;
         Ok(MutationOutcome {
@@ -231,6 +266,7 @@ impl JsonGraphStore {
     ) -> PulseResult<MutationOutcome<Edge>> {
         let _guard = WriteGuard::acquire(&self.repo_root)?;
         self.bootstrap_unlocked()?;
+        recover_prepared_transactions(&self.repo_root)?;
         let (from, to) = canonical_endpoints(edge_type, from, to);
         let id = deterministic_edge_id(edge_type, &from, &to);
         let path = self.edge_path(&id);
@@ -253,13 +289,19 @@ impl JsonGraphStore {
         let nodes = self.load_nodes()?;
         let edges = self.load_edges()?.into_iter().map(|(_, e)| e).collect::<Vec<_>>();
         validate_edge_for_add(&nodes, &edges, &edge)?;
-        storage::atomic_write(&path, &to_canonical_bytes(&edge)?)?;
-        emit_event(
-            &self.repo_root,
+        let after_bytes = to_canonical_bytes(&edge)?;
+        self.commit_mutation(
             "work.edge.created",
             ctx.actor,
             &edge.id,
             json!({"edge": edge}),
+            &path,
+            FileState::Absent,
+            FileState::Present {
+                hash: hash_bytes(&after_bytes),
+                revision: edge.revision,
+            },
+            &after_bytes,
             ctx.now,
         )?;
         Ok(MutationOutcome {
@@ -289,6 +331,7 @@ impl JsonGraphStore {
     }
 
     pub fn validate(&self) -> PulseResult<ValidationReport> {
+        let _guard = WriteGuard::acquire(&self.repo_root)?;
         self.bootstrap_unlocked()?;
         let manifest = self.manifest()?;
         let node_files = self.load_node_files()?;
@@ -306,6 +349,7 @@ impl JsonGraphStore {
             if let Err(e) = validate_node_filename(path, node) {
                 report.push_error(e.code(), e.to_string());
             }
+            self.validate_canonical_file(path, node, "node_canonical_drift", &mut report);
             if !self.repo_root.join(&node.content_dir).exists() {
                 report.push_warning(
                     "missing_draft_content_dir",
@@ -317,7 +361,9 @@ impl JsonGraphStore {
             if let Err(e) = validate_edge_filename(path, edge) {
                 report.push_error(e.code(), e.to_string());
             }
+            self.validate_canonical_file(path, edge, "edge_canonical_drift", &mut report);
         }
+        self.validate_runtime_state(&mut report);
         Ok(report)
     }
 
@@ -328,6 +374,41 @@ impl JsonGraphStore {
         let node_files = self.load_node_files_rel()?;
         let edge_files = self.load_edge_files_rel()?;
         export_with_cache(&self.repo_root, &manifest, &node_files, &edge_files)
+    }
+
+    pub fn recover(&self) -> PulseResult<()> {
+        let _guard = WriteGuard::acquire(&self.repo_root)?;
+        self.bootstrap_unlocked()?;
+        recover_prepared_transactions(&self.repo_root)?;
+        Ok(())
+    }
+
+    fn commit_mutation(
+        &self,
+        event_type: &str,
+        actor: String,
+        subject: &str,
+        payload: serde_json::Value,
+        target_path: &Path,
+        before: FileState,
+        after: FileState,
+        canonical_bytes: &[u8],
+        now: DateTime<Utc>,
+    ) -> PulseResult<()> {
+        debug_assert_eq!(current_file_state(target_path, file_state_revision(&before))?, before);
+        let event = EventEnvelope::new(new_event_id(), event_type, actor.clone(), subject, payload, now);
+        let intent = TransactionIntent::prepared(
+            event.id.clone(),
+            event_type,
+            actor,
+            target_path.to_path_buf(),
+            event_path(&self.repo_root, &event),
+            before,
+            after,
+            serde_json::to_value(event)?,
+        )?;
+        let prepared = prepare_transaction(&self.repo_root, intent)?;
+        commit_prepared_transaction(&prepared, canonical_bytes, self.failpoint)
     }
 
     fn workgraph_dir(&self) -> PathBuf {
@@ -346,36 +427,107 @@ impl JsonGraphStore {
         storage::read_json(&self.workgraph_dir().join("manifest.json"))
     }
 
+    fn validate_canonical_file<T: Serialize>(
+        &self,
+        path: &Path,
+        value: &T,
+        code: &'static str,
+        report: &mut ValidationReport,
+    ) {
+        match (fs::read(path), to_canonical_bytes(value)) {
+            (Ok(actual), Ok(expected)) if actual != expected => report.push_warning(
+                code,
+                format!("{} is not in canonical JSON byte form", path.display()),
+            ),
+            (Err(error), _) => report.push_error("io_error", format!("cannot read {}: {error}", path.display())),
+            (_, Err(error)) => report.push_error(error.code(), error.to_string()),
+            _ => {}
+        }
+    }
+
+    fn validate_runtime_state(&self, report: &mut ValidationReport) {
+        match recover_prepared_transactions(&self.repo_root) {
+            Ok(actions) => {
+                for action in actions {
+                    report.push_warning(
+                        "transaction_recovered",
+                        format!("recovered local transaction state: {action:?}"),
+                    );
+                }
+            }
+            Err(error) => report.push_error(error.code(), error.to_string()),
+        }
+    }
+
     fn validate_manifest_files(&self, manifest: &Manifest, report: &mut ValidationReport) {
-        if manifest.content_root != "../../works" {
+        match crate::storage::paths::configured_content_root(&self.repo_root, &manifest.content_root) {
+            Ok(root) => match crate::storage::paths::configured_content_root(&self.repo_root, "../../works") {
+                Ok(expected) if root != expected => report.push_error(
+                    "content_root_violation",
+                    format!(
+                        "manifest content_root must resolve to repository works/ root, got {}",
+                        manifest.content_root
+                    ),
+                ),
+                Ok(_) => {}
+                Err(error) => report.push_error(error.code(), error.to_string()),
+            },
+            Err(error) => report.push_error(error.code(), error.to_string()),
+        }
+        if manifest.id_pattern != "^(EP|ST|TK|DEC)-[0-9]{3,}$" {
             report.push_error(
                 "invalid_manifest",
-                format!("manifest content_root must be ../../works, got {}", manifest.content_root),
+                format!("manifest id_pattern is unsupported: {}", manifest.id_pattern),
             );
         }
-        for schema_path in [&manifest.node_schema, &manifest.edge_schema] {
-            let rel = match crate::storage::safe_repo_relative(schema_path) {
-                Ok(rel) => rel,
-                Err(e) => {
-                    report.push_error(e.code(), e.to_string());
-                    continue;
-                }
-            };
-            let full = self.workgraph_dir().join(rel);
-            match fs::read(&full) {
-                Ok(bytes) => {
-                    if let Err(e) = serde_json::from_slice::<serde_json::Value>(&bytes) {
-                        report.push_error(
-                            "schema_parse_error",
-                            format!("schema {} is not valid JSON: {}", full.display(), e),
-                        );
-                    }
-                }
-                Err(e) => report.push_error(
-                    "schema_missing",
-                    format!("cannot read schema {}: {}", full.display(), e),
-                ),
+        self.validate_schema_file(&manifest.node_schema, "node_schema_drift", NODE_SCHEMA, report);
+        self.validate_schema_file(&manifest.edge_schema, "edge_schema_drift", EDGE_SCHEMA, report);
+    }
+
+    fn validate_schema_file(
+        &self,
+        schema_path: &str,
+        drift_code: &'static str,
+        expected_embedded_schema: &str,
+        report: &mut ValidationReport,
+    ) {
+        let rel = match crate::storage::safe_repo_relative(schema_path) {
+            Ok(rel) => rel,
+            Err(e) => {
+                report.push_error(e.code(), e.to_string());
+                return;
             }
+        };
+        let full = self.workgraph_dir().join(rel);
+        match fs::read(&full) {
+            Ok(bytes) => match serde_json::from_slice::<serde_json::Value>(&bytes) {
+                Ok(repo_schema) => match serde_json::from_str::<serde_json::Value>(expected_embedded_schema) {
+                    Ok(embedded_schema) if repo_schema != embedded_schema => report.push_error(
+                        drift_code,
+                        format!("schema {} differs from slice schema template", full.display()),
+                    ),
+                    Ok(_) => match to_canonical_bytes(&repo_schema) {
+                        Ok(canonical) if canonical != bytes => report.push_warning(
+                            "schema_canonical_drift",
+                            format!("schema {} is not in canonical JSON byte form", full.display()),
+                        ),
+                        Err(error) => report.push_error(error.code(), error.to_string()),
+                        _ => {}
+                    },
+                    Err(e) => report.push_error(
+                        "embedded_schema_parse_error",
+                        format!("embedded schema is not valid JSON: {e}"),
+                    ),
+                },
+                Err(e) => report.push_error(
+                    "schema_parse_error",
+                    format!("schema {} is not valid JSON: {}", full.display(), e),
+                ),
+            },
+            Err(e) => report.push_error(
+                "schema_missing",
+                format!("cannot read schema {}: {}", full.display(), e),
+            ),
         }
     }
 
@@ -480,5 +632,12 @@ impl JsonGraphStore {
             return Ok(());
         }
         storage::atomic_write(path, bytes)
+    }
+}
+
+fn file_state_revision(state: &FileState) -> Option<u64> {
+    match state {
+        FileState::Absent => None,
+        FileState::Present { revision, .. } => Some(*revision),
     }
 }

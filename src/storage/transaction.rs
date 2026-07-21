@@ -7,6 +7,21 @@ use serde::{Deserialize, Serialize};
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
+#[cfg(debug_assertions)]
+use std::time::Duration;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TransactionFailpoint {
+    AfterIntent,
+    AfterCanonical,
+    AfterEvent,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PreparedTransaction {
+    pub intent: TransactionIntent,
+    pub intent_path: PathBuf,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -94,8 +109,61 @@ pub fn persist_intent(repo_root: &Path, intent: &TransactionIntent) -> Result<Pa
     Ok(path)
 }
 
+pub fn prepare_transaction(repo_root: &Path, intent: TransactionIntent) -> Result<PreparedTransaction> {
+    let intent_path = persist_intent(repo_root, &intent)?;
+    Ok(PreparedTransaction { intent, intent_path })
+}
+
+pub fn complete_and_cleanup_intent(intent_path: &Path, intent: &TransactionIntent) -> Result<()> {
+    let mut complete = intent.clone();
+    complete.state = IntentState::Complete;
+    complete.updated_at = Utc::now();
+    let bytes = canonical_json::to_canonical_bytes_from(&complete)?;
+    atomic::atomic_replace(intent_path, &bytes)?;
+    fs::remove_file(intent_path).map_err(|error| PulseError::io(intent_path, error))
+}
+
+pub fn commit_prepared_transaction(
+    prepared: &PreparedTransaction,
+    canonical_bytes: &[u8],
+    failpoint: Option<TransactionFailpoint>,
+) -> Result<()> {
+    #[cfg(debug_assertions)]
+    if failpoint == Some(TransactionFailpoint::AfterIntent) {
+        trigger_failpoint("after_intent")?;
+    }
+
+    atomic::atomic_replace(&prepared.intent.target_path, canonical_bytes)?;
+    #[cfg(debug_assertions)]
+    if failpoint == Some(TransactionFailpoint::AfterCanonical) {
+        trigger_failpoint("after_canonical")?;
+    }
+
+    write_event_create_new(&prepared.intent)?;
+    #[cfg(debug_assertions)]
+    if failpoint == Some(TransactionFailpoint::AfterEvent) {
+        trigger_failpoint("after_event")?;
+    }
+
+    complete_and_cleanup_intent(&prepared.intent_path, &prepared.intent)
+}
+
+#[cfg(debug_assertions)]
+fn trigger_failpoint(name: &'static str) -> Result<()> {
+    if std::env::var_os("PULSE_FAILPOINT_SLEEP_MS").is_some() {
+        let millis = std::env::var("PULSE_FAILPOINT_SLEEP_MS")
+            .ok()
+            .and_then(|value| value.parse::<u64>().ok())
+            .unwrap_or(30_000);
+        eprintln!("pulse failpoint reached: {name}");
+        std::thread::sleep(Duration::from_millis(millis));
+    }
+    Err(PulseError::Failpoint { name })
+}
+
 pub fn recover_prepared_transactions(repo_root: &Path) -> Result<Vec<RecoveryAction>> {
     let directory = repo_root.join(".pulse/runtime/transactions");
+    cleanup_orphan_transaction_temps(&directory)?;
     if !directory.exists() {
         return Ok(Vec::new());
     }
@@ -237,7 +305,7 @@ fn observed_hash_matches(observed_hash: Option<&str>, expected: &FileState) -> b
     }
 }
 
-fn write_event_create_new(intent: &TransactionIntent) -> Result<()> {
+pub fn write_event_create_new(intent: &TransactionIntent) -> Result<()> {
     let bytes = canonical_json::to_canonical_bytes(&intent.event_payload)?;
     let actual_hash = hash_bytes(&bytes);
     if actual_hash != intent.event_hash {
@@ -251,11 +319,26 @@ fn write_event_create_new(intent: &TransactionIntent) -> Result<()> {
     if let Some(parent) = intent.event_path.parent() {
         fs::create_dir_all(parent).map_err(|error| PulseError::io(parent, error))?;
     }
-    let mut file = OpenOptions::new()
+    let mut file = match OpenOptions::new()
         .write(true)
         .create_new(true)
         .open(&intent.event_path)
-        .map_err(|error| PulseError::io(&intent.event_path, error))?;
+    {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+            if event_matches_intent(intent)? {
+                return Ok(());
+            }
+            return Err(PulseError::EventMismatch {
+                transaction_id: intent.transaction_id.clone(),
+                message: format!(
+                    "event file already exists at {} with different content",
+                    intent.event_path.display()
+                ),
+            });
+        }
+        Err(error) => return Err(PulseError::io(&intent.event_path, error)),
+    };
     file.write_all(&bytes)
         .map_err(|error| PulseError::io(&intent.event_path, error))?;
     file.flush()
@@ -269,6 +352,11 @@ fn cleanup_target_temp(target_path: &Path) -> Result<()> {
     if let Some(parent) = target_path.parent() {
         let _ = atomic::cleanup_orphan_temps(parent)?;
     }
+    Ok(())
+}
+
+fn cleanup_orphan_transaction_temps(directory: &Path) -> Result<()> {
+    let _ = atomic::cleanup_orphan_temps(directory)?;
     Ok(())
 }
 

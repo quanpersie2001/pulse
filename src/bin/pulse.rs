@@ -3,6 +3,8 @@ use std::path::PathBuf;
 use clap::{Parser, Subcommand, ValueEnum};
 use pulse::graph::edge::EdgeType;
 use pulse::id::WorkKind;
+#[cfg(debug_assertions)]
+use pulse::storage::transaction::TransactionFailpoint;
 use pulse::{JsonGraphStore, PulseError};
 use serde::Serialize;
 use serde_json::json;
@@ -12,6 +14,9 @@ use serde_json::json;
 struct Cli {
     #[arg(long, global = true)]
     repo_root: Option<PathBuf>,
+    #[cfg(debug_assertions)]
+    #[arg(long, global = true, hide = true, value_enum)]
+    test_failpoint: Option<FailpointArg>,
     #[command(subcommand)]
     command: Command,
 }
@@ -66,6 +71,10 @@ enum GraphCommand {
         #[command(subcommand)]
         command: EdgeCommand,
     },
+    Recover {
+        #[arg(long)]
+        json: bool,
+    },
     Validate {
         #[arg(long)]
         json: bool,
@@ -90,6 +99,26 @@ enum EdgeCommand {
         #[arg(long)]
         json: bool,
     },
+}
+
+#[cfg(debug_assertions)]
+#[derive(Clone, ValueEnum)]
+#[value(rename_all = "snake_case")]
+enum FailpointArg {
+    AfterIntent,
+    AfterCanonical,
+    AfterEvent,
+}
+
+#[cfg(debug_assertions)]
+impl From<FailpointArg> for TransactionFailpoint {
+    fn from(value: FailpointArg) -> Self {
+        match value {
+            FailpointArg::AfterIntent => TransactionFailpoint::AfterIntent,
+            FailpointArg::AfterCanonical => TransactionFailpoint::AfterCanonical,
+            FailpointArg::AfterEvent => TransactionFailpoint::AfterEvent,
+        }
+    }
 }
 
 #[derive(Clone, ValueEnum)]
@@ -140,6 +169,12 @@ fn main() {
     let repo_root = cli
         .repo_root
         .unwrap_or_else(|| std::env::current_dir().expect("current dir"));
+    #[cfg(debug_assertions)]
+    let store = match cli.test_failpoint {
+        Some(failpoint) => JsonGraphStore::with_failpoint(repo_root, failpoint.into()),
+        None => JsonGraphStore::new(repo_root),
+    };
+    #[cfg(not(debug_assertions))]
     let store = JsonGraphStore::new(repo_root);
     let result = run(store, cli.command);
     if let Err(err) = result {
@@ -187,6 +222,14 @@ fn run(store: JsonGraphStore, command: Command) -> Result<(), PulseError> {
                     render(json, &out, format!("{} {}", out.code, out.value.id))
                 }
             },
+            GraphCommand::Recover { json } => {
+                store.recover()?;
+                render(
+                    json,
+                    &json!({"schema_version": 1, "code": "recovered"}),
+                    "recovered".to_string(),
+                )
+            }
             GraphCommand::Validate { json } => {
                 let report = store.validate()?;
                 let ok = report.valid;

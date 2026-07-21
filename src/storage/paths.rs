@@ -55,22 +55,74 @@ pub fn resolve_repo_relative(repo_root: &Path, relative_path: impl AsRef<Path>) 
 }
 
 pub fn resolve_content_path(repo_root: &Path, content_path: impl AsRef<Path>) -> Result<PathBuf> {
+    resolve_content_path_under(repo_root, "../../works", content_path)
+}
+
+pub fn resolve_content_path_under(
+    repo_root: &Path,
+    manifest_content_root: impl AsRef<Path>,
+    content_path: impl AsRef<Path>,
+) -> Result<PathBuf> {
     let content_path = content_path.as_ref();
     let resolved = resolve_repo_relative(repo_root, content_path)?;
-    let works_root = match resolve_repo_relative(repo_root, "works") {
-        Ok(path) => path,
-        Err(PulseError::Io { source, .. }) if source.kind() == std::io::ErrorKind::NotFound => {
-            let repo_root = canonicalize_existing_dir(repo_root)?;
-            repo_root.join("works")
-        }
-        Err(error) => return Err(error),
-    };
+    let works_root = configured_content_root(repo_root, manifest_content_root)?;
     if !resolved.starts_with(&works_root) {
         return Err(PulseError::ContentRootViolation {
             path: content_path.to_path_buf(),
         });
     }
     Ok(resolved)
+}
+
+pub fn configured_content_root(repo_root: &Path, manifest_content_root: impl AsRef<Path>) -> Result<PathBuf> {
+    let repo_root = canonicalize_existing_dir(repo_root)?;
+    let workgraph_root = repo_root.join(".pulse/workgraph");
+    let content_root = manifest_content_root.as_ref();
+    validate_manifest_relative_path(content_root)?;
+    let resolved = normalize_future_path(&workgraph_root.join(content_root))?;
+    ensure_under_root(&repo_root, &resolved, content_root)?;
+    Ok(resolved)
+}
+
+fn validate_manifest_relative_path(path: &Path) -> Result<()> {
+    if path.is_absolute() {
+        return Err(PulseError::AbsolutePath {
+            path: path.to_path_buf(),
+        });
+    }
+    for component in path.components() {
+        match component {
+            Component::Normal(_) | Component::ParentDir | Component::CurDir => {}
+            Component::RootDir | Component::Prefix(_) => {
+                return Err(PulseError::PathTraversal {
+                    path: path.to_path_buf(),
+                });
+            }
+        }
+    }
+    Ok(())
+}
+
+fn normalize_future_path(path: &Path) -> Result<PathBuf> {
+    if path.exists() {
+        return fs::canonicalize(path).map_err(|error| PulseError::io(path, error));
+    }
+    if let Some(parent) = nearest_existing_parent(path) {
+        let canonical_parent = fs::canonicalize(&parent).map_err(|error| PulseError::io(parent, error))?;
+        let suffix = path.strip_prefix(&parent).unwrap_or(Path::new(""));
+        return Ok(canonical_parent.join(suffix));
+    }
+    Ok(path.to_path_buf())
+}
+
+fn nearest_existing_parent(path: &Path) -> Option<PathBuf> {
+    let mut current = path.parent()?;
+    loop {
+        if current.exists() {
+            return Some(current.to_path_buf());
+        }
+        current = current.parent()?;
+    }
 }
 
 pub fn validate_relative_path(path: &Path) -> Result<()> {

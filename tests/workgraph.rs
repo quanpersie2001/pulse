@@ -1,8 +1,10 @@
 use std::fs;
 
 use chrono::{TimeZone, Utc};
-use pulse::graph::edge::EdgeType;
+use pulse::canonical_json::to_canonical_bytes;
+use pulse::graph::edge::{deterministic_edge_id, Edge, EdgeType};
 use pulse::graph::store::OperationContext;
+use pulse::graph::validate::ValidationReport;
 use pulse::id::WorkKind;
 use pulse::{JsonGraphStore, PulseError};
 use tempfile::TempDir;
@@ -205,6 +207,87 @@ fn event_count(root: &std::path::Path) -> usize {
         }
     }
     count
+}
+
+#[test]
+fn corrupt_cache_rebuilds_without_changing_projection() {
+    let (dir, store) = repo();
+    store
+        .create_node_with_context(WorkKind::Ticket, "A".into(), ctx("test", 1))
+        .unwrap();
+    let first = store.export().unwrap();
+    let cache = dir.path().join(".pulse/cache/workgraph.snapshot.json");
+    fs::write(&cache, b"not json").unwrap();
+    let second = store.export().unwrap();
+    assert_eq!(first, second);
+    assert_ne!(fs::read(&cache).unwrap(), b"not json");
+}
+
+#[test]
+fn schema_template_mismatch_invalidates_graph() {
+    let (dir, store) = repo();
+    fs::write(
+        dir.path().join(".pulse/workgraph/schemas/node.schema.json"),
+        b"{\"schema_version\":999}\n",
+    )
+    .unwrap();
+    let report = store.validate().unwrap();
+    assert_finding(&report, "node_schema_drift");
+}
+
+#[test]
+fn canonical_drift_is_validation_warning() {
+    let (dir, store) = repo();
+    let tk = store
+        .create_node_with_context(WorkKind::Ticket, "A".into(), ctx("test", 1))
+        .unwrap()
+        .value;
+    let path = dir.path().join(".pulse/workgraph/nodes").join(format!("{}.json", tk.id));
+    let compact = serde_json::to_vec(&tk).unwrap();
+    fs::write(&path, compact).unwrap();
+    let report = store.validate().unwrap();
+    assert!(report.valid, "{report:?}");
+    assert!(report.warnings.iter().any(|finding| finding.code == "node_canonical_drift"));
+}
+
+#[test]
+fn edge_file_payload_mismatch_invalidates_graph() {
+    let (dir, store) = repo();
+    let a = store
+        .create_node_with_context(WorkKind::Ticket, "A".into(), ctx("test", 1))
+        .unwrap()
+        .value;
+    let b = store
+        .create_node_with_context(WorkKind::Ticket, "B".into(), ctx("test", 2))
+        .unwrap()
+        .value;
+    let c = store
+        .create_node_with_context(WorkKind::Ticket, "C".into(), ctx("test", 3))
+        .unwrap()
+        .value;
+    let mut edge = Edge::new(EdgeType::BlockedBy, a.id.clone(), b.id, "test".into(), ctx("test", 4).now).unwrap();
+    let file_id = edge.id.clone();
+    edge.to = c.id;
+    edge.id = file_id.clone();
+    fs::write(
+        dir.path().join(".pulse/workgraph/edges").join(format!("{file_id}.json")),
+        to_canonical_bytes(&edge).unwrap(),
+    )
+    .unwrap();
+
+    let report = store.validate().unwrap();
+    assert_finding(&report, "edge_id_mismatch");
+    assert_eq!(
+        deterministic_edge_id(EdgeType::BlockedBy, &edge.from, &edge.to),
+        format!("blocked-by--{}--{}", edge.from, edge.to)
+    );
+}
+
+fn assert_finding(report: &ValidationReport, code: &str) {
+    assert!(
+        report.errors.iter().any(|finding| finding.code == code),
+        "expected finding {code}, got {report:?}"
+    );
 }
 
 fn edge_count(root: &std::path::Path) -> usize {
