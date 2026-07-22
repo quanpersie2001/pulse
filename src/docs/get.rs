@@ -117,25 +117,59 @@ pub fn get_docs(repo_root: &Path, reference: &str, options: GetOptions) -> Pulse
     let outline = sections.iter().map(outline_item).collect::<Vec<_>>();
     let doc_info = doc_info(doc, &content_hash);
     if let Some(section_ref) = section_ref {
-        let section = sections
+        if let Some(section) = sections
             .iter()
             .find(|section| section.section_ref == section_ref)
-            .ok_or_else(|| stale_anchor_error(reference, &doc_info, &sections))?;
-        let (body, truncated) = bounded_body(&bytes, section.range, &options)?;
-        return Ok(GetReport {
-            schema_version: 1,
-            ref_: reference.to_string(),
-            document: doc_info,
-            section: Some(GetSection {
-                section_ref: section.section_ref.clone(),
-                heading_path: section.heading_path.clone(),
-                range: section.range,
-                section_content_hash: section.section_content_hash.clone(),
-            }),
-            outline,
-            body: Some(body),
-            truncated,
-        });
+        {
+            let (body, truncated) = bounded_body(&bytes, section.range, &options)?;
+            return Ok(GetReport {
+                schema_version: 1,
+                ref_: reference.to_string(),
+                document: doc_info,
+                section: Some(GetSection {
+                    section_ref: section.section_ref.clone(),
+                    heading_path: section.heading_path.clone(),
+                    range: section.range,
+                    section_content_hash: section.section_content_hash.clone(),
+                }),
+                outline,
+                body: Some(body),
+                truncated,
+            });
+        }
+
+        let chunks = chunk_records_for_base_ref(&sections, &section_ref);
+        if !chunks.is_empty() {
+            let first = chunks[0];
+            let last = chunks[chunks.len() - 1];
+            let base_range = SectionRange::new(first.range.start_line, last.range.end_line);
+            let body_range = if options.full_section {
+                base_range
+            } else {
+                first.range
+            };
+            let (body, body_truncated) = bounded_body(&bytes, body_range, &options)?;
+            return Ok(GetReport {
+                schema_version: 1,
+                ref_: reference.to_string(),
+                document: doc_info,
+                section: Some(GetSection {
+                    section_ref: section_ref.clone(),
+                    heading_path: first.heading_path.clone(),
+                    range: base_range,
+                    section_content_hash: section_hash(&bytes, base_range)?,
+                }),
+                outline,
+                body: Some(body),
+                truncated: if options.full_section {
+                    body_truncated
+                } else {
+                    true
+                },
+            });
+        }
+
+        return Err(stale_anchor_error(reference, &doc_info, &sections));
     }
     if options.full {
         let max_bytes = options.max_bytes.unwrap_or(1_048_576);
@@ -190,6 +224,33 @@ fn extract_current(
         true,
     );
     Ok((bytes, content_hash, outcome.sections))
+}
+
+fn chunk_records_for_base_ref<'a>(
+    sections: &'a [SectionRecord],
+    base_ref: &str,
+) -> Vec<&'a SectionRecord> {
+    let mut chunks = sections
+        .iter()
+        .filter(|section| section.chunk.is_some())
+        .filter(|section| format!("{}#{}", section.document_id, section.anchor) == base_ref)
+        .collect::<Vec<_>>();
+    chunks.sort_by_key(|section| {
+        (
+            section.chunk.map(|chunk| chunk.ordinal).unwrap_or(u32::MAX),
+            section.range.start_line,
+            section.range.end_line,
+        )
+    });
+    chunks
+}
+
+fn section_hash(bytes: &[u8], range: SectionRange) -> PulseResult<String> {
+    let line_spans = line_spans(bytes)?;
+    validate_range(range, line_spans.len() as u32)?;
+    let start = line_spans[(range.start_line - 1) as usize].0;
+    let end = line_spans[(range.end_line - 1) as usize].1;
+    Ok(hash_bytes(&bytes[start..end]))
 }
 
 fn bounded_body(
