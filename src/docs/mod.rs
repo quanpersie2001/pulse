@@ -1,5 +1,6 @@
 pub mod applicability;
 pub mod cache;
+pub mod get;
 pub mod index;
 pub mod lexical;
 pub mod manifest;
@@ -8,7 +9,9 @@ pub mod model;
 pub mod policy;
 pub mod projection;
 pub mod registry;
+pub mod search;
 pub mod section;
+pub mod tree;
 pub mod validate;
 
 pub use applicability::{
@@ -20,15 +23,17 @@ pub use cache::{
     read_current, validate_generation, CacheState, DocsSearchWriteLock, EngineState,
     ExtractorState, GenerationCounts, GenerationDocument, GenerationState, ValidatedGeneration,
 };
+pub use get::{get_docs, GetDocument, GetOptions, GetOutlineItem, GetReport, GetSection};
 pub use index::{
     build_index, current_generation, index_status, retrieval_fingerprint,
     within_auto_refresh_limits, IndexBuildReport, IndexDocumentsReport, IndexOptions,
     IndexRegistryReport, IndexStateReport, IndexStatusReport, ProjectionReport,
 };
 pub use lexical::{
-    build_index as build_lexical_index, build_schema as build_lexical_schema, load_section_records,
-    open_index as open_lexical_index, query as query_lexical_index, tokenize_query_text,
-    write_sections_jsonl, LexicalHit, LexicalSchema, TANTIVY_COMPAT_VERSION,
+    build_index as build_lexical_index, build_index_with_bodies,
+    build_schema as build_lexical_schema, load_section_records, open_index as open_lexical_index,
+    query as query_lexical_index, tokenize_query_text, write_sections_jsonl, LexicalHit,
+    LexicalSchema, TANTIVY_COMPAT_VERSION,
 };
 pub use manifest::{
     bootstrap, load, migrate_registry, predecessor_schema, DocsBootstrapOutcome,
@@ -54,9 +59,13 @@ pub use registry::{
     registry_fingerprint, registry_path, retire, show, supersede, DocsRegistryStore,
     MutationOutcome, MutationStatus, OperationContext,
 };
+pub use search::{
+    search_docs, SearchBudget, SearchIndexInfo, SearchOptions, SearchReport, SearchResult,
+};
 pub use section::{
     anchor_for_heading, chunk_ref_string, dedupe_anchors, section_ref, ChunkRef, SectionRange,
     SectionRecord, ANCHOR_VERSION, CHUNK_HARD_MAX_BYTES, CHUNK_OVERLAP_LINES, CHUNK_SOFT_MAX_BYTES,
     CHUNK_SOFT_MAX_LINES, CHUNK_VERSION, EXTRACTOR_VERSION,
 };
+pub use tree::{docs_tree, tree_from_registry, DocsTreeReport, TreeNode, TreeOptions};
 pub use validate::{validate_registry, DocsFinding, DocsValidationReport};

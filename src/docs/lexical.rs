@@ -77,6 +77,14 @@ pub fn open_index(tantivy_dir: &Path) -> PulseResult<Index> {
 }
 
 pub fn build_index(tantivy_dir: &Path, sections: &[SectionRecord]) -> PulseResult<()> {
+    build_index_with_bodies(tantivy_dir, sections, &std::collections::BTreeMap::new())
+}
+
+pub fn build_index_with_bodies(
+    tantivy_dir: &Path,
+    sections: &[SectionRecord],
+    bodies: &std::collections::BTreeMap<String, String>,
+) -> PulseResult<()> {
     if tantivy_dir.exists() {
         std::fs::remove_dir_all(tantivy_dir).map_err(|e| PulseError::io(tantivy_dir, e))?;
     }
@@ -90,7 +98,10 @@ pub fn build_index(tantivy_dir: &Path, sections: &[SectionRecord]) -> PulseResul
     })?;
     for section in sections {
         let body_text = if section.body_indexed {
-            section.heading_path.join(" ")
+            bodies
+                .get(&section.section_ref)
+                .cloned()
+                .unwrap_or_else(|| section.heading_path.join(" "))
         } else {
             String::new()
         };

@@ -120,6 +120,63 @@ enum DocsCommand {
         #[arg(long)]
         json: bool,
     },
+    Index {
+        #[arg(long)]
+        changed: bool,
+        #[arg(long)]
+        rebuild: bool,
+        #[arg(long)]
+        check: bool,
+        #[arg(long)]
+        json: bool,
+    },
+    Status {
+        #[arg(long)]
+        json: bool,
+    },
+    Search {
+        query: String,
+        #[arg(long)]
+        kind: Option<DocKindArg>,
+        #[arg(long)]
+        domain: Option<String>,
+        #[arg(long)]
+        authority: Option<DocAuthorityArg>,
+        #[arg(long)]
+        limit: Option<usize>,
+        #[arg(long)]
+        no_refresh: bool,
+        #[arg(long)]
+        explain: bool,
+        #[arg(long)]
+        json: bool,
+    },
+    Get {
+        reference: String,
+        #[arg(long)]
+        max_lines: Option<u32>,
+        #[arg(long)]
+        max_bytes: Option<usize>,
+        #[arg(long)]
+        full: bool,
+        #[arg(long)]
+        full_section: bool,
+        #[arg(long)]
+        no_refresh: bool,
+        #[arg(long)]
+        json: bool,
+    },
+    Tree {
+        path: Option<String>,
+        #[arg(long)]
+        depth: Option<usize>,
+        #[arg(long)]
+        include_draft: bool,
+        #[arg(long)]
+        include_stale: bool,
+        #[arg(long)]
+        json: bool,
+    },
     Applicable {
         #[arg(long = "work")]
         work_id: String,
@@ -873,6 +930,87 @@ fn run(store: JsonGraphStore, command: Command) -> Result<(), PulseError> {
                         "docs registry is invalid",
                     ))
                 }
+            }
+            DocsCommand::Index {
+                changed,
+                rebuild,
+                check,
+                json,
+            } => {
+                let opts = pulse::docs::IndexOptions {
+                    changed,
+                    rebuild,
+                    check,
+                };
+                let out = pulse::docs::build_index(store.repo_root(), opts)?;
+                render(json, &out, format!("docs index {}", out.index.state))
+            }
+            DocsCommand::Status { json } => {
+                let out = pulse::docs::index_status(store.repo_root())?;
+                render(json, &out, format!("docs index {}", out.index.state))
+            }
+            DocsCommand::Search {
+                query,
+                kind,
+                domain,
+                authority,
+                limit,
+                no_refresh,
+                explain,
+                json,
+            } => {
+                let out = pulse::docs::search_docs(
+                    store.repo_root(),
+                    &query,
+                    pulse::docs::SearchOptions {
+                        kind: kind.map(Into::into),
+                        domain,
+                        authority: authority.map(Into::into),
+                        limit,
+                        no_refresh,
+                        explain,
+                    },
+                )?;
+                render(json, &out, format!("{} docs hits", out.results.len()))
+            }
+            DocsCommand::Get {
+                reference,
+                max_lines,
+                max_bytes,
+                full,
+                full_section,
+                no_refresh: _,
+                json,
+            } => {
+                let out = pulse::docs::get_docs(
+                    store.repo_root(),
+                    &reference,
+                    pulse::docs::GetOptions {
+                        max_lines,
+                        max_bytes,
+                        full,
+                        full_section,
+                    },
+                )?;
+                render(json, &out, reference)
+            }
+            DocsCommand::Tree {
+                path,
+                depth,
+                include_draft,
+                include_stale,
+                json,
+            } => {
+                let out = pulse::docs::docs_tree(
+                    store.repo_root(),
+                    path.as_deref(),
+                    pulse::docs::TreeOptions {
+                        depth,
+                        include_draft,
+                        include_stale,
+                    },
+                )?;
+                render(json, &out, format!("{} tree nodes", out.nodes.len()))
             }
             DocsCommand::Applicable {
                 work_id,

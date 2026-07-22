@@ -13,7 +13,7 @@ use crate::docs::cache::{
     CACHE_SCHEMA_VERSION,
 };
 use crate::docs::lexical::{
-    build_index as build_tantivy_index, load_section_records, write_sections_jsonl,
+    build_index_with_bodies as build_tantivy_index, load_section_records, write_sections_jsonl,
     TANTIVY_COMPAT_VERSION,
 };
 use crate::docs::markdown::extract_sections;
@@ -150,7 +150,8 @@ pub fn build_index(repo_root: &Path, opts: IndexOptions) -> PulseResult<IndexBui
     let sections_path = build_dir.join("sections.jsonl");
     let sections_bytes = write_sections_jsonl(&sections_path, &sections)?;
     let tantivy_path = build_dir.join("tantivy");
-    build_tantivy_index(&tantivy_path, &sections)?;
+    let bodies = section_bodies(&capture, &sections);
+    build_tantivy_index(&tantivy_path, &sections, &bodies)?;
     let projection_hashes = expected_projection_hashes(repo_root, &capture.registry, true)?;
     let state = generation_state(
         &capture,
@@ -385,6 +386,38 @@ fn changed_document_count(capture: &Capture, previous: Option<&ValidatedGenerati
                 })
         })
         .count() as u32
+}
+
+fn section_bodies(capture: &Capture, sections: &[SectionRecord]) -> BTreeMap<String, String> {
+    let by_doc = capture
+        .docs
+        .iter()
+        .map(|doc| (doc.record.id.as_str(), doc.bytes.as_slice()))
+        .collect::<BTreeMap<_, _>>();
+    let mut out = BTreeMap::new();
+    for section in sections {
+        let Some(bytes) = by_doc.get(section.document_id.as_str()) else {
+            continue;
+        };
+        let text = slice_lines_utf8(bytes, section.range.start_line, section.range.end_line);
+        out.insert(section.section_ref.clone(), text);
+    }
+    out
+}
+
+fn slice_lines_utf8(bytes: &[u8], start_line: u32, end_line: u32) -> String {
+    let Ok(text) = std::str::from_utf8(bytes) else {
+        return String::new();
+    };
+    let mut out = String::new();
+    for (idx, line) in text.lines().enumerate() {
+        let line_no = (idx as u32) + 1;
+        if line_no >= start_line && line_no <= end_line {
+            out.push_str(line);
+            out.push('\n');
+        }
+    }
+    out
 }
 
 fn generation_state(
