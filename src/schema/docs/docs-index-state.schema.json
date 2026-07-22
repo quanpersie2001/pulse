@@ -1,0 +1,90 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://pulse.dev/schema/docs/docs-index-state.schema.json",
+  "title": "Pulse Docs Search Index State",
+  "description": "State for an immutable disposable docs-search cache generation. This schema describes cache validation/publication metadata only; canonical documentation truth remains the docs registry and Markdown files.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "generation_id",
+    "fingerprint",
+    "engine",
+    "extractor",
+    "config_hash",
+    "registry_retrieval_hash",
+    "documents",
+    "sections_file_hash",
+    "projection_hashes",
+    "counts"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "generation_id": { "type": "string", "pattern": "^gen_sha256_[0-9a-f]{64}$" },
+    "fingerprint": { "$ref": "#/$defs/sha256" },
+    "engine": { "$ref": "#/$defs/engine" },
+    "extractor": { "$ref": "#/$defs/extractor" },
+    "config_hash": { "$ref": "#/$defs/sha256" },
+    "registry_retrieval_hash": { "$ref": "#/$defs/sha256" },
+    "documents": {
+      "type": "object",
+      "additionalProperties": { "$ref": "#/$defs/document_state" }
+    },
+    "sections_file_hash": { "$ref": "#/$defs/sha256" },
+    "projection_hashes": {
+      "type": "object",
+      "additionalProperties": { "$ref": "#/$defs/sha256" }
+    },
+    "counts": { "$ref": "#/$defs/counts" }
+  },
+  "$defs": {
+    "sha256": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+    "engine": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mode", "name", "version"],
+      "properties": {
+        "mode": { "const": "lexical" },
+        "name": { "const": "tantivy" },
+        "version": { "type": "string", "minLength": 1 }
+      }
+    },
+    "extractor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "version", "anchor_version", "chunk_version"],
+      "properties": {
+        "name": { "const": "pulse-markdown-sections" },
+        "version": { "type": "integer", "minimum": 1 },
+        "anchor_version": { "type": "integer", "minimum": 1 },
+        "chunk_version": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "document_state": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["document_revision", "path", "content_hash", "section_count", "chunk_count", "body_indexed"],
+      "properties": {
+        "document_revision": { "type": "integer", "minimum": 1 },
+        "path": { "type": "string", "minLength": 1 },
+        "content_hash": { "$ref": "#/$defs/sha256" },
+        "section_count": { "type": "integer", "minimum": 0 },
+        "chunk_count": { "type": "integer", "minimum": 0 },
+        "body_indexed": { "type": "boolean" }
+      }
+    },
+    "counts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["registered", "eligible", "indexed", "sections", "chunks", "excluded"],
+      "properties": {
+        "registered": { "type": "integer", "minimum": 0 },
+        "eligible": { "type": "integer", "minimum": 0 },
+        "indexed": { "type": "integer", "minimum": 0 },
+        "sections": { "type": "integer", "minimum": 0 },
+        "chunks": { "type": "integer", "minimum": 0 },
+        "excluded": { "type": "integer", "minimum": 0 }
+      }
+    }
+  }
+}

@@ -2,7 +2,9 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
-use crate::docs::model::{DocumentAuthority, DocumentKind};
+use crate::docs::model::{
+    DocumentAuthority, DocumentKind, DocumentationPosture, WorkDocumentationContext,
+};
 use crate::docs::search::{search_docs, SearchOptions};
 use crate::{PulseError, PulseResult};
 
@@ -13,6 +15,8 @@ pub struct RetrievalEvalFixture {
     pub query: String,
     #[serde(default)]
     pub filters: RetrievalEvalFilters,
+    #[serde(default)]
+    pub work_context: Option<RetrievalEvalWorkContext>,
     pub expected: RetrievalEvalExpected,
 }
 
@@ -23,6 +27,45 @@ pub struct RetrievalEvalFilters {
     pub kind: Option<DocumentKind>,
     pub authority: Option<DocumentAuthority>,
     pub limit: Option<usize>,
+    #[serde(default)]
+    pub explain: bool,
+    #[serde(default)]
+    pub include_draft: bool,
+    #[serde(default)]
+    pub include_stale: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct RetrievalEvalWorkContext {
+    #[serde(default = "default_eval_work_id")]
+    pub work_id: String,
+    #[serde(default = "default_eval_work_revision")]
+    pub revision: u64,
+    #[serde(default = "default_eval_posture")]
+    pub posture: DocumentationPosture,
+    #[serde(default)]
+    pub required_documents: Vec<String>,
+    #[serde(default)]
+    pub paths: Vec<String>,
+    #[serde(default)]
+    pub domains: Vec<String>,
+    #[serde(default)]
+    pub labels: Vec<String>,
+}
+
+impl From<&RetrievalEvalWorkContext> for WorkDocumentationContext {
+    fn from(value: &RetrievalEvalWorkContext) -> Self {
+        Self {
+            work_id: value.work_id.clone(),
+            revision: value.revision,
+            posture: value.posture,
+            required_documents: value.required_documents.clone(),
+            paths: value.paths.clone(),
+            domains: value.domains.clone(),
+            labels: value.labels.clone(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -107,7 +150,14 @@ pub fn run_retrieval_eval_fixtures(
                 kind: fixture.filters.kind,
                 domain: fixture.filters.domain.clone(),
                 authority: fixture.filters.authority,
-                limit: fixture.filters.limit.or(Some(8)),
+                limit: fixture.filters.limit,
+                explain: fixture.filters.explain,
+                include_draft: fixture.filters.include_draft,
+                include_stale: fixture.filters.include_stale,
+                work: fixture
+                    .work_context
+                    .as_ref()
+                    .map(WorkDocumentationContext::from),
                 ..SearchOptions::default()
             },
         )?;
@@ -204,4 +254,16 @@ fn reason_codes_match(observed: &[String], expected: &[String]) -> bool {
     expected.sort();
     expected.dedup();
     observed == expected
+}
+
+fn default_eval_work_id() -> String {
+    "TK-EVAL".to_string()
+}
+
+fn default_eval_work_revision() -> u64 {
+    1
+}
+
+fn default_eval_posture() -> DocumentationPosture {
+    DocumentationPosture::Required
 }
