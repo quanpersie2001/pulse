@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::canonical_json::hash_bytes;
 use crate::docs::markdown::extract_sections;
-use crate::docs::model::DocumentRecord;
+use crate::docs::model::{DocumentRecord, RetrievalConfig};
 use crate::docs::registry::load_registry;
 use crate::docs::section::{SectionRange, SectionRecord};
 use crate::{PulseError, PulseResult};
@@ -86,7 +86,13 @@ pub fn get_docs(repo_root: &Path, reference: &str, options: GetOptions) -> Pulse
                     "path range is not a registered document path",
                 )
             })?;
-        return get_path_range(repo_root, doc, reference, range, options);
+        return get_path_range(
+            repo_root,
+            doc,
+            reference,
+            range,
+            apply_registry_defaults(options, &registry.retrieval_config()),
+        );
     }
     let (doc_id, section_ref) = match reference.split_once('#') {
         Some((doc_id, _)) => (doc_id, Some(reference.to_string())),
@@ -105,7 +111,9 @@ pub fn get_docs(repo_root: &Path, reference: &str, options: GetOptions) -> Pulse
             "document is not current",
         ));
     }
+    let options = apply_registry_defaults(options, &registry.retrieval_config());
     let (bytes, content_hash, sections) = extract_current(repo_root, doc)?;
+
     let outline = sections.iter().map(outline_item).collect::<Vec<_>>();
     let doc_info = doc_info(doc, &content_hash);
     if let Some(section_ref) = section_ref {
@@ -156,6 +164,14 @@ pub fn get_docs(repo_root: &Path, reference: &str, options: GetOptions) -> Pulse
             truncated: preview.map(|(_, truncated)| truncated).unwrap_or(false),
         })
     }
+}
+
+fn apply_registry_defaults(mut options: GetOptions, config: &RetrievalConfig) -> GetOptions {
+    options.max_lines = options.max_lines.or(Some(config.default_get_max_lines));
+    options.max_bytes = options
+        .max_bytes
+        .or(Some(config.default_get_max_bytes as usize));
+    options
 }
 
 fn extract_current(

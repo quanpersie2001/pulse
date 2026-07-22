@@ -3,7 +3,7 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
-use crate::docs::model::{DocsRegistry, DocumentRecord, RetrievalConfig};
+use crate::docs::model::{DocsRegistry, DocumentKind, DocumentRecord, RetrievalConfig};
 use crate::docs::policy::{eligible_documents, is_under_managed_root, RetrievalEligibilityOptions};
 use crate::docs::registry::load_registry;
 use crate::{PulseError, PulseResult};
@@ -74,15 +74,20 @@ pub fn tree_from_registry(
         include_stale: options.include_stale,
     };
     for (doc, _) in eligible_documents(registry, eligibility) {
-        if !is_under_managed_root(&doc.path, &config) || !same_or_descendant(&doc.path, &base) {
+        let area = if is_under_managed_root(&doc.path, &config) {
+            if !same_or_descendant(&doc.path, &base) {
+                continue;
+            }
+            doc.path
+                .rsplit_once('/')
+                .map(|(area, _)| area)
+                .unwrap_or(root.as_str())
+                .to_string()
+        } else if base == root && is_repository_member(doc, &config) {
+            "Repository".to_string()
+        } else {
             continue;
-        }
-        let area = doc
-            .path
-            .rsplit_once('/')
-            .map(|(area, _)| area)
-            .unwrap_or("Repository")
-            .to_string();
+        };
         by_area.entry(area).or_default().push(doc);
     }
     let max_depth = options.depth.unwrap_or(3);
@@ -105,10 +110,19 @@ pub fn tree_from_registry(
                 });
             }
         }
+        let is_repository_area = area == "Repository";
         nodes.push(TreeNode {
             path: area.clone(),
-            kind: "area".to_string(),
-            summary: scope_summary(&config, &area),
+            kind: if is_repository_area {
+                "Repository".to_string()
+            } else {
+                "area".to_string()
+            },
+            summary: if is_repository_area {
+                Some("Repository map and policy.".to_string())
+            } else {
+                scope_summary(&config, &area)
+            },
             document_id: None,
             authority: None,
             lifecycle: None,
@@ -155,6 +169,11 @@ fn same_or_descendant(path: &str, base: &str) -> bool {
         || path
             .strip_prefix(base)
             .is_some_and(|rest| rest.starts_with('/'))
+}
+
+fn is_repository_member(doc: &DocumentRecord, config: &RetrievalConfig) -> bool {
+    (config.include_repository_map && doc.kind == DocumentKind::RepositoryMap)
+        || (config.include_repository_policy && doc.kind == DocumentKind::Policy)
 }
 
 fn scope_summary(config: &RetrievalConfig, area: &str) -> Option<String> {

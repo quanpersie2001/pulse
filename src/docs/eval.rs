@@ -2,6 +2,7 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
+use crate::docs::model::{DocumentAuthority, DocumentKind};
 use crate::docs::search::{search_docs, SearchOptions};
 use crate::{PulseError, PulseResult};
 
@@ -19,6 +20,8 @@ pub struct RetrievalEvalFixture {
 #[serde(deny_unknown_fields)]
 pub struct RetrievalEvalFilters {
     pub domain: Option<String>,
+    pub kind: Option<DocumentKind>,
+    pub authority: Option<DocumentAuthority>,
     pub limit: Option<usize>,
 }
 
@@ -29,6 +32,8 @@ pub struct RetrievalEvalExpected {
     pub top_k: Vec<String>,
     #[serde(default)]
     pub must_exclude: Vec<String>,
+    #[serde(default)]
+    pub reason_codes: Vec<String>,
     pub max_first_relevant_rank: Option<u32>,
     pub max_context_bytes_before_first_relevant: Option<usize>,
 }
@@ -99,7 +104,9 @@ pub fn run_retrieval_eval_fixtures(
             repo_root,
             &fixture.query,
             SearchOptions {
+                kind: fixture.filters.kind,
                 domain: fixture.filters.domain.clone(),
+                authority: fixture.filters.authority,
                 limit: fixture.filters.limit.or(Some(8)),
                 ..SearchOptions::default()
             },
@@ -155,7 +162,7 @@ pub fn run_retrieval_eval_fixtures(
         if !must_exclude_hits.is_empty() {
             reason_codes.push("docs_search_noise".to_string());
         }
-        let passed = reason_codes.is_empty();
+        let passed = reason_codes_match(&reason_codes, &fixture.expected.reason_codes);
         results.push(RetrievalEvalResult {
             id: fixture.id.clone(),
             passed,
@@ -187,4 +194,14 @@ pub fn run_retrieval_eval_fixtures(
         must_exclude_violations,
         results,
     })
+}
+
+fn reason_codes_match(observed: &[String], expected: &[String]) -> bool {
+    let mut observed = observed.to_vec();
+    observed.sort();
+    observed.dedup();
+    let mut expected = expected.to_vec();
+    expected.sort();
+    expected.dedup();
+    observed == expected
 }
