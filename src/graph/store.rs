@@ -17,7 +17,7 @@ use crate::graph::node::{
     Node, NodeStatus, StatusReason,
 };
 use crate::graph::projection::PROJECTION_SCHEMA_VERSION;
-use crate::graph::projection::{export_with_cache, GraphProjection};
+use crate::graph::projection::{export_with_cache, graph_fingerprint, GraphProjection};
 use crate::graph::rollup::{rollup, RollupReport};
 use crate::graph::traversal::{affected_by, neighborhood, AffectedByReport, NeighborhoodReport};
 use crate::graph::validate::{
@@ -533,6 +533,8 @@ impl JsonGraphStore {
             &edge_values,
         )
         .into_result()?;
+        let graph_fingerprint_before = self.graph_fingerprint_current_unlocked()?;
+        let graph_fingerprint_after = self.graph_fingerprint_with_planned_workgraph(&node, None)?;
         let after_bytes = to_canonical_bytes(&node)?;
         self.commit_mutation(
             "work.node.transitioned",
@@ -543,6 +545,8 @@ impl JsonGraphStore {
                 "to": to,
                 "expected_revision": expected_revision,
                 "reason": transition_reason,
+                "graph_fingerprint_before": graph_fingerprint_before,
+                "graph_fingerprint_after": graph_fingerprint_after,
                 "gate_coverage": ["transition_direction", "graph_integrity"],
                 "target_requires_status_reason": exp.target_requires_status_reason,
             }),
@@ -756,6 +760,9 @@ impl JsonGraphStore {
         )
         .into_result()?;
 
+        let graph_fingerprint_before = self.graph_fingerprint_current_unlocked()?;
+        let graph_fingerprint_after =
+            self.graph_fingerprint_with_planned_workgraph(&old, edge.as_ref())?;
         let old_after_bytes = to_canonical_bytes(&old)?;
         let event = EventEnvelope::new(
             new_event_id(),
@@ -769,6 +776,8 @@ impl JsonGraphStore {
                 "target": target,
                 "reason": reason,
                 "assertion": assertion,
+                "graph_fingerprint_before": graph_fingerprint_before,
+                "graph_fingerprint_after": graph_fingerprint_after,
                 "gate_coverage": ["supersession_preconditions", "assertion_identity", "graph_integrity"],
             }),
             ctx.now,
@@ -1044,6 +1053,9 @@ impl JsonGraphStore {
         )?);
         old.revision += 1;
         old.updated_at = now;
+        let graph_fingerprint_before = self.graph_fingerprint_current_unlocked()?;
+        let graph_fingerprint_after =
+            self.graph_fingerprint_with_planned_workgraph(&old, edge.as_ref())?;
         let old_after_bytes = to_canonical_bytes(&old)?;
         let event = EventEnvelope::new(
             new_event_id(),
@@ -1052,7 +1064,9 @@ impl JsonGraphStore {
             old_id,
             json!({
                 "old_id": old_id, "expected_revision": expected_revision, "new_revision": old.revision, "target": target, "reason": reason,
-                "reconciliation_receipt": receipt_ref, "gate_coverage": ["supersession_preconditions", "receipt_identity", "graph_integrity"]
+                "reconciliation_receipt": receipt_ref, "graph_fingerprint_before": graph_fingerprint_before,
+                "graph_fingerprint_after": graph_fingerprint_after,
+                "gate_coverage": ["supersession_preconditions", "receipt_identity", "graph_integrity"]
             }),
             now,
         );
@@ -1290,6 +1304,54 @@ impl JsonGraphStore {
     ) -> PulseResult<AffectedByReport> {
         let projection = self.export()?;
         affected_by(&projection, id, relation_filter)
+    }
+
+    fn graph_fingerprint_current_unlocked(&self) -> PulseResult<String> {
+        let manifest = self.manifest()?;
+        let node_files = self.load_node_files_rel()?;
+        let edge_files = self.load_edge_files_rel()?;
+        graph_fingerprint(&manifest, &node_files, &edge_files)
+    }
+
+    fn graph_fingerprint_with_planned_workgraph(
+        &self,
+        node_override: &Node,
+        edge_override: Option<&Edge>,
+    ) -> PulseResult<String> {
+        let manifest = self.manifest()?;
+        let mut node_files = self.load_node_files_rel()?;
+        let node_path = self.rel_path(&self.node_path(&node_override.id));
+        let mut node_replaced = false;
+        for (path, node) in &mut node_files {
+            if path == &node_path {
+                *node = node_override.clone();
+                node_replaced = true;
+                break;
+            }
+        }
+        if !node_replaced {
+            node_files.push((node_path, node_override.clone()));
+        }
+        node_files.sort_by(|left, right| left.0.cmp(&right.0));
+
+        let mut edge_files = self.load_edge_files_rel()?;
+        if let Some(edge) = edge_override {
+            let edge_path = self.rel_path(&self.edge_path(&edge.id));
+            let mut edge_replaced = false;
+            for (path, existing) in &mut edge_files {
+                if path == &edge_path {
+                    *existing = edge.clone();
+                    edge_replaced = true;
+                    break;
+                }
+            }
+            if !edge_replaced {
+                edge_files.push((edge_path, edge.clone()));
+            }
+            edge_files.sort_by(|left, right| left.0.cmp(&right.0));
+        }
+
+        graph_fingerprint(&manifest, &node_files, &edge_files)
     }
 
     pub fn recover(&self) -> PulseResult<()> {
