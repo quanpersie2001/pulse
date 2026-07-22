@@ -604,6 +604,103 @@ fn get_supports_chunk_refs_path_ranges_exact_hashes_and_safe_truncation() {
 }
 
 #[test]
+fn get_base_ref_for_oversized_section_resolves_to_chunks() {
+    let tmp = setup_repo();
+    let repo = tmp.path();
+    let mut big = String::from("# Token Lifecycle\n");
+    for line in 0..170 {
+        big.push_str(&format!("oversized line {line}\n"));
+    }
+    fs::write(repo.join("docs/domain/token.md"), big).unwrap();
+
+    let base = get_docs(
+        repo,
+        "DOC-AUTH-DOMAIN#token-lifecycle",
+        GetOptions {
+            max_lines: Some(200),
+            max_bytes: Some(32_768),
+            ..GetOptions::default()
+        },
+    )
+    .unwrap();
+    let section = base.section.as_ref().unwrap();
+    assert_eq!(section.section_ref, "DOC-AUTH-DOMAIN#token-lifecycle");
+    assert_eq!(section.range.start_line, 1);
+    assert_eq!(section.range.end_line, 171);
+    assert!(base.truncated, "base ref defaults to first chunk only");
+    let body = base.body.unwrap();
+    assert!(body.contains("oversized line 0"));
+    assert!(body.contains("oversized line 158"));
+    assert!(!body.contains("oversized line 169"));
+    assert!(base
+        .outline
+        .iter()
+        .any(|item| item.section_ref == "DOC-AUTH-DOMAIN#token-lifecycle@2"));
+}
+
+#[test]
+fn get_full_section_for_oversized_base_ref_spans_later_chunks() {
+    let tmp = setup_repo();
+    let repo = tmp.path();
+    let mut big = String::from("# Token Lifecycle\n");
+    for line in 0..170 {
+        big.push_str(&format!("full section line {line}\n"));
+    }
+    fs::write(repo.join("docs/domain/token.md"), big).unwrap();
+
+    let full = get_docs(
+        repo,
+        "DOC-AUTH-DOMAIN#token-lifecycle",
+        GetOptions {
+            max_bytes: Some(32_768),
+            full_section: true,
+            ..GetOptions::default()
+        },
+    )
+    .unwrap();
+    assert!(!full.truncated);
+    assert_eq!(
+        full.section.unwrap().section_ref,
+        "DOC-AUTH-DOMAIN#token-lifecycle"
+    );
+    let body = full.body.unwrap();
+    assert!(body.contains("full section line 0"));
+    assert!(body.contains("full section line 169"));
+}
+
+#[test]
+fn search_child_only_term_does_not_match_parent_from_duplicated_body() {
+    let tmp = setup_repo();
+    let repo = tmp.path();
+    fs::write(
+        repo.join("docs/domain/token.md"),
+        b"# Token Lifecycle\n\nParent intro without the child-only term.\n\n## Child Details\n\nNestedChildNeedle appears only inside the child section.\n",
+    )
+    .unwrap();
+
+    let report = search_docs(
+        repo,
+        "NestedChildNeedle",
+        SearchOptions {
+            limit: Some(10),
+            ..SearchOptions::default()
+        },
+    )
+    .unwrap();
+    assert!(report
+        .results
+        .iter()
+        .any(|hit| hit.section_ref == "DOC-AUTH-DOMAIN#child-details"));
+    assert!(
+        report
+            .results
+            .iter()
+            .all(|hit| hit.section_ref != "DOC-AUTH-DOMAIN#token-lifecycle"),
+        "parent section must not match solely because child body text was duplicated into its index body"
+    );
+}
+
+#[test]
 fn stale_section_ref_errors_clearly() {
     let tmp = setup_repo();
     let err = get_docs(

@@ -503,10 +503,36 @@ fn section_bodies(capture: &Capture, sections: &[SectionRecord]) -> BTreeMap<Str
         let Some(bytes) = by_doc.get(section.document_id.as_str()) else {
             continue;
         };
-        let text = slice_lines_utf8(bytes, section.range.start_line, section.range.end_line);
+        let end_line = index_body_end_line(section, sections);
+        let text = slice_lines_utf8(bytes, section.range.start_line, end_line);
         out.insert(section.section_ref.clone(), text);
     }
     out
+}
+
+fn index_body_end_line(section: &SectionRecord, sections: &[SectionRecord]) -> u32 {
+    if section.chunk.is_some() {
+        return section.range.end_line;
+    }
+    sections
+        .iter()
+        .filter(|candidate| candidate.document_id == section.document_id)
+        .filter(|candidate| {
+            candidate.range.start_line > section.range.start_line
+                && candidate.range.start_line <= section.range.end_line
+        })
+        .filter(|candidate| is_nested_heading_path(&section.heading_path, &candidate.heading_path))
+        .map(|candidate| candidate.range.start_line.saturating_sub(1))
+        .min()
+        .unwrap_or(section.range.end_line)
+}
+
+fn is_nested_heading_path(parent: &[String], candidate: &[String]) -> bool {
+    candidate.len() > parent.len()
+        && candidate
+            .iter()
+            .zip(parent.iter())
+            .all(|(candidate, parent)| candidate == parent)
 }
 
 fn slice_lines_utf8(bytes: &[u8], start_line: u32, end_line: u32) -> String {
