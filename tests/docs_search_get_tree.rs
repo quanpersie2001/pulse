@@ -71,7 +71,7 @@ fn setup_repo() -> tempfile::TempDir {
     fs::write(repo.join("docs/domain/token.md"), b"# Token Lifecycle\n\nPreamble text.\n\n## Expired Tokens\n\nTokenExpired means the refresh-token expired in v2.1.\n").unwrap();
     fs::write(
         repo.join("docs/domain/other.md"),
-        b"# Other\n\n## Misc\n\nNothing about auth.\n",
+        b"# Other\n\n## Misc\n\nNothing about auth. OutScopeNeedle OutScopeNeedle OutScopeNeedle.\n",
     )
     .unwrap();
     fs::write(
@@ -400,6 +400,8 @@ fn search_include_flags_and_work_reasons_populate_without_fake_required_hits() {
         .iter()
         .any(|reason| reason == "explicit_required_document"));
 
+    assert!(hit.score > hit.lexical_score);
+
     let missing_required = WorkDocumentationContext {
         work_id: "TK-MISSING".to_string(),
         revision: 1,
@@ -418,7 +420,69 @@ fn search_include_flags_and_work_reasons_populate_without_fake_required_hits() {
         },
     )
     .unwrap();
-    assert!(no_fake.results.is_empty());
+    assert!(no_fake
+        .results
+        .iter()
+        .any(|hit| hit.document_id == "DOC-AUTH-DOMAIN"));
+    assert!(no_fake
+        .results
+        .iter()
+        .all(|hit| hit.document_id != "DOC-OTHER-DOMAIN"));
+}
+
+#[test]
+fn search_work_boosts_without_hard_filtering_lexical_hits() {
+    let tmp = setup_repo();
+    let work = WorkDocumentationContext {
+        work_id: "TK-WORK-SCOPE".to_string(),
+        revision: 3,
+        posture: pulse::docs::DocumentationPosture::Required,
+        required_documents: vec!["DOC-AUTH-GUIDE".to_string()],
+        paths: vec![],
+        domains: vec!["authentication".to_string()],
+        labels: vec![],
+    };
+    let report = search_docs(
+        tmp.path(),
+        "auth OutScopeNeedle",
+        SearchOptions {
+            work: Some(work),
+            explain: true,
+            limit: Some(10),
+            ..SearchOptions::default()
+        },
+    )
+    .unwrap();
+
+    let out_of_scope = report
+        .results
+        .iter()
+        .find(|hit| hit.document_id == "DOC-OTHER-DOMAIN")
+        .expect("out-of-scope lexical hit remains visible under --work");
+    assert_eq!(out_of_scope.score, out_of_scope.lexical_score);
+    assert!(out_of_scope.applicability_reasons.is_empty());
+
+    let scoped = report
+        .results
+        .iter()
+        .find(|hit| hit.document_id == "DOC-AUTH-GUIDE")
+        .expect("required/scoped lexical hit is retained");
+    assert!(scoped.score > scoped.lexical_score);
+    assert!(scoped
+        .applicability_reasons
+        .iter()
+        .any(|reason| reason == "explicit_required_document"));
+    assert!(scoped
+        .applicability_reasons
+        .iter()
+        .any(|reason| reason == "domain_scope_match"));
+
+    let ranks = report
+        .results
+        .iter()
+        .map(|hit| hit.rank)
+        .collect::<Vec<_>>();
+    assert_eq!(ranks, (1..=report.results.len() as u32).collect::<Vec<_>>());
 }
 
 #[test]
