@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 use std::fs::{self, File, OpenOptions};
+use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -299,7 +300,42 @@ pub fn publish_current(repo_root: &Path, generation_id: &str) -> PulseResult<()>
         .map_err(|e| PulseError::io(cache_dir(repo_root), e))?;
     let mut bytes = generation_id.as_bytes().to_vec();
     bytes.push(b'\n');
-    atomic_replace(&current_pointer_path(repo_root), &bytes).map(|_| ())
+    let current_path = current_pointer_path(repo_root);
+    // CURRENT is the visibility boundary for readers: atomic_replace syncs the
+    // temp file before rename and best-effort syncs the cache directory after
+    // rename. We then sync the published name again so the pointer publication
+    // does not intentionally outrun the already-synced generation directory.
+    atomic_replace(&current_path, &bytes).map(|_| ())?;
+    sync_file(&current_path)?;
+    sync_directory_best_effort(&cache_dir(repo_root))?;
+    Ok(())
+}
+
+fn sync_file(path: &Path) -> PulseResult<()> {
+    File::open(path)
+        .and_then(|file| file.sync_all())
+        .map_err(|e| PulseError::io(path, e))
+}
+
+fn sync_directory_best_effort(path: &Path) -> PulseResult<()> {
+    match File::open(path).and_then(|dir| dir.sync_all()) {
+        Ok(()) => Ok(()),
+        Err(error)
+            if matches!(
+                error.kind(),
+                ErrorKind::Unsupported
+                    | ErrorKind::PermissionDenied
+                    | ErrorKind::InvalidInput
+                    | ErrorKind::Other
+            ) =>
+        {
+            // Directory sync is unavailable on some platforms/filesystems.
+            // atomic_replace already synced file content and attempted the
+            // parent directory, so unsupported directory fsync is best-effort.
+            Ok(())
+        }
+        Err(error) => Err(PulseError::io(path, error)),
+    }
 }
 
 #[derive(Debug)]

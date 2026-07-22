@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
-use std::fs;
+use std::fs::{self, File};
+use std::io::ErrorKind;
 use std::path::Path;
 
 use serde::{Deserialize, Serialize};
@@ -140,9 +141,15 @@ pub fn build_index(repo_root: &Path, opts: IndexOptions) -> PulseResult<IndexBui
     fs::create_dir_all(&build_dir).map_err(|e| PulseError::io(&build_dir, e))?;
     let sections_path = build_dir.join("sections.jsonl");
     let sections_bytes = write_sections_jsonl(&sections_path, &sections)?;
+    // The generation is only published after its content is durable enough for a
+    // crash not to expose a CURRENT pointer to missing/partial files.
+    sync_file(&sections_path)?;
     let tantivy_path = build_dir.join("tantivy");
     let bodies = section_bodies(&capture, &sections);
     build_tantivy_index(&tantivy_path, &sections, &bodies)?;
+    // Tantivy commit makes the index logically complete; walk the index tree to
+    // persist committed segment/meta files and best-effort directory entries.
+    sync_directory_tree(&tantivy_path)?;
     let projection_hashes = expected_projection_hashes(repo_root, &capture.registry, true)?;
     let state = generation_state(
         &capture,
@@ -152,8 +159,12 @@ pub fn build_index(repo_root: &Path, opts: IndexOptions) -> PulseResult<IndexBui
         generation_id.clone(),
     );
     let state_bytes = to_canonical_bytes(&state)?;
-    fs::write(build_dir.join("state.json"), state_bytes)
-        .map_err(|e| PulseError::io(build_dir.join("state.json"), e))?;
+    let state_path = build_dir.join("state.json");
+    fs::write(&state_path, state_bytes).map_err(|e| PulseError::io(&state_path, e))?;
+    sync_file(&state_path)?;
+    // Persist the build directory's child names before atomically moving the
+    // whole generation into the generations namespace.
+    sync_directory_best_effort(&build_dir)?;
 
     // Revalidate cheap inputs before publishing.
     let latest =
@@ -184,11 +195,16 @@ pub fn build_index(repo_root: &Path, opts: IndexOptions) -> PulseResult<IndexBui
             }
             fs::rename(&final_dir, &replace_dir).map_err(|e| PulseError::io(&replace_dir, e))?;
             fs::rename(&build_dir, &final_dir).map_err(|e| PulseError::io(&final_dir, e))?;
+            // Persist the visible generation name before cleanup; readers either
+            // see the old CURRENT generation or this complete replacement.
+            sync_generations_parent(repo_root)?;
             fs::remove_dir_all(&replace_dir).map_err(|e| PulseError::io(&replace_dir, e))?;
+            sync_generations_parent(repo_root)?;
         } else {
             fs::create_dir_all(final_dir.parent().expect("generation parent"))
                 .map_err(|e| PulseError::io(final_dir.parent().unwrap(), e))?;
             fs::rename(&build_dir, &final_dir).map_err(|e| PulseError::io(&final_dir, e))?;
+            sync_generations_parent(repo_root)?;
         }
     }
     publish_current(repo_root, &generation_id)?;
@@ -606,9 +622,62 @@ fn write_projections(repo_root: &Path, registry: &DocsRegistry) -> PulseResult<(
                 ));
             }
         }
+        // Projection writes use storage::atomic::atomic_replace, which syncs the
+        // temp file before rename and best-effort syncs the parent directory
+        // after rename. That is sufficient for these derived navigation files;
+        // the docs-search generation/CURRENT path below carries the stricter
+        // publication durability boundary.
         atomic_replace(&path, text.as_bytes()).map(|_| ())?;
     }
     Ok(())
+}
+
+fn sync_file(path: &Path) -> PulseResult<()> {
+    File::open(path)
+        .and_then(|file| file.sync_all())
+        .map_err(|e| PulseError::io(path, e))
+}
+
+fn sync_directory_tree(path: &Path) -> PulseResult<()> {
+    for entry in fs::read_dir(path).map_err(|e| PulseError::io(path, e))? {
+        let entry = entry.map_err(|e| PulseError::io(path, e))?;
+        let child = entry.path();
+        let file_type = entry.file_type().map_err(|e| PulseError::io(&child, e))?;
+        if file_type.is_dir() {
+            sync_directory_tree(&child)?;
+        } else if file_type.is_file() {
+            sync_file(&child)?;
+        }
+    }
+    sync_directory_best_effort(path)
+}
+
+fn sync_generations_parent(repo_root: &Path) -> PulseResult<()> {
+    sync_directory_best_effort(&crate::docs::cache::cache_dir(repo_root).join("generations"))
+}
+
+fn sync_directory_best_effort(path: &Path) -> PulseResult<()> {
+    if !path.exists() {
+        return Ok(());
+    }
+    match File::open(path).and_then(|dir| dir.sync_all()) {
+        Ok(()) => Ok(()),
+        Err(error)
+            if matches!(
+                error.kind(),
+                ErrorKind::Unsupported
+                    | ErrorKind::PermissionDenied
+                    | ErrorKind::InvalidInput
+                    | ErrorKind::Other
+            ) =>
+        {
+            // Directory sync is unavailable on some platforms/filesystems
+            // (notably Windows std without platform-specific flags). File data
+            // has already been synced; name durability is best-effort there.
+            Ok(())
+        }
+        Err(error) => Err(PulseError::io(path, error)),
+    }
 }
 
 fn projection_state_string(
