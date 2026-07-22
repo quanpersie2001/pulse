@@ -58,6 +58,7 @@ fn setup_repo(
         revision: 1,
         repository_id: manifest.repository_id.clone(),
         documents: vec![document(doc_id, revision, &path, lifecycle, policy, None)],
+        retrieval: None,
     };
     write_json(&repo.join(".pulse/docs/registry.json"), &registry);
     let source_commit = commit_all(repo);
@@ -87,6 +88,7 @@ fn document(
         verification_profile: "domain-doc".to_string(),
         generated: None,
         superseded_by,
+        retrieval: None,
     }
 }
 

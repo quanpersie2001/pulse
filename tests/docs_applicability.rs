@@ -23,6 +23,7 @@ fn doc(id: &str, path: &str) -> DocumentRecord {
         verification_profile: "domain-doc".to_string(),
         generated: None,
         superseded_by: None,
+        retrieval: None,
     }
 }
 
@@ -33,6 +34,7 @@ fn registry(mut documents: Vec<DocumentRecord>) -> DocsRegistry {
         revision: 7,
         repository_id: "repo_test".to_string(),
         documents,
+        retrieval: None,
     }
 }
 

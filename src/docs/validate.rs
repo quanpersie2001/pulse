@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::docs::model::{
     DocsRegistry, DocumentAuthority, DocumentKind, DocumentLifecycle, DocumentRecord,
+    RetrievalConfig, RetrievalScope,
 };
 use crate::storage;
 use crate::PulseResult;
@@ -53,7 +54,7 @@ pub fn validate_registry(
 ) -> PulseResult<DocsValidationReport> {
     let mut errors = Vec::new();
     let warnings = Vec::new();
-    if registry.schema_version != 1
+    if registry.schema_version != crate::docs::model::DOCS_REGISTRY_SCHEMA_VERSION_V2
         || registry.revision == 0
         || !registry.repository_id.starts_with("repo_")
     {
@@ -63,6 +64,9 @@ pub fn validate_registry(
             None,
             None,
         ));
+    }
+    if let Some(retrieval) = &registry.retrieval {
+        validate_retrieval_config(retrieval, &mut errors);
     }
     let mut last_id: Option<&str> = None;
     let mut ids = BTreeSet::new();
@@ -381,6 +385,157 @@ fn validate_scope(document: &DocumentRecord, errors: &mut Vec<DocsFinding>) {
             ));
         }
     }
+}
+
+pub fn validate_retrieval_config(config: &RetrievalConfig, errors: &mut Vec<DocsFinding>) {
+    if config.schema_version != 1 {
+        errors.push(finding(
+            "docs_registry_retrieval_config_invalid",
+            "retrieval schema_version must be 1",
+            None,
+            None,
+        ));
+    }
+    if config.root.trim().is_empty()
+        || config.root.starts_with('/')
+        || config.root.contains("\\")
+        || config.root.contains("//")
+        || config.root == "."
+        || config.root == ".."
+        || config.root.split('/').any(|c| c == "..")
+    {
+        errors.push(finding(
+            "docs_registry_retrieval_config_invalid",
+            "retrieval root must be a safe repository-relative directory",
+            None,
+            None,
+        ));
+    }
+    if !(1..=50).contains(&config.default_search_limit) {
+        errors.push(finding(
+            "docs_registry_retrieval_config_invalid",
+            "default_search_limit must be in 1..=50",
+            None,
+            None,
+        ));
+    }
+    if !(1..=2000).contains(&config.default_get_max_lines) {
+        errors.push(finding(
+            "docs_registry_retrieval_config_invalid",
+            "default_get_max_lines must be in 1..=2000",
+            None,
+            None,
+        ));
+    }
+    if !(1024..=1_048_576).contains(&config.default_get_max_bytes) {
+        errors.push(finding(
+            "docs_registry_retrieval_config_invalid",
+            "default_get_max_bytes must be in 1024..=1_048_576",
+            None,
+            None,
+        ));
+    }
+    if !(1..=10_000).contains(&config.auto_refresh_max_documents) {
+        errors.push(finding(
+            "docs_registry_retrieval_config_invalid",
+            "auto_refresh_max_documents must be in 1..=10000",
+            None,
+            None,
+        ));
+    }
+    if !(1_048_576..=1_073_741_824).contains(&config.auto_refresh_max_source_bytes) {
+        errors.push(finding(
+            "docs_registry_retrieval_config_invalid",
+            "auto_refresh_max_source_bytes must be in 1MiB..=1GiB",
+            None,
+            None,
+        ));
+    }
+    if !(1..=1000).contains(&config.area_index_threshold) {
+        errors.push(finding(
+            "docs_registry_retrieval_config_invalid",
+            "area_index_threshold must be in 1..=1000",
+            None,
+            None,
+        ));
+    }
+    let mut seen = BTreeSet::new();
+    let mut sorted = config
+        .scopes
+        .iter()
+        .map(|scope| scope.path.clone())
+        .collect::<Vec<_>>();
+    sorted.sort();
+    if sorted
+        != config
+            .scopes
+            .iter()
+            .map(|scope| scope.path.clone())
+            .collect::<Vec<_>>()
+    {
+        errors.push(finding(
+            "docs_registry_retrieval_config_invalid",
+            "retrieval scopes must be sorted by path",
+            None,
+            None,
+        ));
+    }
+    for scope in &config.scopes {
+        validate_retrieval_scope(scope, &mut seen, errors);
+    }
+}
+
+fn validate_retrieval_scope(
+    scope: &RetrievalScope,
+    seen: &mut BTreeSet<String>,
+    errors: &mut Vec<DocsFinding>,
+) {
+    let normalized = normalize_scope_path(&scope.path);
+    if normalized.is_empty()
+        || normalized.starts_with('/')
+        || normalized.contains("\\")
+        || normalized.contains("//")
+        || normalized.ends_with("/_index.md")
+        || normalized == "_index.md"
+    {
+        errors.push(finding(
+            "docs_registry_retrieval_config_invalid",
+            format!(
+                "retrieval scope path {} must be safe and not generated navigation",
+                scope.path
+            ),
+            None,
+            None,
+        ));
+    }
+    if !seen.insert(normalized) {
+        errors.push(finding(
+            "docs_registry_retrieval_config_invalid",
+            "retrieval scope paths must be unique",
+            None,
+            None,
+        ));
+    }
+    if scope.summary.trim().is_empty() || scope.summary.chars().count() > 500 {
+        errors.push(finding(
+            "docs_registry_retrieval_config_invalid",
+            "retrieval scope summary must be non-empty <=500 chars",
+            None,
+            None,
+        ));
+    }
+}
+
+fn normalize_scope_path(path: &str) -> String {
+    let trimmed = path.trim_matches('/');
+    let mut parts: Vec<&str> = Vec::new();
+    for component in trimmed.split('/') {
+        if component.is_empty() || component == "." {
+            continue;
+        }
+        parts.push(component);
+    }
+    parts.join("/")
 }
 
 fn validate_generated(document: &DocumentRecord, errors: &mut Vec<DocsFinding>) {

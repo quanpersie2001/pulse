@@ -33,6 +33,11 @@ pub struct MutationOutcome<T> {
     pub status: MutationStatus,
     pub registry_revision: u64,
     pub value: T,
+    /// True when the edit changed only per-document retrieval overrides. Such
+    /// edits bump the registry revision but not the receipt-bound document
+    /// revision, so an otherwise-current documentation receipt stays current.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub retrieval_only: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -150,6 +155,7 @@ impl DocsRegistryStore {
             status: MutationStatus::Created,
             registry_revision: registry.revision,
             value: document,
+            retrieval_only: false,
         })
     }
 
@@ -178,9 +184,14 @@ impl DocsRegistryStore {
                 status: MutationStatus::Unchanged,
                 registry_revision: registry.revision,
                 value: registry.documents[index].clone(),
+                retrieval_only: false,
             });
         }
-        registry.documents[index].revision += 1;
+        let retrieval_only = is_retrieval_only_change(&changed_fields);
+        let document_revision_before = registry.documents[index].revision;
+        if !retrieval_only {
+            registry.documents[index].revision += 1;
+        }
         registry.revision += 1;
         registry.documents[index].normalize();
         registry.normalize();
@@ -191,15 +202,21 @@ impl DocsRegistryStore {
             .find(|document| document.id == id)
             .cloned()
             .expect("edited document remains present");
+        let (event_type, code) = if retrieval_only {
+            ("docs.document.retrieval_updated", "retrieval_updated")
+        } else {
+            ("docs.document.updated", "updated")
+        };
         self.commit_registry_mutation(
-            "docs.document.updated",
+            event_type,
             ctx.actor,
             id,
             json!({
                 "document_id": id,
-                "document_revision_before": expected_document_revision,
+                "document_revision_before": document_revision_before,
                 "document_revision_after": document.revision,
                 "changed_fields": changed_fields,
+                "retrieval_only": retrieval_only,
                 "registry_revision_before": before_registry.revision,
                 "registry_revision_after": registry.revision,
                 "registry_hash_before": registry_hash(&before_registry)?,
@@ -211,10 +228,11 @@ impl DocsRegistryStore {
         )?;
         Ok(MutationOutcome {
             schema_version: 1,
-            code: "updated".to_string(),
+            code: code.to_string(),
             status: MutationStatus::Updated,
             registry_revision: registry.revision,
             value: document,
+            retrieval_only,
         })
     }
 
@@ -340,6 +358,7 @@ impl DocsRegistryStore {
             status: MutationStatus::Updated,
             registry_revision: registry.revision,
             value: document,
+            retrieval_only: false,
         })
     }
 
@@ -623,7 +642,21 @@ fn apply_patch(document: &mut DocumentRecord, patch: DocumentPatch) -> Vec<Strin
             changed.insert("superseded_by".to_string());
         }
     }
+    if let Some(value) = patch.retrieval {
+        if document.retrieval != value {
+            document.retrieval = value;
+            changed.insert("retrieval".to_string());
+        }
+    }
     changed.into_iter().collect()
+}
+
+/// Whether a set of changed fields is retrieval-only (touches only per-document
+/// retrieval overrides). Retrieval-only edits bump the registry revision but
+/// NOT the receipt-bound document revision, so an otherwise-current
+/// documentation receipt is not staled by an indexing-preference change.
+pub fn is_retrieval_only_change(changed_fields: &[String]) -> bool {
+    !changed_fields.is_empty() && changed_fields.iter().all(|field| field == "retrieval")
 }
 
 fn registry_hash(registry: &DocsRegistryEnvelope) -> PulseResult<String> {

@@ -2,17 +2,19 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://pulse.dev/schema/docs/document.schema.json",
   "title": "Pulse Document Registry",
+  "description": "v2: Slice 5 retrieval-capable registry. Adds optional envelope `retrieval` config and per-document `retrieval` overrides. A v1 (Slice 4) registry that exactly matches the known predecessor is migrated deliberately; it is never silently reinterpreted as current.",
   "type": "object",
   "additionalProperties": false,
   "required": ["schema_version", "revision", "repository_id", "documents"],
   "properties": {
-    "schema_version": { "const": 1 },
+    "schema_version": { "const": 2 },
     "revision": { "type": "integer", "minimum": 1 },
     "repository_id": { "type": "string", "pattern": "^repo_" },
     "documents": {
       "type": "array",
       "items": { "$ref": "#/$defs/document" }
-    }
+    },
+    "retrieval": { "anyOf": [{ "type": "null" }, { "$ref": "#/$defs/retrieval_config" }] }
   },
   "$defs": {
     "document": {
@@ -37,7 +39,8 @@
         "review_policy": { "enum": ["none", "light", "standard", "independent", "human"] },
         "verification_profile": { "type": "string" },
         "generated": { "anyOf": [{ "type": "null" }, { "$ref": "#/$defs/generated" }] },
-        "superseded_by": { "anyOf": [{ "type": "null" }, { "type": "string" }] }
+        "superseded_by": { "anyOf": [{ "type": "null" }, { "type": "string" }] },
+        "retrieval": { "anyOf": [{ "type": "null" }, { "$ref": "#/$defs/document_retrieval" }] }
       }
     },
     "scope": {
@@ -59,6 +62,52 @@
         "outputs": { "type": "array", "items": { "type": "string" }, "minItems": 1 },
         "editable": { "type": "boolean" },
         "freshness_check": { "type": "string", "minLength": 1 }
+      }
+    },
+    "retrieval_config": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version", "root", "include_repository_map", "include_repository_policy",
+        "default_index", "default_include_body", "default_search_limit",
+        "default_get_max_lines", "default_get_max_bytes", "auto_refresh_max_documents",
+        "auto_refresh_max_source_bytes", "materialize_root_index", "area_index_threshold"
+      ],
+      "properties": {
+        "schema_version": { "const": 1 },
+        "root": { "type": "string", "minLength": 1 },
+        "include_repository_map": { "type": "boolean" },
+        "include_repository_policy": { "type": "boolean" },
+        "default_index": { "type": "boolean" },
+        "default_include_body": { "type": "boolean" },
+        "default_search_limit": { "type": "integer", "minimum": 1, "maximum": 50 },
+        "default_get_max_lines": { "type": "integer", "minimum": 1, "maximum": 2000 },
+        "default_get_max_bytes": { "type": "integer", "minimum": 1024, "maximum": 1048576 },
+        "auto_refresh_max_documents": { "type": "integer", "minimum": 1, "maximum": 10000 },
+        "auto_refresh_max_source_bytes": { "type": "integer", "minimum": 1048576, "maximum": 1073741824 },
+        "materialize_root_index": { "type": "boolean" },
+        "area_index_threshold": { "type": "integer", "minimum": 1, "maximum": 1000 },
+        "scopes": { "type": "array", "items": { "$ref": "#/$defs/retrieval_scope" } }
+      }
+    },
+    "retrieval_scope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "summary"],
+      "properties": {
+        "path": { "type": "string", "minLength": 1 },
+        "summary": { "type": "string", "minLength": 1, "maxLength": 500 },
+        "materialize_index": { "type": "boolean" }
+      }
+    },
+    "document_retrieval": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["index", "include_body", "materialize_index"],
+      "properties": {
+        "index": { "type": "boolean" },
+        "include_body": { "type": "boolean" },
+        "materialize_index": { "type": "boolean" }
       }
     }
   }

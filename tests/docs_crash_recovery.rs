@@ -37,6 +37,7 @@ fn document(id: &str, path: &str) -> DocumentRecord {
         verification_profile: "domain-doc".to_string(),
         generated: None,
         superseded_by: None,
+        retrieval: None,
     }
 }
 

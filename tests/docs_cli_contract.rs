@@ -57,9 +57,25 @@ fn setup_repo() -> TempDir {
     )
     .unwrap();
     let registry = json!({
-        "schema_version": 1,
+        "schema_version": 2,
         "revision": 1,
         "repository_id": manifest["repository_id"].as_str().unwrap(),
+        "retrieval": {
+            "schema_version": 1,
+            "root": "docs",
+            "include_repository_map": true,
+            "include_repository_policy": true,
+            "default_index": true,
+            "default_include_body": true,
+            "default_search_limit": 8,
+            "default_get_max_lines": 120,
+            "default_get_max_bytes": 32768,
+            "auto_refresh_max_documents": 200,
+            "auto_refresh_max_source_bytes": 20971520,
+            "materialize_root_index": true,
+            "area_index_threshold": 5,
+            "scopes": []
+        },
         "documents": [
             {
                 "id": "DOC-AUTH-DOMAIN",

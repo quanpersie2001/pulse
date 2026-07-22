@@ -32,6 +32,7 @@ fn record(id: &str, path: &str) -> DocumentRecord {
         verification_profile: "domain-doc".to_string(),
         generated: None,
         superseded_by: None,
+        retrieval: None,
     }
 }
 
@@ -42,7 +43,7 @@ fn bootstrap_reuses_evidence_repository_id_and_is_idempotent() {
 
     let evidence = pulse::evidence::manifest::bootstrap(repo).unwrap().manifest;
     let first = docs_bootstrap(repo).unwrap();
-    assert_eq!(first.registry.schema_version, 1);
+    assert_eq!(first.registry.schema_version, 2);
     assert_eq!(first.registry.revision, 1);
     assert_eq!(first.registry.repository_id, evidence.repository_id);
     assert!(repo.join(".pulse/docs/registry.json").exists());
