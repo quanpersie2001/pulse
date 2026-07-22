@@ -720,7 +720,10 @@ fn validate_legacy_doc_against_registry(
     registry_codes: &mut Vec<String>,
     policies: &mut BTreeSet<String>,
 ) -> Result<()> {
-    if doc.proposed_document_id.is_none() && doc.document_id.is_none() && doc.document_revision.is_none() {
+    if doc.proposed_document_id.is_none()
+        && doc.document_id.is_none()
+        && doc.document_revision.is_none()
+    {
         registry_codes.push("document_receipt_pre_registry_unresolved".to_string());
         return Ok(());
     }

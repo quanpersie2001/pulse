@@ -118,7 +118,10 @@ pub fn get_docs(repo_root: &Path, reference: &str, options: GetOptions) -> Pulse
     let outline = sections.iter().map(outline_item).collect::<Vec<_>>();
     let doc_info = doc_info(doc, &content_hash);
     if let Some(section_ref) = section_ref {
-        if let Some(section) = sections.iter().find(|section| section.section_ref == section_ref) {
+        if let Some(section) = sections
+            .iter()
+            .find(|section| section.section_ref == section_ref)
+        {
             let (body, truncated) = bounded_body(&bytes, section.range, &options)?;
             return Ok(GetReport {
                 schema_version: 1,
@@ -167,7 +170,9 @@ pub fn get_docs(repo_root: &Path, reference: &str, options: GetOptions) -> Pulse
             });
         }
 
-        return Err(stale_anchor_error(repo_root, reference, &doc_info, &sections));
+        return Err(stale_anchor_error(
+            repo_root, reference, &doc_info, &sections,
+        ));
     }
     if options.full {
         let max_bytes = options.max_bytes.unwrap_or(1_048_576);
