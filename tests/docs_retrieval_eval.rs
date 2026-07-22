@@ -1,7 +1,7 @@
 use pulse::canonical_json::to_canonical_bytes;
 use pulse::docs::{
     run_retrieval_evals, DocsRegistry, DocumentAuthority, DocumentKind, DocumentLifecycle,
-    DocumentRecord, DocumentScope, RetrievalConfig, ReviewPolicy,
+    DocumentRecord, DocumentRetrieval, DocumentScope, RetrievalConfig, ReviewPolicy,
 };
 use std::fs;
 
@@ -54,6 +54,11 @@ fn setup_repo() -> tempfile::TempDir {
         b"# Recovery\n\n## Rollback\n\nUse pulse docs index to rebuild cache.\n",
     )
     .unwrap();
+    fs::write(
+        repo.join("docs/domain/draft-token.md"),
+        b"# Draft Token\n\n## Token Preview\n\nTokenExpired draft preview.\n",
+    )
+    .unwrap();
     let registry = DocsRegistry {
         schema_version: 2,
         revision: 1,
@@ -66,6 +71,21 @@ fn setup_repo() -> tempfile::TempDir {
                 vec!["refresh-token"],
                 vec!["authentication"],
             ),
+            DocumentRecord {
+                authority: DocumentAuthority::Draft,
+                retrieval: Some(DocumentRetrieval {
+                    index: true,
+                    include_body: true,
+                    materialize_index: false,
+                }),
+                ..doc(
+                    "DOC-DRAFT-DOMAIN",
+                    "docs/domain/draft-token.md",
+                    "Draft token lifecycle",
+                    vec!["refresh-token"],
+                    vec!["authentication"],
+                )
+            },
             doc(
                 "DOC-RECOVERY-DOMAIN",
                 "docs/domain/recovery.md",
@@ -99,6 +119,22 @@ fn retrieval_eval_fixture_reports_recall_mrr_exclusions_and_context_budget() {
     assert_eq!(report.must_exclude_violations, 0);
     assert!(report.recall_at_k >= 1.0);
     assert!(report.mean_reciprocal_rank > 0.0);
+}
+
+#[test]
+fn retrieval_eval_filters_by_kind_and_authority_and_accepts_expected_reason_codes() {
+    let tmp = setup_repo();
+    let fixture = tmp.path().join("filtered-eval.jsonl");
+    fs::write(&fixture, concat!(
+        "{\"id\":\"approved-domain-filter\",\"query\":\"TokenExpired refresh-token\",\"filters\":{\"domain\":\"authentication\",\"kind\":\"domain\",\"authority\":\"approved\",\"limit\":8},\"expected\":{\"top_k\":[\"DOC-AUTH-DOMAIN#expired-tokens\"],\"must_exclude\":[\"DOC-DRAFT-DOMAIN#token-preview\"],\"reason_codes\":[],\"max_first_relevant_rank\":3,\"max_context_bytes_before_first_relevant\":3000}}\n",
+        "{\"id\":\"expected-miss\",\"query\":\"zzzz-no-match\",\"filters\":{\"kind\":\"domain\",\"authority\":\"approved\",\"limit\":8},\"expected\":{\"top_k\":[\"DOC-AUTH-DOMAIN#expired-tokens\"],\"reason_codes\":[\"docs_search_miss\"],\"max_first_relevant_rank\":1}}\n"
+    )).unwrap();
+
+    let report = run_retrieval_evals(tmp.path(), &fixture).unwrap();
+    assert!(report.passed, "{report:?}");
+    assert_eq!(report.fixture_count, 2);
+    assert_eq!(report.results[0].reason_codes, Vec::<String>::new());
+    assert_eq!(report.results[1].reason_codes, vec!["docs_search_miss"]);
 }
 
 #[test]

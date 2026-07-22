@@ -90,6 +90,7 @@ fn setup_repo() -> tempfile::TempDir {
     )
     .unwrap();
     fs::write(repo.join("AGENTS.md"), b"# Repo Map\n").unwrap();
+    fs::write(repo.join("PULSE.md"), b"# Repo Policy\n").unwrap();
     let registry = DocsRegistry {
         schema_version: 2,
         revision: 1,
@@ -127,6 +128,17 @@ fn setup_repo() -> tempfile::TempDir {
                     "DOC-REPO-MAP",
                     "AGENTS.md",
                     "Repository map",
+                    vec!["repository"],
+                )
+            },
+            DocumentRecord {
+                kind: DocumentKind::Policy,
+                path: "PULSE.md".to_string(),
+                summary: "Repository policy".to_string(),
+                ..doc(
+                    "DOC-REPO-POLICY",
+                    "PULSE.md",
+                    "Repository policy",
                     vec!["repository"],
                 )
             },
@@ -543,6 +555,52 @@ fn stale_section_ref_errors_clearly() {
 }
 
 #[test]
+fn get_uses_registry_defaults_when_cli_limits_are_absent_and_explicit_limits_override() {
+    let tmp = setup_repo();
+    let repo = tmp.path();
+    let mut body = String::from("# Token Lifecycle\n\n## Expired Tokens\n\n");
+    for line in 0..6 {
+        body.push_str(&format!("default limited line {line}\n"));
+    }
+    fs::write(repo.join("docs/domain/token.md"), body).unwrap();
+
+    let mut registry: DocsRegistry =
+        pulse::storage::read_json(&repo.join(".pulse/docs/registry.json")).unwrap();
+    let mut config = registry.retrieval_config();
+    config.default_get_max_lines = 2;
+    config.default_get_max_bytes = 1024;
+    registry.retrieval = Some(config);
+    fs::write(
+        repo.join(".pulse/docs/registry.json"),
+        to_canonical_bytes(&registry).unwrap(),
+    )
+    .unwrap();
+
+    let default_limited = get_docs(
+        repo,
+        "DOC-AUTH-DOMAIN#expired-tokens",
+        GetOptions::default(),
+    )
+    .unwrap();
+    assert!(default_limited.truncated);
+    assert_eq!(default_limited.body.unwrap().lines().count(), 2);
+
+    let explicit_limit = get_docs(
+        repo,
+        "DOC-AUTH-DOMAIN#expired-tokens",
+        GetOptions {
+            max_lines: Some(7),
+            ..GetOptions::default()
+        },
+    )
+    .unwrap();
+    assert!(explicit_limit
+        .body
+        .unwrap()
+        .contains("default limited line 4"));
+}
+
+#[test]
 fn tree_works_without_cache_from_registry_only() {
     let tmp = setup_repo();
     let tree = docs_tree(tmp.path(), None, TreeOptions::default()).unwrap();
@@ -553,6 +611,19 @@ fn tree_works_without_cache_from_registry_only() {
         .find(|node| node.path == "docs/domain")
         .unwrap();
     assert_eq!(domain.summary.as_deref(), Some("Domain documentation area"));
+    let repository = tree
+        .nodes
+        .iter()
+        .find(|node| node.path == "Repository")
+        .unwrap();
+    assert_eq!(repository.kind, "Repository");
+    let repository_doc_ids = repository
+        .children
+        .iter()
+        .filter_map(|node| node.document_id.as_deref())
+        .collect::<Vec<_>>();
+    assert!(repository_doc_ids.contains(&"DOC-REPO-MAP"));
+    assert!(repository_doc_ids.contains(&"DOC-REPO-POLICY"));
 }
 
 #[test]
