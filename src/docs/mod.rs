@@ -3,6 +3,7 @@ pub mod manifest;
 pub mod markdown;
 pub mod model;
 pub mod policy;
+pub mod projection;
 pub mod registry;
 pub mod section;
 pub mod validate;
@@ -19,9 +20,15 @@ pub use markdown::{
 };
 pub use model::*;
 pub use policy::{
-    is_generated_navigation_path, is_protected_path, is_runtime_or_cache_path,
+    eligible_documents, is_generated_navigation_path, is_protected_path, is_runtime_or_cache_path,
     is_work_content_path, retrieval_exclusion, ResolvedRetrieval, RetrievalEligibilityOptions,
     RetrievalExclusion,
+};
+pub use projection::{
+    check_projections, is_pulse_generated, projection_config, projection_state, projection_targets,
+    render_area_index, render_root_index, ProjectionCheckReport, ProjectionConfig,
+    ProjectionFileState, ProjectionState, ProjectionStatus, ProjectionTarget, PROJECTION_MARKER,
+    PROJECTION_SCHEMA_VERSION,
 };
 pub use registry::{
     edit, is_retrieval_only_change, list, load_registry, load_registry_or_empty, register,

@@ -17,7 +17,8 @@
 //! ambiguous `eligible()` boolean.
 
 use crate::docs::model::{
-    DocumentAuthority, DocumentKind, DocumentLifecycle, DocumentRecord, RetrievalConfig,
+    DocsRegistry, DocumentAuthority, DocumentKind, DocumentLifecycle, DocumentRecord,
+    RetrievalConfig,
 };
 
 /// Search/retrieval eligibility options (mirror applicability flags but scoped
@@ -126,6 +127,21 @@ pub fn retrieval_exclusion(
         reasons.push("document_generated_navigation".to_string());
     }
 
+    // A document not under the managed docs root is a retrieval input only when
+    // it is an enabled repository map (`AGENTS.md`, kind=repository_map) or
+    // repository policy (`PULSE.md`, kind=policy). Disabling the include flag
+    // removes it from the index/projection without affecting registry/applicability.
+    if !is_under_managed_root(&document.path, config) {
+        let enabled_special = match document.kind {
+            DocumentKind::RepositoryMap => config.include_repository_map,
+            DocumentKind::Policy => config.include_repository_policy,
+            _ => false,
+        };
+        if !enabled_special {
+            reasons.push("document_outside_retrieval_root".to_string());
+        }
+    }
+
     // index=false removes from index/search but not from registry/applicability.
     let resolved = ResolvedRetrieval::for_document(document, config);
     if !resolved.index {
@@ -137,6 +153,32 @@ pub fn retrieval_exclusion(
     RetrievalExclusion {
         reason_codes: reasons,
     }
+}
+
+/// Returns only documents with no retrieval exclusion reason, paired with their
+/// resolved retrieval policy. Pure (no IO): file existence/UTF-8 is the
+/// indexer's responsibility, not this function's.
+///
+/// Informational documents are included (searchable) but their authority is
+/// preserved verbatim on the paired record; they never become *required*
+/// applicability through this function. Applicability is a separate policy
+/// owned by [`crate::docs::applicability`] and is intentionally unchanged here.
+pub fn eligible_documents(
+    registry: &DocsRegistry,
+    options: RetrievalEligibilityOptions,
+) -> Vec<(&DocumentRecord, ResolvedRetrieval)> {
+    let config = registry.retrieval_config();
+    registry
+        .documents
+        .iter()
+        .filter_map(|document| {
+            if retrieval_exclusion(document, &config, options).is_eligible() {
+                Some((document, ResolvedRetrieval::for_document(document, &config)))
+            } else {
+                None
+            }
+        })
+        .collect()
 }
 
 /// Whether a document path is under the managed retrieval root (or is a
@@ -152,6 +194,15 @@ pub fn is_under_retrieval_root(path: &str, config: &RetrievalConfig) -> bool {
             && path
                 .trim_start_matches('/')
                 .starts_with(&format!("{root}/"))
+}
+
+/// Whether a path lives under the managed docs tree only (no special-case for
+/// `AGENTS.md`/`PULSE.md`). Used to decide whether a document needs an enabled
+/// repository map/policy flag to qualify as a retrieval input.
+pub fn is_under_managed_root(path: &str, config: &RetrievalConfig) -> bool {
+    let root = config.root.trim_matches('/');
+    let path = path.trim_start_matches('/');
+    path == root || path.starts_with(&format!("{root}/"))
 }
 
 /// Pulse migration backup paths may never be indexed.
