@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://pulse.dev/schema/knowledge/relation.schema.json",
+  "title": "Pulse Knowledge Relation",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "id", "revision", "type", "from", "to", "created_at", "created_by"],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 260,
+      "pattern": "^[a-z0-9-]+--LRN-[0-9]{3,}--[a-z0-9-]+--[^/\\\\.][^/\\\\]*$"
+    },
+    "revision": { "type": "integer", "minimum": 1 },
+    "type": {
+      "enum": ["derived_from", "corroborates", "contradicts", "superseded_by", "promoted_to", "implemented_by", "applied_to", "caused_by"]
+    },
+    "from": { "$ref": "#/$defs/endpoint" },
+    "to": { "$ref": "#/$defs/endpoint" },
+    "created_at": { "$ref": "#/$defs/date_time" },
+    "created_by": { "type": "string", "minLength": 1, "maxLength": 200 }
+  },
+  "$defs": {
+    "date_time": { "type": "string", "format": "date-time", "minLength": 20, "maxLength": 40 },
+    "sha256": { "type": "string", "pattern": "^sha256:[0-9a-fA-F]{64}$" },
+    "endpoint_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 160,
+      "not": { "pattern": "(^\\.$|^\\.\\.$|/|\\\\|\\.\\.|[\\u0000-\\u001f])" }
+    },
+    "endpoint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "id", "revision", "content_hash"],
+      "properties": {
+        "kind": { "enum": ["learning", "work", "receipt", "commit", "document", "decision"] },
+        "id": { "$ref": "#/$defs/endpoint_id" },
+        "revision": { "anyOf": [{ "type": "null" }, { "type": "integer", "minimum": 1 }] },
+        "content_hash": { "anyOf": [{ "type": "null" }, { "$ref": "#/$defs/sha256" }] }
+      }
+    }
+  }
+}

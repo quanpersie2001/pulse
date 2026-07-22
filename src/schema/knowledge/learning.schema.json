@@ -1,0 +1,212 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://pulse.dev/schema/knowledge/learning.schema.json",
+  "title": "Pulse Knowledge Learning",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "id",
+    "revision",
+    "title",
+    "status",
+    "kind",
+    "severity",
+    "summary",
+    "guidance",
+    "applicability",
+    "provenance",
+    "validation",
+    "routing",
+    "promotion",
+    "freshness",
+    "trust",
+    "content",
+    "created_at",
+    "updated_at"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "id": { "type": "string", "pattern": "^LRN-[0-9]{3,}$" },
+    "revision": { "type": "integer", "minimum": 1 },
+    "title": { "$ref": "#/$defs/title" },
+    "status": {
+      "enum": ["candidate", "reviewed", "validated", "promoted", "disputed", "superseded", "retired"]
+    },
+    "kind": {
+      "enum": [
+        "success_pattern",
+        "failure_pattern",
+        "correction",
+        "ratchet",
+        "decision_heuristic",
+        "debugging_technique",
+        "verification_technique",
+        "tooling_constraint",
+        "environment_constraint",
+        "integration_constraint",
+        "performance_insight",
+        "security_insight",
+        "process_insight",
+        "context_routing_insight"
+      ]
+    },
+    "severity": { "enum": ["low", "medium", "high", "critical"] },
+    "summary": { "type": "string", "minLength": 1, "maxLength": 1000 },
+    "guidance": { "$ref": "#/$defs/guidance" },
+    "applicability": { "$ref": "#/$defs/applicability" },
+    "provenance": { "$ref": "#/$defs/provenance" },
+    "validation": { "$ref": "#/$defs/validation" },
+    "routing": { "$ref": "#/$defs/routing" },
+    "promotion": { "$ref": "#/$defs/promotion" },
+    "freshness": { "$ref": "#/$defs/freshness" },
+    "trust": { "$ref": "#/$defs/trust" },
+    "content": { "anyOf": [{ "type": "null" }, { "$ref": "#/$defs/content_binding" }] },
+    "created_at": { "$ref": "#/$defs/date_time" },
+    "updated_at": { "$ref": "#/$defs/date_time" }
+  },
+  "$defs": {
+    "date_time": { "type": "string", "format": "date-time", "minLength": 20, "maxLength": 40 },
+    "date": { "type": "string", "format": "date", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$" },
+    "sha256": { "type": "string", "pattern": "^sha256:[0-9a-fA-F]{64}$" },
+    "title": { "type": "string", "minLength": 1, "maxLength": 200 },
+    "text": { "type": "string", "minLength": 1, "maxLength": 500 },
+    "short_string": { "type": "string", "minLength": 1, "maxLength": 120 },
+    "repo_glob": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 240,
+      "not": { "pattern": "(^/|^\\.\\./|/\\.\\./|^\\.\\.$|\\\\|^\\.pulse/(runtime|cache|evidence)(/|$))" }
+    },
+    "string_list": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/short_string" },
+      "uniqueItems": true,
+      "maxItems": 32
+    },
+    "guidance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["do", "avoid", "required_checks"],
+      "properties": {
+        "do": { "type": "array", "items": { "$ref": "#/$defs/text" }, "uniqueItems": true, "maxItems": 16 },
+        "avoid": { "type": "array", "items": { "$ref": "#/$defs/text" }, "uniqueItems": true, "maxItems": 16 },
+        "required_checks": { "type": "array", "items": { "$ref": "#/$defs/text" }, "uniqueItems": true, "maxItems": 16 }
+      }
+    },
+    "applicability": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "domains",
+        "surfaces",
+        "paths",
+        "symbols",
+        "work_kinds",
+        "work_labels",
+        "technologies",
+        "operations",
+        "risks",
+        "signals",
+        "platforms",
+        "configurations",
+        "versions",
+        "exclusions"
+      ],
+      "properties": {
+        "domains": { "$ref": "#/$defs/string_list" },
+        "surfaces": { "$ref": "#/$defs/string_list" },
+        "paths": { "type": "array", "items": { "$ref": "#/$defs/repo_glob" }, "uniqueItems": true, "maxItems": 64 },
+        "symbols": { "$ref": "#/$defs/string_list" },
+        "work_kinds": { "$ref": "#/$defs/string_list" },
+        "work_labels": { "$ref": "#/$defs/string_list" },
+        "technologies": { "$ref": "#/$defs/string_list" },
+        "operations": { "$ref": "#/$defs/string_list" },
+        "risks": { "$ref": "#/$defs/string_list" },
+        "signals": { "$ref": "#/$defs/string_list" },
+        "platforms": { "$ref": "#/$defs/string_list" },
+        "configurations": { "$ref": "#/$defs/string_list" },
+        "versions": { "$ref": "#/$defs/string_list" },
+        "exclusions": { "type": "array", "items": { "$ref": "#/$defs/repo_glob" }, "uniqueItems": true, "maxItems": 64 }
+      }
+    },
+    "provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["relation_ids", "source_commits"],
+      "properties": {
+        "relation_ids": { "type": "array", "items": { "type": "string", "minLength": 1, "maxLength": 260 }, "uniqueItems": true, "maxItems": 64 },
+        "source_commits": { "type": "array", "items": { "type": "string", "minLength": 7, "maxLength": 64 }, "uniqueItems": true, "maxItems": 32 }
+      }
+    },
+    "validation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["confidence", "validated_by", "validated_at", "reproduction_count", "contradiction_status"],
+      "properties": {
+        "confidence": { "enum": ["low", "medium", "high", "enforced"] },
+        "validated_by": { "$ref": "#/$defs/string_list" },
+        "validated_at": { "anyOf": [{ "type": "null" }, { "$ref": "#/$defs/date_time" }] },
+        "reproduction_count": { "type": "integer", "minimum": 0, "maximum": 1000000 },
+        "contradiction_status": { "enum": ["none", "suspected", "confirmed"] }
+      }
+    },
+    "routing": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["audiences", "moments", "prompt_priority", "max_summary_tokens"],
+      "properties": {
+        "audiences": { "type": "array", "items": { "enum": ["shaper", "planner", "implementer", "debugger", "validator", "reviewer", "qa", "orchestrator"] }, "uniqueItems": true, "maxItems": 8 },
+        "moments": { "type": "array", "items": { "enum": ["shape", "plan", "execute", "debug", "verify", "review", "qa", "reconcile"] }, "uniqueItems": true, "maxItems": 8 },
+        "prompt_priority": { "enum": ["suggested", "recommended", "required_when_applicable"] },
+        "max_summary_tokens": { "type": "integer", "minimum": 20, "maximum": 500 }
+      }
+    },
+    "promotion": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["state", "rationale", "relation_ids"],
+      "properties": {
+        "state": { "enum": ["unresolved", "none", "proposed", "promoted", "deferred"] },
+        "rationale": { "anyOf": [{ "type": "null" }, { "type": "string", "minLength": 1, "maxLength": 1000 }] },
+        "relation_ids": { "type": "array", "items": { "type": "string", "minLength": 1, "maxLength": 260 }, "uniqueItems": true, "maxItems": 64 }
+      }
+    },
+    "freshness": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["review_after", "invalidated_by_paths", "version_constraints", "platform_constraints"],
+      "properties": {
+        "review_after": { "anyOf": [{ "type": "null" }, { "$ref": "#/$defs/date" }] },
+        "invalidated_by_paths": { "type": "array", "items": { "$ref": "#/$defs/repo_glob" }, "uniqueItems": true, "maxItems": 64 },
+        "version_constraints": { "$ref": "#/$defs/string_list" },
+        "platform_constraints": { "$ref": "#/$defs/string_list" }
+      }
+    },
+    "trust": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source", "contains_untrusted_text", "redaction_status"],
+      "properties": {
+        "source": { "enum": ["trusted_repository", "review_required", "untrusted_external"] },
+        "contains_untrusted_text": { "type": "boolean" },
+        "redaction_status": { "enum": ["not_required", "caller_asserted", "review_required", "verified"] }
+      }
+    },
+    "content_binding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "content_hash"],
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 21,
+          "maxLength": 260,
+          "pattern": "^knowledge/learnings/[^\\0]*$",
+          "not": { "pattern": "(^/|^knowledge/learnings/(\\.\\.?)(/|$)|/\\.\\./|\\\\|^knowledge/learnings/\\.pulse(/|$))" }
+        },
+        "content_hash": { "$ref": "#/$defs/sha256" }
+      }
+    }
+  }
+}

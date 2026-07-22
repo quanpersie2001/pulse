@@ -5,6 +5,7 @@ pub mod event;
 pub mod evidence;
 pub mod graph;
 pub mod id;
+pub mod knowledge;
 pub mod source;
 pub mod storage;
 
