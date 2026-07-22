@@ -1,0 +1,56 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://pulse.dev/schema/docs/retrieval-eval.schema.json",
+  "title": "Pulse Docs Retrieval Eval Fixture",
+  "description": "One JSONL line for the Slice 5 deterministic retrieval evaluation harness. The harness executes the same library search path as CLI search and reports fixture-level quality/reason codes.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["id", "query", "expected"],
+  "properties": {
+    "id": { "type": "string", "minLength": 1 },
+    "query": { "type": "string", "minLength": 1, "maxLength": 256 },
+    "filters": { "$ref": "#/$defs/filters" },
+    "work_context": { "anyOf": [{ "type": "null" }, { "$ref": "#/$defs/work_context" }] },
+    "expected": { "$ref": "#/$defs/expected" }
+  },
+  "$defs": {
+    "filters": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "domain": { "type": "string", "minLength": 1 },
+        "kind": { "enum": ["repository_map", "policy", "product", "architecture", "domain", "operations", "reference", "decision_projection", "generated", "informational"] },
+        "authority": { "enum": ["draft", "approved", "informational", "generated"] },
+        "limit": { "type": "integer", "minimum": 1, "maximum": 50 },
+        "explain": { "type": "boolean" },
+        "include_draft": { "type": "boolean" },
+        "include_stale": { "type": "boolean" }
+      }
+    },
+    "work_context": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "work_id": { "type": "string", "minLength": 1 },
+        "revision": { "type": "integer", "minimum": 1 },
+        "posture": { "enum": ["unknown", "required", "none", "deferred", "investigate"] },
+        "required_documents": { "type": "array", "items": { "type": "string" } },
+        "paths": { "type": "array", "items": { "type": "string" } },
+        "domains": { "type": "array", "items": { "type": "string" } },
+        "labels": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "expected": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["top_k", "must_exclude", "max_first_relevant_rank", "max_context_bytes_before_first_relevant"],
+      "properties": {
+        "top_k": { "type": "array", "items": { "type": "string" } },
+        "must_exclude": { "type": "array", "items": { "type": "string" } },
+        "reason_codes": { "type": "array", "items": { "type": "string" } },
+        "max_first_relevant_rank": { "anyOf": [{ "type": "null" }, { "type": "integer", "minimum": 1 }] },
+        "max_context_bytes_before_first_relevant": { "anyOf": [{ "type": "null" }, { "type": "integer", "minimum": 0 }] }
+      }
+    }
+  }
+}

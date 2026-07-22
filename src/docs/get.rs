@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::path::Path;
 
 use serde::{Deserialize, Serialize};
@@ -117,10 +118,7 @@ pub fn get_docs(repo_root: &Path, reference: &str, options: GetOptions) -> Pulse
     let outline = sections.iter().map(outline_item).collect::<Vec<_>>();
     let doc_info = doc_info(doc, &content_hash);
     if let Some(section_ref) = section_ref {
-        if let Some(section) = sections
-            .iter()
-            .find(|section| section.section_ref == section_ref)
-        {
+        if let Some(section) = sections.iter().find(|section| section.section_ref == section_ref) {
             let (body, truncated) = bounded_body(&bytes, section.range, &options)?;
             return Ok(GetReport {
                 schema_version: 1,
@@ -169,7 +167,7 @@ pub fn get_docs(repo_root: &Path, reference: &str, options: GetOptions) -> Pulse
             });
         }
 
-        return Err(stale_anchor_error(reference, &doc_info, &sections));
+        return Err(stale_anchor_error(repo_root, reference, &doc_info, &sections));
     }
     if options.full {
         let max_bytes = options.max_bytes.unwrap_or(1_048_576);
@@ -401,28 +399,156 @@ pub fn stale_anchor_report(
     current_document: &GetDocument,
     sections: &[SectionRecord],
 ) -> StaleAnchorReport {
+    stale_anchor_report_with_hint(requested_ref, current_document, sections, None)
+}
+
+fn stale_anchor_report_with_hint(
+    requested_ref: &str,
+    current_document: &GetDocument,
+    sections: &[SectionRecord],
+    source_line_hint: Option<u32>,
+) -> StaleAnchorReport {
     StaleAnchorReport {
         schema_version: 1,
         code: "docs_anchor_stale".to_string(),
         message: format!("section ref not found: {requested_ref}"),
         requested_ref: requested_ref.to_string(),
         current_document: current_document.clone(),
-        candidate_section_refs: sections
-            .iter()
-            .take(5)
-            .map(|section| section.section_ref.clone())
-            .collect(),
+        candidate_section_refs: ranked_stale_candidates(requested_ref, sections, source_line_hint),
     }
 }
 
 fn stale_anchor_error(
+    repo_root: &Path,
     requested_ref: &str,
     current_document: &GetDocument,
     sections: &[SectionRecord],
 ) -> PulseError {
-    let report = stale_anchor_report(requested_ref, current_document, sections);
+    let source_line_hint = cached_source_line_hint(repo_root, requested_ref);
+    let report =
+        stale_anchor_report_with_hint(requested_ref, current_document, sections, source_line_hint);
     let message = serde_json::to_string(&report).unwrap_or(report.message);
     PulseError::validation("docs_anchor_stale", message)
+}
+
+fn cached_source_line_hint(repo_root: &Path, requested_ref: &str) -> Option<u32> {
+    let generation = crate::docs::cache::open_reader_generation(repo_root)
+        .ok()
+        .flatten()?;
+    let sections = crate::docs::lexical::load_section_records(&generation.sections_path).ok()?;
+    sections
+        .iter()
+        .find(|section| section.section_ref == requested_ref)
+        .map(|section| section.range.start_line)
+}
+
+fn ranked_stale_candidates(
+    requested_ref: &str,
+    sections: &[SectionRecord],
+    source_line_hint: Option<u32>,
+) -> Vec<String> {
+    let requested_anchor = anchor_from_section_ref(requested_ref).unwrap_or_default();
+    let requested_base = duplicate_base_anchor(&requested_anchor);
+    let requested_tokens = stale_anchor_tokens(&requested_anchor);
+    let mut ranked = sections
+        .iter()
+        .map(|section| {
+            let candidate_base = duplicate_base_anchor(&section.anchor);
+            let prefix_score = prefix_anchor_score(
+                &requested_anchor,
+                &requested_base,
+                &section.anchor,
+                &candidate_base,
+            );
+            let candidate_tokens = stale_anchor_tokens(&format!(
+                "{} {} {}",
+                section.anchor,
+                section.heading,
+                section.heading_path.join(" ")
+            ));
+            let token_overlap = requested_tokens.intersection(&candidate_tokens).count() as i64;
+            let proximity = source_line_hint
+                .map(|line| section.range.start_line.abs_diff(line))
+                .unwrap_or(u32::MAX);
+            let proximity_score = source_line_hint
+                .map(|_| 30_i64.saturating_sub(proximity.min(30) as i64))
+                .unwrap_or(0);
+            let score = prefix_score + (token_overlap * 12) + proximity_score;
+            (score, token_overlap, proximity, section.section_ref.clone())
+        })
+        .collect::<Vec<_>>();
+    ranked.sort_by(|left, right| {
+        right
+            .0
+            .cmp(&left.0)
+            .then_with(|| right.1.cmp(&left.1))
+            .then_with(|| left.2.cmp(&right.2))
+            .then_with(|| left.3.cmp(&right.3))
+    });
+    ranked
+        .into_iter()
+        .take(5)
+        .map(|(_, _, _, section_ref)| section_ref)
+        .collect()
+}
+
+fn anchor_from_section_ref(section_ref: &str) -> Option<String> {
+    let (_, anchor) = section_ref.split_once('#')?;
+    Some(anchor.split('@').next().unwrap_or(anchor).to_string())
+}
+
+fn duplicate_base_anchor(anchor: &str) -> String {
+    let Some((base, suffix)) = anchor.rsplit_once('-') else {
+        return anchor.to_string();
+    };
+    if suffix
+        .parse::<u32>()
+        .is_ok_and(|value| value >= 2 && !base.is_empty())
+    {
+        base.to_string()
+    } else {
+        anchor.to_string()
+    }
+}
+
+fn prefix_anchor_score(
+    requested_anchor: &str,
+    requested_base: &str,
+    candidate_anchor: &str,
+    candidate_base: &str,
+) -> i64 {
+    if requested_anchor.is_empty() {
+        return 0;
+    }
+    if candidate_anchor == requested_anchor {
+        return 100;
+    }
+    if candidate_base == requested_base {
+        return 90;
+    }
+    if candidate_anchor.starts_with(requested_base)
+        || requested_base.starts_with(candidate_anchor)
+        || candidate_base.starts_with(requested_base)
+        || requested_base.starts_with(candidate_base)
+    {
+        return 60;
+    }
+    0
+}
+
+fn stale_anchor_tokens(text: &str) -> BTreeSet<String> {
+    text.chars()
+        .map(|ch| {
+            if ch.is_alphanumeric() {
+                ch.to_lowercase().collect::<String>()
+            } else {
+                " ".to_string()
+            }
+        })
+        .collect::<String>()
+        .split_whitespace()
+        .map(str::to_string)
+        .collect()
 }
 
 fn serde_variant<T: Serialize>(value: &T) -> String {

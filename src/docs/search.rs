@@ -169,7 +169,9 @@ pub fn search_docs(
             "docs-search generation missing after refresh",
         )
     })?;
-    let limit = options.limit.unwrap_or(8).clamp(1, 50);
+    let registry = load_registry(repo_root)?;
+    let default_limit = registry.retrieval_config().default_search_limit as usize;
+    let limit = options.limit.unwrap_or(default_limit).clamp(1, 50);
     let applicability = applicability_by_document(repo_root, &options)?;
     let hits = query_lexical(
         &generation.tantivy_path,

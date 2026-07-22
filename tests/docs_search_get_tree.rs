@@ -188,6 +188,38 @@ fn search_auto_refreshes_and_returns_bounded_section_snippet() {
 }
 
 #[test]
+fn search_uses_registry_default_limit_when_cli_limit_absent_and_allows_override() {
+    let tmp = setup_repo();
+    let repo = tmp.path();
+    let mut registry: DocsRegistry =
+        pulse::storage::read_json(&repo.join(".pulse/docs/registry.json")).unwrap();
+    let mut config = registry.retrieval_config();
+    config.default_search_limit = 1;
+    registry.retrieval = Some(config);
+    fs::write(
+        repo.join(".pulse/docs/registry.json"),
+        to_canonical_bytes(&registry).unwrap(),
+    )
+    .unwrap();
+
+    let default_limited = search_docs(repo, "auth", SearchOptions::default()).unwrap();
+    assert_eq!(default_limited.budget.result_limit, 1);
+    assert_eq!(default_limited.results.len(), 1);
+
+    let explicit_limit = search_docs(
+        repo,
+        "auth",
+        SearchOptions {
+            limit: Some(3),
+            ..SearchOptions::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(explicit_limit.budget.result_limit, 3);
+    assert!(explicit_limit.results.len() > default_limited.results.len());
+}
+
+#[test]
 fn search_filters_by_domain_and_no_refresh_errors_when_missing() {
     let tmp = setup_repo();
     let err = search_docs(
@@ -713,6 +745,60 @@ fn stale_section_ref_errors_clearly() {
     let message = err.to_string();
     assert!(message.contains("current_document"));
     assert!(message.contains("candidate_section_refs"));
+}
+
+#[test]
+fn stale_section_ref_candidates_rank_by_anchor_tokens_and_cached_source_proximity() {
+    let tmp = setup_repo();
+    let repo = tmp.path();
+    fs::write(
+        repo.join("docs/domain/token.md"),
+        b"# Token Lifecycle\n\n## Authentication Token Expiry\n\nCached old section.\n\n## Renewal Flow\n\nRenewal details.\n\n## Error Mapping\n\nErrors.\n",
+    )
+    .unwrap();
+    build_index(repo, pulse::docs::IndexOptions::default()).unwrap();
+    fs::write(
+        repo.join("docs/domain/token.md"),
+        b"# Token Lifecycle\n\n## Renewal Flow\n\nRenewal details.\n\n## Auth Token Expiry Rules\n\nRenamed section.\n\n## Error Mapping\n\nErrors.\n",
+    )
+    .unwrap();
+
+    let err = get_docs(
+        repo,
+        "DOC-AUTH-DOMAIN#authentication-token-expiry",
+        GetOptions::default(),
+    )
+    .unwrap_err();
+    assert_eq!(err.code(), "docs_anchor_stale");
+    let message = err.to_string();
+    let report_json = message
+        .strip_prefix("validation failed: ")
+        .expect("validation error should contain JSON report");
+    let report: pulse::docs::StaleAnchorReport = serde_json::from_str(report_json).unwrap();
+    assert_eq!(
+        report.candidate_section_refs.first().map(String::as_str),
+        Some("DOC-AUTH-DOMAIN#auth-token-expiry-rules")
+    );
+    assert!(report
+        .candidate_section_refs
+        .iter()
+        .any(|candidate| candidate == "DOC-AUTH-DOMAIN#renewal-flow"));
+}
+
+#[test]
+fn docs_slice5_schemas_are_embedded_and_well_formed() {
+    for schema in [
+        pulse::docs::DOCS_SECTION_SCHEMA,
+        pulse::docs::DOCS_INDEX_STATE_SCHEMA,
+        pulse::docs::RETRIEVAL_EVAL_SCHEMA,
+    ] {
+        let value: serde_json::Value = serde_json::from_str(schema).unwrap();
+        assert_eq!(
+            value["$schema"],
+            "https://json-schema.org/draft/2020-12/schema"
+        );
+        assert_eq!(value["type"], "object");
+    }
 }
 
 #[test]

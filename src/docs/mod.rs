@@ -27,7 +27,7 @@ pub use cache::{
 pub use eval::{
     load_retrieval_eval_fixtures, run_retrieval_eval_fixtures, run_retrieval_evals,
     RetrievalEvalExpected, RetrievalEvalFilters, RetrievalEvalFixture, RetrievalEvalReport,
-    RetrievalEvalResult,
+    RetrievalEvalResult, RetrievalEvalWorkContext,
 };
 pub use get::{
     get_docs, stale_anchor_report, GetDocument, GetOptions, GetOutlineItem, GetReport, GetSection,
@@ -47,7 +47,8 @@ pub use lexical::{
 };
 pub use manifest::{
     bootstrap, load, migrate_registry, predecessor_schema, DocsBootstrapOutcome,
-    DocsMigrationOutcome, MigrationStatus, SchemaVersion, DOCUMENT_SCHEMA,
+    DocsMigrationOutcome, MigrationStatus, SchemaVersion, DOCS_INDEX_STATE_SCHEMA,
+    DOCS_SECTION_SCHEMA, DOCUMENT_SCHEMA, RETRIEVAL_EVAL_SCHEMA,
 };
 pub use markdown::{
     extract_document_title, extract_sections, ExtractionOutcome, ExtractionWarning, TitleSource,

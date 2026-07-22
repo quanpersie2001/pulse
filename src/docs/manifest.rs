@@ -21,6 +21,19 @@ use crate::{PulseError, Result};
 /// Current (v2) document registry JSON schema. Embedded so drift is detectable.
 pub const DOCUMENT_SCHEMA: &str = include_str!("../schema/docs/document.schema.json");
 
+/// Derived section-record JSON schema for docs-search `sections.jsonl` lines.
+/// This documents the disposable cache contract; canonical prose remains the
+/// registered Markdown file and registry metadata.
+pub const DOCS_SECTION_SCHEMA: &str = include_str!("../schema/docs/docs-section.schema.json");
+
+/// Immutable docs-search generation `state.json` schema. This is cache
+/// validation/publication metadata, not a canonical documentation receipt.
+pub const DOCS_INDEX_STATE_SCHEMA: &str =
+    include_str!("../schema/docs/docs-index-state.schema.json");
+
+/// JSONL fixture-line schema for the deterministic retrieval eval harness.
+pub const RETRIEVAL_EVAL_SCHEMA: &str = include_str!("../schema/docs/retrieval-eval.schema.json");
+
 /// Exact known predecessor: the Slice 4 (v1) document registry JSON schema.
 /// A registry whose on-disk schema canonical-hash matches this predecessor is
 /// migrated deliberately to v2. It is never silently reinterpreted as current.
