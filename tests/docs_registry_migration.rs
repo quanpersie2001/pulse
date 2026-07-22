@@ -5,9 +5,10 @@
 //! - R3: retrieval config defaults are deterministic/normalized.
 //! - R29a: retrieval-only document edit bumps registry revision but NOT the
 //!   receipt-bound document revision.
-//! - R29b: a valid pre-migration v1 documentation receipt verifies identically
-//!   before and after registry v2 migration (payload v1 stays the only supported
-//!   payload version; retrieval-only metadata is ignored by verification).
+//! - R29b: a valid pre-migration v1 documentation receipt remains integrity- and
+//!   binding-valid before and after registry v2 migration. Payload v1 is treated
+//!   as historical/legacy-unresolved while retrieval-only metadata is ignored by
+//!   verification.
 
 use chrono::Utc;
 use pulse::canonical_json::{hash_bytes, to_canonical_bytes};
@@ -355,7 +356,8 @@ fn r29b_pre_migration_v1_receipt_verifies_identically_after_migration() {
             payload_version: 1,
             documents: vec![DocumentationValidationDocument {
                 proposed_document_id: Some("DOC-AUTH-DOMAIN".to_string()),
-                document_revision: Some(1),
+                document_id: None,
+                document_revision: None,
                 path: path.clone(),
                 content_hash: hash.clone(),
                 result: ReceiptResult::Passed,
@@ -367,15 +369,26 @@ fn r29b_pre_migration_v1_receipt_verifies_identically_after_migration() {
     fs::write(&file, to_canonical_bytes(&receipt).unwrap()).unwrap();
     record_receipt(repo, None, &file).unwrap();
 
-    // Verify before migration.
+    // Verify before migration. Payload v1 remains historical-valid but not
+    // registry/gate current after Slice 4 canonical document IDs landed.
     let before = verify_receipt(repo, &receipt.id, true, None).unwrap();
-    assert_eq!(before.registry.status, "current");
+    assert_eq!(before.integrity.status, "valid");
+    assert_eq!(before.bindings.status, "current");
+    assert_eq!(before.registry.status, "legacy_unresolved");
+    assert_eq!(
+        before.registry.reason_codes,
+        vec!["legacy_unresolved".to_string()]
+    );
     assert_eq!(before.policy.status, "structurally_satisfied");
-    assert!(before.gate_eligible);
+    assert!(!before.gate_eligible);
 
-    // Migrate v1 -> v2 (adds retrieval defaults; does NOT bump document revision).
+    // Verification lazily migrates v1 -> v2 (adds retrieval defaults; does NOT
+    // bump document revision). Explicit retry is idempotent/current.
     let migration = migrate_registry(repo, &repository_id).unwrap();
-    assert_eq!(migration.status, pulse::docs::MigrationStatus::Migrated);
+    assert_eq!(
+        migration.status,
+        pulse::docs::MigrationStatus::AlreadyCurrent
+    );
     assert_eq!(migration.registry.documents[0].revision, 1);
 
     // Verify after migration: identical outcome. Retrieval-only metadata ignored.

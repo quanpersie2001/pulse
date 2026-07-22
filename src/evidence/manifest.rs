@@ -11,8 +11,10 @@ pub const SUPERSESSION_SCHEMA: &str =
     include_str!("../schema/evidence/supersession-reconciliation.v1.schema.json");
 pub const SHAPING_SCHEMA: &str =
     include_str!("../schema/evidence/shaping-validation.v1.schema.json");
-pub const DOCUMENTATION_SCHEMA: &str =
+pub const DOCUMENTATION_SCHEMA_V1: &str =
     include_str!("../schema/evidence/documentation-validation.v1.schema.json");
+pub const DOCUMENTATION_SCHEMA_V2: &str =
+    include_str!("../schema/evidence/documentation-validation.v2.schema.json");
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
@@ -78,7 +80,13 @@ pub fn bootstrap(repo_root: &Path) -> Result<EvidenceBootstrapOutcome> {
     )?;
     write_schema_if_absent(
         &schemas.join("documentation-validation.v1.schema.json"),
-        DOCUMENTATION_SCHEMA,
+        DOCUMENTATION_SCHEMA_V1,
+        &mut created,
+        &mut preserved,
+    )?;
+    write_schema_if_absent(
+        &schemas.join("documentation-validation.v2.schema.json"),
+        DOCUMENTATION_SCHEMA_V2,
         &mut created,
         &mut preserved,
     )?;
@@ -110,9 +118,48 @@ pub fn load(repo_root: &Path) -> Result<EvidenceManifest> {
     if !manifest_path.exists() {
         return Ok(bootstrap(repo_root)?.manifest);
     }
-    let manifest: EvidenceManifest = crate::storage::read_json(&manifest_path)?;
+    ensure_documentation_v2_schema(repo_root)?;
+    let mut manifest: EvidenceManifest = crate::storage::read_json(&manifest_path)?;
+    let expected = default_manifest(repo_root)?;
+    let mut changed = false;
+    if let Some(expected_docs) = expected.receipt_kinds.get("documentation_validation") {
+        let docs = manifest
+            .receipt_kinds
+            .entry("documentation_validation".to_string())
+            .or_default();
+        if !docs.contains_key("2") {
+            if let Some(schema_ref) = expected_docs.get("2") {
+                docs.insert("2".to_string(), schema_ref.clone());
+                changed = true;
+            }
+        }
+    }
+    if changed {
+        let bytes = to_canonical_bytes(&manifest)?;
+        crate::storage::atomic_write(&manifest_path, &bytes)?;
+    }
     validate_manifest(repo_root, &manifest)?;
     Ok(manifest)
+}
+
+fn ensure_documentation_v2_schema(repo_root: &Path) -> Result<()> {
+    let schemas = repo_root.join(".pulse/evidence/schemas");
+    fs::create_dir_all(&schemas).map_err(|error| PulseError::io(&schemas, error))?;
+    let path = schemas.join("documentation-validation.v2.schema.json");
+    let value: serde_json::Value = serde_json::from_str(DOCUMENTATION_SCHEMA_V2)?;
+    let bytes = to_canonical_bytes(&value)?;
+    if path.exists() {
+        let existing = fs::read(&path).map_err(|error| PulseError::io(&path, error))?;
+        if hash_bytes(&existing) != hash_bytes(&bytes) {
+            return Err(PulseError::validation(
+                "receipt_schema_invalid",
+                format!("schema drift at {}", path.display()),
+            ));
+        }
+    } else {
+        crate::storage::create_new(&path, &bytes)?;
+    }
+    Ok(())
 }
 
 fn default_manifest(repo_root: &Path) -> Result<EvidenceManifest> {
@@ -142,18 +189,25 @@ fn default_manifest(repo_root: &Path) -> Result<EvidenceManifest> {
             "documentation_validation",
             "1",
             "schemas/documentation-validation.v1.schema.json",
-            DOCUMENTATION_SCHEMA,
+            DOCUMENTATION_SCHEMA_V1,
+        ),
+        (
+            "documentation_validation",
+            "2",
+            "schemas/documentation-validation.v2.schema.json",
+            DOCUMENTATION_SCHEMA_V2,
         ),
     ] {
-        let mut versions = BTreeMap::new();
-        versions.insert(
-            version.to_string(),
-            SchemaRef {
-                schema: path.to_string(),
-                schema_hash: schema_hash(schema)?,
-            },
-        );
-        receipt_kinds.insert(kind.to_string(), versions);
+        receipt_kinds
+            .entry(kind.to_string())
+            .or_insert_with(BTreeMap::new)
+            .insert(
+                version.to_string(),
+                SchemaRef {
+                    schema: path.to_string(),
+                    schema_hash: schema_hash(schema)?,
+                },
+            );
     }
     let _ = repo_root;
     Ok(EvidenceManifest {
