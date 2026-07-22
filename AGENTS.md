@@ -1,145 +1,229 @@
-# AGENTS.md — Pulse Operator Contract
+# AGENTS.md — Pulse Reboot Operator Contract
 
 Read this file at every session start. Re-read after context compaction.
 
-## What is Pulse?
+## What Pulse Is Now
 
-Pulse is a validate-first, docs-first workflow system with a single public skill router: **`pulse:workflow`**. Runtime reads and reservations use the rendered **`{{pulse_command}}`** command from the installed workflow skill.
+Pulse is a **local-first harness engineering system** for making a repository understandable, executable, verifiable and improvable by coding agents.
 
-## What Pulse Is / Is Not
+Pulse combines:
 
-Pulse is:
+1. a local work graph for Epics, Stories, Tickets, Decisions and their relations;
+2. durable documentation knowledge with ownership, applicability, authority and validation;
+3. repository harness capabilities: scripts, tools, hooks, skills, policies and evals;
+4. evidence loops for verification, review, QA and receipts;
+5. knowledge compounding loops that promote proven learnings into docs, decisions, checks, skills or evals;
+6. optional peer-agent orchestration once single-agent reliability is proven.
 
-- a gated workflow with explicit human approvals and repo artifacts
-- a skill plugin for Claude Code and Codex
-- compatible with swarm and single-worker execution
+Pulse is **not** Jira-lite, a fixed phase workflow, a cloud-first service, or a general-purpose agent framework.
 
-Pulse is not:
+Primary design source: [`PULSE_REBOOT.md`](PULSE_REBOOT.md).
+Detailed owners live under [`pulse-reboot/`](pulse-reboot/).
 
-- permission to skip locked context, validating, or review gates
-- a fragmented public workflow surface
-- a replacement for human gate approval
+## Core Principle
 
-## One-Line Glossary
+The repository is the system of record. Important state, decisions, evidence and durable knowledge must be local, inspectable and recoverable.
 
-- context artifact — locked decisions downstream work must honor.
-- shape artifact — approved planning shape (`work-shape.md`, `phase-plan.md`, `epic-map.md`).
-- current-work artifact — execution-ready contract for active delivery slice.
-- work item — one unit of execution in the canonical workgraph.
-- handoff — pause/resume contract for the next actor.
-- `{{pulse_command}} status` — read-only runtime scout.
+Message history is not source-of-truth. Runtime state is not durable docs truth. Work prose is not a substitute for evidence or documentation receipts.
 
-## Public Router Commands
+## Architecture Map
 
-| Command | Purpose |
-|---|---|
-| `pulse:workflow use` | Session entrypoint, readiness, and resume context |
-| `pulse:workflow explore` | Discover and lock decisions |
-| `pulse:workflow brainstorm` | Expand and compare approaches |
-| `pulse:workflow plan` | Select shape and execution contract |
-| `pulse:workflow validate` | Prove feasibility/readiness |
-| `pulse:workflow swarm` | Coordinate parallel execution |
-| `pulse:workflow execute` | Implement approved work |
-| `pulse:workflow review` | Enforce quality gates |
-| `pulse:workflow compound` | Capture durable learnings |
-
-## Chain
-
-```
-pulse:workflow use → pulse:workflow brainstorm (optional) → pulse:workflow explore → pulse:workflow plan → pulse:workflow validate → pulse:workflow swarm or pulse:workflow execute → pulse:workflow review → pulse:workflow compound
+```text
+Human / Agent
+  -> Pulse CLI / kernel
+  -> Local Work Graph + Documentation System + Evidence Store
+  -> Repository Harness + Source Repository
+  -> Verify / Review / QA / Compound Learnings
 ```
 
-## Go Mode Gates
+Key planes:
 
-- **GATE 1** (after explore): approve locked context.
-- **GATE 2** (after plan): approve shape artifact.
-- **GATE 3** (after validate): approve feasibility-validated current work before execution.
-- **GATE 4** (after review): P1 findings must be fixed before merge.
+1. **Work graph** — `.pulse/workgraph/nodes/*.json`, `.pulse/workgraph/edges/*.json`, projections/cache.
+2. **Work content** — `works/` prose/artifacts owned by Epics, Stories, Tickets and Decisions.
+3. **Documentation knowledge** — `docs/`, `AGENTS.md`, future `PULSE.md`, registry and generated navigation.
+4. **Evidence** — `.pulse/evidence/` receipts, artifacts and validation bindings.
+5. **Runtime** — `.pulse/runtime/` locks, transactions, cache and ephemeral coordination state.
+6. **Repository harness** — scripts, tests, skills, policies, evals and verification profiles.
 
-## Core Runtime Tools
+## Current Kernel / CLI Surface
 
-- `pulse:workflow` — user-facing workflow router
-- `{{pulse_command}} status --repo-root <repo> --json` — scout orientation
-- `{{pulse_command}} ready --repo-root <repo> --json` — ready work inspection
-- `{{pulse_command}} reservation ... --repo-root <repo> --json` — reservation coordination
-- native swarm adapters — Claude teammates/Codex subagents
+Use the local Rust CLI/kernel, not the legacy `pulse:workflow` skill router.
 
-## Packaged Standalone Utility Skills
-
-- `architecture-rescue`
-- `systematic-debug-fix`
-- `dev-note`
-- `dev-note-distil`
-- `prompt-leverage`
-
-## 3-Plane Model
-
-1. **Control plane — `.pulse/runtime/`**: state, handoffs, reservations, runtime mirrors.
-2. **Workgraph plane — `.pulse/workgraph/`**: canonical metadata and derived views.
-3. **Work content plane — `works/`**: epics/stories/tasks/bugs and verification artifacts.
-
-## File Conventions
-
-```
-.pulse/runtime/tooling-status.json
-.pulse/runtime/state.json
-.pulse/runtime/STATE.md
-.pulse/runtime/handoffs/manifest.json
-.pulse/runtime/reservations.json
-.pulse/workgraph/items.jsonl
-.pulse/workgraph/schema.json
-.pulse/workgraph/views/
-.pulse/harness/HARNESS_BACKLOG.md
-works/
-```
-
-## Critical Rules
-
-1. Never execute without validating approval.
-2. Locked context decisions are source-of-truth for downstream work.
-3. If context usage exceeds ~65%, write a handoff and pause cleanly.
-4. Keep `.pulse/runtime/state.json` and `.pulse/runtime/STATE.md` aligned.
-5. After compaction, re-read this file, run scout, then reopen handoff + runtime state before continuing.
-6. P1 review findings always block merge.
-7. Do not edit `dist/` generated skill outputs directly; update source files under `skills/` and regenerate with `scripts/build-skills.mjs`.
-
-## Operator Cookbook
-
-### Start a fresh run
-
-1. Run `pulse:workflow use`.
-2. Run `{{pulse_command}} status --repo-root <repo> --json`.
-3. Open only the artifacts scout points to.
-
-### Resume safely
-
-- Surface `.pulse/runtime/handoffs/manifest.json` before resume.
-- Wait for explicit resume confirmation.
-- Rehydrate from handoff, then verify runtime mirrors.
-
-### Pick swarm vs single-worker
-
-- Use swarm only when approved work has enough parallelizable items.
-- Use single-worker when Pulse discipline is needed but parallelism is not.
-- Gate 3 still applies to both.
-
-### Runtime workgraph quick reads
+Common work graph commands:
 
 ```bash
-{{pulse_command}} ready --repo-root <repo> --json
-{{pulse_command}} reservation list --repo-root <repo> --active-only --json
+pulse --repo-root <repo> work create --kind ticket --title "..." --json
+pulse --repo-root <repo> work show <id> --json
+pulse --repo-root <repo> work list --json
+pulse --repo-root <repo> work edit <id> --expected-revision <n> ... --json
+pulse --repo-root <repo> work transition <id> --to <status> --expected-revision <n> --actor <actor> --json
+pulse --repo-root <repo> work supersede <old-id> --by <new-id> --expected-revision <n> --reason "..." --reconciliation-receipt <receipt-id> --actor <actor> --json
+pulse --repo-root <repo> work executability <id> --json
+pulse --repo-root <repo> work rollup <id> --json
+pulse --repo-root <repo> graph export --json
+pulse --repo-root <repo> graph validate --json
+pulse --repo-root <repo> graph recover --json
+pulse --repo-root <repo> graph neighborhood <id> --json
+pulse --repo-root <repo> graph affected-by <id> --json
 ```
 
-## Landing the Plane (Session Completion)
+Evidence commands:
+
+```bash
+pulse --repo-root <repo> evidence artifact put <path> --json
+pulse --repo-root <repo> evidence artifact verify <hash> --json
+pulse --repo-root <repo> evidence receipt record <receipt-file> --json
+pulse --repo-root <repo> evidence receipt verify <receipt-id> --json
+pulse --repo-root <repo> evidence receipt show <receipt-id> --json
+```
+
+Documentation commands:
+
+```bash
+pulse --repo-root <repo> docs register ... --json
+pulse --repo-root <repo> docs edit <doc-id> ... --json
+pulse --repo-root <repo> docs retire <doc-id> ... --json
+pulse --repo-root <repo> docs supersede <old-doc-id> <new-doc-id> ... --json
+pulse --repo-root <repo> docs list --json
+pulse --repo-root <repo> docs show <doc-id> --json
+pulse --repo-root <repo> docs validate --json
+pulse --repo-root <repo> docs applicable --work <work-id> --json
+pulse --repo-root <repo> docs impact <ticket-id> --expected-revision <n> --posture <required|none|deferred> ... --json
+pulse --repo-root <repo> docs index --json
+pulse --repo-root <repo> docs index --check --json
+pulse --repo-root <repo> docs status --json
+pulse --repo-root <repo> docs search "query" [--work <work-id>] [--limit <n>] [--json]
+pulse --repo-root <repo> docs get <doc-id|section-ref|chunk-ref|path:start-end> --json
+pulse --repo-root <repo> docs tree [path] --json
+```
+
+Prefer `--json` for agent consumption. Treat CLI error codes as the stable contract.
+
+## Work Graph Rules
+
+- Ticket is the executable unit.
+- Epic/Story hold durable outcome, behavior baseline and design/approach context.
+- Decisions capture accepted hard-to-reverse choices.
+- Hierarchy is not dependency. Use edges/dependencies explicitly.
+- Priority is a signal, not an absolute sorting law.
+- All mutations use CAS via `expected_revision` and emit immutable events.
+- Never manually edit canonical graph JSON unless doing deliberate repair with tests/recovery context.
+- Run `graph validate` after broad graph mutations.
+
+## Documentation Rules
+
+Durable repository knowledge belongs in:
+
+- `docs/`
+- `AGENTS.md`
+- future `PULSE.md`
+- accepted Decisions / work artifacts when they own the knowledge
+
+Documentation registry controls identity, lifecycle, authority, scope and retrieval policy.
+
+Rules:
+
+1. Public behavior, invariant, architecture or operator procedure changes must update, classify or defer docs through `docs impact`.
+2. Generated `_index.md` navigation files are derived; do not hand-edit generated Pulse markers.
+3. Section retrieval uses `docs index/search/get/tree`; do not bypass it by raw-scanning the entire docs tree unless debugging the retrieval system itself.
+4. `AGENTS.md` is operator guidance. It must not become a long design doc; link to owning reboot docs.
+5. Treat stale/retired/superseded docs as historical, not current truth.
+
+Relevant design owners:
+
+- [`pulse-reboot/10-documentation-system.md`](pulse-reboot/10-documentation-system.md)
+- [`pulse-reboot/11-documentation-retrieval.md`](pulse-reboot/11-documentation-retrieval.md)
+
+## Evidence And Verification Rules
+
+- Verification claims should be backed by receipts, test output or committed evidence.
+- Receipt validation has integrity, binding, registry/policy and authorization dimensions.
+- Authorization may remain explicitly unresolved; do not turn structural checks into human approval.
+- Supersession through the CLI is receipt-first: use `--reconciliation-receipt`, not inline `--assertion`.
+- Source/content-bound receipts are the durable proof boundary for documentation and review claims.
+
+Relevant owner: [`pulse-reboot/07-verification-ratchet.md`](pulse-reboot/07-verification-ratchet.md).
+
+## Shaping / Readiness Discipline
+
+Pulse is not a fixed phase workflow, but it requires readiness discipline:
+
+- Ground before asking: read work context, applicable docs, decisions, code and evidence.
+- Ask humans only across authority boundaries: intent, irreversible trade-offs, risk appetite and approval.
+- Turn sharp uncertainty into Decision, Discovery/Spike or enabling Ticket.
+- Keep bounded fog in `not_yet_specified`; do not invent speculative tickets upfront.
+- If execution discovers critical ambiguity outside implementation freedom, stop and re-shape/requeue.
+
+Owner: [`pulse-reboot/04-runtime-harness.md`](pulse-reboot/04-runtime-harness.md).
+
+## Agent Operating Rules
+
+1. Start by orienting from repository artifacts, not conversation memory.
+2. Use the Pulse CLI/kernel for canonical reads and mutations.
+3. Respect CAS revisions; on conflict, reload current state before retrying.
+4. Keep runtime transactions recoverable; if interrupted, run/read `graph recover` before continuing graph work.
+5. Prefer small, evidence-backed commits.
+6. Do not mark work complete unless tests/verification prove the affected behavior.
+7. Use sub-agents/isolated worktrees for parallelizable investigation or implementation, then verify and merge deliberately.
+8. Do not let sub-agent summaries substitute for checking actual diffs and tests.
+9. Keep generated/cache/runtime outputs out of durable source unless explicitly tracked by design.
+10. When context exceeds about 65%, write a handoff with branch, commits, tests run, open blockers and next action.
+
+## Repository Layout Quick Reference
+
+```text
+.pulse/workgraph/nodes/          canonical work nodes
+.pulse/workgraph/edges/          canonical graph edges
+.pulse/runtime/                  locks, transactions, ephemeral runtime state
+.pulse/evidence/                 receipts, artifacts and evidence manifest
+.pulse/docs/                     docs registry, schemas and retrieval eval fixtures
+.pulse/cache/                    disposable generated caches
+works/                           human-facing work prose and artifacts
+docs/                            durable repository documentation
+pulse-reboot/                    reboot design owner documents
+proposals/                       implementation slice proposals
+src/                             Rust Pulse kernel/CLI implementation
+tests/                           integration and contract tests
+```
+
+## Validation Commands For This Repo
+
+Before claiming implementation work is done, run:
+
+```bash
+cargo fmt --check
+cargo clippy --all-targets --quiet
+cargo test --all-targets
+```
+
+For docs retrieval changes, also consider targeted suites:
+
+```bash
+cargo test --test docs_search_get_tree --test docs_index --test docs_retrieval_eval
+```
+
+For evidence/receipt changes:
+
+```bash
+cargo test --test evidence_receipts --test docs_receipt_registry --test crash_recovery_process
+```
+
+For graph/lifecycle changes:
+
+```bash
+cargo test --test lifecycle --test workgraph --test workgraph_transaction --test workgraph_read_models
+```
+
+## Session Completion
 
 Before ending a substantial work chunk:
 
-1. Update or close active work items.
-2. Leave `.pulse/runtime/state.json`, `.pulse/runtime/STATE.md`, and handoff files consistent.
-3. Capture unresolved blockers and next actions.
-4. Commit and push code changes through normal Git flow.
+1. Ensure working tree state is intentional.
+2. Run the relevant validation commands and record them in the final response.
+3. Commit coherent changes.
+4. Note branch, commits, remaining risks and next action.
+5. If using Pulse work items, update their status or leave a clear handoff.
 
-## Optional Session Search and Memory Tools
+## Optional Memory Tools
 
-CASS (`cass`) and cass-memory (`cm`) are optional accelerators for transcript search and recall. Treat current repo artifacts as source-of-truth when discrepancies appear.
-
+CASS (`cass`) and cass-memory (`cm`) are optional recall accelerators. Treat current repo artifacts, events and receipts as source-of-truth when discrepancies appear.
