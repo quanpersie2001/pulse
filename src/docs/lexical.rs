@@ -3,18 +3,21 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 use tantivy::collector::TopDocs;
-use tantivy::query::QueryParser;
+use tantivy::query::{BooleanQuery, BoostQuery, Occur, Query, TermQuery};
 use tantivy::schema::document::Value;
-use tantivy::schema::{Field, IndexRecordOption, Schema, TantivyDocument, STORED, STRING, TEXT};
+use tantivy::schema::{
+    Field, IndexRecordOption, Schema, TantivyDocument, TextFieldIndexing, TextOptions, STORED,
+    STRING, TEXT,
+};
+use tantivy::tokenizer::{LowerCaser, RawTokenizer, RemoveLongFilter, TextAnalyzer};
 use tantivy::{doc, Index, Term};
 
 use crate::docs::section::SectionRecord;
 use crate::{PulseError, PulseResult};
 
-/// Private engine compatibility id. Tantivy's raw on-disk format is disposable;
-/// this string participates in the retrieval fingerprint/cache compatibility.
-pub const TANTIVY_COMPAT_VERSION: &str = "tantivy-0.22-pulse-docs-v1";
+pub const TANTIVY_COMPAT_VERSION: &str = "tantivy-0.22-pulse-docs-v2";
 pub const SNIPPET_MAX_BYTES: usize = 500;
+pub const PULSE_IDENTIFIER_TOKENIZER: &str = "pulse_identifier_v1";
 
 #[derive(Debug, Clone)]
 pub struct LexicalSchema {
@@ -44,7 +47,12 @@ pub fn build_schema() -> LexicalSchema {
     let summary = builder.add_text_field("summary", TEXT | STORED);
     let path = builder.add_text_field("path", TEXT | STORED);
     let body = builder.add_text_field("body", TEXT | STORED);
-    let identifiers = builder.add_text_field("identifiers", TEXT | STORED);
+    let identifier_options = TextOptions::default().set_stored().set_indexing_options(
+        TextFieldIndexing::default()
+            .set_tokenizer(PULSE_IDENTIFIER_TOKENIZER)
+            .set_index_option(IndexRecordOption::WithFreqsAndPositions),
+    );
+    let identifiers = builder.add_text_field("identifiers", identifier_options);
     let schema = builder.build();
     LexicalSchema {
         schema,
@@ -93,6 +101,7 @@ pub fn build_index_with_bodies(
     let index = Index::create_in_dir(tantivy_dir, fields.schema.clone()).map_err(|e| {
         PulseError::validation("docs_index_corrupt", format!("tantivy create failed: {e}"))
     })?;
+    register_tokenizers(&index);
     let mut writer = index.writer(50_000_000).map_err(|e| {
         PulseError::validation("docs_index_corrupt", format!("tantivy writer failed: {e}"))
     })?;
@@ -108,23 +117,24 @@ pub fn build_index_with_bodies(
         let record_json = serde_json::to_string(section).map_err(|e| {
             PulseError::validation("json_serialize_error", format!("section record json: {e}"))
         })?;
-        writer
-            .add_document(doc!(
-                fields.section_ref => section.section_ref.clone(),
-                fields.record_json => record_json,
-                fields.heading => section.heading.clone(),
-                fields.document_title => section.document_title.clone(),
-                fields.heading_path => section.heading_path.join(" "),
-                fields.aliases => section.aliases.join(" "),
-                fields.domains => section.domains.join(" "),
-                fields.summary => section.summary.clone(),
-                fields.path => section.path.clone(),
-                fields.body => body_text,
-                fields.identifiers => identifiers_for_section(section),
-            ))
-            .map_err(|e| {
-                PulseError::validation("docs_index_corrupt", format!("tantivy add failed: {e}"))
-            })?;
+        let mut document = doc!(
+            fields.section_ref => section.section_ref.clone(),
+            fields.record_json => record_json,
+            fields.heading => section.heading.clone(),
+            fields.document_title => section.document_title.clone(),
+            fields.heading_path => section.heading_path.join(" "),
+            fields.aliases => section.aliases.join(" "),
+            fields.domains => section.domains.join(" "),
+            fields.summary => section.summary.clone(),
+            fields.path => section.path.clone(),
+            fields.body => body_text,
+        );
+        for identifier in identifiers_for_section(section) {
+            document.add_text(fields.identifiers, identifier);
+        }
+        writer.add_document(document).map_err(|e| {
+            PulseError::validation("docs_index_corrupt", format!("tantivy add failed: {e}"))
+        })?;
     }
     writer.commit().map_err(|e| {
         PulseError::validation("docs_index_corrupt", format!("tantivy commit failed: {e}"))
@@ -134,6 +144,7 @@ pub fn build_index_with_bodies(
 
 pub fn query(tantivy_dir: &Path, terms: &[String], limit: usize) -> PulseResult<Vec<LexicalHit>> {
     let index = open_index(tantivy_dir)?;
+    register_tokenizers(&index);
     let fields = fields_from_schema(index.schema())?;
     let reader = index.reader().map_err(|e| {
         PulseError::validation("docs_index_corrupt", format!("tantivy reader failed: {e}"))
@@ -143,27 +154,7 @@ pub fn query(tantivy_dir: &Path, terms: &[String], limit: usize) -> PulseResult<
     if normalized.is_empty() || limit == 0 {
         return Ok(Vec::new());
     }
-    let query_parser = QueryParser::for_index(
-        &index,
-        vec![
-            fields.heading,
-            fields.document_title,
-            fields.heading_path,
-            fields.aliases,
-            fields.domains,
-            fields.summary,
-            fields.path,
-            fields.body,
-            fields.identifiers,
-        ],
-    );
-    let q = normalized.join(" ");
-    let query = query_parser.parse_query(&q).map_err(|e| {
-        PulseError::validation(
-            "docs_search_query_invalid",
-            format!("invalid docs query: {e}"),
-        )
-    })?;
+    let query = build_plain_text_query(&fields, &normalized);
     let top_docs = searcher
         .search(&query, &TopDocs::with_limit(limit.max(1)))
         .map_err(|e| PulseError::validation("docs_index_corrupt", format!("search failed: {e}")))?;
@@ -181,7 +172,7 @@ pub fn query(tantivy_dir: &Path, terms: &[String], limit: usize) -> PulseResult<
         hits.push(LexicalHit {
             section_ref,
             score: score as f64,
-            matched_fields: Vec::new(),
+            matched_fields: matched_fields(&retrieved, &fields, &normalized),
         });
     }
     hits.sort_by(|a, b| {
@@ -252,11 +243,16 @@ fn fields_from_schema(schema: Schema) -> PulseResult<LexicalSchema> {
 }
 
 fn normalize_terms(terms: &[String]) -> Vec<String> {
-    terms
-        .iter()
-        .flat_map(|term| tokenize_query_text(term))
-        .take(32)
-        .collect()
+    let mut normalized = Vec::new();
+    for term in terms.iter().flat_map(|term| tokenize_query_text(term)) {
+        if !normalized.contains(&term) {
+            normalized.push(term);
+        }
+        if normalized.len() >= 32 {
+            break;
+        }
+    }
+    normalized
 }
 
 pub fn tokenize_query_text(input: &str) -> Vec<String> {
@@ -277,7 +273,7 @@ pub fn tokenize_query_text(input: &str) -> Vec<String> {
         .collect()
 }
 
-fn identifiers_for_section(section: &SectionRecord) -> String {
+fn identifiers_for_section(section: &SectionRecord) -> Vec<String> {
     let mut out = Vec::new();
     for source in [
         section.section_ref.as_str(),
@@ -291,19 +287,121 @@ fn identifiers_for_section(section: &SectionRecord) -> String {
                 .chars()
                 .any(|c| matches!(c, '-' | '_' | '.' | '/' | ':') || c.is_ascii_digit())
             {
-                out.push(token);
+                out.push(token.clone());
+                out.extend(identifier_parts(&token));
             }
         }
     }
-    out.join(" ")
+    out.sort();
+    out.dedup();
+    out
 }
 
-#[allow(dead_code)]
-fn exact_term(field: Field, text: &str) -> Term {
-    Term::from_field_text(field, text)
+fn register_tokenizers(index: &Index) {
+    index.tokenizers().register(
+        PULSE_IDENTIFIER_TOKENIZER,
+        TextAnalyzer::builder(RawTokenizer::default())
+            .filter(RemoveLongFilter::limit(128))
+            .filter(LowerCaser)
+            .build(),
+    );
 }
 
-#[allow(dead_code)]
-fn record_option() -> IndexRecordOption {
-    IndexRecordOption::WithFreqsAndPositions
+fn build_plain_text_query(fields: &LexicalSchema, terms: &[String]) -> Box<dyn Query> {
+    let mut clauses = Vec::new();
+    for term in terms {
+        for (field, boost) in boosted_fields(fields, term) {
+            let term_query: Box<dyn Query> = Box::new(TermQuery::new(
+                Term::from_field_text(field, term),
+                IndexRecordOption::WithFreqs,
+            ));
+            clauses.push((
+                Occur::Should,
+                Box::new(BoostQuery::new(term_query, boost)) as Box<dyn Query>,
+            ));
+        }
+        for part in identifier_parts(term) {
+            let term_query: Box<dyn Query> = Box::new(TermQuery::new(
+                Term::from_field_text(fields.identifiers, &part),
+                IndexRecordOption::WithFreqs,
+            ));
+            clauses.push((
+                Occur::Should,
+                Box::new(BoostQuery::new(term_query, 1.4)) as Box<dyn Query>,
+            ));
+        }
+    }
+    Box::new(BooleanQuery::new(clauses))
+}
+
+fn boosted_fields(fields: &LexicalSchema, term: &str) -> Vec<(Field, f32)> {
+    let mut out = vec![
+        (fields.heading, 5.0),
+        (fields.document_title, 4.0),
+        (fields.heading_path, 3.0),
+        (fields.aliases, 3.0),
+        (fields.domains, 3.0),
+        (fields.summary, 2.5),
+        (fields.path, 1.5),
+        (fields.body, 1.0),
+    ];
+    let identifier_boost = if term
+        .chars()
+        .any(|c| matches!(c, '-' | '_' | '.' | '/' | ':') || c.is_ascii_digit())
+    {
+        6.0
+    } else {
+        2.0
+    };
+    out.push((fields.identifiers, identifier_boost));
+    out
+}
+
+fn matched_fields(
+    document: &TantivyDocument,
+    fields: &LexicalSchema,
+    terms: &[String],
+) -> Vec<String> {
+    let field_names = [
+        ("heading", fields.heading),
+        ("document_title", fields.document_title),
+        ("heading_path", fields.heading_path),
+        ("aliases", fields.aliases),
+        ("domains", fields.domains),
+        ("summary", fields.summary),
+        ("path", fields.path),
+        ("body", fields.body),
+        ("identifiers", fields.identifiers),
+    ];
+    let mut out = Vec::new();
+    for (name, field) in field_names {
+        let values = document
+            .get_all(field)
+            .filter_map(|value| value.as_str())
+            .map(str::to_lowercase)
+            .collect::<Vec<_>>();
+        if values.iter().any(|value| text_matches_terms(value, terms)) {
+            out.push(name.to_string());
+        }
+    }
+    out
+}
+
+fn text_matches_terms(text: &str, terms: &[String]) -> bool {
+    let indexed_terms = tokenize_query_text(text);
+    terms.iter().any(|term| {
+        text.contains(term)
+            || indexed_terms.iter().any(|indexed| indexed == term)
+            || identifier_parts(term)
+                .iter()
+                .any(|part| indexed_terms.iter().any(|indexed| indexed == part))
+    })
+}
+
+fn identifier_parts(token: &str) -> Vec<String> {
+    token
+        .split(['-', '_', '.', '/', ':'])
+        .filter(|part| !part.is_empty())
+        .map(str::to_string)
+        .collect()
 }

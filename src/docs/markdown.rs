@@ -28,8 +28,8 @@
 //!   preamble section with anchor `preamble`.
 //! - LF and CRLF produce identical logical line numbers/ranges; only the byte
 //!   hashes differ.
-//! - A UTF-8 BOM is accepted and excluded from heading text and from
-//!   section-byte slices (so section hashes are BOM-stable).
+//! - A UTF-8 BOM is accepted and excluded from heading text, but retained in
+//!   the exact source-byte slice for any section beginning on line 1.
 //! - Oversized base sections (over the soft byte/line limits) are split into
 //!   chunks with fence-atomic units and a best-effort line overlap.
 
@@ -48,8 +48,7 @@ use serde::{Deserialize, Serialize};
 pub enum TitleSource {
     /// Resolved from the first level-1 heading.
     FirstH1,
-    /// No level-1 heading found; title is empty and the caller is expected to
-    /// substitute a normalized file stem.
+    /// No level-1 heading found; extraction uses a normalized file stem fallback.
     Fallback,
 }
 
@@ -65,7 +64,7 @@ pub enum ExtractionWarning {
     /// A heading whose visible text is empty; it still gets an outline record
     /// with the `section` fallback anchor. Carries the affected section ref.
     EmptyHeading { section_ref: String },
-    /// No level-1 heading was found and the document title fell back to empty.
+    /// No level-1 heading was found and the document title used a file stem fallback.
     MissingTitleFallback,
     /// Defensive: the input bytes were not valid UTF-8. No sections extracted.
     /// (The indexer excludes non-UTF-8 documents before calling extraction.)
@@ -97,7 +96,7 @@ impl ExtractionOutcome {
 // Internal parser primitives
 // ---------------------------------------------------------------------------
 
-/// Byte span of one logical source line, relative to the BOM-stripped body.
+/// Byte span of one logical source line, relative to the original source bytes.
 /// Covers `[start, end)` where `end` is just past the line terminator (== next
 /// line's start, or body end), so the bytes of lines `[s, e]` (inclusive) are
 /// exactly `[spans[s-1].start, spans[e-1].end)`.
@@ -129,15 +128,15 @@ enum ParseResult {
 struct ParsedDoc {
     /// One entry per logical line (no terminator, no BOM).
     lines: Vec<String>,
-    /// Parallel byte spans relative to the BOM-stripped body.
+    /// Parallel byte spans relative to the original source bytes.
     spans: Vec<LineSpan>,
     /// Per-line fence membership (true inside a fence block, including the
     /// opening and closing fence lines).
     in_fence: Vec<bool>,
     /// ATX headings outside fences, in source order.
     headings: Vec<HeadingInfo>,
-    /// BOM-stripped body, for byte slicing.
-    body: String,
+    /// Original source bytes, for exact source-byte slicing.
+    source: Vec<u8>,
 }
 
 impl ParsedDoc {
@@ -149,7 +148,7 @@ impl ParsedDoc {
     fn slice_bytes(&self, start_line: u32, end_line: u32) -> &[u8] {
         let s = self.spans[(start_line - 1) as usize].start;
         let e = self.spans[(end_line - 1) as usize].end;
-        &self.body.as_bytes()[s..e]
+        &self.source[s..e]
     }
 
     fn slice_len(&self, start_line: u32, end_line: u32) -> usize {
@@ -176,7 +175,10 @@ fn parse_bytes(bytes: &[u8]) -> ParseResult {
         Ok(s) => s,
         Err(_) => return ParseResult::InvalidUtf8,
     };
-    let (lines, spans) = split_lines(body);
+    let (lines, mut spans) = split_lines(body, bom_len);
+    if bom_len > 0 && !spans.is_empty() {
+        spans[0].start = 0;
+    }
     let in_fence = compute_fence(&lines);
     let headings = collect_headings(&lines, &in_fence);
     ParseResult::Ok(ParsedDoc {
@@ -184,13 +186,13 @@ fn parse_bytes(bytes: &[u8]) -> ParseResult {
         spans,
         in_fence,
         headings,
-        body: body.to_string(),
+        source: bytes.to_vec(),
     })
 }
 
 /// Split a body string into logical lines and parallel byte spans. A single
 /// trailing terminator does not create an extra empty line.
-fn split_lines(body: &str) -> (Vec<String>, Vec<LineSpan>) {
+fn split_lines(body: &str, byte_offset: usize) -> (Vec<String>, Vec<LineSpan>) {
     let bytes = body.as_bytes();
     let n = bytes.len();
     let mut lines = Vec::new();
@@ -206,8 +208,8 @@ fn split_lines(body: &str) -> (Vec<String>, Vec<LineSpan>) {
             };
             lines.push(body[line_start..content_end].to_string());
             spans.push(LineSpan {
-                start: line_start,
-                end: i + 1,
+                start: byte_offset + line_start,
+                end: byte_offset + i + 1,
             });
             line_start = i + 1;
         }
@@ -216,8 +218,8 @@ fn split_lines(body: &str) -> (Vec<String>, Vec<LineSpan>) {
     if line_start < n {
         lines.push(body[line_start..n].to_string());
         spans.push(LineSpan {
-            start: line_start,
-            end: n,
+            start: byte_offset + line_start,
+            end: byte_offset + n,
         });
     }
     (lines, spans)
@@ -404,9 +406,9 @@ struct SectionDesc {
 }
 
 /// Resolve the document title from decoded text: the first level-1 heading's
-/// visible text, or empty with [`TitleSource::Fallback`].
+/// visible text, or the normalized file stem fallback with [`TitleSource::Fallback`].
 pub fn extract_document_title(text: &str) -> (String, TitleSource) {
-    let (lines, _spans) = split_lines(text);
+    let (lines, _spans) = split_lines(text, 0);
     let in_fence = compute_fence(&lines);
     for (idx, line) in lines.iter().enumerate() {
         if in_fence[idx] {
@@ -419,6 +421,32 @@ pub fn extract_document_title(text: &str) -> (String, TitleSource) {
         }
     }
     (String::new(), TitleSource::Fallback)
+}
+
+fn normalized_file_stem(path: &str) -> String {
+    let file = path
+        .trim_matches('/')
+        .rsplit('/')
+        .next()
+        .filter(|segment| !segment.is_empty())
+        .unwrap_or(path);
+    let stem = file.rsplit_once('.').map(|(stem, _)| stem).unwrap_or(file);
+    let words: Vec<String> = stem
+        .split(['-', '_', '.', ' '])
+        .filter(|word| !word.is_empty())
+        .map(|word| {
+            let mut chars = word.chars();
+            match chars.next() {
+                Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+                None => String::new(),
+            }
+        })
+        .collect();
+    if words.is_empty() {
+        stem.to_string()
+    } else {
+        words.join(" ")
+    }
 }
 
 /// Extract deterministic section/chunk records from a document's bytes.
@@ -458,7 +486,7 @@ pub fn extract_sections(
     let h1_headings: Vec<&HeadingInfo> = parsed.headings.iter().filter(|h| h.level == 1).collect();
     let (document_title, title_source) = match h1_headings.first() {
         Some(h) => (visible_heading_text(&h.text), TitleSource::FirstH1),
-        None => (String::new(), TitleSource::Fallback),
+        None => (normalized_file_stem(&document.path), TitleSource::Fallback),
     };
     let h1_count = h1_headings.len() as u32;
     if h1_count > 1 {
@@ -792,8 +820,8 @@ mod tests {
     fn crlf_and_lf_same_line_count() {
         let lf = "a\nb\nc";
         let crlf = "a\r\nb\r\nc";
-        let (lf_lines, _) = split_lines(lf);
-        let (crlf_lines, _) = split_lines(crlf);
+        let (lf_lines, _) = split_lines(lf, 0);
+        let (crlf_lines, _) = split_lines(crlf, 0);
         assert_eq!(lf_lines, crlf_lines);
     }
 }

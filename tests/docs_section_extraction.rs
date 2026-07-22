@@ -198,6 +198,28 @@ fn r8_title_resolves_to_first_h1() {
     assert_eq!(source, TitleSource::FirstH1);
 }
 
+#[test]
+fn r8_title_falls_back_to_normalized_file_stem_when_h1_missing() {
+    let outcome = extract_outcome(b"## Only H2\nbody\n");
+    assert_eq!(outcome.sections[0].document_title, "Token Lifecycle");
+    assert!(outcome
+        .warnings
+        .iter()
+        .any(|w| matches!(w, ExtractionWarning::MissingTitleFallback)));
+}
+
+#[test]
+fn r8_section_hash_includes_bom_for_line_one_slice() {
+    let bytes = b"\xEF\xBB\xBF# Title\n\nBody\n";
+    let sections = extract(bytes);
+    let title = by_anchor(&sections, "title");
+    assert_eq!(title.range, pulse::docs::SectionRange::new(1, 3));
+    assert_eq!(
+        title.section_content_hash,
+        expected_section_hash(bytes, 1, 3)
+    );
+}
+
 // ---------------------------------------------------------------------------
 // R9 — CRLF produces the same logical refs/ranges; byte hashes differ
 // ---------------------------------------------------------------------------

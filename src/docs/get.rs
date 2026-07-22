@@ -61,6 +61,18 @@ pub struct GetOutlineItem {
     pub chunk: Option<crate::docs::ChunkRef>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct StaleAnchorReport {
+    pub schema_version: u32,
+    pub code: String,
+    pub message: String,
+    pub requested_ref: String,
+    pub current_document: GetDocument,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub candidate_section_refs: Vec<String>,
+}
+
 pub fn get_docs(repo_root: &Path, reference: &str, options: GetOptions) -> PulseResult<GetReport> {
     let registry = load_registry(repo_root)?;
     if let Some((path, range)) = parse_path_range(reference) {
@@ -100,12 +112,7 @@ pub fn get_docs(repo_root: &Path, reference: &str, options: GetOptions) -> Pulse
         let section = sections
             .iter()
             .find(|section| section.section_ref == section_ref)
-            .ok_or_else(|| {
-                PulseError::validation(
-                    "docs_anchor_stale",
-                    format!("section ref not found: {section_ref}"),
-                )
-            })?;
+            .ok_or_else(|| stale_anchor_error(reference, &doc_info, &sections))?;
         let (body, truncated) = bounded_body(&bytes, section.range, &options)?;
         return Ok(GetReport {
             schema_version: 1,
@@ -123,14 +130,8 @@ pub fn get_docs(repo_root: &Path, reference: &str, options: GetOptions) -> Pulse
         });
     }
     if options.full {
-        let body = String::from_utf8(bytes)
-            .map_err(|e| PulseError::validation("utf8_error", e.to_string()))?;
         let max_bytes = options.max_bytes.unwrap_or(1_048_576);
-        let truncated = body.len() > max_bytes;
-        let mut body = body;
-        if truncated {
-            body.truncate(max_bytes);
-        }
+        let (body, truncated) = utf8_prefix(&bytes, max_bytes)?;
         Ok(GetReport {
             schema_version: 1,
             ref_: reference.to_string(),
@@ -180,30 +181,23 @@ fn bounded_body(
     range: SectionRange,
     options: &GetOptions,
 ) -> PulseResult<(String, bool)> {
-    let text = std::str::from_utf8(bytes)
-        .map_err(|e| PulseError::validation("utf8_error", e.to_string()))?;
+    let line_spans = line_spans(bytes)?;
+    validate_range(range, line_spans.len() as u32)?;
     let max_lines = options.max_lines.unwrap_or(120);
     let max_bytes = options.max_bytes.unwrap_or(32_768);
-    let mut lines = Vec::new();
-    for (idx, line) in text.lines().enumerate() {
-        let line_no = idx as u32 + 1;
-        if line_no >= range.start_line && line_no <= range.end_line {
-            lines.push(line);
-            if lines.len() as u32 >= max_lines && !options.full_section {
-                break;
-            }
-        }
-    }
-    let mut body = lines.join("\n");
-    if !body.is_empty() {
-        body.push('\n');
-    }
-    let truncated =
-        (range.line_count() > max_lines && !options.full_section) || body.len() > max_bytes;
-    if body.len() > max_bytes {
-        body.truncate(max_bytes);
-    }
-    Ok((body, truncated))
+    let effective_end = if options.full_section {
+        range.end_line
+    } else {
+        range
+            .end_line
+            .min(range.start_line.saturating_add(max_lines).saturating_sub(1))
+    };
+    let start = line_spans[(range.start_line - 1) as usize].0;
+    let end = line_spans[(effective_end - 1) as usize].1;
+    let slice = &bytes[start..end];
+    let (body, byte_truncated) = utf8_prefix(slice, max_bytes)?;
+    let line_truncated = !options.full_section && range.line_count() > max_lines;
+    Ok((body, line_truncated || byte_truncated))
 }
 
 fn doc_info(doc: &DocumentRecord, content_hash: &str) -> GetDocument {
@@ -248,7 +242,18 @@ fn get_path_range(
     range: SectionRange,
     options: GetOptions,
 ) -> PulseResult<GetReport> {
+    if doc.lifecycle != crate::docs::DocumentLifecycle::Current {
+        return Err(PulseError::validation(
+            "docs_anchor_stale",
+            "path range document is not current",
+        ));
+    }
     let (bytes, content_hash, sections) = extract_current(repo_root, doc)?;
+    let line_spans = line_spans(&bytes)?;
+    validate_range(range, line_spans.len() as u32)?;
+    let start = line_spans[(range.start_line - 1) as usize].0;
+    let end = line_spans[(range.end_line - 1) as usize].1;
+    let section_content_hash = hash_bytes(&bytes[start..end]);
     let (body, truncated) = bounded_body(&bytes, range, &options)?;
     Ok(GetReport {
         schema_version: 1,
@@ -258,12 +263,89 @@ fn get_path_range(
             section_ref: reference.to_string(),
             heading_path: Vec::new(),
             range,
-            section_content_hash: hash_bytes(body.as_bytes()),
+            section_content_hash,
         }),
         outline: sections.iter().map(outline_item).collect(),
         body: Some(body),
         truncated,
     })
+}
+
+fn validate_range(range: SectionRange, total_lines: u32) -> PulseResult<()> {
+    if range.start_line == 0 || range.end_line == 0 || range.start_line > range.end_line {
+        return Err(PulseError::validation(
+            "docs_get_range_invalid",
+            "path range must satisfy start<=end and use 1-based lines",
+        ));
+    }
+    if range.end_line > total_lines {
+        return Err(PulseError::validation(
+            "docs_get_range_invalid",
+            format!(
+                "path range end {} exceeds document line count {total_lines}",
+                range.end_line
+            ),
+        ));
+    }
+    Ok(())
+}
+
+fn line_spans(bytes: &[u8]) -> PulseResult<Vec<(usize, usize)>> {
+    std::str::from_utf8(bytes).map_err(|e| PulseError::validation("utf8_error", e.to_string()))?;
+    let mut spans = Vec::new();
+    let mut start = 0usize;
+    for (idx, byte) in bytes.iter().enumerate() {
+        if *byte == b'\n' {
+            spans.push((start, idx + 1));
+            start = idx + 1;
+        }
+    }
+    if start < bytes.len() {
+        spans.push((start, bytes.len()));
+    }
+    Ok(spans)
+}
+
+fn utf8_prefix(bytes: &[u8], max_bytes: usize) -> PulseResult<(String, bool)> {
+    let text = std::str::from_utf8(bytes)
+        .map_err(|e| PulseError::validation("utf8_error", e.to_string()))?;
+    if text.len() <= max_bytes {
+        return Ok((text.to_string(), false));
+    }
+    let mut end = max_bytes;
+    while end > 0 && !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    Ok((text[..end].to_string(), true))
+}
+
+pub fn stale_anchor_report(
+    requested_ref: &str,
+    current_document: &GetDocument,
+    sections: &[SectionRecord],
+) -> StaleAnchorReport {
+    StaleAnchorReport {
+        schema_version: 1,
+        code: "docs_anchor_stale".to_string(),
+        message: format!("section ref not found: {requested_ref}"),
+        requested_ref: requested_ref.to_string(),
+        current_document: current_document.clone(),
+        candidate_section_refs: sections
+            .iter()
+            .take(5)
+            .map(|section| section.section_ref.clone())
+            .collect(),
+    }
+}
+
+fn stale_anchor_error(
+    requested_ref: &str,
+    current_document: &GetDocument,
+    sections: &[SectionRecord],
+) -> PulseError {
+    let report = stale_anchor_report(requested_ref, current_document, sections);
+    let message = serde_json::to_string(&report).unwrap_or(report.message);
+    PulseError::validation("docs_anchor_stale", message)
 }
 
 fn serde_variant<T: Serialize>(value: &T) -> String {

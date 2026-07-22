@@ -149,6 +149,12 @@ enum DocsCommand {
         #[arg(long)]
         explain: bool,
         #[arg(long)]
+        include_draft: bool,
+        #[arg(long)]
+        include_stale: bool,
+        #[arg(long = "work")]
+        work_id: Option<String>,
+        #[arg(long)]
         json: bool,
     },
     Get {
@@ -941,8 +947,13 @@ fn run(store: JsonGraphStore, command: Command) -> Result<(), PulseError> {
                     changed,
                     rebuild,
                     check,
+                    ..pulse::docs::IndexOptions::default()
                 };
-                let out = pulse::docs::build_index(store.repo_root(), opts)?;
+                let out = if check {
+                    pulse::docs::check_index(store.repo_root())?
+                } else {
+                    pulse::docs::build_index(store.repo_root(), opts)?
+                };
                 render(json, &out, format!("docs index {}", out.index.state))
             }
             DocsCommand::Status { json } => {
@@ -957,8 +968,34 @@ fn run(store: JsonGraphStore, command: Command) -> Result<(), PulseError> {
                 limit,
                 no_refresh,
                 explain,
+                include_draft,
+                include_stale,
+                work_id,
                 json,
             } => {
+                let work = match work_id {
+                    Some(work_id) => {
+                        let node = store.show_node(&work_id)?;
+                        Some(
+                            node.documentation
+                                .as_ref()
+                                .map(|documentation| {
+                                    pulse::docs::WorkDocumentationContext::from((
+                                        node.id.as_str(),
+                                        node.revision,
+                                        documentation,
+                                    ))
+                                })
+                                .unwrap_or_else(|| {
+                                    pulse::docs::WorkDocumentationContext::unknown(
+                                        node.id.clone(),
+                                        node.revision,
+                                    )
+                                }),
+                        )
+                    }
+                    None => None,
+                };
                 let out = pulse::docs::search_docs(
                     store.repo_root(),
                     &query,
@@ -969,6 +1006,9 @@ fn run(store: JsonGraphStore, command: Command) -> Result<(), PulseError> {
                         limit,
                         no_refresh,
                         explain,
+                        include_draft,
+                        include_stale,
+                        work,
                     },
                 )?;
                 render(json, &out, format!("{} docs hits", out.results.len()))
@@ -979,9 +1019,15 @@ fn run(store: JsonGraphStore, command: Command) -> Result<(), PulseError> {
                 max_bytes,
                 full,
                 full_section,
-                no_refresh: _,
+                no_refresh,
                 json,
             } => {
+                if no_refresh {
+                    return Err(PulseError::validation(
+                        "unsupported_option",
+                        "docs get reads canonical files directly; --no-refresh is only meaningful for docs search",
+                    ));
+                }
                 let out = pulse::docs::get_docs(
                     store.repo_root(),
                     &reference,

@@ -480,13 +480,15 @@ pub fn validate_retrieval_config(config: &RetrievalConfig, errors: &mut Vec<Docs
             None,
         ));
     }
+    let root = normalize_scope_path(&config.root);
     for scope in &config.scopes {
-        validate_retrieval_scope(scope, &mut seen, errors);
+        validate_retrieval_scope(scope, &root, &mut seen, errors);
     }
 }
 
 fn validate_retrieval_scope(
     scope: &RetrievalScope,
+    root: &str,
     seen: &mut BTreeSet<String>,
     errors: &mut Vec<DocsFinding>,
 ) {
@@ -508,6 +510,17 @@ fn validate_retrieval_scope(
             None,
         ));
     }
+    if !same_or_descendant(&normalized, root) {
+        errors.push(finding(
+            "docs_registry_retrieval_config_invalid",
+            format!(
+                "retrieval scope path {} must be under retrieval root {}",
+                scope.path, root
+            ),
+            None,
+            None,
+        ));
+    }
     if !seen.insert(normalized) {
         errors.push(finding(
             "docs_registry_retrieval_config_invalid",
@@ -524,6 +537,13 @@ fn validate_retrieval_scope(
             None,
         ));
     }
+}
+
+fn same_or_descendant(path: &str, base: &str) -> bool {
+    path == base
+        || path
+            .strip_prefix(base)
+            .is_some_and(|rest| rest.starts_with('/'))
 }
 
 fn normalize_scope_path(path: &str) -> String {

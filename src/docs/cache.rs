@@ -174,6 +174,15 @@ pub fn read_current(repo_root: &Path) -> Option<String> {
     }
 }
 
+fn read_current_raw(repo_root: &Path) -> PulseResult<Option<String>> {
+    let path = current_pointer_path(repo_root);
+    match fs::read_to_string(&path) {
+        Ok(text) => Ok(Some(text.trim().to_string())),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(PulseError::io(&path, error)),
+    }
+}
+
 pub fn validate_generation(
     repo_root: &Path,
     generation_id: &str,
@@ -235,9 +244,12 @@ pub fn validate_generation(
 }
 
 pub fn classify(repo_root: &Path) -> PulseResult<(CacheState, Option<ValidatedGeneration>)> {
-    let Some(current) = read_current(repo_root) else {
+    let Some(current) = read_current_raw(repo_root)? else {
         return Ok((CacheState::Missing, None));
     };
+    if !is_valid_generation_id(&current) {
+        return Ok((CacheState::Corrupt, None));
+    }
     match validate_generation(repo_root, &current) {
         Ok(valid) => Ok((CacheState::Current, Some(valid))),
         Err(e) if e.code() == "docs_index_incompatible" => Ok((CacheState::Incompatible, None)),

@@ -1,14 +1,19 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
+use crate::canonical_json::hash_bytes;
+use crate::docs::applicability::{applicable_docs, ApplicabilityOptions, FsContentResolver};
 use crate::docs::cache::{classify_against, CacheState};
-use crate::docs::index::{build_index, current_generation, index_status, IndexOptions};
+use crate::docs::index::{
+    build_index, cache_state_error_code, current_generation, index_status, IndexOptions,
+};
 use crate::docs::lexical::{
     load_section_records, query as query_lexical, tokenize_query_text, SNIPPET_MAX_BYTES,
 };
-use crate::docs::model::{DocumentAuthority, DocumentKind};
+use crate::docs::model::{DocumentAuthority, DocumentKind, WorkDocumentationContext};
+use crate::docs::registry::load_registry;
 use crate::docs::section::{SectionRange, SectionRecord};
 use crate::{PulseError, PulseResult};
 
@@ -20,6 +25,9 @@ pub struct SearchOptions {
     pub limit: Option<usize>,
     pub no_refresh: bool,
     pub explain: bool,
+    pub include_draft: bool,
+    pub include_stale: bool,
+    pub work: Option<WorkDocumentationContext>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -29,6 +37,8 @@ pub struct SearchReport {
     pub query: String,
     pub normalized_terms: Vec<String>,
     pub index: SearchIndexInfo,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub work: Option<SearchWorkInfo>,
     pub results: Vec<SearchResult>,
     pub budget: SearchBudget,
 }
@@ -40,6 +50,14 @@ pub struct SearchIndexInfo {
     pub generation_id: Option<String>,
     pub state: String,
     pub mode: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct SearchWorkInfo {
+    pub id: String,
+    pub revision: u64,
+    pub documentation_posture: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -94,17 +112,36 @@ pub fn search_docs(
         ));
     }
 
-    let status = index_status(repo_root)?;
-    let generation = match current_generation(repo_root)? {
-        Some(generation) if status.index.state == "current" => generation,
+    let build_options = crate::docs::policy::RetrievalEligibilityOptions {
+        include_draft: options.include_draft,
+        include_stale: options.include_stale,
+    };
+    let status = if options.include_draft || options.include_stale {
+        crate::docs::index::index_status_with_options(repo_root, build_options)?
+    } else {
+        index_status(repo_root)?
+    };
+    let refresh_options = IndexOptions {
+        changed: false,
+        rebuild: options.include_draft || options.include_stale,
+        check: false,
+        include_draft: options.include_draft,
+        include_stale: options.include_stale,
+    };
+    let generation = match current_generation(repo_root) {
+        Ok(Some(generation)) if status.index.state == "current" => generation,
         _ if options.no_refresh => {
             return Err(PulseError::validation(
-                "docs_index_stale",
-                "docs-search index is not current and --no-refresh was requested",
+                cache_state_error_code(&status.index.state),
+                format!(
+                    "docs-search index is {} and --no-refresh was requested",
+                    status.index.state
+                ),
             ));
         }
         _ => {
-            build_index(repo_root, IndexOptions::default())?;
+            crate::docs::index::ensure_auto_refresh_allowed(repo_root)?;
+            build_index(repo_root, refresh_options)?;
             current_generation(repo_root)?.ok_or_else(|| {
                 PulseError::validation(
                     "docs_index_missing",
@@ -116,14 +153,29 @@ pub fn search_docs(
 
     // Reclassify against current status after any refresh.
     let state = classify_against(repo_root, &generation.state.fingerprint)?.0;
-    if state != CacheState::Current && options.no_refresh {
-        return Err(PulseError::validation(
-            "docs_index_stale",
-            "docs-search index is stale",
-        ));
+    if state != CacheState::Current {
+        if options.no_refresh {
+            return Err(PulseError::validation(
+                cache_state_error_code(state.as_str()),
+                format!("docs-search index is {}", state.as_str()),
+            ));
+        }
+        crate::docs::index::ensure_auto_refresh_allowed(repo_root)?;
+        build_index(repo_root, refresh_options)?;
     }
+    let generation = current_generation(repo_root)?.ok_or_else(|| {
+        PulseError::validation(
+            "docs_index_missing",
+            "docs-search generation missing after refresh",
+        )
+    })?;
     let limit = options.limit.unwrap_or(8).clamp(1, 50);
-    let hits = query_lexical(&generation.tantivy_path, &terms, limit * 4)?;
+    let applicability = applicability_by_document(repo_root, &options)?;
+    let hits = query_lexical(
+        &generation.tantivy_path,
+        &sanitized_terms(&terms),
+        limit * 4,
+    )?;
     let sections = load_section_records(&generation.sections_path)?;
     let sections_by_ref = sections
         .into_iter()
@@ -158,8 +210,19 @@ pub fn search_docs(
             lifecycle: section.lifecycle.clone(),
             owner: section.owner.clone(),
             kind: section.kind.clone(),
-            matched_fields: hit.matched_fields,
-            applicability_reasons: Vec::new(),
+            matched_fields: if options.explain {
+                hit.matched_fields
+            } else {
+                Vec::new()
+            },
+            applicability_reasons: if options.explain || options.work.is_some() {
+                applicability
+                    .get(&section.document_id)
+                    .cloned()
+                    .unwrap_or_default()
+            } else {
+                Vec::new()
+            },
         });
         if results.len() >= limit {
             break;
@@ -175,6 +238,11 @@ pub fn search_docs(
             state: CacheState::Current.as_str().to_string(),
             mode: "lexical".to_string(),
         },
+        work: options.work.as_ref().map(|work| SearchWorkInfo {
+            id: work.work_id.clone(),
+            revision: work.revision,
+            documentation_posture: serde_variant(&work.posture),
+        }),
         results,
         budget: SearchBudget {
             result_limit: limit,
@@ -184,7 +252,51 @@ pub fn search_docs(
     })
 }
 
+fn applicability_by_document(
+    repo_root: &Path,
+    options: &SearchOptions,
+) -> PulseResult<BTreeMap<String, Vec<String>>> {
+    let Some(work) = &options.work else {
+        return Ok(BTreeMap::new());
+    };
+    let registry = load_registry(repo_root)?;
+    let resolver = FsContentResolver::new(repo_root);
+    let report = applicable_docs(
+        work,
+        &registry,
+        &resolver,
+        ApplicabilityOptions {
+            include_draft: options.include_draft,
+            include_stale: options.include_stale,
+        },
+    )?;
+    let mut out = BTreeMap::new();
+    for doc in report.required {
+        out.insert(doc.id, doc.reasons);
+    }
+    for doc in report.optional {
+        out.entry(doc.id).or_insert(doc.reasons);
+    }
+    Ok(out)
+}
+
+fn sanitized_terms(terms: &[String]) -> Vec<String> {
+    terms
+        .iter()
+        .map(|term| term.replace(':', " "))
+        .flat_map(|term| tokenize_query_text(&term))
+        .collect()
+}
+
 fn matches_filters(section: &SectionRecord, options: &SearchOptions) -> bool {
+    if !options.include_draft && section.authority == "draft" {
+        return false;
+    }
+    if !options.include_stale
+        && (section.lifecycle == "stale" || section.lifecycle == "suspected_stale")
+    {
+        return false;
+    }
     if let Some(kind) = options.kind {
         if section.kind != serde_variant(&kind) {
             return false;
@@ -200,6 +312,17 @@ fn matches_filters(section: &SectionRecord, options: &SearchOptions) -> bool {
             return false;
         }
     }
+    if let Some(work) = &options.work {
+        let required: BTreeSet<_> = work.required_documents.iter().collect();
+        let scope_match = section.domains.iter().any(|d| work.domains.contains(d))
+            || work
+                .paths
+                .iter()
+                .any(|path| section.path.starts_with(path.trim_end_matches("/**")));
+        if !required.contains(&section.document_id) && !scope_match {
+            return false;
+        }
+    }
     true
 }
 
@@ -209,13 +332,43 @@ fn snippet_for_section(
     terms: &[String],
 ) -> PulseResult<String> {
     let path = repo_root.join(crate::storage::safe_repo_relative(&section.path)?);
-    let text = std::fs::read_to_string(&path).map_err(|e| PulseError::io(&path, e))?;
+    let bytes = std::fs::read(&path).map_err(|e| PulseError::io(&path, e))?;
+    if hash_bytes(&bytes) != section.document_content_hash {
+        return indexed_snippet(section, terms);
+    }
+    let text = String::from_utf8(bytes).map_err(|e| {
+        PulseError::validation(
+            "utf8_error",
+            format!("document is not valid UTF-8 for snippet: {e}"),
+        )
+    })?;
+    snippet_from_text(&text, section, terms)
+}
+
+fn indexed_snippet(section: &SectionRecord, terms: &[String]) -> PulseResult<String> {
+    let text = [
+        section.heading_path.join(" "),
+        section.summary.clone(),
+        section.aliases.join(" "),
+        section.domains.join(" "),
+    ]
+    .into_iter()
+    .filter(|part| !part.trim().is_empty())
+    .collect::<Vec<_>>()
+    .join("\n");
+    snippet_from_text(&text, section, terms)
+}
+
+fn snippet_from_text(text: &str, section: &SectionRecord, terms: &[String]) -> PulseResult<String> {
     let mut lines = Vec::new();
     for (idx, line) in text.lines().enumerate() {
         let line_no = (idx as u32) + 1;
         if line_no >= section.range.start_line && line_no <= section.range.end_line {
             lines.push(line.to_string());
         }
+    }
+    if lines.is_empty() {
+        lines = text.lines().map(str::to_string).collect();
     }
     let start_idx = lines
         .iter()
@@ -226,11 +379,19 @@ fn snippet_for_section(
         .unwrap_or(0);
     let begin = start_idx.saturating_sub(1);
     let end = (start_idx + 4).min(lines.len());
-    let mut snippet = lines[begin..end].join("\n");
-    if snippet.len() > SNIPPET_MAX_BYTES {
-        snippet.truncate(SNIPPET_MAX_BYTES);
+    let snippet = lines[begin..end].join("\n");
+    Ok(truncate_utf8(&snippet, SNIPPET_MAX_BYTES))
+}
+
+fn truncate_utf8(text: &str, max_bytes: usize) -> String {
+    if text.len() <= max_bytes {
+        return text.to_string();
     }
-    Ok(snippet)
+    let mut end = max_bytes;
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    text[..end].to_string()
 }
 
 fn serde_variant<T: Serialize>(value: &T) -> String {

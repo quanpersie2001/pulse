@@ -8,9 +8,9 @@ use serde_json::json;
 use crate::canonical_json::{hash_bytes, hash_value, to_canonical_bytes};
 use crate::docs::cache::{
     builds_dir, classify_against, cleanup_generations, generation_dir,
-    generation_id_for_fingerprint, publish_current, CacheState, DocsSearchWriteLock, EngineState,
-    ExtractorState, GenerationCounts, GenerationDocument, GenerationState, ValidatedGeneration,
-    CACHE_SCHEMA_VERSION,
+    generation_id_for_fingerprint, publish_current, read_current, validate_generation, CacheState,
+    DocsSearchWriteLock, EngineState, ExtractorState, GenerationCounts, GenerationDocument,
+    GenerationState, ValidatedGeneration, CACHE_SCHEMA_VERSION,
 };
 use crate::docs::lexical::{
     build_index_with_bodies as build_tantivy_index, load_section_records, write_sections_jsonl,
@@ -22,7 +22,7 @@ use crate::docs::policy::{eligible_documents, ResolvedRetrieval, RetrievalEligib
 use crate::docs::projection::{
     check_projections, projection_targets, render_area_index, render_root_index,
 };
-use crate::docs::registry::{load_registry, registry_fingerprint};
+use crate::docs::registry::{load_registry, registry_fingerprint, registry_path};
 use crate::docs::section::{SectionRecord, ANCHOR_VERSION, CHUNK_VERSION, EXTRACTOR_VERSION};
 use crate::storage::atomic::atomic_replace;
 use crate::storage::paths::resolve_repo_relative;
@@ -37,6 +37,10 @@ pub struct IndexOptions {
     pub changed: bool,
     pub rebuild: bool,
     pub check: bool,
+    #[serde(skip)]
+    pub include_draft: bool,
+    #[serde(skip)]
+    pub include_stale: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -111,25 +115,12 @@ struct Capture {
 
 pub fn build_index(repo_root: &Path, opts: IndexOptions) -> PulseResult<IndexBuildReport> {
     if opts.check {
-        return index_status(repo_root);
+        return check_index(repo_root);
     }
     let _cache_lock = DocsSearchWriteLock::acquire(repo_root)?;
     cleanup_generations(repo_root, true)?;
-    let capture = capture_inputs(repo_root)?;
-    if !within_auto_refresh_limits(
-        &capture.config,
-        capture.docs.len(),
-        capture.total_source_bytes,
-    ) {
-        return Err(PulseError::validation(
-            "docs_index_refresh_required",
-            format!(
-                "eligible docs/source bytes exceed auto-refresh limits: docs={}, bytes={}",
-                capture.docs.len(),
-                capture.total_source_bytes
-            ),
-        ));
-    }
+    let capture =
+        capture_inputs_with_options(repo_root, retrieval_options_from_index_options(opts))?;
     let previous = crate::docs::cache::open_reader_generation(repo_root)
         .ok()
         .flatten();
@@ -165,7 +156,8 @@ pub fn build_index(repo_root: &Path, opts: IndexOptions) -> PulseResult<IndexBui
         .map_err(|e| PulseError::io(build_dir.join("state.json"), e))?;
 
     // Revalidate cheap inputs before publishing.
-    let latest = capture_inputs(repo_root)?;
+    let latest =
+        capture_inputs_with_options(repo_root, retrieval_options_from_index_options(opts))?;
     if latest.fingerprint != capture.fingerprint {
         return Err(PulseError::validation(
             "docs_index_inputs_changed",
@@ -174,12 +166,31 @@ pub fn build_index(repo_root: &Path, opts: IndexOptions) -> PulseResult<IndexBui
     }
 
     let final_dir = generation_dir(repo_root, &generation_id);
-    if final_dir.exists() {
-        fs::remove_dir_all(&final_dir).map_err(|e| PulseError::io(&final_dir, e))?;
+    let current = read_current(repo_root);
+    let current_final_is_valid = final_dir.exists()
+        && current.as_deref() == Some(&generation_id)
+        && validate_generation(repo_root, &generation_id).is_ok();
+    if current_final_is_valid {
+        fs::remove_dir_all(&build_dir).map_err(|e| PulseError::io(&build_dir, e))?;
+    } else {
+        if final_dir.exists() {
+            let replace_dir = final_dir.with_file_name(format!(
+                ".{}-replace-{}",
+                generation_id,
+                std::process::id()
+            ));
+            if replace_dir.exists() {
+                fs::remove_dir_all(&replace_dir).map_err(|e| PulseError::io(&replace_dir, e))?;
+            }
+            fs::rename(&final_dir, &replace_dir).map_err(|e| PulseError::io(&replace_dir, e))?;
+            fs::rename(&build_dir, &final_dir).map_err(|e| PulseError::io(&final_dir, e))?;
+            fs::remove_dir_all(&replace_dir).map_err(|e| PulseError::io(&replace_dir, e))?;
+        } else {
+            fs::create_dir_all(final_dir.parent().expect("generation parent"))
+                .map_err(|e| PulseError::io(final_dir.parent().unwrap(), e))?;
+            fs::rename(&build_dir, &final_dir).map_err(|e| PulseError::io(&final_dir, e))?;
+        }
     }
-    fs::create_dir_all(final_dir.parent().expect("generation parent"))
-        .map_err(|e| PulseError::io(final_dir.parent().unwrap(), e))?;
-    fs::rename(&build_dir, &final_dir).map_err(|e| PulseError::io(&final_dir, e))?;
     publish_current(repo_root, &generation_id)?;
     write_projections(repo_root, &capture.registry)?;
     cleanup_generations(repo_root, true)?;
@@ -195,13 +206,30 @@ pub fn build_index(repo_root: &Path, opts: IndexOptions) -> PulseResult<IndexBui
 }
 
 pub fn index_status(repo_root: &Path) -> PulseResult<IndexStatusReport> {
-    let capture = capture_inputs(repo_root)?;
+    let capture = capture_inputs_read_only(repo_root)?;
     let (state, valid) = classify_against(repo_root, &capture.fingerprint)?;
     let proj = projection_state_string(repo_root, &capture.registry)?;
     let generation = valid.as_ref().map(|v| &v.state);
     Ok(report_from_state(
         "ok", state, generation, &capture, 0, proj,
     ))
+}
+
+pub fn check_index(repo_root: &Path) -> PulseResult<IndexStatusReport> {
+    let report = index_status(repo_root)?;
+    if report.index.state != "current" {
+        return Err(PulseError::validation(
+            cache_state_error_code(&report.index.state),
+            format!("docs-search cache is {}", report.index.state),
+        ));
+    }
+    if report.projections.state != "current" {
+        return Err(PulseError::validation(
+            projection_state_error_code(&report.projections.state),
+            format!("docs projections are {}", report.projections.state),
+        ));
+    }
+    Ok(report)
 }
 
 pub fn retrieval_fingerprint(
@@ -262,15 +290,72 @@ pub fn current_generation(repo_root: &Path) -> PulseResult<Option<ValidatedGener
     crate::docs::cache::open_reader_generation(repo_root)
 }
 
-fn capture_inputs(repo_root: &Path) -> PulseResult<Capture> {
+pub fn index_status_with_options(
+    repo_root: &Path,
+    options: RetrievalEligibilityOptions,
+) -> PulseResult<IndexStatusReport> {
+    let registry: DocsRegistry = crate::storage::read_json(&registry_path(repo_root))?;
+    let capture = capture_from_registry(repo_root, registry, options)?;
+    let (state, valid) = classify_against(repo_root, &capture.fingerprint)?;
+    let proj = projection_state_string(repo_root, &capture.registry)?;
+    let generation = valid.as_ref().map(|v| &v.state);
+    Ok(report_from_state(
+        "ok", state, generation, &capture, 0, proj,
+    ))
+}
+
+pub fn ensure_auto_refresh_allowed(repo_root: &Path) -> PulseResult<()> {
+    let capture = capture_inputs_read_only(repo_root)?;
+    if within_auto_refresh_limits(
+        &capture.config,
+        capture.docs.len(),
+        capture.total_source_bytes,
+    ) {
+        Ok(())
+    } else {
+        Err(PulseError::validation(
+            "docs_index_refresh_required",
+            format!(
+                "eligible docs/source bytes exceed auto-refresh limits: docs={}, bytes={}",
+                capture.docs.len(),
+                capture.total_source_bytes
+            ),
+        ))
+    }
+}
+
+fn capture_inputs_read_only(repo_root: &Path) -> PulseResult<Capture> {
+    let registry: DocsRegistry = crate::storage::read_json(&registry_path(repo_root))?;
+    capture_from_registry(repo_root, registry, RetrievalEligibilityOptions::default())
+}
+
+fn capture_inputs_with_options(
+    repo_root: &Path,
+    options: RetrievalEligibilityOptions,
+) -> PulseResult<Capture> {
     // `load_registry` already acquires the repository write guard and recovers
     // prepared canonical transactions. Do not acquire `WriteGuard` here again:
     // the lock is exclusive and non-reentrant, and doing so deadlocks tests and
     // real index builds in the same process.
     let registry = load_registry(repo_root)?;
+    capture_from_registry(repo_root, registry, options)
+}
+
+fn retrieval_options_from_index_options(opts: IndexOptions) -> RetrievalEligibilityOptions {
+    RetrievalEligibilityOptions {
+        include_draft: opts.include_draft,
+        include_stale: opts.include_stale,
+    }
+}
+
+fn capture_from_registry(
+    repo_root: &Path,
+    registry: DocsRegistry,
+    options: RetrievalEligibilityOptions,
+) -> PulseResult<Capture> {
     let registry_fingerprint = registry_fingerprint(&registry)?;
     let config = registry.retrieval_config();
-    let eligible = eligible_documents(&registry, RetrievalEligibilityOptions::default());
+    let eligible = eligible_documents(&registry, options);
     let mut docs = Vec::new();
     let mut content_hashes = BTreeMap::new();
     let mut total_source_bytes = 0u64;
@@ -278,7 +363,10 @@ fn capture_inputs(repo_root: &Path) -> PulseResult<Capture> {
         let full = resolve_repo_relative(repo_root, &doc.path)?;
         let bytes = fs::read(&full).map_err(|e| PulseError::io(&full, e))?;
         if std::str::from_utf8(&bytes).is_err() {
-            continue;
+            return Err(PulseError::validation(
+                "docs_document_not_utf8",
+                format!("eligible indexed document is not UTF-8: {}", doc.path),
+            ));
         }
         let content_hash = hash_bytes(&bytes);
         total_source_bytes += bytes.len() as u64;
@@ -535,6 +623,25 @@ fn projection_state_string(
             .map(|target| target.path)
             .collect(),
     })
+}
+
+pub fn cache_state_error_code(state: &str) -> &'static str {
+    match state {
+        "missing" => "docs_index_missing",
+        "stale" => "docs_index_stale",
+        "corrupt" => "docs_index_corrupt",
+        "incompatible" => "docs_index_incompatible",
+        _ => "docs_index_not_current",
+    }
+}
+
+fn projection_state_error_code(state: &str) -> &'static str {
+    match state {
+        "missing" => "docs_index_projection_missing",
+        "stale" => "docs_index_projection_stale",
+        "conflict" => "docs_index_projection_conflict",
+        _ => "docs_index_projection_not_current",
+    }
 }
 
 fn report_from_state(

@@ -1,20 +1,36 @@
-use pulse::canonical_json::to_canonical_bytes;
+use chrono::{TimeZone, Utc};
+use pulse::canonical_json::{hash_bytes, to_canonical_bytes};
 use pulse::docs::{
-    docs_tree, get_docs, search_docs, DocsRegistry, DocumentAuthority, DocumentKind,
-    DocumentLifecycle, DocumentRecord, DocumentScope, GetOptions, RetrievalConfig, ReviewPolicy,
-    SearchOptions, TreeOptions,
+    build_index, docs_tree, get_docs, read_current, search_docs, validate_generation, DocsRegistry,
+    DocumentAuthority, DocumentKind, DocumentLifecycle, DocumentRecord, DocumentScope, GetOptions,
+    RetrievalConfig, RetrievalScope, ReviewPolicy, SearchOptions, TreeOptions,
+    WorkDocumentationContext,
 };
+use pulse::graph::node::DocumentationImpactPosture;
+use pulse::graph::store::{DocumentationImpactUpdate, OperationContext};
+use pulse::id::WorkKind;
+use pulse::JsonGraphStore;
 use std::fs;
 use std::process::Command;
 
 fn doc(id: &str, path: &str, summary: &str, domains: Vec<&str>) -> DocumentRecord {
+    let authority = if id.contains("DRAFT") {
+        DocumentAuthority::Draft
+    } else {
+        DocumentAuthority::Approved
+    };
+    let lifecycle = if id.contains("STALE") {
+        DocumentLifecycle::Stale
+    } else {
+        DocumentLifecycle::Current
+    };
     DocumentRecord {
         id: id.to_string(),
         revision: 1,
         path: path.to_string(),
         kind: DocumentKind::Domain,
-        authority: DocumentAuthority::Approved,
-        lifecycle: DocumentLifecycle::Current,
+        authority,
+        lifecycle,
         owner: "team:docs".to_string(),
         summary: summary.to_string(),
         aliases: vec!["refresh-token".to_string()],
@@ -31,6 +47,13 @@ fn doc(id: &str, path: &str, summary: &str, domains: Vec<&str>) -> DocumentRecor
     }
 }
 
+fn ctx(actor: &str, sec: i64) -> OperationContext {
+    OperationContext {
+        actor: actor.to_string(),
+        now: Utc.timestamp_opt(sec, 0).unwrap(),
+    }
+}
+
 fn setup_repo() -> tempfile::TempDir {
     let tmp = tempfile::tempdir().unwrap();
     let repo = tmp.path();
@@ -44,12 +67,29 @@ fn setup_repo() -> tempfile::TempDir {
     )
     .unwrap();
     fs::create_dir_all(repo.join("docs/domain")).unwrap();
+    fs::create_dir_all(repo.join("docs/authentication")).unwrap();
     fs::write(repo.join("docs/domain/token.md"), b"# Token Lifecycle\n\nPreamble text.\n\n## Expired Tokens\n\nTokenExpired means the refresh-token expired in v2.1.\n").unwrap();
     fs::write(
         repo.join("docs/domain/other.md"),
         b"# Other\n\n## Misc\n\nNothing about auth.\n",
     )
     .unwrap();
+    fs::write(
+        repo.join("docs/authentication/guide.md"),
+        b"# Auth Guide\n\nAuthentication scope guide.\n",
+    )
+    .unwrap();
+    fs::write(
+        repo.join("docs/domain/draft.md"),
+        b"# Draft Docs\n\n## Draft\n\nDraftFlag lexical hit.\n",
+    )
+    .unwrap();
+    fs::write(
+        repo.join("docs/domain/stale.md"),
+        b"# Stale Docs\n\n## Stale\n\nStaleFlag lexical hit.\n",
+    )
+    .unwrap();
+    fs::write(repo.join("AGENTS.md"), b"# Repo Map\n").unwrap();
     let registry = DocsRegistry {
         schema_version: 2,
         revision: 1,
@@ -62,13 +102,49 @@ fn setup_repo() -> tempfile::TempDir {
                 vec!["authentication"],
             ),
             doc(
+                "DOC-AUTH-GUIDE",
+                "docs/authentication/guide.md",
+                "Authentication guide",
+                vec!["authentication"],
+            ),
+            doc(
+                "DOC-DRAFT-DOMAIN",
+                "docs/domain/draft.md",
+                "DraftFlag documentation",
+                vec!["drafts"],
+            ),
+            doc(
                 "DOC-OTHER-DOMAIN",
                 "docs/domain/other.md",
                 "Other",
                 vec!["other"],
             ),
+            DocumentRecord {
+                kind: DocumentKind::RepositoryMap,
+                path: "AGENTS.md".to_string(),
+                summary: "Repository map".to_string(),
+                ..doc(
+                    "DOC-REPO-MAP",
+                    "AGENTS.md",
+                    "Repository map",
+                    vec!["repository"],
+                )
+            },
+            doc(
+                "DOC-STALE-DOMAIN",
+                "docs/domain/stale.md",
+                "StaleFlag documentation",
+                vec!["stale"],
+            ),
         ],
-        retrieval: Some(RetrievalConfig::defaults()),
+        retrieval: Some(RetrievalConfig {
+            scopes: vec![RetrievalScope {
+                path: "docs/domain".to_string(),
+                summary: "Domain documentation area".to_string(),
+                materialize_index: None,
+            }],
+            ..RetrievalConfig::defaults()
+        }),
     };
     fs::write(
         repo.join(".pulse/docs/registry.json"),
@@ -111,7 +187,7 @@ fn search_filters_by_domain_and_no_refresh_errors_when_missing() {
         },
     )
     .unwrap_err();
-    assert_eq!(err.code(), "docs_index_stale");
+    assert_eq!(err.code(), "docs_index_missing");
     let report = search_docs(
         tmp.path(),
         "TokenExpired",
@@ -135,6 +211,229 @@ impl DomainsContains for pulse::docs::SearchResult {
         self.applicability_reasons.iter().any(|r| r == domain)
             || self.document_id == "DOC-AUTH-DOMAIN"
     }
+}
+
+#[test]
+fn search_auto_refresh_respects_cost_guard_but_explicit_index_does_not() {
+    let tmp = setup_repo();
+    let repo = tmp.path();
+    let mut registry: DocsRegistry =
+        pulse::storage::read_json(&repo.join(".pulse/docs/registry.json")).unwrap();
+    let mut config = registry.retrieval_config();
+    config.auto_refresh_max_documents = 1;
+    registry.retrieval = Some(config);
+    fs::write(
+        repo.join(".pulse/docs/registry.json"),
+        to_canonical_bytes(&registry).unwrap(),
+    )
+    .unwrap();
+
+    let err = search_docs(repo, "TokenExpired", SearchOptions::default()).unwrap_err();
+    assert_eq!(err.code(), "docs_index_refresh_required");
+
+    let indexed = build_index(repo, pulse::docs::IndexOptions::default()).unwrap();
+    assert_eq!(indexed.index.state, "current");
+}
+
+#[test]
+fn search_refreshes_corrupt_current_and_no_refresh_reports_typed_error() {
+    let tmp = setup_repo();
+    let repo = tmp.path();
+    build_index(repo, pulse::docs::IndexOptions::default()).unwrap();
+    fs::write(
+        repo.join(".pulse/cache/docs-search/CURRENT"),
+        b"not-a-generation\n",
+    )
+    .unwrap();
+
+    let err = search_docs(
+        repo,
+        "TokenExpired",
+        SearchOptions {
+            no_refresh: true,
+            ..SearchOptions::default()
+        },
+    )
+    .unwrap_err();
+    assert_eq!(err.code(), "docs_index_corrupt");
+
+    let report = search_docs(repo, "TokenExpired", SearchOptions::default()).unwrap();
+    assert_eq!(report.index.state, "current");
+}
+
+#[test]
+fn search_refreshes_corrupt_generation_and_no_refresh_reports_typed_error() {
+    let tmp = setup_repo();
+    let repo = tmp.path();
+    build_index(repo, pulse::docs::IndexOptions::default()).unwrap();
+    let current = read_current(repo).unwrap();
+    let generation = validate_generation(repo, &current).unwrap();
+    fs::write(&generation.sections_path, b"corrupt sections\n").unwrap();
+
+    let err = search_docs(
+        repo,
+        "TokenExpired",
+        SearchOptions {
+            no_refresh: true,
+            ..SearchOptions::default()
+        },
+    )
+    .unwrap_err();
+    assert_eq!(err.code(), "docs_index_corrupt");
+
+    let report = search_docs(repo, "TokenExpired", SearchOptions::default()).unwrap();
+    assert_eq!(report.index.state, "current");
+    assert!(!report.results.is_empty());
+}
+
+#[test]
+fn search_no_refresh_reports_incompatible_generation() {
+    let tmp = setup_repo();
+    let repo = tmp.path();
+    build_index(repo, pulse::docs::IndexOptions::default()).unwrap();
+    let current = read_current(repo).unwrap();
+    let generation = validate_generation(repo, &current).unwrap();
+    let mut state: serde_json::Value =
+        pulse::storage::read_json(&generation.generation_path.join("state.json")).unwrap();
+    state["schema_version"] = serde_json::json!(999);
+    fs::write(
+        generation.generation_path.join("state.json"),
+        to_canonical_bytes(&state).unwrap(),
+    )
+    .unwrap();
+
+    let err = search_docs(
+        repo,
+        "TokenExpired",
+        SearchOptions {
+            no_refresh: true,
+            ..SearchOptions::default()
+        },
+    )
+    .unwrap_err();
+    assert_eq!(err.code(), "docs_index_incompatible");
+}
+
+#[test]
+fn search_preserves_identifiers_explain_and_plain_text_query() {
+    let tmp = setup_repo();
+    let report = search_docs(
+        tmp.path(),
+        "document_id:DOC-OTHER-DOMAIN OR TokenExpired refresh-token v2.1 pulse docs index",
+        SearchOptions {
+            explain: true,
+            ..SearchOptions::default()
+        },
+    )
+    .unwrap();
+    assert!(report
+        .results
+        .iter()
+        .any(|hit| hit.document_id == "DOC-AUTH-DOMAIN"));
+    assert!(report
+        .results
+        .iter()
+        .any(|hit| !hit.matched_fields.is_empty()));
+}
+
+#[test]
+fn search_include_flags_and_work_reasons_populate_without_fake_required_hits() {
+    let tmp = setup_repo();
+    assert!(
+        search_docs(tmp.path(), "DraftFlag", SearchOptions::default())
+            .unwrap()
+            .results
+            .is_empty()
+    );
+    assert!(search_docs(
+        tmp.path(),
+        "DraftFlag",
+        SearchOptions {
+            include_draft: true,
+            ..SearchOptions::default()
+        },
+    )
+    .unwrap()
+    .results
+    .iter()
+    .any(|hit| hit.document_id == "DOC-DRAFT-DOMAIN"));
+    assert!(search_docs(
+        tmp.path(),
+        "StaleFlag",
+        SearchOptions {
+            include_stale: true,
+            ..SearchOptions::default()
+        },
+    )
+    .unwrap()
+    .results
+    .iter()
+    .any(|hit| hit.document_id == "DOC-STALE-DOMAIN"));
+
+    let work = WorkDocumentationContext {
+        work_id: "TK-SEARCH".to_string(),
+        revision: 7,
+        posture: pulse::docs::DocumentationPosture::Required,
+        required_documents: vec!["DOC-AUTH-DOMAIN".to_string()],
+        paths: vec![],
+        domains: vec!["authentication".to_string()],
+        labels: vec![],
+    };
+    let report = search_docs(
+        tmp.path(),
+        "TokenExpired",
+        SearchOptions {
+            explain: true,
+            work: Some(work),
+            ..SearchOptions::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(report.work.as_ref().unwrap().id, "TK-SEARCH");
+    let hit = report
+        .results
+        .iter()
+        .find(|hit| hit.document_id == "DOC-AUTH-DOMAIN")
+        .unwrap();
+    assert!(hit
+        .applicability_reasons
+        .iter()
+        .any(|reason| reason == "explicit_required_document"));
+
+    let missing_required = WorkDocumentationContext {
+        work_id: "TK-MISSING".to_string(),
+        revision: 1,
+        posture: pulse::docs::DocumentationPosture::Required,
+        required_documents: vec!["DOC-OTHER-DOMAIN".to_string()],
+        paths: vec![],
+        domains: vec![],
+        labels: vec![],
+    };
+    let no_fake = search_docs(
+        tmp.path(),
+        "TokenExpired",
+        SearchOptions {
+            work: Some(missing_required),
+            ..SearchOptions::default()
+        },
+    )
+    .unwrap();
+    assert!(no_fake.results.is_empty());
+}
+
+#[test]
+fn search_snippets_are_utf8_safe_and_fallback_when_doc_modified() {
+    let tmp = setup_repo();
+    search_docs(tmp.path(), "TokenExpired", SearchOptions::default()).unwrap();
+    let unicode = format!(
+        "# Token Lifecycle\n\n## Expired Tokens\n\n{} TokenExpired\n",
+        "é".repeat(600)
+    );
+    fs::write(tmp.path().join("docs/domain/token.md"), unicode).unwrap();
+    let report = search_docs(tmp.path(), "TokenExpired", SearchOptions::default()).unwrap();
+    let snippet = &report.results[0].snippet;
+    assert!(snippet.is_char_boundary(snippet.len()));
+    assert!(!snippet.is_empty());
 }
 
 #[test]
@@ -163,6 +462,72 @@ fn get_document_outline_and_section_body_are_bounded_and_current() {
 }
 
 #[test]
+fn get_supports_chunk_refs_path_ranges_exact_hashes_and_safe_truncation() {
+    let tmp = setup_repo();
+    let bytes = fs::read(tmp.path().join("docs/domain/token.md")).unwrap();
+    let range = get_docs(
+        tmp.path(),
+        "docs/domain/token.md:5-7",
+        GetOptions::default(),
+    )
+    .unwrap();
+    let section = range.section.unwrap();
+    assert_eq!(section.range.start_line, 5);
+    assert_eq!(section.range.end_line, 7);
+    let expected = hash_bytes(&bytes["# Token Lifecycle\n\nPreamble text.\n\n".len()..]);
+    assert_eq!(section.section_content_hash, expected);
+    assert!(range.body.unwrap().contains("TokenExpired"));
+
+    let invalid = get_docs(
+        tmp.path(),
+        "docs/domain/token.md:7-5",
+        GetOptions::default(),
+    )
+    .unwrap_err();
+    assert_eq!(invalid.code(), "docs_get_range_invalid");
+    let unregistered = get_docs(
+        tmp.path(),
+        "docs/domain/missing.md:1-1",
+        GetOptions::default(),
+    )
+    .unwrap_err();
+    assert_eq!(unregistered.code(), "docs_anchor_stale");
+
+    fs::write(
+        tmp.path().join("docs/domain/token.md"),
+        b"# Token Lifecycle\n\n## Expired Tokens\n\nabc\xE2\x82\xACdef\n",
+    )
+    .unwrap();
+    let truncated = get_docs(
+        tmp.path(),
+        "DOC-AUTH-DOMAIN#expired-tokens",
+        GetOptions {
+            max_bytes: Some(17),
+            ..GetOptions::default()
+        },
+    )
+    .unwrap();
+    assert!(truncated.truncated);
+    assert!(truncated.body.unwrap().is_char_boundary(17));
+
+    let mut big = String::from("# Token Lifecycle\n");
+    for line in 0..170 {
+        big.push_str(&format!("line {line}\n"));
+    }
+    fs::write(tmp.path().join("docs/domain/token.md"), big).unwrap();
+    let chunk = get_docs(
+        tmp.path(),
+        "DOC-AUTH-DOMAIN#token-lifecycle@2",
+        GetOptions::default(),
+    )
+    .unwrap();
+    assert_eq!(
+        chunk.section.unwrap().section_ref,
+        "DOC-AUTH-DOMAIN#token-lifecycle@2"
+    );
+}
+
+#[test]
 fn stale_section_ref_errors_clearly() {
     let tmp = setup_repo();
     let err = get_docs(
@@ -172,6 +537,9 @@ fn stale_section_ref_errors_clearly() {
     )
     .unwrap_err();
     assert_eq!(err.code(), "docs_anchor_stale");
+    let message = err.to_string();
+    assert!(message.contains("current_document"));
+    assert!(message.contains("candidate_section_refs"));
 }
 
 #[test]
@@ -179,7 +547,31 @@ fn tree_works_without_cache_from_registry_only() {
     let tmp = setup_repo();
     let tree = docs_tree(tmp.path(), None, TreeOptions::default()).unwrap();
     assert_eq!(tree.root, "docs");
-    assert!(tree.nodes.iter().any(|node| node.path == "docs/domain"));
+    let domain = tree
+        .nodes
+        .iter()
+        .find(|node| node.path == "docs/domain")
+        .unwrap();
+    assert_eq!(domain.summary.as_deref(), Some("Domain documentation area"));
+}
+
+#[test]
+fn tree_path_safety_uses_component_boundaries_and_excludes_virtual_docs_for_subtrees() {
+    let tmp = setup_repo();
+    let auth = docs_tree(tmp.path(), Some("docs/auth"), TreeOptions::default()).unwrap();
+    assert!(
+        auth.nodes.is_empty(),
+        "docs/auth must not match docs/authentication"
+    );
+    let subtree = docs_tree(tmp.path(), Some("docs/domain"), TreeOptions::default()).unwrap();
+    assert!(subtree.nodes.iter().all(|node| node.path != "Repository"));
+    assert!(subtree
+        .nodes
+        .iter()
+        .flat_map(|node| node.children.iter())
+        .all(|node| node.path.starts_with("docs/domain/")));
+    let err = docs_tree(tmp.path(), Some("../docs"), TreeOptions::default()).unwrap_err();
+    assert_eq!(err.code(), "docs_tree_path_invalid");
 }
 
 #[test]
@@ -210,12 +602,55 @@ fn cli_index_status_search_get_tree_json_contracts() {
         run(&["docs", "status", "--json"])["index"]["state"],
         "current"
     );
-    assert!(
-        !run(&["docs", "search", "TokenExpired", "--json"])["results"]
-            .as_array()
-            .unwrap()
-            .is_empty()
-    );
+    assert!(!run(&[
+        "docs",
+        "search",
+        "TokenExpired",
+        "--include-draft",
+        "--include-stale",
+        "--explain",
+        "--json"
+    ])["results"]
+        .as_array()
+        .unwrap()
+        .is_empty());
+
+    let store = JsonGraphStore::new(tmp.path());
+    let ticket = store
+        .create_node_with_context(WorkKind::Ticket, "Search docs".into(), ctx("test", 1))
+        .unwrap()
+        .value;
+    store
+        .update_documentation_impact_with_context(
+            &ticket.id,
+            ticket.revision,
+            DocumentationImpactUpdate {
+                posture: DocumentationImpactPosture::Required,
+                rationale: None,
+                required_documents: vec!["DOC-AUTH-DOMAIN".to_string()],
+                deferred_to: vec![],
+                paths: vec![],
+                domains: vec!["authentication".to_string()],
+                labels: vec![],
+            },
+            ctx("test", 2),
+        )
+        .unwrap();
+    let worked = run(&[
+        "docs",
+        "search",
+        "TokenExpired",
+        "--work",
+        &ticket.id,
+        "--explain",
+        "--json",
+    ]);
+    assert_eq!(worked["work"]["id"], ticket.id);
+    assert!(worked["results"][0]["applicability_reasons"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|reason| reason == "explicit_required_document"));
     assert_eq!(
         run(&["docs", "get", "DOC-AUTH-DOMAIN#expired-tokens", "--json"])["section"]["section_ref"],
         "DOC-AUTH-DOMAIN#expired-tokens"

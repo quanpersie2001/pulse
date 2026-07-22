@@ -131,7 +131,7 @@ pub struct SectionRecord {
     pub document_revision: u64,
     /// Repository-relative canonical document path.
     pub path: String,
-    /// Resolved document title (first H1, or empty with a fallback warning).
+    /// Resolved document title (first H1, or normalized file stem fallback).
     pub document_title: String,
     /// Visible heading text (cleaned of inline Markdown formatting).
     pub heading: String,

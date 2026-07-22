@@ -29,11 +29,15 @@ pub use eval::{
     RetrievalEvalExpected, RetrievalEvalFilters, RetrievalEvalFixture, RetrievalEvalReport,
     RetrievalEvalResult,
 };
-pub use get::{get_docs, GetDocument, GetOptions, GetOutlineItem, GetReport, GetSection};
+pub use get::{
+    get_docs, stale_anchor_report, GetDocument, GetOptions, GetOutlineItem, GetReport, GetSection,
+    StaleAnchorReport,
+};
 pub use index::{
-    build_index, current_generation, index_status, retrieval_fingerprint,
-    within_auto_refresh_limits, IndexBuildReport, IndexDocumentsReport, IndexOptions,
-    IndexRegistryReport, IndexStateReport, IndexStatusReport, ProjectionReport,
+    build_index, cache_state_error_code, check_index, current_generation,
+    ensure_auto_refresh_allowed, index_status, retrieval_fingerprint, within_auto_refresh_limits,
+    IndexBuildReport, IndexDocumentsReport, IndexOptions, IndexRegistryReport, IndexStateReport,
+    IndexStatusReport, ProjectionReport,
 };
 pub use lexical::{
     build_index as build_lexical_index, build_index_with_bodies,
@@ -67,6 +71,7 @@ pub use registry::{
 };
 pub use search::{
     search_docs, SearchBudget, SearchIndexInfo, SearchOptions, SearchReport, SearchResult,
+    SearchWorkInfo,
 };
 pub use section::{
     anchor_for_heading, chunk_ref_string, dedupe_anchors, section_ref, ChunkRef, SectionRange,

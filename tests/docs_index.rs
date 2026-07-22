@@ -1,6 +1,6 @@
 use pulse::canonical_json::to_canonical_bytes;
 use pulse::docs::{
-    build_index, current_generation, index_status, query_lexical_index, read_current,
+    build_index, check_index, current_generation, index_status, query_lexical_index, read_current,
     validate_generation, DocsRegistry, DocumentAuthority, DocumentKind, DocumentLifecycle,
     DocumentRecord, DocumentRetrieval, DocumentScope, IndexOptions, RetrievalConfig, ReviewPolicy,
 };
@@ -77,7 +77,11 @@ fn initial_build_publishes_complete_generation_and_queryable_tantivy_index() {
     assert!(gen.tantivy_path.exists());
     let hits = query_lexical_index(
         &gen.tantivy_path,
-        &["refresh-token".to_string(), "v2.1".to_string()],
+        &[
+            "refresh-token".to_string(),
+            "v2.1".to_string(),
+            "docs/domain/token.md".to_string(),
+        ],
         5,
     )
     .unwrap();
@@ -169,7 +173,7 @@ fn corrupt_sections_is_detected_and_rebuild_repairs_cache_without_touching_docs(
 }
 
 #[test]
-fn auto_refresh_cost_guard_errors_above_limits() {
+fn explicit_index_ignores_auto_refresh_cost_guard() {
     let tmp = setup_repo();
     let repo = tmp.path();
     let mut registry: DocsRegistry =
@@ -188,8 +192,57 @@ fn auto_refresh_cost_guard_errors_above_limits() {
         to_canonical_bytes(&registry).unwrap(),
     )
     .unwrap();
+    let report = build_index(repo, IndexOptions::default()).unwrap();
+    assert_eq!(report.index.state, "current");
+    assert_eq!(report.documents.eligible, 2);
+}
+
+#[test]
+fn index_check_is_read_only_and_errors_when_cache_or_projections_missing() {
+    let tmp = setup_repo();
+    let repo = tmp.path();
+    let err = check_index(repo).unwrap_err();
+    assert_eq!(err.code(), "docs_index_missing");
+    assert!(!repo.join(".pulse/cache/docs-search/CURRENT").exists());
+    assert!(!repo.join("docs/_index.md").exists());
+
+    build_index(repo, IndexOptions::default()).unwrap();
+    fs::remove_file(repo.join("docs/_index.md")).unwrap();
+    let err = check_index(repo).unwrap_err();
+    assert_eq!(err.code(), "docs_index_projection_missing");
+    assert!(!repo.join("docs/_index.md").exists());
+}
+
+#[test]
+fn non_utf8_eligible_document_is_hard_error() {
+    let tmp = setup_repo();
+    let repo = tmp.path();
+    fs::write(repo.join("docs/domain/token.md"), [0xff, 0xfe, b'\n']).unwrap();
     let err = build_index(repo, IndexOptions::default()).unwrap_err();
-    assert_eq!(err.code(), "docs_index_refresh_required");
+    assert_eq!(err.code(), "docs_document_not_utf8");
+}
+
+#[test]
+fn rebuilding_same_fingerprint_preserves_current_generation_dir() {
+    let tmp = setup_repo();
+    let repo = tmp.path();
+    build_index(repo, IndexOptions::default()).unwrap();
+    let current = read_current(repo).unwrap();
+    let sentinel = repo
+        .join(".pulse/cache/docs-search/generations")
+        .join(&current)
+        .join("reader-sentinel");
+    fs::write(&sentinel, b"reader-visible").unwrap();
+    build_index(
+        repo,
+        IndexOptions {
+            rebuild: true,
+            ..IndexOptions::default()
+        },
+    )
+    .unwrap();
+    assert!(sentinel.exists());
+    assert_eq!(read_current(repo).unwrap(), current);
 }
 
 #[test]
