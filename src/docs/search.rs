@@ -9,9 +9,7 @@ use crate::docs::cache::{classify_against, CacheState};
 use crate::docs::index::{
     build_index, cache_state_error_code, current_generation, index_status, IndexOptions,
 };
-use crate::docs::lexical::{
-    load_section_records, query as query_lexical, tokenize_query_text, SNIPPET_MAX_BYTES,
-};
+use crate::docs::lexical::{query as query_lexical, tokenize_query_text, SNIPPET_MAX_BYTES};
 use crate::docs::model::{DocumentAuthority, DocumentKind, WorkDocumentationContext};
 use crate::docs::registry::load_registry;
 use crate::docs::section::{SectionRange, SectionRecord};
@@ -178,28 +176,20 @@ pub fn search_docs(
         &sanitized_terms(&terms),
         limit * 4,
     )?;
-    let sections = load_section_records(&generation.sections_path)?;
-    let sections_by_ref = sections
-        .into_iter()
-        .map(|section| (section.section_ref.clone(), section))
-        .collect::<BTreeMap<_, _>>();
     let mut candidates = Vec::new();
     for hit in hits {
-        let Some(section) = sections_by_ref.get(&hit.section_ref) else {
-            continue;
-        };
-        if !matches_filters(section, &options) {
+        if !matches_filters(&hit.section, &options) {
             continue;
         }
         let applicability_reasons = applicability
-            .get(&section.document_id)
+            .get(&hit.section.document_id)
             .cloned()
             .unwrap_or_default();
         let score = adjusted_score(hit.score, &applicability_reasons, options.work.is_some());
         candidates.push(SearchCandidate {
             score,
             lexical_score: hit.score,
-            section: section.clone(),
+            section: hit.section,
             matched_fields: hit.matched_fields,
             applicability_reasons,
         });

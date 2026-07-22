@@ -34,3 +34,7 @@ uuid = { version = "1", features = ["v4", "serde"] }
 
 [dev-dependencies]
 tempfile = "3"
+
+[[bench]]
+name = "docs_retrieval"
+harness = false

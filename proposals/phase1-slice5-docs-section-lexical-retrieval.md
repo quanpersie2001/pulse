@@ -30,6 +30,37 @@ Implementation hiện tại chưa có:
 
 Vì vậy slice kế tiếp đúng theo Phase 1 roadmap và handoff của Slice 4 là **Documentation Section Extraction + Lexical Retrieval**. Slice này không mở shaping/readiness, không tạo `work packet` đầy đủ và không thêm semantic/vector retrieval.
 
+### Verification update after implementation
+
+Slice 5 now includes a release-mode benchmark harness at
+`benches/docs_retrieval.rs` and a three-platform GitHub Actions matrix in
+`.github/workflows/rust.yml`.
+
+The reference benchmark uses deterministic corpora of 10, 100 and 1,000
+registered Markdown documents. It measures:
+
+- cold full index build;
+- warm lexical query against an already-openable immutable generation;
+- one-document incremental refresh, including extraction reuse and publication;
+- docs-search cache bytes divided by indexed UTF-8 source bytes.
+
+A local macOS arm64 reference run on Rust 1.97.1 produced the following
+1,000-document p95 results:
+
+| Metric | Result | Slice target |
+|---|---:|---:|
+| Warm lexical search | 5.171 ms | <= 100 ms |
+| Cold full build | 1,345.397 ms | <= 10,000 ms |
+| One-document incremental refresh | 1,355.408 ms | <= 2,000 ms |
+| Cache/source ratio | 0.863x | <= 3.0x |
+
+The machine-readable local report is written under
+`target/benchmark-evidence/` and remains disposable. CI uploads the Linux
+reference report as a workflow artifact. Linux, macOS and Windows each run
+format, Clippy, all Rust targets and the benchmark smoke profile. Platform
+proof is considered complete only when that matrix passes on the commit under
+review; a local run proves only the reported macOS arm64 environment.
+
 ## Vị trí của slice trong Pulse Reboot
 
 Slice 4 trả lời:

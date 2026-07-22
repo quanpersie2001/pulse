@@ -76,6 +76,7 @@ pub struct LexicalHit {
     pub section_ref: String,
     pub score: f64,
     pub matched_fields: Vec<String>,
+    pub section: SectionRecord,
 }
 
 pub fn open_index(tantivy_dir: &Path) -> PulseResult<Index> {
@@ -169,10 +170,23 @@ pub fn query(tantivy_dir: &Path, terms: &[String], limit: usize) -> PulseResult<
         let Some(section_ref) = section_ref_value.as_str().map(str::to_string) else {
             continue;
         };
+        let Some(record_value) = retrieved.get_first(fields.record_json) else {
+            continue;
+        };
+        let Some(record_json) = record_value.as_str() else {
+            continue;
+        };
+        let section = serde_json::from_str(record_json).map_err(|e| {
+            PulseError::validation(
+                "docs_index_corrupt",
+                format!("stored section record is invalid: {e}"),
+            )
+        })?;
         hits.push(LexicalHit {
             section_ref,
             score: score as f64,
             matched_fields: matched_fields(&retrieved, &fields, &normalized),
+            section,
         });
     }
     hits.sort_by(|a, b| {
