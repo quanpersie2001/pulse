@@ -39,6 +39,30 @@ fn write_json(path: &std::path::Path, value: &impl serde::Serialize) {
     fs::write(path, bytes).unwrap();
 }
 
+fn event_count(repo: &std::path::Path, event_type: &str, subject: &str) -> usize {
+    let events = repo.join(".pulse/events");
+    if !events.exists() {
+        return 0;
+    }
+    let mut count = 0;
+    for day in fs::read_dir(events).unwrap() {
+        let day = day.unwrap().path();
+        if !day.is_dir() {
+            continue;
+        }
+        for entry in fs::read_dir(day).unwrap() {
+            let value: serde_json::Value =
+                serde_json::from_slice(&fs::read(entry.unwrap().path()).unwrap()).unwrap();
+            if value.get("event_type").and_then(|value| value.as_str()) == Some(event_type)
+                && value.get("subject").and_then(|value| value.as_str()) == Some(subject)
+            {
+                count += 1;
+            }
+        }
+    }
+    count
+}
+
 fn make_shaping_receipt(
     id: &str,
     node: &pulse::graph::node::Node,
@@ -385,4 +409,63 @@ fn dirty_bound_content_reports_unsupported_source_snapshot() {
         .bindings
         .reason_codes
         .contains(&"dirty_source_unsupported".to_string()));
+}
+
+#[test]
+fn artifact_put_recovery_rolls_forward_content_metadata_and_event() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path();
+    pulse::evidence::bootstrap(repo).unwrap();
+    let input = repo.join("artifact-recover.txt");
+    fs::write(&input, b"artifact recovery notes").unwrap();
+    let expected_digest = hash_bytes(&fs::read(&input).unwrap());
+    let manifest = pulse::evidence::manifest::load(repo).unwrap();
+
+    let err = pulse::evidence::put_artifact(
+        repo,
+        Some(TransactionFailpoint::AfterMultiTargetFirst),
+        &input,
+        "review_notes".to_string(),
+        Some("text/plain".to_string()),
+        None,
+        manifest.max_artifact_bytes,
+    )
+    .unwrap_err();
+    assert_eq!(err.code(), "failpoint");
+
+    let hex = expected_digest.strip_prefix("sha256:").unwrap();
+    let artifact_dir = repo
+        .join(".pulse/evidence/artifacts/sha256")
+        .join(&hex[0..2])
+        .join(hex);
+    assert!(artifact_dir.join("content").exists());
+    assert!(!artifact_dir.join("metadata.json").exists());
+    assert_eq!(
+        event_count(repo, "evidence.artifact.recorded", &expected_digest),
+        0
+    );
+
+    recover_prepared_transactions(repo).unwrap();
+    assert!(artifact_dir.join("metadata.json").exists());
+    pulse::evidence::verify_artifact(repo, &expected_digest).unwrap();
+    assert_eq!(
+        event_count(repo, "evidence.artifact.recorded", &expected_digest),
+        1
+    );
+
+    let retry = pulse::evidence::put_artifact(
+        repo,
+        None,
+        &input,
+        "review_notes".to_string(),
+        Some("text/plain".to_string()),
+        None,
+        manifest.max_artifact_bytes,
+    )
+    .unwrap();
+    assert_eq!(retry.code, "unchanged");
+    assert_eq!(
+        event_count(repo, "evidence.artifact.recorded", &expected_digest),
+        1
+    );
 }

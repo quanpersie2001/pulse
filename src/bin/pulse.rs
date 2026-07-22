@@ -8,7 +8,7 @@ use pulse::evidence::model::{ReceiptKind, ReceiptResult};
 use pulse::graph::edge::EdgeType;
 use pulse::graph::lifecycle::TransitionReason;
 use pulse::graph::node::{DocumentationImpactPosture, NodeStatus};
-use pulse::graph::store::{DocumentationImpactUpdate, SupersessionAssertion, SupersessionTarget};
+use pulse::graph::store::{DocumentationImpactUpdate, SupersessionTarget};
 use pulse::id::WorkKind;
 #[cfg(debug_assertions)]
 use pulse::storage::transaction::TransactionFailpoint;
@@ -350,7 +350,7 @@ enum WorkCommand {
         expected_revision: u64,
         #[arg(long)]
         reason: String,
-        #[arg(long)]
+        #[arg(long, hide = true)]
         assertion: Option<PathBuf>,
         #[arg(long)]
         reconciliation_receipt: Option<String>,
@@ -722,37 +722,26 @@ fn run(store: JsonGraphStore, command: Command) -> Result<(), PulseError> {
                         ));
                     }
                 };
-                let out = match (reconciliation_receipt, assertion) {
-                    (Some(receipt_id), None) => store.supersede_work_with_receipt(
-                        &old_id,
-                        target,
-                        expected_revision,
-                        reason,
-                        receipt_id,
-                        actor,
-                    )?,
-                    (None, Some(assertion)) => {
-                        let assertion_bytes = std::fs::read(&assertion)
-                            .map_err(|error| PulseError::io(assertion.clone(), error))?;
-                        let assertion: SupersessionAssertion =
-                            serde_json::from_slice(&assertion_bytes)
-                                .map_err(|error| PulseError::json(assertion.clone(), error))?;
-                        store.supersede_work(
-                            &old_id,
-                            target,
-                            expected_revision,
-                            reason,
-                            assertion,
-                            actor,
-                        )?
-                    }
-                    _ => {
-                        return Err(PulseError::validation(
-                            "supersession_receipt_mismatch",
-                            "choose exactly one of --reconciliation-receipt or --assertion",
-                        ))
-                    }
+                if assertion.is_some() {
+                    return Err(PulseError::validation(
+                        "inline_supersession_assertion_unsupported",
+                        "new supersession CLI requires --reconciliation-receipt; inline --assertion is retained only for historical/library compatibility",
+                    ));
+                }
+                let Some(receipt_id) = reconciliation_receipt else {
+                    return Err(PulseError::validation(
+                        "supersession_receipt_required",
+                        "new supersession CLI requires --reconciliation-receipt",
+                    ));
                 };
+                let out = store.supersede_work_with_receipt(
+                    &old_id,
+                    target,
+                    expected_revision,
+                    reason,
+                    receipt_id,
+                    actor,
+                )?;
                 render(json, &out, format!("{} {}", out.code, out.value.node.id))
             }
             WorkCommand::Transition {

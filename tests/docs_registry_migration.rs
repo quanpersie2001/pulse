@@ -354,8 +354,8 @@ fn r29b_pre_migration_v1_receipt_verifies_identically_after_migration() {
         payload: ReceiptPayload::DocumentationValidation(DocumentationValidationPayload {
             payload_version: 1,
             documents: vec![DocumentationValidationDocument {
-                document_id: "DOC-AUTH-DOMAIN".to_string(),
-                document_revision: 1,
+                proposed_document_id: Some("DOC-AUTH-DOMAIN".to_string()),
+                document_revision: Some(1),
                 path: path.clone(),
                 content_hash: hash.clone(),
                 result: ReceiptResult::Passed,

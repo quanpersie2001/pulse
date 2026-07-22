@@ -131,3 +131,84 @@ fn cli_missing_reason_fails_before_commit() {
     assert_eq!(shown["node"]["status"], "draft");
     assert_eq!(shown["node"]["revision"], 1);
 }
+
+#[test]
+fn cli_supersede_requires_receipt_and_rejects_inline_assertion() {
+    let repo = tempfile::tempdir().unwrap();
+    let old = run_ok(
+        &repo,
+        &[
+            "work", "create", "--kind", "ticket", "--title", "Old", "--json",
+        ],
+    );
+    let old_id = old["value"]["id"].as_str().unwrap().to_string();
+    let replacement = run_ok(
+        &repo,
+        &[
+            "work",
+            "create",
+            "--kind",
+            "story",
+            "--title",
+            "Replacement",
+            "--json",
+        ],
+    );
+    let replacement_id = replacement["value"]["id"].as_str().unwrap().to_string();
+
+    let missing = run_err(
+        &repo,
+        &[
+            "work",
+            "supersede",
+            &old_id,
+            "--by",
+            &replacement_id,
+            "--expected-revision",
+            "1",
+            "--reason",
+            "absorbed",
+            "--actor",
+            "human:test",
+            "--json",
+        ],
+    );
+    assert_eq!(missing["code"], "supersession_receipt_required");
+
+    let assertion = repo.path().join("assertion.json");
+    std::fs::write(
+        &assertion,
+        r#"{
+  "assertion_version": 1,
+  "asserted_by": "human:test",
+  "source_revisions": ["TK-001@1"],
+  "claim": "absorbed",
+  "references": ["ST-001"]
+}"#,
+    )
+    .unwrap();
+    let inline = run_err(
+        &repo,
+        &[
+            "work",
+            "supersede",
+            &old_id,
+            "--by",
+            &replacement_id,
+            "--expected-revision",
+            "1",
+            "--reason",
+            "absorbed",
+            "--assertion",
+            assertion.to_str().unwrap(),
+            "--actor",
+            "human:test",
+            "--json",
+        ],
+    );
+    assert_eq!(inline["code"], "inline_supersession_assertion_unsupported");
+
+    let shown = run_ok(&repo, &["work", "show", &old_id, "--json"]);
+    assert_eq!(shown["node"]["status"], "draft");
+    assert_eq!(shown["node"]["revision"], 1);
+}
