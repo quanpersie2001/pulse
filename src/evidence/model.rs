@@ -201,8 +201,19 @@ pub struct DocumentationValidationPayload {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct DocumentationValidationDocument {
-    pub document_id: String,
-    pub document_revision: u64,
+    /// Historical Slice 3 payload v1 carried an optional, untrusted document ID
+    /// proposal. It remains parseable for immutable receipts but is not treated
+    /// as canonical registry identity.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub proposed_document_id: Option<String>,
+    /// Canonical Slice 4+ registry document identity. Required for payload v2;
+    /// optional in the Rust model so legacy v1 receipts can deserialize.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub document_id: Option<String>,
+    /// Receipt-bound document record revision. Required for payload v2;
+    /// optional in the Rust model so legacy v1 receipts can deserialize.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub document_revision: Option<u64>,
     pub path: String,
     pub content_hash: String,
     pub result: ReceiptResult,

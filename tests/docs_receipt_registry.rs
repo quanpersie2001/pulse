@@ -52,13 +52,47 @@ fn setup_repo(
     fs::create_dir_all(full.parent().unwrap()).unwrap();
     fs::write(&full, b"# Token lifecycle\n").unwrap();
     let hash = hash_bytes(&fs::read(&full).unwrap());
-    fs::create_dir_all(repo.join(".pulse/docs")).unwrap();
+    fs::create_dir_all(repo.join(".pulse/docs/schemas")).unwrap();
+    let schema: serde_json::Value = serde_json::from_str(pulse::docs::DOCUMENT_SCHEMA).unwrap();
+    fs::write(
+        repo.join(".pulse/docs/schemas/document.schema.json"),
+        to_canonical_bytes(&schema).unwrap(),
+    )
+    .unwrap();
+    let mut documents = vec![document(
+        doc_id,
+        revision,
+        &path,
+        lifecycle,
+        policy,
+        if lifecycle == DocumentLifecycle::Superseded {
+            Some("DOC-AUTH-REPLACEMENT".to_string())
+        } else {
+            None
+        },
+    )];
+    if lifecycle == DocumentLifecycle::Superseded {
+        let replacement_path = "docs/domain/token-lifecycle-replacement.md";
+        fs::write(
+            repo.join(replacement_path),
+            b"# Replacement token lifecycle\n",
+        )
+        .unwrap();
+        documents.push(document(
+            "DOC-AUTH-REPLACEMENT",
+            1,
+            replacement_path,
+            DocumentLifecycle::Current,
+            policy,
+            None,
+        ));
+    }
     let registry = DocsRegistry {
-        schema_version: 1,
+        schema_version: 2,
         revision: 1,
         repository_id: manifest.repository_id.clone(),
-        documents: vec![document(doc_id, revision, &path, lifecycle, policy, None)],
-        retrieval: None,
+        documents,
+        retrieval: Some(pulse::docs::RetrievalConfig::defaults()),
     };
     write_json(&repo.join(".pulse/docs/registry.json"), &registry);
     let source_commit = commit_all(repo);
@@ -99,6 +133,17 @@ fn receipt(
     doc: DocumentationValidationDocument,
     checks: Vec<DocumentCheck>,
 ) -> ReceiptEnvelope {
+    receipt_with_payload_version(id, repository_id, source_commit, doc, checks, 2)
+}
+
+fn receipt_with_payload_version(
+    id: &str,
+    repository_id: &str,
+    source_commit: &str,
+    doc: DocumentationValidationDocument,
+    checks: Vec<DocumentCheck>,
+    payload_version: u32,
+) -> ReceiptEnvelope {
     let path = doc.path.clone();
     let content_hash = doc.content_hash.clone();
     ReceiptEnvelope {
@@ -131,7 +176,7 @@ fn receipt(
             graph_fingerprint_observed: None,
         },
         payload: ReceiptPayload::DocumentationValidation(DocumentationValidationPayload {
-            payload_version: 1,
+            payload_version,
             documents: vec![doc],
             checks,
         }),
@@ -146,8 +191,24 @@ fn record(repo: &std::path::Path, receipt: &ReceiptEnvelope) {
 
 fn receipt_doc(id: &str, revision: u64, path: &str, hash: &str) -> DocumentationValidationDocument {
     DocumentationValidationDocument {
-        document_id: id.to_string(),
-        document_revision: revision,
+        proposed_document_id: None,
+        document_id: Some(id.to_string()),
+        document_revision: Some(revision),
+        path: path.to_string(),
+        content_hash: hash.to_string(),
+        result: ReceiptResult::Passed,
+    }
+}
+
+fn legacy_receipt_doc(
+    proposed_id: Option<&str>,
+    path: &str,
+    hash: &str,
+) -> DocumentationValidationDocument {
+    DocumentationValidationDocument {
+        proposed_document_id: proposed_id.map(str::to_string),
+        document_id: None,
+        document_revision: None,
         path: path.to_string(),
         content_hash: hash.to_string(),
         result: ReceiptResult::Passed,
@@ -155,7 +216,7 @@ fn receipt_doc(id: &str, revision: u64, path: &str, hash: &str) -> Documentation
 }
 
 #[test]
-fn v1_current_registry_match_is_gate_eligible_for_none_policy() {
+fn v2_current_registry_match_is_gate_eligible_for_none_policy() {
     let (tmp, repository_id, source_commit, hash) = setup_repo(
         "DOC-AUTH-DOMAIN",
         3,
@@ -187,7 +248,7 @@ fn v1_current_registry_match_is_gate_eligible_for_none_policy() {
 }
 
 #[test]
-fn wrong_id_for_same_path_reports_registry_mismatch() {
+fn v2_wrong_id_for_same_path_reports_registry_mismatch() {
     let (tmp, repository_id, source_commit, hash) = setup_repo(
         "DOC-AUTH-DOMAIN",
         3,
@@ -219,7 +280,7 @@ fn wrong_id_for_same_path_reports_registry_mismatch() {
 }
 
 #[test]
-fn document_revision_stale_is_current_verification_mismatch() {
+fn v2_document_revision_stale_is_current_verification_mismatch() {
     let (tmp, repository_id, source_commit, hash) = setup_repo(
         "DOC-AUTH-DOMAIN",
         4,
@@ -247,6 +308,47 @@ fn document_revision_stale_is_current_verification_mismatch() {
         .registry
         .reason_codes
         .contains(&"document_receipt_revision_stale".to_string()));
+    assert!(!report.gate_eligible);
+}
+
+#[test]
+fn v2_wrong_path_for_same_id_reports_registry_mismatch() {
+    let (tmp, repository_id, _source_commit, hash) = setup_repo(
+        "DOC-AUTH-DOMAIN",
+        3,
+        DocumentLifecycle::Current,
+        ReviewPolicy::None,
+    );
+    let repo = tmp.path();
+    fs::create_dir_all(repo.join("docs/domain")).unwrap();
+    fs::write(
+        repo.join("docs/domain/wrong.md"),
+        b"# Wrong token lifecycle\n",
+    )
+    .unwrap();
+    let wrong_hash = hash_bytes(&fs::read(repo.join("docs/domain/wrong.md")).unwrap());
+    let source_commit = commit_all(repo);
+    let rcpt = receipt(
+        "rcpt_01J00000000000000000000109",
+        &repository_id,
+        &source_commit,
+        receipt_doc("DOC-AUTH-DOMAIN", 3, "docs/domain/wrong.md", &wrong_hash),
+        vec![],
+    );
+    record(repo, &rcpt);
+
+    let report = pulse::evidence::verify_receipt(repo, &rcpt.id, true, None).unwrap();
+    assert_eq!(report.integrity.status, "valid");
+    assert_eq!(report.registry.status, "mismatch");
+    assert!(report
+        .registry
+        .reason_codes
+        .contains(&"document_receipt_registry_mismatch".to_string()));
+    assert!(!report
+        .registry
+        .reason_codes
+        .contains(&"document_receipt_revision_stale".to_string()));
+    assert_ne!(hash, wrong_hash);
     assert!(!report.gate_eligible);
 }
 
@@ -283,7 +385,7 @@ fn retired_superseded_and_stale_receipts_remain_historical_integrity_valid_but_i
 }
 
 #[test]
-fn documentation_payload_version_two_is_unsupported_pre_public_reset() {
+fn v1_historical_receipt_compatibility_survives_registry_v2_migration() {
     let (tmp, repository_id, source_commit, hash) = setup_repo(
         "DOC-AUTH-DOMAIN",
         3,
@@ -291,8 +393,43 @@ fn documentation_payload_version_two_is_unsupported_pre_public_reset() {
         ReviewPolicy::None,
     );
     let repo = tmp.path();
-    let mut rcpt = receipt(
+    let rcpt = receipt_with_payload_version(
         "rcpt_01J00000000000000000000106",
+        &repository_id,
+        &source_commit,
+        legacy_receipt_doc(
+            Some("DOC-AUTH-DOMAIN"),
+            "docs/domain/token-lifecycle.md",
+            &hash,
+        ),
+        vec![],
+        1,
+    );
+    record(repo, &rcpt);
+
+    let report = pulse::evidence::verify_receipt(repo, &rcpt.id, true, None).unwrap();
+    assert_eq!(report.integrity.status, "valid");
+    assert_eq!(report.bindings.status, "current");
+    assert_eq!(report.registry.status, "legacy_unresolved");
+    assert_eq!(
+        report.registry.reason_codes,
+        vec!["legacy_unresolved".to_string()]
+    );
+    assert_eq!(report.policy.status, "structurally_satisfied");
+    assert!(!report.gate_eligible);
+}
+
+#[test]
+fn future_documentation_payload_version_three_is_rejected() {
+    let (tmp, repository_id, source_commit, hash) = setup_repo(
+        "DOC-AUTH-DOMAIN",
+        3,
+        DocumentLifecycle::Current,
+        ReviewPolicy::None,
+    );
+    let repo = tmp.path();
+    let rcpt = receipt_with_payload_version(
+        "rcpt_01J00000000000000000000108",
         &repository_id,
         &source_commit,
         receipt_doc(
@@ -302,11 +439,8 @@ fn documentation_payload_version_two_is_unsupported_pre_public_reset() {
             &hash,
         ),
         vec![],
+        3,
     );
-    let ReceiptPayload::DocumentationValidation(payload) = &mut rcpt.payload else {
-        panic!("documentation payload expected");
-    };
-    payload.payload_version = 2;
     let file = repo.join(format!("{}.json", rcpt.id));
     write_json(&file, &rcpt);
 

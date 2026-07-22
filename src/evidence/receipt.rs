@@ -13,7 +13,7 @@ use crate::storage::WriteGuard;
 use crate::{PulseError, Result};
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::json;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -437,7 +437,7 @@ fn validate_docs_payload(
     receipt: &ReceiptEnvelope,
     p: &DocumentationValidationPayload,
 ) -> Result<()> {
-    if p.payload_version != 1 {
+    if !matches!(p.payload_version, 1 | 2) {
         return Err(PulseError::validation(
             "receipt_version_unsupported",
             "payload",
@@ -450,12 +450,10 @@ fn validate_docs_payload(
         ));
     }
     for doc in &p.documents {
-        validate_document_id(&doc.document_id)?;
-        if doc.document_revision == 0 {
-            return Err(PulseError::validation(
-                "document_receipt_registry_mismatch",
-                "document revision must be positive",
-            ));
+        match p.payload_version {
+            1 => validate_legacy_document_identity(doc)?,
+            2 => validate_registry_document_identity(doc)?,
+            _ => unreachable!("payload version checked above"),
         }
         validate_document_entry_common(receipt, &doc.path, &doc.content_hash)?;
     }
@@ -471,6 +469,52 @@ fn validate_docs_payload(
                 return Err(PulseError::validation("artifact_not_found", d.clone()));
             }
         }
+    }
+    Ok(())
+}
+
+fn validate_legacy_document_identity(doc: &DocumentationValidationDocument) -> Result<()> {
+    if let Some(id) = doc
+        .document_id
+        .as_deref()
+        .or(doc.proposed_document_id.as_deref())
+    {
+        validate_document_id(id)?;
+    }
+    if matches!(doc.document_revision, Some(0)) {
+        return Err(PulseError::validation(
+            "document_receipt_registry_mismatch",
+            "document revision must be positive when present",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_registry_document_identity(doc: &DocumentationValidationDocument) -> Result<()> {
+    let document_id = doc.document_id.as_deref().ok_or_else(|| {
+        PulseError::validation(
+            "document_receipt_registry_mismatch",
+            "document_id is required for documentation payload v2",
+        )
+    })?;
+    validate_document_id(document_id)?;
+    let Some(document_revision) = doc.document_revision else {
+        return Err(PulseError::validation(
+            "document_receipt_registry_mismatch",
+            "document_revision is required for documentation payload v2",
+        ));
+    };
+    if document_revision == 0 {
+        return Err(PulseError::validation(
+            "document_receipt_registry_mismatch",
+            "document revision must be positive",
+        ));
+    }
+    if doc.proposed_document_id.is_some() {
+        return Err(PulseError::validation(
+            "receipt_schema_invalid",
+            "payload v2 uses document_id, not proposed_document_id",
+        ));
     }
     Ok(())
 }
@@ -531,7 +575,7 @@ fn docs_validation_dimensions(
         ));
     };
 
-    if payload.payload_version != 1 {
+    if !matches!(payload.payload_version, 1 | 2) {
         return Ok((
             ValidationDimension {
                 status: "invalid".to_string(),
@@ -552,40 +596,26 @@ fn docs_validation_dimensions(
     let registry = load_docs_registry(repo_root)?;
     let mut registry_codes = Vec::new();
     let mut policies = BTreeSet::new();
+    if payload.payload_version == 1 {
+        registry_codes.push("legacy_unresolved".to_string());
+    }
     for doc in &payload.documents {
-        let Some(record) = registry
-            .documents
-            .iter()
-            .find(|candidate| candidate.id == doc.document_id)
-        else {
-            registry_codes.push("document_receipt_registry_mismatch".to_string());
-            if registry
-                .documents
-                .iter()
-                .any(|candidate| candidate.path == doc.path)
-            {
-                registry_codes.push("document_receipt_wrong_id_for_path".to_string());
-            }
-            continue;
-        };
-        policies.insert(record.review_policy.clone());
-        if record.path != doc.path {
-            registry_codes.push("document_receipt_registry_mismatch".to_string());
-        }
-        if record.revision != doc.document_revision {
-            registry_codes.push("document_receipt_revision_stale".to_string());
-        }
-        match current_content_hash(repo_root, &record.path)? {
-            Some(current_hash) if current_hash == doc.content_hash => {}
-            Some(_) => registry_codes.push("document_receipt_registry_mismatch".to_string()),
-            None => registry_codes.push("document_receipt_registry_mismatch".to_string()),
-        }
-        match record.lifecycle.as_str() {
-            "current" => {}
-            "retired" => registry_codes.push("document_retired".to_string()),
-            "superseded" => registry_codes.push("document_superseded".to_string()),
-            "stale" | "suspected_stale" => registry_codes.push("document_stale".to_string()),
-            _ => registry_codes.push("document_receipt_registry_mismatch".to_string()),
+        match payload.payload_version {
+            1 => validate_legacy_doc_against_registry(
+                repo_root,
+                &registry,
+                doc,
+                &mut registry_codes,
+                &mut policies,
+            )?,
+            2 => validate_v2_doc_against_registry(
+                repo_root,
+                &registry,
+                doc,
+                &mut registry_codes,
+                &mut policies,
+            )?,
+            _ => unreachable!("payload version checked above"),
         }
     }
     registry_codes.sort();
@@ -625,11 +655,16 @@ fn docs_validation_dimensions(
     authorization_codes.sort();
     authorization_codes.dedup();
 
+    let legacy_only = registry_codes
+        .iter()
+        .all(|code| code == "legacy_unresolved");
     let registry_dimension = ValidationDimension {
         status: if !current {
             "not_checked"
         } else if registry_codes.is_empty() {
             "current"
+        } else if legacy_only {
+            "legacy_unresolved"
         } else if registry_codes.iter().any(|code| {
             matches!(
                 code.as_str(),
@@ -669,6 +704,100 @@ fn docs_validation_dimensions(
         authorization_dimension,
         gate_eligible,
     ))
+}
+
+fn validate_legacy_doc_against_registry(
+    repo_root: &Path,
+    registry: &DocsRegistrySnapshot,
+    doc: &DocumentationValidationDocument,
+    registry_codes: &mut Vec<String>,
+    policies: &mut BTreeSet<String>,
+) -> Result<()> {
+    let matches = registry
+        .documents
+        .iter()
+        .filter(|candidate| candidate.path == doc.path)
+        .collect::<Vec<_>>();
+    if matches.len() == 1 {
+        let record = matches[0];
+        policies.insert(record.review_policy.clone());
+        if let Some(id) = doc.document_id.as_deref() {
+            if id != record.id {
+                registry_codes.push("document_receipt_registry_mismatch".to_string());
+                registry_codes.push("document_receipt_wrong_id_for_path".to_string());
+            }
+        }
+        if let Some(id) = doc.proposed_document_id.as_deref() {
+            if id != record.id {
+                registry_codes.push("document_receipt_registry_mismatch".to_string());
+                registry_codes.push("document_receipt_wrong_id_for_path".to_string());
+            }
+        }
+        if let Some(revision) = doc.document_revision {
+            if record.revision != revision {
+                registry_codes.push("document_receipt_revision_stale".to_string());
+            }
+        }
+        validate_registry_record_state(repo_root, record, doc, registry_codes)?;
+    }
+    Ok(())
+}
+
+fn validate_v2_doc_against_registry(
+    repo_root: &Path,
+    registry: &DocsRegistrySnapshot,
+    doc: &DocumentationValidationDocument,
+    registry_codes: &mut Vec<String>,
+    policies: &mut BTreeSet<String>,
+) -> Result<()> {
+    let Some(document_id) = doc.document_id.as_deref() else {
+        registry_codes.push("document_receipt_registry_mismatch".to_string());
+        return Ok(());
+    };
+    let Some(record) = registry
+        .documents
+        .iter()
+        .find(|candidate| candidate.id == document_id)
+    else {
+        registry_codes.push("document_receipt_registry_mismatch".to_string());
+        if registry
+            .documents
+            .iter()
+            .any(|candidate| candidate.path == doc.path)
+        {
+            registry_codes.push("document_receipt_wrong_id_for_path".to_string());
+        }
+        return Ok(());
+    };
+    policies.insert(record.review_policy.clone());
+    if record.path != doc.path {
+        registry_codes.push("document_receipt_registry_mismatch".to_string());
+    }
+    if doc.document_revision != Some(record.revision) {
+        registry_codes.push("document_receipt_revision_stale".to_string());
+    }
+    validate_registry_record_state(repo_root, record, doc, registry_codes)
+}
+
+fn validate_registry_record_state(
+    repo_root: &Path,
+    record: &DocsRegistryDocument,
+    doc: &DocumentationValidationDocument,
+    registry_codes: &mut Vec<String>,
+) -> Result<()> {
+    match current_content_hash(repo_root, &record.path)? {
+        Some(current_hash) if current_hash == doc.content_hash => {}
+        Some(_) => registry_codes.push("document_receipt_registry_mismatch".to_string()),
+        None => registry_codes.push("document_receipt_registry_mismatch".to_string()),
+    }
+    match record.lifecycle.as_str() {
+        "current" => {}
+        "retired" => registry_codes.push("document_retired".to_string()),
+        "superseded" => registry_codes.push("document_superseded".to_string()),
+        "stale" | "suspected_stale" => registry_codes.push("document_stale".to_string()),
+        _ => registry_codes.push("document_receipt_registry_mismatch".to_string()),
+    }
+    Ok(())
 }
 
 fn binding_staleness(
@@ -751,15 +880,12 @@ fn code_to_static(code: &str) -> &'static str {
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone)]
 struct DocsRegistrySnapshot {
-    #[serde(default)]
     documents: Vec<DocsRegistryDocument>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone)]
 struct DocsRegistryDocument {
     id: String,
     revision: u64,
@@ -769,51 +895,39 @@ struct DocsRegistryDocument {
 }
 
 fn load_docs_registry(repo_root: &Path) -> Result<DocsRegistrySnapshot> {
-    let path = repo_root.join(".pulse/docs/registry.json");
-    if !path.exists() {
-        return Ok(DocsRegistrySnapshot {
-            documents: Vec::new(),
-        });
-    }
-    let value: Value = crate::storage::read_json(&path)?;
-    let documents_value = value
-        .get("documents")
-        .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default();
-    let mut documents = Vec::new();
-    for document in documents_value {
-        documents.push(DocsRegistryDocument {
-            id: required_string(&document, "id")?,
-            revision: document
-                .get("revision")
-                .and_then(Value::as_u64)
-                .ok_or_else(|| {
-                    PulseError::validation("docs_registry_schema_invalid", "missing revision")
-                })?,
-            path: required_string(&document, "path")?,
-            lifecycle: optional_string(&document, "lifecycle", "current")?,
-            review_policy: optional_string(&document, "review_policy", "none")?,
-        });
-    }
-    Ok(DocsRegistrySnapshot { documents })
+    let registry = crate::docs::load_registry_or_empty(repo_root)?;
+    Ok(DocsRegistrySnapshot {
+        documents: registry
+            .documents
+            .into_iter()
+            .map(|document| DocsRegistryDocument {
+                id: document.id,
+                revision: document.revision,
+                path: document.path,
+                lifecycle: lifecycle_name(document.lifecycle).to_string(),
+                review_policy: review_policy_name(document.review_policy).to_string(),
+            })
+            .collect(),
+    })
 }
 
-fn required_string(value: &Value, field: &'static str) -> Result<String> {
-    value
-        .get(field)
-        .and_then(Value::as_str)
-        .map(str::to_string)
-        .ok_or_else(|| PulseError::validation("docs_registry_schema_invalid", field))
+fn lifecycle_name(lifecycle: crate::docs::DocumentLifecycle) -> &'static str {
+    match lifecycle {
+        crate::docs::DocumentLifecycle::Current => "current",
+        crate::docs::DocumentLifecycle::SuspectedStale => "suspected_stale",
+        crate::docs::DocumentLifecycle::Stale => "stale",
+        crate::docs::DocumentLifecycle::Retired => "retired",
+        crate::docs::DocumentLifecycle::Superseded => "superseded",
+    }
 }
 
-fn optional_string(value: &Value, field: &'static str, default: &str) -> Result<String> {
-    match value.get(field) {
-        Some(value) => value
-            .as_str()
-            .map(str::to_string)
-            .ok_or_else(|| PulseError::validation("docs_registry_schema_invalid", field)),
-        None => Ok(default.to_string()),
+fn review_policy_name(policy: crate::docs::ReviewPolicy) -> &'static str {
+    match policy {
+        crate::docs::ReviewPolicy::None => "none",
+        crate::docs::ReviewPolicy::Light => "light",
+        crate::docs::ReviewPolicy::Standard => "standard",
+        crate::docs::ReviewPolicy::Independent => "independent",
+        crate::docs::ReviewPolicy::Human => "human",
     }
 }
 

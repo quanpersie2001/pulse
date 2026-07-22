@@ -202,7 +202,7 @@ pub(crate) fn load_existing_registry(
     match schema_version(repo_root)? {
         SchemaVersion::Current => {}
         SchemaVersion::KnownPredecessor => {
-            migrate_registry(repo_root, repository_id)?;
+            migrate_registry_unlocked(repo_root, repository_id)?;
         }
     }
     let registry_path = repo_root.join(".pulse/docs/registry.json");
