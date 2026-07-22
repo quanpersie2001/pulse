@@ -915,21 +915,34 @@ Sau registry identity ổn định:
 - `pulse docs index|status|search|get|tree`;
 - retrieval fingerprints/evals/context budgets.
 
-### Slice 6 — Shaping + Readiness Composition
+### Slice 6 — Knowledge Store Foundation
 
-Dùng typed shaping receipt + docs applicability + structural executability để compose:
+Đóng requirement Phase 1 còn thiếu về canonical learning identity:
+
+- one-learning-per-record sharded JSON;
+- typed provenance/relations;
+- revision CAS và immutable events;
+- status/confidence/applicability/promotion/freshness schema;
+- deterministic fingerprint và disposable snapshot boundary.
+
+### Slice 7 — Shaping State + Readiness/Frontier Projections
+
+Dùng typed shaping receipt + docs applicability + structural executability để
+compose:
 
 ```text
 implementation contract
 + critical branch dispositions
 + work/content-bound shaping receipt
 + documentation impact/applicable docs
-+ QA impact references
++ required Decisions/content references
 + graph/dependency validity
 = dispatch readiness
 ```
 
-Slice đó mới cân nhắc mở `draft -> shaped`, `shaped -> ready`, decision/execution frontier và `pulse work ready`.
+Slice 7 mới mở gate `draft -> shaped`, `shaped -> ready`, decision/execution
+frontier và `pulse work ready`. Final `pulse work packet`, runner, lease và
+reconciliation execution thuộc Phase 2; QA impact/baseline thuộc Phase 3.
 
 ## Risks và open questions cho review
 

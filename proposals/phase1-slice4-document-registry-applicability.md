@@ -73,7 +73,7 @@ Triển khai documentation registry/applicability layer để có thể:
 - detect missing required document, missing owner, ambiguous scope và stale registry path;
 - nâng `documentation_validation` receipt từ content-only validation lên canonical document-ID/path/lifecycle/policy-aware validation;
 - emit immutable events cho registry và documentation-impact mutations;
-- giữ extension point rõ cho Slice 5 section extraction/search và Slice 6 readiness composition.
+- giữ extension point rõ cho Slice 5 section extraction/search, Slice 6 knowledge foundation và Slice 7 readiness composition.
 
 ## Acceptance scope
 
@@ -792,10 +792,16 @@ pulse docs get
 pulse docs tree
 ```
 
-Deferred sang Slice 6/Phase 2+:
+Deferred sang Slice 7:
 
 ```text
 pulse work ready
+pulse work frontier --kind decision|execution
+```
+
+Deferred sang Phase 2+:
+
+```text
 pulse work packet
 pulse docs promote
 pulse docs drift
@@ -1017,7 +1023,12 @@ Dùng registry identity/scope/lifecycle từ Slice 4 để thêm:
 
 Slice 5 không cần phát minh lại document owner/authority/applicability hoặc path lifecycle.
 
-### Slice 6 — Shaping + Readiness Composition
+### Slice 6 — Knowledge Store Foundation
+
+Thêm canonical learning store tối thiểu theo roadmap Phase 1. Slice này là một
+foundation sibling, không phải dependency kỹ thuật của docs applicability.
+
+### Slice 7 — Shaping State + Readiness/Frontier Projections
 
 Dùng:
 
@@ -1026,18 +1037,20 @@ structural executability
 + implementation contract
 + shaping receipt/branch dispositions/authority
 + documentation impact + applicable docs
-+ QA impact references
 + required Decisions/content references
 = dispatch readiness
 ```
 
-Slice 6 mới cân nhắc:
+Slice 7 sở hữu:
 
-- mở `draft -> shaped` và `shaped -> ready`;
+- mở gate `draft -> shaped` và `shaped -> ready`;
 - decision/execution frontier;
-- full `pulse work ready`;
-- bounded work packet references;
+- `pulse work ready`;
+- packet-input references cho required/suggested docs sections và read budget;
 - invalidate readiness khi registry/doc/shaping revisions đổi.
+
+Final `pulse work packet` và prompt builder thuộc Phase 2. QA impact/baseline
+thuộc Phase 3.
 
 ### Phase 2/3 follow-up
 
@@ -1055,8 +1068,8 @@ Slice 6 mới cân nhắc:
 3. **Timestamp fields:** có cần `created_at/updated_at` trong document record hay immutable events đủ audit? Nếu thêm timestamp, deterministic tests dùng operation clock như graph.
 4. **Scope glob semantics:** dùng crate/glob subset nào và normalization trên Windows ra sao? Contract phải version hóa separator/case behavior, không dựa incidental filesystem glob.
 5. **Required-vs-optional inference:** proposal chỉ explicit refs là required. Repository policy/global required docs được biểu diễn trong registry scope hay PULSE policy adapter ở slice sau?
-6. **Ticket routing metadata:** đặt `paths/domains/labels` trong docs-specific block tránh mở full implementation schema, nhưng Slice 6 có thể cần cùng context cho QA/knowledge. Có nên sớm tạo typed reusable `work_context`, hay chờ hai consumers để tránh abstraction sớm?
-7. **`ticket.md` sync:** machine metadata và human prose có thể lệch. Slice 4 chỉ validate references cơ học; Slice 6 shaping/parser có cần canonical generated section hoặc receipt để chứng minh alignment?
+6. **Ticket routing metadata:** đặt `paths/domains/labels` trong docs-specific block tránh mở full implementation schema, nhưng Slice 7 readiness và Phase 3 QA có thể cần cùng context. Có nên sớm tạo typed reusable `work_context`, hay chờ hai consumers để tránh abstraction sớm?
+7. **`ticket.md` sync:** machine metadata và human prose có thể lệch. Slice 4 chỉ validate references cơ học; Slice 7 shaping/readiness có cần canonical generated section hoặc receipt để chứng minh alignment?
 8. **Investigate posture:** owner docs cho Discovery/Spike dùng `investigate`, nhưng current node chưa có work subtype. Nên defer posture này hay thêm minimal typed work role trong Slice 4?
 9. **Authority resolver:** owner syntax chỉ structural. Trước readiness/close, team/role/human IDs được resolve từ `PULSE.md`, config hay Agent Registry nào?
 10. **Review-policy profiles:** hard-code five policies và check matrix hay registry trỏ tới profile manifest? Slice này cần đủ typed để không accept arbitrary checks nhưng không nên kéo full harness capability manifest sớm.

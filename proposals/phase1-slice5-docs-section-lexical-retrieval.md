@@ -138,7 +138,7 @@ Triển khai documentation retrieval foundation để có thể:
 - browse registry-derived documentation tree mà không parse full corpus;
 - expose index/retrieval fingerprints và explainable inclusion/exclusion reasons;
 - chạy fixture evals cho exact identifier, paraphrase, Vietnamese, exclusions, no-result và context budget;
-- giữ extension point rõ cho Slice 6 shaping/readiness/work packet và Phase 4 knowledge retrieval.
+- giữ extension point rõ cho Slice 6 knowledge foundation, Slice 7 shaping/readiness/work packet và Phase 4 knowledge retrieval.
 
 ## Acceptance scope
 
@@ -1096,7 +1096,7 @@ Slice 5 reuses Slice 4 document-level applicability, but preserves boundaries:
 - Search does not turn optional scope match into required context.
 - Explicit required document with no lexical hit does not appear as fake result; output can include `required_documents_without_hits` so future packet builder can separately include required outline/sections.
 
-Slice 5 adds a library-level `RetrievalSuggestion` contract suitable for Slice 6:
+Slice 5 adds a library-level `RetrievalSuggestion` contract suitable for Slice 7:
 
 ```jsonc
 {
@@ -1484,9 +1484,18 @@ Tests cần real temporary repositories và real Markdown bytes. Cache concurren
 - [ ] Không thêm embeddings, vector DB, SQLite, daemon, QMD runtime dependency hoặc full work packet.
 - [ ] Rust format, clippy và full test suite sạch.
 
-## Handoff sang Slice 6 — Shaping + Readiness Composition
+## Handoff sau Slice 5
 
-Slice 6 có thể dùng:
+Phase 1 còn hai sibling foundations độc lập phần lớn với nhau:
+
+1. **Slice 6 — Knowledge Store Foundation** tại
+   [`phase1-slice6-knowledge-store-foundation.md`](phase1-slice6-knowledge-store-foundation.md).
+2. **Slice 7 — Shaping Contract + Readiness Projection**.
+
+Numbering thể hiện delivery order, không khẳng định readiness phụ thuộc kỹ thuật
+vào knowledge store.
+
+Slice 7 có thể dùng:
 
 ```text
 structural executability
@@ -1499,14 +1508,16 @@ structural executability
 = dispatch readiness + bounded execution packet inputs
 ```
 
-Slice 6 mới sở hữu:
+Slice 7 sở hữu:
 
 - shaping receipt/reference và critical ambiguity dispositions;
 - `draft -> shaped` / `shaped -> ready` gating;
 - destination, exit condition, bounded fog và decision/execution frontier;
-- full `pulse work ready`;
-- full `pulse work packet` với required/suggested section refs và read budget;
+- `pulse work ready`;
+- packet-input references cho required/suggested section refs và read budget;
 - readiness invalidation khi work, registry, document, section/extractor hoặc shaping revisions đổi.
+
+Final `pulse work packet` và prompt builder thuộc Phase 2.
 
 Slice 5 chỉ cung cấp retrieval primitives và suggestion records; nó không quyết định semantic required sections cho every Ticket.
 
