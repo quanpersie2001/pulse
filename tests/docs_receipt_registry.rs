@@ -146,12 +146,110 @@ fn record(repo: &std::path::Path, receipt: &ReceiptEnvelope) {
 
 fn receipt_doc(id: &str, revision: u64, path: &str, hash: &str) -> DocumentationValidationDocument {
     DocumentationValidationDocument {
-        document_id: id.to_string(),
-        document_revision: revision,
+        proposed_document_id: Some(id.to_string()),
+        document_revision: Some(revision),
         path: path.to_string(),
         content_hash: hash.to_string(),
         result: ReceiptResult::Passed,
     }
+}
+
+#[test]
+fn pre_registry_v1_receipt_without_document_identity_is_legacy_unresolved() {
+    let (tmp, repository_id, source_commit, hash) = setup_repo(
+        "DOC-AUTH-DOMAIN",
+        3,
+        DocumentLifecycle::Current,
+        ReviewPolicy::None,
+    );
+    let repo = tmp.path();
+    let rcpt = receipt(
+        "rcpt_01J00000000000000000000109",
+        &repository_id,
+        &source_commit,
+        DocumentationValidationDocument {
+            proposed_document_id: None,
+            document_revision: None,
+            path: "docs/domain/token-lifecycle.md".to_string(),
+            content_hash: hash,
+            result: ReceiptResult::Passed,
+        },
+        vec![],
+    );
+    record(repo, &rcpt);
+
+    let report = pulse::evidence::verify_receipt(repo, &rcpt.id, true, None).unwrap();
+    assert_eq!(report.integrity.status, "valid");
+    assert_eq!(report.bindings.status, "current");
+    assert_eq!(report.registry.status, "legacy_unresolved");
+    assert!(report
+        .registry
+        .reason_codes
+        .contains(&"document_receipt_pre_registry_unresolved".to_string()));
+    assert_eq!(report.authorization.status, "not_evaluated");
+    assert!(report
+        .authorization
+        .reason_codes
+        .contains(&"authority_resolver_unavailable".to_string()));
+    assert!(!report.gate_eligible);
+}
+
+#[test]
+fn historical_v1_document_id_alias_canonicalizes_to_proposed_document_id() {
+    let (tmp, repository_id, source_commit, hash) = setup_repo(
+        "DOC-AUTH-DOMAIN",
+        3,
+        DocumentLifecycle::Current,
+        ReviewPolicy::None,
+    );
+    let repo = tmp.path();
+    let receipt_id = "rcpt_01J00000000000000000000110";
+    let receipt = serde_json::json!({
+        "schema_version": 1,
+        "receipt_version": 1,
+        "id": receipt_id,
+        "kind": "documentation_validation",
+        "result": "passed",
+        "actor": {"kind": "human", "id": "tester"},
+        "recorded_at": "2026-07-22T00:00:00Z",
+        "subject": {"kind": "documentation", "id": "DOC-AUTH-DOMAIN"},
+        "bindings": {
+            "source": {"kind": "git_commit", "commit": source_commit, "repository_id": repository_id},
+            "content": [{"path": "docs/domain/token-lifecycle.md", "sha256": hash.clone()}],
+            "artifacts": [],
+            "work": []
+        },
+        "payload": {
+            "payload_version": 1,
+            "documents": [{
+                "document_id": "DOC-AUTH-DOMAIN",
+                "document_revision": 3,
+                "path": "docs/domain/token-lifecycle.md",
+                "content_hash": hash,
+                "result": "passed"
+            }],
+            "checks": []
+        }
+    });
+    let file = repo.join("historical-doc-receipt.json");
+    write_json(&file, &receipt);
+
+    pulse::evidence::record_receipt(repo, None, &file).unwrap();
+    let shown = pulse::evidence::show_receipt(repo, receipt_id).unwrap();
+    let ReceiptPayload::DocumentationValidation(payload) = shown.receipt.payload else {
+        panic!("documentation payload expected");
+    };
+    assert_eq!(
+        payload.documents[0].proposed_document_id.as_deref(),
+        Some("DOC-AUTH-DOMAIN")
+    );
+    let stored = fs::read_to_string(
+        repo.join(".pulse/evidence/receipts")
+            .join(format!("{receipt_id}.json")),
+    )
+    .unwrap();
+    assert!(stored.contains("proposed_document_id"));
+    assert!(!stored.contains("\"document_id\""));
 }
 
 #[test]
@@ -183,6 +281,14 @@ fn v1_current_registry_match_is_gate_eligible_for_none_policy() {
     assert_eq!(report.bindings.status, "current");
     assert_eq!(report.registry.status, "current");
     assert_eq!(report.policy.status, "structurally_satisfied");
+    // Even the permissive `none` policy remains mechanical: it is gate eligible
+    // only because no authorization claim is required, not because the receipt
+    // resolved or granted actor authority.
+    assert_eq!(report.authorization.status, "not_evaluated");
+    assert!(report
+        .authorization
+        .reason_codes
+        .contains(&"authority_resolver_unavailable".to_string()));
     assert!(report.gate_eligible);
 }
 
@@ -351,6 +457,8 @@ fn independent_policy_has_structural_checks_but_authorization_unresolved() {
     let report = pulse::evidence::verify_receipt(repo, &rcpt.id, true, None).unwrap();
     assert_eq!(report.registry.status, "current");
     assert_eq!(report.policy.status, "structurally_satisfied");
+    // Independent review policy is structurally checked only. Slice 3/4 still
+    // has no authority resolver, so authorization remains explicitly unresolved.
     assert_eq!(report.authorization.status, "unresolved");
     assert!(report
         .authorization

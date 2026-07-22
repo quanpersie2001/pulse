@@ -450,8 +450,10 @@ fn validate_docs_payload(
         ));
     }
     for doc in &p.documents {
-        validate_document_id(&doc.document_id)?;
-        if doc.document_revision == 0 {
+        if let Some(document_id) = &doc.proposed_document_id {
+            validate_document_id(document_id)?;
+        }
+        if doc.document_revision == Some(0) {
             return Err(PulseError::validation(
                 "document_receipt_registry_mismatch",
                 "document revision must be positive",
@@ -553,10 +555,18 @@ fn docs_validation_dimensions(
     let mut registry_codes = Vec::new();
     let mut policies = BTreeSet::new();
     for doc in &payload.documents {
+        let Some(document_id) = &doc.proposed_document_id else {
+            registry_codes.push("document_receipt_pre_registry_unresolved".to_string());
+            continue;
+        };
+        let Some(document_revision) = doc.document_revision else {
+            registry_codes.push("document_receipt_pre_registry_unresolved".to_string());
+            continue;
+        };
         let Some(record) = registry
             .documents
             .iter()
-            .find(|candidate| candidate.id == doc.document_id)
+            .find(|candidate| candidate.id == *document_id)
         else {
             registry_codes.push("document_receipt_registry_mismatch".to_string());
             if registry
@@ -572,7 +582,7 @@ fn docs_validation_dimensions(
         if record.path != doc.path {
             registry_codes.push("document_receipt_registry_mismatch".to_string());
         }
-        if record.revision != doc.document_revision {
+        if record.revision != document_revision {
             registry_codes.push("document_receipt_revision_stale".to_string());
         }
         match current_content_hash(repo_root, &record.path)? {
@@ -592,6 +602,9 @@ fn docs_validation_dimensions(
     registry_codes.dedup();
 
     let mut policy_codes = Vec::new();
+    // Authorization is deliberately mechanical/unresolved in the evidence
+    // foundation. Registry/policy checks below can prove only structure; they
+    // must never promote an actor or review policy into an authorized gate pass.
     let mut authorization_codes = vec!["authority_resolver_unavailable".to_string()];
     let mut authorization_status = "not_evaluated";
     for policy in &policies {
@@ -630,6 +643,11 @@ fn docs_validation_dimensions(
             "not_checked"
         } else if registry_codes.is_empty() {
             "current"
+        } else if registry_codes
+            .iter()
+            .any(|code| code == "document_receipt_pre_registry_unresolved")
+        {
+            "legacy_unresolved"
         } else if registry_codes.iter().any(|code| {
             matches!(
                 code.as_str(),

@@ -201,8 +201,22 @@ pub struct DocumentationValidationPayload {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct DocumentationValidationDocument {
-    pub document_id: String,
-    pub document_revision: u64,
+    /// Slice 3's pre-registry document identity claim is intentionally only a
+    /// proposal by the receipt author.  Historical experimental receipts used
+    /// `document_id` here before Slice 4 reserved that name for registry-bound
+    /// v2 payloads, so v1 still accepts `document_id` as an input alias while
+    /// canonicalizing new v1 receipts to `proposed_document_id`.
+    #[serde(
+        default,
+        alias = "document_id",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub proposed_document_id: Option<String>,
+    /// Optional only for historical/library compatibility with pre-v2
+    /// registry-aware experiments.  New registry-bound receipts should use the
+    /// future documentation payload v2 rather than relying on this v1 field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub document_revision: Option<u64>,
     pub path: String,
     pub content_hash: String,
     pub result: ReceiptResult,
