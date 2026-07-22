@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::path::Path;
 
 use serde::{Deserialize, Serialize};
@@ -181,8 +181,7 @@ pub fn search_docs(
         .into_iter()
         .map(|section| (section.section_ref.clone(), section))
         .collect::<BTreeMap<_, _>>();
-    let mut results = Vec::new();
-    let mut returned_snippet_bytes = 0usize;
+    let mut candidates = Vec::new();
     for hit in hits {
         let Some(section) = sections_by_ref.get(&hit.section_ref) else {
             continue;
@@ -190,43 +189,61 @@ pub fn search_docs(
         if !matches_filters(section, &options) {
             continue;
         }
-        let snippet = snippet_for_section(repo_root, section, &terms)?;
+        let applicability_reasons = applicability
+            .get(&section.document_id)
+            .cloned()
+            .unwrap_or_default();
+        let score = adjusted_score(hit.score, &applicability_reasons, options.work.is_some());
+        candidates.push(SearchCandidate {
+            score,
+            lexical_score: hit.score,
+            section: section.clone(),
+            matched_fields: hit.matched_fields,
+            applicability_reasons,
+        });
+    }
+    candidates.sort_by(|a, b| {
+        b.score
+            .total_cmp(&a.score)
+            .then_with(|| b.lexical_score.total_cmp(&a.lexical_score))
+            .then_with(|| a.section.section_ref.cmp(&b.section.section_ref))
+    });
+    candidates.truncate(limit);
+
+    let mut results = Vec::new();
+    let mut returned_snippet_bytes = 0usize;
+    for (idx, candidate) in candidates.into_iter().enumerate() {
+        let snippet = snippet_for_section(repo_root, &candidate.section, &terms)?;
         returned_snippet_bytes += snippet.len();
         results.push(SearchResult {
-            rank: results.len() as u32 + 1,
-            score: hit.score,
-            lexical_score: hit.score,
-            section_ref: section.section_ref.clone(),
-            document_id: section.document_id.clone(),
-            document_revision: section.document_revision,
-            path: section.path.clone(),
-            heading_path: section.heading_path.clone(),
-            range: section.range,
-            document_content_hash: section.document_content_hash.clone(),
-            section_content_hash: section.section_content_hash.clone(),
-            summary: section.summary.clone(),
+            rank: idx as u32 + 1,
+            score: candidate.score,
+            lexical_score: candidate.lexical_score,
+            section_ref: candidate.section.section_ref,
+            document_id: candidate.section.document_id,
+            document_revision: candidate.section.document_revision,
+            path: candidate.section.path,
+            heading_path: candidate.section.heading_path,
+            range: candidate.section.range,
+            document_content_hash: candidate.section.document_content_hash,
+            section_content_hash: candidate.section.section_content_hash,
+            summary: candidate.section.summary,
             snippet,
-            authority: section.authority.clone(),
-            lifecycle: section.lifecycle.clone(),
-            owner: section.owner.clone(),
-            kind: section.kind.clone(),
+            authority: candidate.section.authority,
+            lifecycle: candidate.section.lifecycle,
+            owner: candidate.section.owner,
+            kind: candidate.section.kind,
             matched_fields: if options.explain {
-                hit.matched_fields
+                candidate.matched_fields
             } else {
                 Vec::new()
             },
             applicability_reasons: if options.explain || options.work.is_some() {
-                applicability
-                    .get(&section.document_id)
-                    .cloned()
-                    .unwrap_or_default()
+                candidate.applicability_reasons
             } else {
                 Vec::new()
             },
         });
-        if results.len() >= limit {
-            break;
-        }
     }
     Ok(SearchReport {
         schema_version: 1,
@@ -288,6 +305,36 @@ fn sanitized_terms(terms: &[String]) -> Vec<String> {
         .collect()
 }
 
+#[derive(Debug)]
+struct SearchCandidate {
+    score: f64,
+    lexical_score: f64,
+    section: SectionRecord,
+    matched_fields: Vec<String>,
+    applicability_reasons: Vec<String>,
+}
+
+fn adjusted_score(lexical_score: f64, reasons: &[String], apply_work_boost: bool) -> f64 {
+    if !apply_work_boost || lexical_score <= 0.0 {
+        return lexical_score;
+    }
+    let boost_fraction = reasons
+        .iter()
+        .map(|reason| match reason.as_str() {
+            "explicit_required_document" => 0.20,
+            "impact_required" => 0.20,
+            "explicit_required_document_replacement" => 0.16,
+            "supersession_replacement" => 0.12,
+            "path_scope_match" => 0.12,
+            "domain_scope_match" => 0.10,
+            "label_scope_match" => 0.08,
+            _ => 0.0,
+        })
+        .sum::<f64>()
+        .min(0.20);
+    lexical_score + (lexical_score * boost_fraction)
+}
+
 fn matches_filters(section: &SectionRecord, options: &SearchOptions) -> bool {
     if !options.include_draft && section.authority == "draft" {
         return false;
@@ -309,17 +356,6 @@ fn matches_filters(section: &SectionRecord, options: &SearchOptions) -> bool {
     }
     if let Some(domain) = &options.domain {
         if !section.domains.iter().any(|d| d == domain) {
-            return false;
-        }
-    }
-    if let Some(work) = &options.work {
-        let required: BTreeSet<_> = work.required_documents.iter().collect();
-        let scope_match = section.domains.iter().any(|d| work.domains.contains(d))
-            || work
-                .paths
-                .iter()
-                .any(|path| section.path.starts_with(path.trim_end_matches("/**")));
-        if !required.contains(&section.document_id) && !scope_match {
             return false;
         }
     }
