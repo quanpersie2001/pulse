@@ -1,0 +1,1 @@
+{"id":"docs-core-placeholder","query":"documentation index","filters":{"limit":8},"expected":{"top_k":[],"must_exclude":[],"max_first_relevant_rank":null,"max_context_bytes_before_first_relevant":null}}

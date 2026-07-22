@@ -1,5 +1,6 @@
 pub mod applicability;
 pub mod cache;
+pub mod eval;
 pub mod get;
 pub mod index;
 pub mod lexical;
@@ -22,6 +23,11 @@ pub use cache::{
     generation_dir, generation_id_for_fingerprint, open_reader_generation, publish_current,
     read_current, validate_generation, CacheState, DocsSearchWriteLock, EngineState,
     ExtractorState, GenerationCounts, GenerationDocument, GenerationState, ValidatedGeneration,
+};
+pub use eval::{
+    load_retrieval_eval_fixtures, run_retrieval_eval_fixtures, run_retrieval_evals,
+    RetrievalEvalExpected, RetrievalEvalFilters, RetrievalEvalFixture, RetrievalEvalReport,
+    RetrievalEvalResult,
 };
 pub use get::{get_docs, GetDocument, GetOptions, GetOutlineItem, GetReport, GetSection};
 pub use index::{
