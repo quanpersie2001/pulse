@@ -25,3 +25,6 @@ references/**
 
 # Rust build artifacts
 target/
+
+# Pulse docs lexical retrieval cache (disposable)
+.pulse/cache/docs-search/

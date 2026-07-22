@@ -1,4 +1,7 @@
 pub mod applicability;
+pub mod cache;
+pub mod index;
+pub mod lexical;
 pub mod manifest;
 pub mod markdown;
 pub mod model;
@@ -10,6 +13,22 @@ pub mod validate;
 
 pub use applicability::{
     applicable_docs, ApplicabilityOptions, ContentResolver, FsContentResolver,
+};
+pub use cache::{
+    cache_dir, classify, classify_against, cleanup_generations, current_pointer_path,
+    generation_dir, generation_id_for_fingerprint, open_reader_generation, publish_current,
+    read_current, validate_generation, CacheState, DocsSearchWriteLock, EngineState,
+    ExtractorState, GenerationCounts, GenerationDocument, GenerationState, ValidatedGeneration,
+};
+pub use index::{
+    build_index, current_generation, index_status, retrieval_fingerprint,
+    within_auto_refresh_limits, IndexBuildReport, IndexDocumentsReport, IndexOptions,
+    IndexRegistryReport, IndexStateReport, IndexStatusReport, ProjectionReport,
+};
+pub use lexical::{
+    build_index as build_lexical_index, build_schema as build_lexical_schema, load_section_records,
+    open_index as open_lexical_index, query as query_lexical_index, tokenize_query_text,
+    write_sections_jsonl, LexicalHit, LexicalSchema, TANTIVY_COMPAT_VERSION,
 };
 pub use manifest::{
     bootstrap, load, migrate_registry, predecessor_schema, DocsBootstrapOutcome,
