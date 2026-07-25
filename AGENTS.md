@@ -20,6 +20,75 @@ Pulse is **not** Jira-lite, a fixed phase workflow, a cloud-first service, or a 
 Primary design source: [`PULSE_REBOOT.md`](PULSE_REBOOT.md).
 Detailed owners live under [`pulse-reboot/`](pulse-reboot/).
 
+## Repository Role And Self-Hosting Boundary
+
+This repository **develops the Pulse harness**. It is not currently enrolled as
+a target repository managed by Pulse, and Pulse is not currently self-hosting
+its own development work graph here.
+
+Rules:
+
+1. **Do not run Pulse work-graph, evidence, docs-registry or lifecycle mutations
+   with `--repo-root .` in this repository.** Do not bootstrap
+   `.pulse/workgraph/nodes/`, `.pulse/workgraph/edges/`, `.pulse/events/`,
+   `.pulse/evidence/`, `.pulse/docs/` or `works/` as a side effect of planning or
+   implementation work.
+2. Do not run validation/read commands against `--repo-root .` when they may
+   implicitly bootstrap, migrate or rewrite repository state. Use test fixtures,
+   temporary repositories and `cargo test` for kernel/CLI validation.
+3. Existing legacy paths such as `.pulse/workgraph/items.jsonl`,
+   `.pulse/workgraph/schema.json`, local `target/*/pulse` binaries, or other
+   development fixtures are **not evidence that self-hosting is active**.
+4. For planning Pulse implementation in this repository, use `proposals/`,
+   owning `pulse-reboot/` documents, source/tests and Git history. Do not create
+   canonical Pulse Story/Ticket/Decision nodes for the work unless the
+   maintainer explicitly approves a separate self-hosting migration.
+5. CLI examples below describe the product contract for an explicitly enrolled
+   target repository or a temporary test fixture. They are not instructions to
+   apply those commands to this repository itself.
+6. Self-hosting requires an explicit maintainer request and accepted design
+   decision covering migration, ownership and rollback. Never infer consent from
+   the presence of `.pulse/` files.
+
+## Target Repository Test Convention
+
+Pulse integration tests exercise the harness on tracked target-repository
+fixtures, never on this development repository and never by mutating a tracked
+fixture in place.
+
+Canonical flow:
+
+```text
+tests/fixtures/target-repos/<fixture>/   tracked read-only template
+                    |
+                    | TestRepo::from_fixture(...)
+                    v
+external TempDir                         mutable working copy + Git baseline
+                    |
+                    | pulse --repo-root <temp-copy>
+                    v
+assertions + automatic cleanup
+```
+
+Rules:
+
+1. Use `tests/fixtures/target-repos/minimal-service/` as the default realistic
+   target repository unless a scenario requires a dedicated fixture.
+2. Rust integration tests should use
+   `tests/common/fixture_repo.rs::TestRepo::from_fixture`; extend the shared
+   helper instead of reimplementing unsafe copy/CLI setup in each test.
+3. The tracked fixture is immutable test input. It must not contain generated
+   `.pulse/` state or a nested `.git/`, and tests must not run Pulse directly
+   against its path.
+4. `TestRepo` copies the fixture outside this repository, initializes a clean
+   deterministic Git baseline, passes only that path as `--repo-root`, and
+   removes it when the `TempDir` is dropped.
+5. Tests that need malformed/corrupt state should create it in the temporary
+   copy or use a clearly named dedicated negative fixture; never corrupt the
+   shared template.
+6. Manual smoke tests follow the same rule: copy/create a target under `mktemp`
+   and point `target/debug/pulse` there. Never use `--repo-root .`.
+
 ## Core Principle
 
 The repository is the system of record. Important state, decisions, evidence and durable knowledge must be local, inspectable and recoverable.
@@ -47,7 +116,10 @@ Key planes:
 
 ## Current Kernel / CLI Surface
 
-Use the local Rust CLI/kernel, not the legacy `pulse:workflow` skill router.
+Use the local Rust CLI/kernel, not the legacy `pulse:workflow` skill router,
+when implementing or testing Pulse against explicit fixtures/target repositories.
+The self-hosting boundary above takes precedence: do not point these commands at
+this repository root unless the maintainer explicitly requests it.
 
 Common work graph commands:
 
@@ -100,6 +172,9 @@ pulse --repo-root <repo> docs tree [path] --json
 Prefer `--json` for agent consumption. Treat CLI error codes as the stable contract.
 
 ## Work Graph Rules
+
+These rules govern Pulse-managed target repositories and test fixtures; they do
+not enroll this development repository into Pulse.
 
 - Ticket is the executable unit.
 - Epic/Story hold durable outcome, behavior baseline and design/approach context.
@@ -159,8 +234,12 @@ Owner: [`pulse-reboot/04-runtime-harness.md`](pulse-reboot/04-runtime-harness.md
 ## Agent Operating Rules
 
 1. Start by orienting from repository artifacts, not conversation memory.
-2. Use the Pulse CLI/kernel for canonical reads and mutations.
-3. Respect CAS revisions; on conflict, reload current state before retrying.
+2. In this Pulse development repository, edit source/design docs and use tests or
+   temporary fixtures. Use the Pulse CLI/kernel for canonical reads and
+   mutations only in an explicitly enrolled target repository or fixture; never
+   infer that this repository is enrolled.
+3. Respect CAS revisions in Pulse-managed target repositories; on conflict,
+   reload current state before retrying.
 4. Keep runtime transactions recoverable; if interrupted, run/read `graph recover` before continuing graph work.
 5. Prefer small, evidence-backed commits.
 6. Do not mark work complete unless tests/verification prove the affected behavior.
@@ -171,17 +250,22 @@ Owner: [`pulse-reboot/04-runtime-harness.md`](pulse-reboot/04-runtime-harness.md
 
 ## Repository Layout Quick Reference
 
+The `.pulse/workgraph/nodes`, `.pulse/workgraph/edges`, `.pulse/events` and
+`works/` paths below are the **designed target-repository layout**, not proof that
+this development repository should contain or bootstrap them. Paths that exist
+here may be schemas, fixtures or legacy development artifacts.
+
 ```text
-.pulse/workgraph/nodes/          canonical work nodes
-.pulse/workgraph/edges/          canonical graph edges
-.pulse/runtime/                  locks, transactions, ephemeral runtime state
-.pulse/evidence/                 receipts, artifacts and evidence manifest
-.pulse/docs/                     docs registry, schemas and retrieval eval fixtures
+.pulse/workgraph/nodes/          target-repo canonical work nodes
+.pulse/workgraph/edges/          target-repo canonical graph edges
+.pulse/runtime/                  target-repo ephemeral coordination state
+.pulse/evidence/                 target-repo receipts/artifacts or test fixtures
+.pulse/docs/                     target-repo registry/schemas or test fixtures
 .pulse/cache/                    disposable generated caches
-works/                           human-facing work prose and artifacts
+works/                           target-repo work prose; absent here until self-hosting is approved
 docs/                            durable repository documentation
 pulse-reboot/                    reboot design owner documents
-proposals/                       implementation slice proposals
+proposals/                       Pulse implementation slice proposals
 src/                             Rust Pulse kernel/CLI implementation
 tests/                           integration and contract tests
 ```
@@ -222,7 +306,9 @@ Before ending a substantial work chunk:
 2. Run the relevant validation commands and record them in the final response.
 3. Commit coherent changes.
 4. Note branch, commits, remaining risks and next action.
-5. If using Pulse work items, update their status or leave a clear handoff.
+5. If operating on Pulse work items in an explicitly enrolled target repository,
+   update their status or leave a clear handoff. Do not create such items in this
+   development repository without explicit self-hosting approval.
 
 ## Optional Memory Tools
 

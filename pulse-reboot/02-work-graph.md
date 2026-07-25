@@ -116,33 +116,64 @@ Không lưu global counter/revision thường xuyên trong manifest vì nó sẽ
 
 ## Node contract
 
-Một Ticket node:
+Một implementation Ticket node sau Phase 1 Slice 7:
 
 ```json
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "id": "TK-031",
   "kind": "ticket",
-  "revision": 7,
+  "revision": 9,
+  "contract_revision": 4,
   "title": "Phân loại lỗi refresh token",
   "status": "ready",
   "priority": "P0",
   "risk": "medium",
   "materialization": "R2",
   "content_dir": "works/TK-031",
+  "role": "implementation",
   "implementation": {
     "mode": "guided",
-    "plan_required": true
+    "work_surface": "code",
+    "plan_policy": "worker_optional",
+    "verification_profile": "service-change",
+    "brief": {
+      "path": "works/TK-031/ticket.md",
+      "content_hash": "sha256:..."
+    }
   },
-  "verification_profile": "service-change",
+  "qa": {
+    "impact": {
+      "posture": "required",
+      "behavioral_owner": "ST-014",
+      "affected_case_ids": ["QA-001", "QA-004"]
+    }
+  },
   "created_at": "2026-07-18T01:00:00Z",
   "updated_at": "2026-07-18T02:00:00Z"
 }
 ```
 
-Normative fields tối thiểu: `schema_version`, `id`, `kind`, `revision`, `title`, `status`, `content_dir`, timestamps. Kind-specific fields được JSON Schema validate.
+Normative fields tối thiểu: `schema_version`, `id`, `kind`, `revision`,
+`contract_revision`, `title`, `status`, `content_dir`, timestamps. Kind-specific
+fields được JSON Schema validate. Ticket role là `implementation` hoặc
+`decision_work`; không thêm top-level work kind thứ năm.
 
-Node không embed child list hoặc inverse relations. Những giá trị đó được derive từ edge store để tránh hai nguồn sự thật.
+`revision` là CAS revision cho mọi node mutation. `contract_revision` chỉ tăng
+khi semantic execution/shaping input đổi: role, risk/materialization,
+implementation hoặc decision-work contract, docs/QA impact, required
+Decision/approach reference hoặc contract-owned content binding. Status,
+timestamp và current shaping pointer chỉ tăng `revision`; nếu chúng cũng tăng
+`contract_revision`, shaping apply hoặc ready transition sẽ tự làm proof vừa
+được dùng trở thành stale.
+
+Known-schema migration không được tự đoán risk/materialization: legacy Ticket
+được migrate thành `unassessed` và bị chặn shaped/ready tới khi human/Agent có
+thẩm quyền classify rõ. Unknown schema predecessor phải fail closed.
+
+Node không embed child list, inverse relations, frontier list hoặc readiness
+boolean. Những giá trị đó được derive từ edge/evidence/docs/policy projections
+để tránh hai nguồn sự thật.
 
 ## Edge contract
 
@@ -194,16 +225,26 @@ Story là default owner của behavioral baseline. Child Ticket reference Story 
 
 Ticket là executable unit nhỏ nhất mà một Agent có thể nhận lease. Nó phải đủ rõ để Agent không phát minh lại objective hoặc đoán vùng code cần thay đổi.
 
-Ticket có hai lớp implementation:
+Ticket có hai typed roles:
 
-1. `ticket.md` là approved implementation brief: current/target behavior, code anchors, required changes, invariants và implementation freedom.
-2. `plan.md` là exact execution plan do Worker materialize sau khi đọc current checkout.
+- `implementation`: thay đổi repository/product/harness theo executable contract;
+- `decision_work`: resolve một precise `fact_gap|intent_gap|tradeoff_gap|fidelity_gap|prerequisite_gap` cho destination, có precise question, expected output/evidence và provenance branch/fog khi có.
+
+Decision-work Ticket không bị buộc phải có implementation anchors/invariants và
+có thể vào decision frontier từ `draft` khi precise, structurally executable và
+unblocked; nếu bắt nó phải có một shaping receipt riêng trước khi shape thì tạo
+recursive readiness loop. Implementation Ticket mới dùng ready gate đầy đủ.
+
+Implementation Ticket có hai lớp:
+
+1. `ticket.md` là approved implementation brief: objective, current/target behavior, work surface, code/equivalent anchors, required changes, invariants, acceptance, scope, implementation freedom, required Decisions/shared approach, verification profile, expected evidence và handoff.
+2. `plan.md` là exact execution plan do Worker materialize sau khi đọc current checkout; `plan_policy=none|worker_optional|required_before_execution` chỉ khai báo lúc nào Phase 2 phải materialize nó.
 
 Story/Ticket shaping phải gán disposition cho mọi critical ambiguity trước `ready`. Pulse không bắt buộc một artifact brainstorm riêng: shared direction thuộc Story/`approach.md`, implementation contract thuộc Ticket, hard-to-reverse choice thuộc Decision, còn unknown cần evidence thuộc linked Discovery/Spike Ticket. Kỹ thuật shaping/grilling thuộc [`04-runtime-harness.md`](04-runtime-harness.md); file này sở hữu canonical disposition và ready semantics.
 
 ### Decision
 
-Decision ghi context, options, decision, consequence và supersession. Nó không phải Ticket trá hình. Nếu cần implementation, tạo Ticket liên kết.
+Decision ghi context, options, decision, consequence và supersession. Nó không phải Ticket trá hình. Nếu cần implementation, tạo Ticket liên kết. Hard-to-reverse Decision chỉ thỏa ready gate khi có immutable acceptance proof bind Decision ID, `contract_revision`, content hash, accepted outcome và actor có `decision.accept`; node tồn tại hoặc shaping approver nhắc tới Decision chưa phải acceptance.
 
 ### Shaping map và decision work
 
@@ -228,10 +269,10 @@ Decision work dùng existing graph primitives thay vì tạo một hierarchy th�
 
 CLI derive hai projection riêng:
 
-- **decision frontier:** open, unblocked, unclaimed decision work phục vụ một destination;
-- **execution frontier:** implementation Tickets đã qua ready gate và có thể dispatch.
+- **decision frontier:** precise decision work ở `draft|shaped|ready`, structurally executable, unblocked và phục vụ một destination;
+- **execution frontier:** implementation Tickets status `ready` có current readiness pass; đây vẫn chưa phải dispatch authorization.
 
-Claim/lease vẫn dùng runtime coordination contract; `unclaimed` không được persist như một status giả trong canonical graph. Frontier là projection có graph fingerprint + shaping-map revision, không phải writable list trong Markdown.
+Claim/lease vẫn dùng runtime coordination contract; `unclaimed` không được persist như một status giả trong canonical graph. Trước Phase 2 lease resolver, frontier output phải ghi `claim_state=not_evaluated`, không giả `unclaimed=true`. Frontier là deterministic derived projection có relevant graph/shaping/readiness fingerprint, không phải writable list trong Markdown. Priority/foundation ordering thuộc semantic reconciliation, không được kernel biến thành hidden score.
 
 `not_yet_specified` không phải node và không được coi là blocker tự động. Khi evidence làm một fog statement đủ sắc nét, shaping reconciliation tạo canonical decision work bằng CAS, gắn provenance về fog entry/map revision và cập nhật map. Nếu fog lộ ra blocker cho current execution, affected implementation Ticket mất readiness hoặc chuyển `blocked` theo transition policy.
 
@@ -325,11 +366,11 @@ Mỗi behavior-affecting Ticket phải khai báo QA impact:
 | Posture | Nghĩa | Close implication |
 |---|---|---|
 | `required` | Ticket ảnh hưởng material behavior/risk và cần targeted QA checkpoint | Required affected/new cases phải có valid receipt trước Ticket close |
-| `covered_by_story_close` | Ticket chưa tạo runnable/material slice hoặc checkpoint không economical | Có rationale; full Story qualification vẫn bắt buộc |
-| `none` | Không ảnh hưởng behavioral contract | Có rationale; developer verification vẫn bắt buộc |
-| `unknown` | Chưa phân tích impact | Không được `ready` nếu Ticket có khả năng đổi public/user-visible behavior |
+| `covered_by_story_close` | Ticket chưa tạo runnable/material slice hoặc checkpoint không economical | Có rationale + behavioral owner Story + approval grant `qa.defer_to_story_close`; full Story qualification vẫn bắt buộc |
+| `none` | Không ảnh hưởng behavioral/public-risk contract | Có rationale + approval grant `qa.none.approve`; developer verification vẫn bắt buộc |
+| `unknown` | Chưa phân tích impact | Không được `ready` |
 
-QA impact reference canonical Story case IDs, new proposed cases và checkpoint reason. Worker được đề xuất case mới nhưng không tự đổi expected behavior/acceptance ngoài authority. Chi tiết execution scopes và change control thuộc [`03-story-qa.md`](03-story-qa.md).
+QA impact reference canonical Story case IDs, new proposed cases và checkpoint reason. Worker được đề xuất case mới nhưng không tự đổi expected behavior/acceptance ngoài authority. Trong Slice 7, `required` được parse structurally nhưng gate là `unavailable` cho tới Phase 3 baseline/case resolver; kernel không giả case IDs là valid. Chi tiết execution scopes và change control thuộc [`03-story-qa.md`](03-story-qa.md).
 
 ## Ready gate
 
@@ -344,15 +385,17 @@ Implementation Ticket chỉ `ready` khi CLI xác nhận deterministic conditions
 - Hard blockers đều terminal/satisfied.
 - Required Decisions/Story approach tồn tại, có approval/authority phù hợp và revision khớp.
 - Implementation mode, plan policy, verification profile và handoff contract rõ.
-- QA impact là `required`, `covered_by_story_close`, hoặc `none` có rationale; không còn `unknown` với behavior-affecting work.
-- Affected/new QA case references resolve được tới behavioral owner; thay đổi expected behavior có approval/revision phù hợp.
+- QA impact không còn `unknown`; `none` và `covered_by_story_close` có rationale, owner khi cần và approval grant tương ứng.
+- `required` chỉ pass khi installed QA baseline/case resolver xác nhận affected/new references; trước Phase 3 family này là `unavailable`, không bypass.
 - Documentation impact là `required`, `none` có rationale hoặc `deferred` hợp policy; không còn `unknown`.
 - Applicable durable docs, owner và required Decisions resolve được khi risk/surface yêu cầu.
 - Mọi content/document reference tồn tại và node/edge graph valid.
 
-Kernel có thể validate schema, links, required fields, revision và presence của receipt; nó không tự phán đoán một conversation đã đạt shared understanding. Semantic shaping result do skill/reviewer tạo, có actor, source revisions, branch summary và policy-required approval để ready gate kiểm tra.
+Kernel có thể validate schema, links, required fields, contract revisions, hashes, receipt integrity/bindings và policy grants; nó không tự phán đoán một conversation đã đạt shared understanding. Semantic shaping result do skill/reviewer tạo, có actor, contract/source/content bindings, branch summary và policy-required approval để ready gate kiểm tra.
 
-`ready` không có nghĩa Agent phải làm đúng từng dòng plan cũ. Nó nghĩa Agent có một executable contract, không phải phát minh lại mục tiêu, và biết lựa chọn nào được tự quyết hay lúc nào phải xin Decision.
+Readiness là derived, versioned report với gate-family findings và narrow fingerprint trên relevant Ticket/blocker/shaping/Decision/docs/QA/policy/content projections; không dùng global graph fingerprint làm sole currentness key. `status=ready` nhưng input fingerprint đổi là `ready_state_stale`, bị loại khỏi execution frontier và không tự rewrite canonical status trong read path.
+
+`ready` không có nghĩa Agent phải làm đúng từng dòng plan cũ hoặc đã được dispatch. Nó nghĩa Agent có một current executable contract, không phải phát minh lại mục tiêu, và biết lựa chọn nào được tự quyết hay lúc nào phải xin Decision. `dispatch_authorized` vẫn false cho tới khi Phase 2 xác nhận lease/capability/source workspace; work `qa.impact=required` còn chờ Phase 3 resolver.
 
 ## Progressive materialization
 
@@ -434,8 +477,10 @@ draft/shaped/ready/blocked -> cancelled
 any non-terminal -> superseded
 ```
 
-- `ready` pass executable-contract và graph gates.
-- `active` phải có assignment lease hợp lệ.
+- `draft -> shaped`, `blocked -> shaped` và `shaped -> ready` chỉ mở qua typed shaping/readiness recomputation dưới repository lock; không có `--force`.
+- Không mở direct `blocked -> ready`; resume phải đi qua `shaped` để structural executability được đánh giá lại.
+- `ready` pass current executable-contract/readiness gates; stale projection không đủ để vào execution frontier.
+- `active` phải có assignment lease hợp lệ và vẫn thuộc Phase 2.
 - `verifying` khóa source snapshot.
 - `done` do close gate tính, không do Worker tự khai báo. Ticket có QA posture `required` cần valid targeted checkpoint receipts; Story cần full applicable qualification receipts.
 - `superseded` có `superseded_by` edge hoặc Decision giải thích.

@@ -68,6 +68,7 @@ Human -> Orchestration Agent -> independent Agent tasks/threads
 - Hierarchy không thay thế dependency graph; priority là tín hiệu, không phải phép sort tuyệt đối.
 - Artifact được materialize theo risk, không ép mọi Ticket đi qua cùng một bộ ceremony.
 - Critical ambiguity phải được resolve trước execution bằng shaping repo-grounded, one-question-at-a-time và risk-adaptive; đây là readiness discipline, không phải fixed brainstorm phase.
+- Readiness/frontiers là derived projections trên typed contracts, receipts, docs, Decisions và policy; semantic freshness dùng `contract_revision` riêng để lifecycle/pointer mutation không tự làm proof stale.
 - Shaping effort lớn khóa destination, quản lý decision frontier và bounded `not_yet_specified`; graph được mở rộng theo evidence sau mỗi resolution thay vì speculative decomposition upfront.
 - Deterministic work thuộc kernel/script; judgment work thuộc agent skill.
 - Developer verification chứng minh implementation Ticket; impact-driven QA checkpoint kiểm tra affected behavior sớm; full Story qualification chứng minh integrated capability vẫn đúng qua nhiều Ticket.
@@ -78,7 +79,8 @@ Human -> Orchestration Agent -> independent Agent tasks/threads
 - Story sở hữu persistent QA baseline; Ticket reference affected cases. QA dùng typed receipts và resolve executor theo surface/capability/environment, gồm Playwright, browser agent/DevTools observation, API, CLI/PTY, data hoặc structured manual adapter.
 - Work graph là nguồn sự thật của trạng thái công việc; message chỉ là transport và coordination evidence.
 - Worker Agent là task/thread độc lập, có danh tính, lease và worktree riêng; không đồng nghĩa với sub-agent.
-- Orchestration Agent hành xử như user ở lớp transport nhưng chỉ có bounded authority ở lớp nghiệp vụ.
+- Orchestration Agent hành xử như user ở lớp transport nhưng chỉ có bounded authority ở lớp nghiệp vụ; `PULSE.md` giữ human intent còn enforceable local grants nằm trong default-deny `.pulse/policy/authority.json`.
+- QA impact `unknown` không được ready; `none` và Story-close deferral cần explicit local grants, còn behavior work `required` chờ baseline/case resolver thay vì được bypass.
 - Worker không tự đổi acceptance, đóng Story, merge hoặc deploy nếu chưa được cấp quyền.
 - Ưu tiên single-agent reliability trước, sau đó mới thêm concurrency và peer-agent orchestration.
 

@@ -131,7 +131,7 @@ Quy tắc ownership:
 
 #### Decision frontier và routing
 
-Decision frontier là tập decision work `open + unblocked + unclaimed` có thể xử lý ngay để làm rõ đường tới destination. Nó khác execution frontier: decision frontier làm rõ contract; execution frontier chứa implementation Tickets đã qua ready gate.
+Decision frontier là tập typed decision-work Ticket `draft|shaped|ready`, precise, structurally executable và unblocked có thể xử lý ngay để làm rõ đường tới destination. Nó khác execution frontier: decision frontier làm rõ contract; execution frontier chứa implementation Tickets status `ready` có current readiness pass. Trước khi Phase 2 có lease resolver, cả hai projection ghi `claim_state=not_evaluated`; chúng không được giả `unclaimed=true` hoặc persist claim/frontier state vào graph.
 
 Mỗi uncertainty sắc nét được classify trước khi route:
 
@@ -263,6 +263,11 @@ pulse init
 pulse doctor [--json]
 
 pulse work list|show|create|edit|ready|close
+pulse work contract set <ticket-id> [--json]
+pulse work decision-contract set <ticket-id> [--json]
+pulse work qa-impact set <ticket-id> [--json]
+pulse work shaping apply|show|invalidate <work-id> [--json]
+pulse work readiness-policy show|validate [--json]
 pulse work packet <ticket-id> [--json]
 pulse work children <id> [--json]
 pulse work frontier --kind decision|execution [--for <epic-or-story-id>] [--json]
@@ -422,7 +427,9 @@ Target repo có thể khai báo `PULSE.md`:
 - migration-high-risk
 ```
 
-Policy mô tả intent/quyền. Command cụ thể nằm trong config/scripts có schema.
+`PULSE.md` mô tả human-readable intent và authority boundaries. Canonical enforceable principal/grant truth nằm riêng ở `.pulse/policy/authority.json`, default-deny, exact `(kind,id)` match, deterministic fingerprint và không có implicit human superuser. `.pulse/config.yaml` chỉ giữ operational configuration; command cụ thể nằm trong config/scripts có schema.
+
+Slice 7 grant vocabulary tối thiểu gồm shaping approval/apply/invalidate/destination redraw, `decision.accept`, shaped/ready transition, materialization downgrade, `documentation.defer`, `qa.none.approve` và `qa.defer_to_story_close`. Kernel derive required grants từ operation/materialization/posture; receipt không được tự chọn grant cần thiết. Đây là local policy guardrail, không phải cryptographic authentication trước malicious filesystem writer.
 
 ## Target repository layout
 
@@ -431,6 +438,8 @@ AGENTS.md
 PULSE.md
 .pulse/
   config.yaml
+  policy/
+    authority.json
   workgraph/
     manifest.json
     schemas/
@@ -468,4 +477,4 @@ works/
 
 Documentation taxonomy, registry, authority và validation contract thuộc [`10-documentation-system.md`](10-documentation-system.md). Generated navigation, section-level search/get, lexical cache và optional semantic adapter thuộc [`11-documentation-retrieval.md`](11-documentation-retrieval.md).
 
-Shared live coordination state nằm trong một repository-scoped local control directory, không nằm trong tracked work graph và không dùng SQLite ở v1. `AGENTS.md` chỉ là map. `PULSE.md` là policy. `docs/` là durable current knowledge. `works/` là active work prose. `.pulse/knowledge/` giữ reusable learning metadata/provenance, không phải current product truth. `.pulse/config.yaml` là machine-readable config. Không file nào cố sở hữu nhiều vai trò.
+Shared live coordination state nằm trong một repository-scoped local control directory, không nằm trong tracked work graph và không dùng SQLite ở v1. `AGENTS.md` chỉ là map. `PULSE.md` là human-readable policy intent. `.pulse/policy/authority.json` là enforceable principal/grant registry. `docs/` là durable current knowledge. `works/` là active work prose. `.pulse/knowledge/` giữ reusable learning metadata/provenance, không phải current product truth. `.pulse/config.yaml` là operational machine-readable config. Không file nào cố sở hữu nhiều vai trò.

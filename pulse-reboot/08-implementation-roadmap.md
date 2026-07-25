@@ -76,16 +76,20 @@ Mỗi phần salvage phải đi qua contract/test mới; không kéo cả depend
 - Top-level `works/` boundary, document registry schema và durable docs source hierarchy.
 - Node/edge create/show/list/edit với revision CAS, deterministic edge IDs và atomic rename.
 - Lifecycle, inverse projections, dependency cycles, readiness và supersession.
+- Phase 1 Slice 7 node schema v2: separate `contract_revision`, typed Ticket role `implementation|decision_work`, risk/materialization `unassessed` migration, implementation/decision-work contracts và minimal QA-impact posture.
 - `graph validate`, `graph neighborhood`, `graph export` và disposable fingerprinted cache.
 - Immutable semantic event files.
 - Receipt store/validator tối thiểu, gồm source/content-bound documentation receipt và shaping receipt schema/reference contract.
 - Knowledge manifest/schema/store tối thiểu cho one-learning-per-record, revision CAS, provenance relations, status/confidence/applicability/promotion và disposable index boundary.
-- Ready projection cho critical branch disposition, authority/approval và remaining uncertainty; kernel chỉ validate contract, không tự đánh giá semantic clarity.
-- Shaping-map reference/revision, destination/exit condition, canonical resolution pointers, bounded fog entries và derived decision/execution frontier queries.
+- Ready projection cho critical branch disposition, authority/approval và remaining uncertainty; kernel chỉ validate typed contracts, bindings, revisions, hashes và policy, không tự đánh giá semantic clarity.
+- Shaping receipt v2 + immutable Decision acceptance proof, receipt-first current pointer apply/invalidate và narrow readiness fingerprint không tự stale khi status/pointer-only revision đổi.
+- Tracked default-deny `.pulse/policy/authority.json` tách khỏi `PULSE.md` intent và `.pulse/config.yaml` operational settings; gồm explicit shaping/Decision/transition/docs/QA grants.
+- Minimal QA readiness boundary: `unknown` block; `none` cần rationale + `qa.none.approve`; `covered_by_story_close` cần Story owner/rationale + `qa.defer_to_story_close`; `required` unavailable tới Phase 3 baseline/case resolver.
+- Shaping-map reference/revision, destination/exit condition, canonical resolution pointers, bounded fog entries và derived decision/execution frontier queries; pre-lease output dùng `claim_state=not_evaluated`.
 - `pulse docs list|show|applicable` và exclusion của retired/migration docs.
 - Heading-aware section extraction, generated `_index.md`, disposable BM25+ index và `pulse docs index|status|search|get|tree`.
 
-**Exit:** Ticket local-first được tạo, sửa, link, query, transition và recover deterministic; applicable durable docs và ranked sections được resolve deterministic; xóa cache/projection rồi rebuild không làm đổi canonical truth hoặc expected retrieval semantics.
+**Exit:** Ticket local-first được tạo, sửa, link, query, shape và transition tới current `ready` deterministic; authority/QA/docs/Decision/shaping inputs được projection thành explainable readiness; decision/execution frontiers rebuild deterministic; applicable durable docs và ranked sections được resolve deterministic; xóa cache/projection rồi rebuild không làm đổi canonical truth hoặc expected retrieval semantics. `ready -> active`, lease/workspace, full work packet, full QA baseline/case validation và close gate vẫn thuộc Phase 2/3.
 
 ### Phase 2 - Single-agent run
 
@@ -216,16 +220,16 @@ Mỗi phần salvage phải đi qua contract/test mới; không kéo cả depend
 
 ## Orchestration acceptance scenarios
 
-66. Orchestrator tạo independent Codex task và assign Ticket cho identity cụ thể từ CLI execution packet.
-67. Assignment không acknowledged hết hạn, Ticket trở về executable và không ghost lease.
-68. Orchestrator restart recover Agent/thread/lease/mailbox cursors.
-69. Hai dispatch cạnh tranh không tạo hai exclusive Workers.
-70. Worker blocker được route tới Orchestrator/human và resume cùng thread.
-71. Reviewer/QA Agent dùng frozen snapshot, tạo valid receipt.
-72. Human takeover task; Orchestrator chuyển observe, không gửi lệnh xung đột.
-73. Worker không thể đóng Story, đổi acceptance/approved docs, merge hoặc deploy vượt policy.
-74. Direct delivery fail chỉ mang `fallback_stored`, không giả acknowledged.
-75. Active Ticket bị supersede giữ partial handoff/evidence và cleanup an toàn.
+- **66.** Orchestrator tạo independent Codex task và assign Ticket cho identity cụ thể từ CLI execution packet.
+- **67.** Assignment không acknowledged hết hạn, Ticket trở về executable và không ghost lease.
+- **68.** Orchestrator restart recover Agent/thread/lease/mailbox cursors.
+- **69.** Hai dispatch cạnh tranh không tạo hai exclusive Workers.
+- **70.** Worker blocker được route tới Orchestrator/human và resume cùng thread.
+- **71.** Reviewer/QA Agent dùng frozen snapshot, tạo valid receipt.
+- **72.** Human takeover task; Orchestrator chuyển observe, không gửi lệnh xung đột.
+- **73.** Worker không thể đóng Story, đổi acceptance/approved docs, merge hoặc deploy vượt policy.
+- **74.** Direct delivery fail chỉ mang `fallback_stored`, không giả acknowledged.
+- **75.** Active Ticket bị supersede giữ partial handoff/evidence và cleanup an toàn.
 
 ## Delivery risks
 
