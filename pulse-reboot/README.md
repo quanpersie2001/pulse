@@ -65,7 +65,7 @@ Nguyên tắc: L0 chỉ tóm tắt và liên kết. Mỗi quy tắc normative ch
 | `05-cross-agent-coordination.md` | Peer-agent identity, transport, lease, mailbox, authority và recovery |
 | `06-priority-reconciliation.md` | Semantic priority, decision/execution frontier scheduling, supersession và reconcile decisions |
 | `07-verification-ratchet.md` | Verification, review, doctor, eval, failure classification và harness backlog |
-| `08-implementation-roadmap.md` | Technology, migration, phases, acceptance scenarios và risks |
+| `08-implementation-roadmap.md` | Technology, brownfield/product migration boundaries, phases, acceptance scenarios và risks |
 | `09-decisions-and-dod.md` | Decision register và Definition of Done theo milestone |
 | `10-documentation-system.md` | Documentation taxonomy, source hierarchy, ownership, context routing, lifecycle, validation, promotion và drift |
 | `11-documentation-retrieval.md` | Generated indexes, section extraction, lexical search/get, cache, retrieval eval và optional semantic adapter |

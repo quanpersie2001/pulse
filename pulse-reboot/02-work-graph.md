@@ -116,11 +116,11 @@ Không lưu global counter/revision thường xuyên trong manifest vì nó sẽ
 
 ## Node contract
 
-Một implementation Ticket node sau Phase 1 Slice 7:
+Một implementation Ticket node theo node schema baseline v1:
 
 ```json
 {
-  "schema_version": 2,
+  "schema_version": 1,
   "id": "TK-031",
   "kind": "ticket",
   "revision": 9,
@@ -167,9 +167,13 @@ timestamp và current shaping pointer chỉ tăng `revision`; nếu chúng cũng
 `contract_revision`, shaping apply hoặc ready transition sẽ tự làm proof vừa
 được dùng trở thành stale.
 
-Known-schema migration không được tự đoán risk/materialization: legacy Ticket
-được migrate thành `unassessed` và bị chặn shaped/ready tới khi human/Agent có
-thẩm quyền classify rõ. Unknown schema predecessor phải fail closed.
+Bootstrap và create/edit path chỉ ghi node schema hiện tại (`schema_version: 1`).
+`risk` và `materialization` có thể dùng `unassessed` như giá trị enum domain khi
+classification chưa đủ chắc; đây là trạng thái explicit của contract, không phải
+default được suy ra từ bytes on-disk cũ. Khi repository schema hoặc canonical
+node bytes không khớp embedded current templates/schema, kernel refuse drift theo
+default-deny và chỉ ghi đè qua thao tác chủ ý có approval/backup/policy; không
+tự nâng cấp hoặc đoán missing fields.
 
 Node không embed child list, inverse relations, frontier list hoặc readiness
 boolean. Những giá trị đó được derive từ edge/evidence/docs/policy projections
@@ -356,7 +360,7 @@ Critical decision branches dùng disposition semantic sau; projection có thể 
 | `resolved` | Đã chọn direction/constraint | Canonical artifact ghi lựa chọn, rationale cần thiết và authority |
 | `rejected` | Nhánh đã xem xét nhưng loại | Lý do đủ để downstream không mở lại vô cớ |
 | `delegated` | Worker được quyền chọn | Nằm rõ trong implementation freedom và không thể đổi contract/invariant |
-| `deferred` | Chưa cần giải quyết trong slice này | Có reason, owner/target và trigger hoặc linked work; không làm current implementation sai |
+| `deferred` | Chưa cần giải quyết trong phạm vi execution hiện tại | Có reason, owner/target và trigger hoặc linked work; không làm current implementation sai |
 | `blocking` | Chưa thể dispatch an toàn | Ticket không được `ready` cho tới khi resolve, supersede hoặc chuyển thành discovery work phù hợp |
 
 `plan.md` chỉ materialize khi policy yêu cầu hoặc Worker cần durable plan. `validation.md` ghi developer verification và proof của Ticket; nó không thay `Story/qa.md`.
@@ -370,7 +374,7 @@ Mỗi behavior-affecting Ticket phải khai báo QA impact:
 | `none` | Không ảnh hưởng behavioral/public-risk contract | Có rationale + approval grant `qa.none.approve`; developer verification vẫn bắt buộc |
 | `unknown` | Chưa phân tích impact | Không được `ready` |
 
-QA impact reference canonical Story case IDs, new proposed cases và checkpoint reason. Worker được đề xuất case mới nhưng không tự đổi expected behavior/acceptance ngoài authority. Trong Slice 7, `required` được parse structurally nhưng gate là `unavailable` cho tới Phase 3 baseline/case resolver; kernel không giả case IDs là valid. Chi tiết execution scopes và change control thuộc [`03-story-qa.md`](03-story-qa.md).
+QA impact reference canonical Story case IDs, new proposed cases và checkpoint reason. Worker được đề xuất case mới nhưng không tự đổi expected behavior/acceptance ngoài authority. Trong Phase 1, `required` được parse structurally nhưng gate là `unavailable` cho tới Phase 3 baseline/case resolver; kernel không giả case IDs là valid. Chi tiết execution scopes và change control thuộc [`03-story-qa.md`](03-story-qa.md).
 
 ## Ready gate
 
@@ -381,7 +385,7 @@ Implementation Ticket chỉ `ready` khi CLI xác nhận deterministic conditions
 - Required changes, invariants và scope boundary đủ cụ thể.
 - Không còn critical ambiguity ở trạng thái `blocking` hoặc không được disposition.
 - Mọi planning-critical branch đã `resolved`, `rejected`, `delegated` hoặc `deferred` hợp lệ; `delegated` không vượt implementation freedom và `deferred` không làm current contract sai.
-- Nếu policy yêu cầu persisted shaping map: destination/exit condition có approval phù hợp, map revision khớp, decision frontier không còn item blocking Ticket, và `not_yet_specified` đã được review là bounded/non-blocking cho current slice.
+- Nếu policy yêu cầu persisted shaping map: destination/exit condition có approval phù hợp, map revision khớp, decision frontier không còn item blocking Ticket, và `not_yet_specified` đã được review là bounded/non-blocking cho execution contract hiện tại.
 - Hard blockers đều terminal/satisfied.
 - Required Decisions/Story approach tồn tại, có approval/authority phù hợp và revision khớp.
 - Implementation mode, plan policy, verification profile và handoff contract rõ.
@@ -509,6 +513,6 @@ Vì vậy local work graph đóng vai trò tracker source mà Linear đóng tron
 
 ## Close rules
 
-Ticket chỉ `done` khi acceptance map tới valid evidence, developer verification và required review pass, QA posture được disposition, required targeted checkpoint receipts pass trên source snapshot hiện tại, documentation impact đã update/classify/defer hợp policy, không còn blocking finding và handoff ghi remaining risk trung thực. Ticket checkpoint chỉ chứng minh affected slice; nó không thay full Story qualification.
+Ticket chỉ `done` khi acceptance map tới valid evidence, developer verification và required review pass, QA posture được disposition, required targeted checkpoint receipts pass trên source snapshot hiện tại, documentation impact đã update/classify/defer hợp policy, không còn blocking finding và handoff ghi remaining risk trung thực. Ticket checkpoint chỉ chứng minh affected change scope; nó không thay full Story qualification.
 
 Story chỉ `done` khi child outcome đủ, current `qa.md` coverage không còn gap bắt buộc và full applicable behavioral baseline pass trên integrated/frozen candidate snapshot theo [`03-story-qa.md`](03-story-qa.md). Epic đóng khi success signals được đánh giá, không chỉ vì mọi child Ticket mang nhãn `done`.

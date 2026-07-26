@@ -93,14 +93,14 @@ Core v1 hoàn thành khi:
 - [ ] Lifecycle, deterministic edges, inverse projection, revision CAS, atomic recovery và supersession có unit/integration tests.
 - [ ] `graph export` rebuild deterministic sau khi xóa cache; SQLite không cần cho correctness/performance target v1.
 - [ ] Agent nhận `work packet` đầy đủ, gồm required/suggested section refs và read budget, không phải search raw graph files hoặc đọc toàn bộ docs tree để hiểu assignment.
-- [ ] Node schema có normal CAS `revision` và semantic `contract_revision`; legacy Ticket migrate risk/materialization thành `unassessed` thay vì fabricated defaults.
+- [ ] Node schema có normal CAS `revision` và semantic `contract_revision`; create/edit/draft flows ghi assessed values hoặc explicit `unassessed` domain value cho risk/materialization khi classification chưa đủ chắc, không fabricate defaults và không derive values từ older on-disk shapes.
 - [ ] Ticket role `implementation|decision_work` có typed contract riêng; precise decision work không bị recursive readiness loop.
 - [ ] Implementation Ticket ready gate kiểm tra objective/current/target, work surface/anchors, required changes, invariants, acceptance, mode, plan policy, verification/evidence/handoff contract.
 - [ ] Ready gate từ chối critical ambiguity chưa disposition; `delegated` phải nằm trong implementation freedom, `deferred` phải có owner/target + trigger hoặc linked work, và semantic shaping receipt phải source/revision-bound khi policy yêu cầu.
 - [ ] `pulse-shape` đọc repo/docs trước khi hỏi, đi decision branches theo dependency order, hỏi human từng câu kèm recommendation khi có strong default, và materialize kết quả vào đúng Story/Ticket/Decision/docs owner theo risk.
 - [ ] R0 clear/low-risk work qua short ambiguity self-check mà không bị ép tạo full brainstorm artifact hoặc hỏi human không cần thiết.
 - [ ] R2/R3 multi-session shaping hỗ trợ approved destination/exit condition, canonical resolution pointers, derived decision frontier, bounded `not_yet_specified` và out-of-scope boundary.
-- [ ] Precise fact/intent/trade-off/fidelity/prerequisite gaps được route đúng sang research, grilling, Decision, prototype hoặc enabling work; fog chưa precise không bị pre-slice thành speculative Tickets.
+- [ ] Precise fact/intent/trade-off/fidelity/prerequisite gaps được route đúng sang research, grilling, Decision, prototype hoặc enabling work; fog chưa precise không bị materialize sớm thành speculative Tickets.
 - [ ] Resolve decision work reconcile dependencies, graduate newly precise fog, supersede/cancel invalidated branches và recompute readiness với CAS/audit.
 - [ ] CLI phân biệt decision frontier với execution frontier và không persist claim state hoặc frontier list thành writable graph truth; trước lease resolver claim state là `not_evaluated`.
 - [ ] `.pulse/policy/authority.json` validate/fingerprint deterministic, default-deny, không có implicit human superuser và kernel derive grant từ operation/posture.

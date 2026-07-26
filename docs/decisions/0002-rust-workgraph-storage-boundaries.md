@@ -2,28 +2,30 @@
 
 ## Status
 
-Accepted for the current Phase 1 experimental harness.
+Accepted for the current reboot baseline.
 
 ## Context
 
-Phase 1 Slice 1 asked for repository-scoped locking, sharded canonical JSON files,
-prepared transaction recovery, JSON Schema-backed contracts, and platform-aware
-atomic replace behavior. The Rust implementation currently enforces node/edge
-contracts with typed `serde` deserialization plus explicit semantic validators,
-and it ships repository-owned JSON Schema templates for drift detection and
-bootstrap.
+The workgraph implementation needs repository-scoped locking, sharded canonical
+JSON files, prepared transaction recovery, JSON Schema-backed contracts, and
+platform-aware atomic replace behavior. The Rust implementation currently
+enforces node/edge contracts with typed `serde` deserialization plus explicit
+semantic validators, and it ships repository-owned JSON Schema templates for
+bootstrap and drift detection against the current baseline.
 
 ## Decision
 
 - Workgraph reads and read-model projections acquire the same repository
   `WriteGuard` used by mutations, run transaction recovery first, then load and
-  validate canonical node/edge files. This is the v1 read-consistency mechanism
-  for multi-target supersession; it may serialize readers with writers, but it
+  validate canonical node/edge files. This is the read-consistency mechanism for
+  multi-target supersession; it may serialize readers with writers, but it
   prevents graph-semantic CLI reads from returning a half-applied supersession.
 - Runtime JSON Schema validation is not yet implemented. The accepted boundary
-  for this slice is: parse with strict typed models (`deny_unknown_fields` where
-  present), run explicit semantic validation, and validate repository schema
-  files by exact drift comparison against embedded templates/known predecessors.
+  is: parse with strict typed models (`deny_unknown_fields` where present), run
+  explicit semantic validation, and validate repository schema files by exact
+  drift comparison against embedded current templates. Any mismatch is refused
+  as schema drift unless an explicit operator action overwrites/regenerates the
+  repository baseline; the runtime accepts only the embedded current baseline.
   A future JSON Schema engine can be added without changing canonical file
   ownership.
 - Atomic replace is scoped to one file at a time. On Unix the implementation

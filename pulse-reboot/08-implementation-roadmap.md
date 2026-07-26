@@ -76,13 +76,13 @@ Mỗi phần salvage phải đi qua contract/test mới; không kéo cả depend
 - Top-level `works/` boundary, document registry schema và durable docs source hierarchy.
 - Node/edge create/show/list/edit với revision CAS, deterministic edge IDs và atomic rename.
 - Lifecycle, inverse projections, dependency cycles, readiness và supersession.
-- Phase 1 Slice 7 node schema v2: separate `contract_revision`, typed Ticket role `implementation|decision_work`, risk/materialization `unassessed` migration, implementation/decision-work contracts và minimal QA-impact posture.
+- Final node schema baseline v1 fields: separate `contract_revision`, typed Ticket role `implementation|decision_work`, `risk`/`materialization` cho phép explicit `unassessed` domain value khi classification chưa đủ chắc, implementation/decision-work contracts và minimal QA-impact posture.
 - `graph validate`, `graph neighborhood`, `graph export` và disposable fingerprinted cache.
 - Immutable semantic event files.
 - Receipt store/validator tối thiểu, gồm source/content-bound documentation receipt và shaping receipt schema/reference contract.
 - Knowledge manifest/schema/store tối thiểu cho one-learning-per-record, revision CAS, provenance relations, status/confidence/applicability/promotion và disposable index boundary.
 - Ready projection cho critical branch disposition, authority/approval và remaining uncertainty; kernel chỉ validate typed contracts, bindings, revisions, hashes và policy, không tự đánh giá semantic clarity.
-- Shaping receipt v2 + immutable Decision acceptance proof, receipt-first current pointer apply/invalidate và narrow readiness fingerprint không tự stale khi status/pointer-only revision đổi.
+- Shaping receipt contract + immutable Decision acceptance proof, receipt-first current pointer apply/invalidate và narrow readiness fingerprint không tự stale khi status/pointer-only revision đổi.
 - Tracked default-deny `.pulse/policy/authority.json` tách khỏi `PULSE.md` intent và `.pulse/config.yaml` operational settings; gồm explicit shaping/Decision/transition/docs/QA grants.
 - Minimal QA readiness boundary: `unknown` block; `none` cần rationale + `qa.none.approve`; `covered_by_story_close` cần Story owner/rationale + `qa.defer_to_story_close`; `required` unavailable tới Phase 3 baseline/case resolver.
 - Shaping-map reference/revision, destination/exit condition, canonical resolution pointers, bounded fog entries và derived decision/execution frontier queries; pre-lease output dùng `claim_state=not_evaluated`.
@@ -267,4 +267,4 @@ Giảm thiểu: Phase 5 không bắt đầu trước khi resume, lease, receipt 
 
 ### Duy trì hai kiến trúc
 
-Giảm thiểu: archive rõ, migration một chiều, không compatibility layer vô thời hạn.
+Giảm thiểu: archive rõ, brownfield/product migration một chiều khi cần, không compatibility layer vô thời hạn; implementation slices nội bộ không tạo schema bridge hoặc compatibility target riêng.

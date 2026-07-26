@@ -125,7 +125,7 @@ Quy tắc ownership:
 
 - canonical answer sống ở đúng Decision, research/prototype resolution hoặc owning work contract; map chỉ gist + link;
 - một câu hỏi đủ sắc nét thì trở thành typed decision work, kể cả khi đang blocked;
-- một vùng uncertainty chưa thể viết thành precise question ở `not_yet_specified`, không pre-slice thành speculative Tickets;
+- một vùng uncertainty chưa thể viết thành precise question ở `not_yet_specified`, không materialize sớm thành speculative Tickets;
 - out-of-scope không phải fog và không tự graduate trừ khi destination được human-authorized redraw;
 - map revision phải gắn source work revisions để stale shaping result không mở readiness sai.
 
@@ -152,7 +152,7 @@ Các loại này là decision-work roles, không bắt buộc thêm top-level no
 Phân biệt:
 
 - `blocking`: precise question đã biết và phải resolve trước execution;
-- `deferred`: precise question đã biết nhưng current slice vẫn đúng khi chưa resolve, có owner/trigger;
+- `deferred`: precise question đã biết nhưng execution scope hiện tại vẫn đúng khi chưa resolve, có owner/trigger;
 - `not_yet_specified`: chưa đủ evidence để biết câu hỏi chính xác là gì;
 - `out_of_scope`: đã chủ động loại khỏi destination hiện tại.
 
@@ -429,7 +429,7 @@ Target repo có thể khai báo `PULSE.md`:
 
 `PULSE.md` mô tả human-readable intent và authority boundaries. Canonical enforceable principal/grant truth nằm riêng ở `.pulse/policy/authority.json`, default-deny, exact `(kind,id)` match, deterministic fingerprint và không có implicit human superuser. `.pulse/config.yaml` chỉ giữ operational configuration; command cụ thể nằm trong config/scripts có schema.
 
-Slice 7 grant vocabulary tối thiểu gồm shaping approval/apply/invalidate/destination redraw, `decision.accept`, shaped/ready transition, materialization downgrade, `documentation.defer`, `qa.none.approve` và `qa.defer_to_story_close`. Kernel derive required grants từ operation/materialization/posture; receipt không được tự chọn grant cần thiết. Đây là local policy guardrail, không phải cryptographic authentication trước malicious filesystem writer.
+Phase 1 authority grant vocabulary tối thiểu gồm shaping approval/apply/invalidate/destination redraw, `decision.accept`, shaped/ready transition, materialization downgrade, `documentation.defer`, `qa.none.approve` và `qa.defer_to_story_close`. Kernel derive required grants từ operation/materialization/posture; receipt không được tự chọn grant cần thiết. Đây là local policy guardrail, không phải cryptographic authentication trước malicious filesystem writer.
 
 ## Target repository layout
 
