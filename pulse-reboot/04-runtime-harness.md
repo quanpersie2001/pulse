@@ -392,11 +392,13 @@ Một message “done” không đổi canonical work. Một Agent biến mất 
 
 ## Event envelope
 
+Semantic events use one current envelope v1 baseline:
+
 ```json
 {
-  "event_version": 1,
-  "event_id": "evt_01J...",
-  "type": "ticket.handoff_submitted",
+  "schema_version": 1,
+  "id": "evt_01J...",
+  "event_type": "ticket.handoff_submitted",
   "occurred_at": "2026-07-18T02:00:00Z",
   "actor": {"kind": "agent", "id": "agent_codex_17"},
   "subject": {"kind": "ticket", "id": "TK-031", "revision": 7},
@@ -404,6 +406,12 @@ Một message “done” không đổi canonical work. Một Agent biến mất 
   "payload": {"receipt_id": "handoff_01J..."}
 }
 ```
+
+`schema_version`, `id`, `event_type`, `occurred_at`, typed `actor`, typed
+`subject`, optional typed `correlation`, and event-specific `payload` form the
+shared envelope. The current pre-release implementation is updated to this owner
+contract in place; it does not introduce an event v2 or preserve the earlier
+internal string actor/subject shape as a supported predecessor.
 
 Mỗi semantic event là một immutable file `.pulse/events/<date>/<event-id>.json`. Không dùng một tracked monthly JSONL vì concurrent append giữa worktrees tạo merge hotspot. Raw high-volume runtime logs có thể gitignored; secrets và raw prompts nhạy cảm phải được redact hoặc lưu qua protected artifact reference.
 

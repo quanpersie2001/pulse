@@ -76,8 +76,9 @@
 | D-65 | Phase 1 ready có minimal QA gate: `unknown` block; QA `none` cần `qa.none.approve`; `covered_by_story_close` cần `qa.defer_to_story_close`; `required` chờ Phase 3 baseline/case resolver | Accept |
 | D-66 | Readiness/frontiers là versioned derived projections với narrow relevant-input fingerprint; stale ready bị loại khỏi execution frontier, claim trước lease resolver là `not_evaluated` | Accept |
 | D-67 | Hard-to-reverse Decision reference cần immutable acceptance proof bind contract revision/content và actor có `decision.accept`; existence hoặc shaping mention không đủ | Accept |
+| D-68 | Trước initial Core v1, mỗi persisted/public contract family có một current baseline; Phase/Slice không phải version và internal development state không tạo predecessor/migration support | Accept |
 
-Khi một quyết định đổi, tạo Decision work item, cập nhật file chủ đề sở hữu và root summary. Không sửa riêng bảng này.
+Khi một quyết định đổi, tạo Decision work item, cập nhật file chủ đề sở hữu và root summary. Không sửa riêng bảng này. D-68 được ghi trong [Decision 0003](../docs/decisions/0003-pre-release-contract-baselines.md).
 
 ## Core v1 Definition of Done
 
