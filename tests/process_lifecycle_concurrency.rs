@@ -36,7 +36,19 @@ fn l32_two_processes_transitioning_same_expected_revision_have_one_winner() {
     let created = run_ok(
         &repo,
         &[
-            "work", "create", "--kind", "ticket", "--title", "Original", "--json",
+            "work",
+            "create",
+            "--kind",
+            "ticket",
+            "--title",
+            "Original",
+            "--role",
+            "implementation",
+            "--risk",
+            "low",
+            "--materialization",
+            "R0",
+            "--json",
         ],
     );
     let id = created["value"]["id"].as_str().unwrap().to_string();

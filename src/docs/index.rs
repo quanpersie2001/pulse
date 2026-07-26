@@ -286,7 +286,7 @@ pub fn retrieval_fingerprint(
         "tokenizer_config_version": TOKENIZER_CONFIG_VERSION,
         "retrieval_config": config,
         "projection_config": crate::docs::projection::projection_config(&DocsRegistry {
-            schema_version: crate::docs::model::DOCS_REGISTRY_SCHEMA_VERSION_V2,
+            schema_version: crate::docs::model::DOCS_REGISTRY_SCHEMA_VERSION,
             revision: 1,
             repository_id: "repo_fingerprint_placeholder".to_string(),
             documents: eligible.iter().map(|(d, _)| (*d).clone()).collect(),

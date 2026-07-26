@@ -1,5 +1,5 @@
 //! Section/chunk models, stable anchors, section refs and versioned chunk
-//! limits for documentation extraction (Slice 5, Phase 2).
+//! limits for documentation extraction.
 //!
 //! This module owns the *identity* layer of extracted documentation sections:
 //!
@@ -123,7 +123,7 @@ pub struct SectionRecord {
     /// Stable ref. `DOC-ID#anchor` for an unchunked section, `DOC-ID#anchor@N`
     /// for a chunk.
     pub section_ref: String,
-    /// Same as [`Self::section_ref`] in this slice.
+    /// Same as [`Self::section_ref`] in the current section record contract.
     pub section_id: String,
     /// Owning stable document ID.
     pub document_id: String,

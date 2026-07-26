@@ -9,19 +9,9 @@ use pulse::id::WorkKind;
 
 fn node(id: &str, kind: WorkKind, status: NodeStatus) -> Node {
     let now = Utc.timestamp_opt(1, 0).unwrap();
-    Node {
-        schema_version: 1,
-        id: id.to_string(),
-        kind,
-        revision: 1,
-        title: id.to_string(),
-        status,
-        status_reason: None,
-        documentation: None,
-        content_dir: format!("works/{id}"),
-        created_at: now,
-        updated_at: now,
-    }
+    let mut node = Node::new(id.to_string(), kind, id.to_string(), now).unwrap();
+    node.status = status;
+    node
 }
 
 fn edge(edge_type: EdgeType, from: &str, to: &str) -> Edge {

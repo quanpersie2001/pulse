@@ -1,4 +1,4 @@
-//! Markdown section extraction adapter (Slice 5, Phase 2).
+//! Markdown section extraction adapter for documentation retrieval.
 //!
 //! This module owns the *extraction semantics*: turning registered, current,
 //! UTF-8 Markdown bytes into deterministic [`SectionRecord`]s with stable

@@ -92,7 +92,7 @@ fn setup_repo() -> tempfile::TempDir {
     fs::write(repo.join("AGENTS.md"), b"# Repo Map\n").unwrap();
     fs::write(repo.join("PULSE.md"), b"# Repo Policy\n").unwrap();
     let registry = DocsRegistry {
-        schema_version: 2,
+        schema_version: 1,
         revision: 1,
         repository_id: manifest.repository_id,
         documents: vec![
@@ -786,7 +786,7 @@ fn stale_section_ref_candidates_rank_by_anchor_tokens_and_cached_source_proximit
 }
 
 #[test]
-fn docs_slice5_schemas_are_embedded_and_well_formed() {
+fn docs_retrieval_schemas_are_embedded_and_well_formed() {
     for schema in [
         pulse::docs::DOCS_SECTION_SCHEMA,
         pulse::docs::DOCS_INDEX_STATE_SCHEMA,

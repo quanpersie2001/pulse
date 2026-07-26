@@ -178,7 +178,19 @@ fn killed_after_intent_recovers_by_cleaning_uncommitted_transaction() {
     let created = run_ok(
         &repo,
         &[
-            "work", "create", "--kind", "ticket", "--title", "Before", "--json",
+            "work",
+            "create",
+            "--kind",
+            "ticket",
+            "--title",
+            "Before",
+            "--role",
+            "implementation",
+            "--risk",
+            "low",
+            "--materialization",
+            "R0",
+            "--json",
         ],
     );
     let id = created["value"]["id"].as_str().unwrap().to_string();
@@ -199,7 +211,19 @@ fn killed_after_canonical_recovers_missing_event_without_reapplying_node() {
     let created = run_ok(
         &repo,
         &[
-            "work", "create", "--kind", "ticket", "--title", "Before", "--json",
+            "work",
+            "create",
+            "--kind",
+            "ticket",
+            "--title",
+            "Before",
+            "--role",
+            "implementation",
+            "--risk",
+            "low",
+            "--materialization",
+            "R0",
+            "--json",
         ],
     );
     let id = created["value"]["id"].as_str().unwrap().to_string();
@@ -226,7 +250,19 @@ fn killed_after_event_recovers_by_cleaning_intent_without_duplicate_event() {
     let created = run_ok(
         &repo,
         &[
-            "work", "create", "--kind", "ticket", "--title", "Before", "--json",
+            "work",
+            "create",
+            "--kind",
+            "ticket",
+            "--title",
+            "Before",
+            "--role",
+            "implementation",
+            "--risk",
+            "low",
+            "--materialization",
+            "R0",
+            "--json",
         ],
     );
     let id = created["value"]["id"].as_str().unwrap().to_string();
@@ -306,7 +342,19 @@ fn killed_receipt_record_after_file_recovers_event_once() {
     let created = run_ok(
         &repo,
         &[
-            "work", "create", "--kind", "ticket", "--title", "Receipt", "--json",
+            "work",
+            "create",
+            "--kind",
+            "ticket",
+            "--title",
+            "Receipt",
+            "--role",
+            "implementation",
+            "--risk",
+            "low",
+            "--materialization",
+            "R0",
+            "--json",
         ],
     );
     let id = created["value"]["id"].as_str().unwrap();

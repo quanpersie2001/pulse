@@ -1,16 +1,15 @@
 //! Shared documentation policy: lifecycle/path rules with consumer-specific
 //! eligibility.
 //!
-//! Slice 5 separates two eligibility notions that Slice 4 conflated via a
-//! single applicability path:
+//! The documentation system separates two eligibility notions:
 //!
-//! - **Applicability eligibility** (Slice 4): deterministic document-level
-//!   routing for a work item — is this doc *required* context? Lives in
+//! - **Applicability eligibility**: deterministic document-level routing for a
+//!   work item — is this doc *required* context? Lives in
 //!   [`crate::docs::applicability`].
-//! - **Search/retrieval eligibility** (Slice 5): is this document a valid input
-//!   to the lexical index and `search`? Informational docs are searchable but
-//!   never become required applicability; retired/superseded/draft/protected
-//!   docs are excluded by default.
+//! - **Search/retrieval eligibility**: is this document a valid input to the
+//!   lexical index and `search`? Informational docs are searchable but never
+//!   become required applicability; retired/superseded/draft/protected docs are
+//!   excluded by default.
 //!
 //! This module owns the shared lifecycle/path predicates and the retrieval
 //! eligibility resolver so both consumers share one source of truth without one

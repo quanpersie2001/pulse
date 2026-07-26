@@ -55,6 +55,12 @@ fn setup_repo() -> (TempDir, String) {
             "ticket",
             "--title",
             "Knowledge source",
+            "--role",
+            "implementation",
+            "--risk",
+            "low",
+            "--materialization",
+            "R0",
             "--json",
         ],
     );

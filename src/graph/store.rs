@@ -8,6 +8,9 @@ use serde_json::json;
 
 use crate::canonical_json::{hash_bytes, to_canonical_bytes};
 use crate::event::{event_path, EventEnvelope};
+use crate::graph::contract::{
+    validate_public_create_classification, ContractValidationMode, PublicCreateClassification,
+};
 use crate::graph::edge::{canonical_endpoints, deterministic_edge_id, Edge, EdgeType};
 use crate::graph::executability::{structural_executability, StructuralExecutabilityReport};
 use crate::graph::lifecycle::{status_requires_reason, validate_transition, TransitionReason};
@@ -16,7 +19,6 @@ use crate::graph::node::{
     DocumentationImpact, DocumentationImpactPosture, DocumentationMetadata, DocumentationRouting,
     Node, NodeStatus, StatusReason,
 };
-use crate::graph::projection::PROJECTION_SCHEMA_VERSION;
 use crate::graph::projection::{export_with_cache, graph_fingerprint, GraphProjection};
 use crate::graph::rollup::{rollup, RollupReport};
 use crate::graph::traversal::{affected_by, neighborhood, AffectedByReport, NeighborhoodReport};
@@ -33,11 +35,6 @@ use crate::storage::transaction::{
 };
 use crate::storage::{self, WriteGuard};
 use crate::{PulseError, PulseResult};
-
-const SLICE1_NODE_SCHEMA_HASH: &str =
-    "sha256:1590def10b4715549d6d735352f2033bb128808dab7e56a138689bb0a46af589";
-const SLICE3_NODE_SCHEMA_HASH: &str =
-    "sha256:b327203245e5a9ecbcc11182ceff1decb3aaf575e99b0ada12994cba81e33f8f";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -161,13 +158,63 @@ impl JsonGraphStore {
     }
 
     pub fn bootstrap_unlocked(&self) -> PulseResult<()> {
+        // Fresh baseline initialization writes the node schema before durable
+        // manifest/edge schema markers. If interrupted, only the safe current
+        // partial layout may be completed; unknown existing state remains
+        // refused without overwrite.
+        match self.classify_workgraph_bootstrap_state()? {
+            WorkgraphBootstrapState::Empty | WorkgraphBootstrapState::SafePartialCurrent => {
+                self.ensure_current_workgraph_baseline_unlocked()?;
+            }
+            WorkgraphBootstrapState::ExistingCurrent => {
+                self.ensure_workgraph_layout_unlocked()?;
+            }
+            WorkgraphBootstrapState::MissingNodeSchemaWithState => {
+                return Err(PulseError::validation(
+                    "node_schema_missing_refused",
+                    "node schema is missing while existing workgraph state is present; refusing bootstrap without overwrite",
+                ));
+            }
+            WorkgraphBootstrapState::NodeSchemaDrift { hash } => {
+                return Err(PulseError::validation(
+                    "node_schema_drift_refused",
+                    format!(
+                        "refusing to overwrite node schema drift {}; resolve schema state explicitly",
+                        hash
+                    ),
+                ));
+            }
+            WorkgraphBootstrapState::UnexpectedPartialState => {
+                return Err(PulseError::validation(
+                    "workgraph_partial_state_refused",
+                    "workgraph contains partial state that is not a safe current baseline initialization; refusing bootstrap without overwrite",
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    /// Create the complete current baseline. The node schema is written first so
+    /// a fresh initialization interrupted after durable marker writes remains a
+    /// recognizable current partial layout.
+    fn ensure_current_workgraph_baseline_unlocked(&self) -> PulseResult<()> {
+        let wg = self.workgraph_dir();
+        fs::create_dir_all(wg.join("schemas"))
+            .map_err(|e| PulseError::io(wg.join("schemas"), e))?;
+        self.write_current_node_schema_if_absent_unlocked()?;
+        self.ensure_workgraph_layout_unlocked()
+    }
+
+    /// Create workgraph directories, manifest, and edge schema without touching an
+    /// existing node schema. Used after classification has already proven the
+    /// repository is either fresh or already on the current baseline.
+    fn ensure_workgraph_layout_unlocked(&self) -> PulseResult<()> {
         let wg = self.workgraph_dir();
         fs::create_dir_all(wg.join("nodes")).map_err(|e| PulseError::io(wg.join("nodes"), e))?;
         fs::create_dir_all(wg.join("edges")).map_err(|e| PulseError::io(wg.join("edges"), e))?;
         fs::create_dir_all(wg.join("schemas"))
             .map_err(|e| PulseError::io(wg.join("schemas"), e))?;
         self.write_if_absent(&wg.join("manifest.json"), &Manifest::default())?;
-        self.write_or_upgrade_node_schema_unlocked()?;
         self.write_bytes_if_absent(&wg.join("schemas/edge.schema.json"), EDGE_SCHEMA.as_bytes())?;
         Ok(())
     }
@@ -178,11 +225,50 @@ impl JsonGraphStore {
         title: String,
         ctx: OperationContext,
     ) -> PulseResult<MutationOutcome<Node>> {
+        self.create_node_with_classification_context(
+            kind,
+            title,
+            PublicCreateClassification::default(),
+            ContractValidationMode::CanonicalStorage,
+            ctx,
+        )
+    }
+
+    pub fn create_node_public_with_context(
+        &self,
+        kind: WorkKind,
+        title: String,
+        classification: PublicCreateClassification,
+        ctx: OperationContext,
+    ) -> PulseResult<MutationOutcome<Node>> {
+        validate_public_create_classification(kind, &classification)?;
+        self.create_node_with_classification_context(
+            kind,
+            title,
+            classification,
+            ContractValidationMode::PublicCreate,
+            ctx,
+        )
+    }
+
+    fn create_node_with_classification_context(
+        &self,
+        kind: WorkKind,
+        title: String,
+        classification: PublicCreateClassification,
+        validation_mode: ContractValidationMode,
+        ctx: OperationContext,
+    ) -> PulseResult<MutationOutcome<Node>> {
         let _guard = WriteGuard::acquire(&self.repo_root)?;
         self.bootstrap_unlocked()?;
         recover_prepared_transactions(&self.repo_root)?;
         let id = self.allocate_id(kind)?;
-        let node = Node::new(id.clone(), kind, title, ctx.now)?;
+        let mut node = Node::new(id.clone(), kind, title, ctx.now)?;
+        if kind == WorkKind::Ticket && classification.any_present() {
+            node.role = classification.role;
+            node.risk = classification.risk;
+            node.materialization = classification.materialization;
+        }
         let nodes = self.load_nodes()?;
         let edges = self.load_edges()?;
         validate_id_for_kind(&id, kind)?;
@@ -201,6 +287,7 @@ impl JsonGraphStore {
             &edge_values,
         )
         .into_result()?;
+        crate::graph::contract::validate_node_contract_result(&node, validation_mode)?;
         let after_bytes = to_canonical_bytes(&node)?;
         self.commit_mutation(
             "work.node.created",
@@ -400,6 +487,7 @@ impl JsonGraphStore {
         }
         let previous_documentation = node.documentation.clone();
         node.documentation = Some(documentation.clone());
+        node.contract_revision += 1;
         node.revision += 1;
         node.updated_at = ctx.now;
         let node_values = self
@@ -673,7 +761,7 @@ impl JsonGraphStore {
         ) {
             return Err(PulseError::validation(
                 "supersession_unavailable",
-                format!("status {:?} cannot be superseded in Slice 2", old.status),
+                format!("status {:?} cannot be superseded", old.status),
             ));
         }
         if !existing_outgoing.is_empty() {
@@ -1356,9 +1444,15 @@ impl JsonGraphStore {
 
     pub fn recover(&self) -> PulseResult<()> {
         let _guard = WriteGuard::acquire(&self.repo_root)?;
-        self.bootstrap_unlocked()?;
+        // Recovery must not create layout/bootstrap files just to locate prepared
+        // intents. Runtime transaction recovery alone is enough to roll forward
+        // partial work.
         recover_prepared_transactions(&self.repo_root)?;
         Ok(())
+    }
+
+    fn classify_workgraph_bootstrap_state(&self) -> PulseResult<WorkgraphBootstrapState> {
+        classify_workgraph_bootstrap_state(&self.workgraph_dir())
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1499,7 +1593,7 @@ impl JsonGraphStore {
         );
     }
 
-    fn write_or_upgrade_node_schema_unlocked(&self) -> PulseResult<()> {
+    fn write_current_node_schema_if_absent_unlocked(&self) -> PulseResult<()> {
         let path = self.workgraph_dir().join("schemas/node.schema.json");
         if !path.exists() {
             storage::atomic_write(&path, NODE_SCHEMA.as_bytes())?;
@@ -1510,59 +1604,13 @@ impl JsonGraphStore {
             return Ok(());
         }
         let current_hash = hash_bytes(&current);
-        if ![SLICE1_NODE_SCHEMA_HASH, SLICE3_NODE_SCHEMA_HASH].contains(&current_hash.as_str()) {
-            return Err(PulseError::validation(
-                "node_schema_upgrade_refused",
-                format!(
-                    "refusing to overwrite unknown node schema {}; expected known predecessor",
-                    current_hash
-                ),
-            ));
-        }
-        // Drain any prepared transaction before replacing the schema template so recovery
-        // evidence is interpreted against a stable predecessor contract.
-        recover_prepared_transactions(&self.repo_root)?;
-        // Prove every existing node still parses and validates under the typed Slice 2 model.
-        let manifest = self.manifest()?;
-        let node_files = self.load_node_files()?;
-        for (_, node) in &node_files {
-            validate_node_filename(&self.node_path(&node.id), node)?;
-            crate::graph::validate::validate_node(&self.repo_root, &manifest, node)?;
-        }
-        let event = EventEnvelope::new(
-            new_event_id(),
-            "work.schema.node.upgraded",
-            "system:pulse",
-            "schemas/node.schema.json",
-            json!({
-                "from_schema_hash": current_hash,
-                "to_schema_hash": hash_bytes(NODE_SCHEMA.as_bytes()),
-                "node_count": node_files.len(),
-                "projection_schema_version": PROJECTION_SCHEMA_VERSION,
-                "gate_coverage": ["write_fence", "transaction_recovery", "known_predecessor_schema", "typed_node_parse"]
-            }),
-            Utc::now(),
-        );
-        let event_path = event_path(&self.repo_root, &event);
-        let intent = TransactionIntent::prepared(
-            event.id.clone(),
-            "work.schema.node.upgraded",
-            "system:pulse",
-            path.clone(),
-            event_path,
-            FileState::Present {
-                hash: current_hash,
-                revision: 0,
-            },
-            FileState::Present {
-                hash: hash_bytes(NODE_SCHEMA.as_bytes()),
-                revision: 0,
-            },
-            serde_json::to_value(event)?,
-        )?;
-        let prepared = prepare_transaction(&self.repo_root, intent)?;
-        commit_prepared_transaction(&prepared, NODE_SCHEMA.as_bytes(), self.failpoint)?;
-        Ok(())
+        Err(PulseError::validation(
+            "node_schema_drift_refused",
+            format!(
+                "refusing to overwrite node schema drift {}; resolve schema state explicitly",
+                current_hash
+            ),
+        ))
     }
 
     fn validate_schema_file(
@@ -1587,7 +1635,7 @@ impl JsonGraphStore {
                         Ok(embedded_schema) if repo_schema != embedded_schema => report.push_error(
                             drift_code,
                             format!(
-                                "schema {} differs from slice schema template",
+                                "schema {} differs from embedded schema template",
                                 full.display()
                             ),
                         ),
@@ -1729,6 +1777,180 @@ impl JsonGraphStore {
         }
         storage::atomic_write(path, bytes)
     }
+}
+
+enum WorkgraphBootstrapState {
+    Empty,
+    SafePartialCurrent,
+    ExistingCurrent,
+    MissingNodeSchemaWithState,
+    NodeSchemaDrift { hash: String },
+    UnexpectedPartialState,
+}
+
+struct WorkgraphBootstrapInspection {
+    has_manifest: bool,
+    has_node_schema: bool,
+    has_edge_schema: bool,
+    has_node_files: bool,
+    has_edge_files: bool,
+    has_only_safe_entries: bool,
+    manifest_matches: bool,
+    node_schema_matches: Option<bool>,
+    edge_schema_matches: bool,
+    node_schema_hash: Option<String>,
+}
+
+impl WorkgraphBootstrapInspection {
+    fn has_any_current_marker(&self) -> bool {
+        self.has_manifest || self.has_node_schema || self.has_edge_schema
+    }
+
+    fn all_present_markers_match(&self) -> bool {
+        self.manifest_matches && self.node_schema_matches != Some(false) && self.edge_schema_matches
+    }
+}
+
+fn classify_workgraph_bootstrap_state(wg: &Path) -> PulseResult<WorkgraphBootstrapState> {
+    let inspection = inspect_workgraph_bootstrap_state(wg)?;
+    if !inspection.has_only_safe_entries {
+        return Ok(WorkgraphBootstrapState::UnexpectedPartialState);
+    }
+    if inspection.node_schema_matches == Some(false) {
+        return Ok(WorkgraphBootstrapState::NodeSchemaDrift {
+            hash: inspection.node_schema_hash.unwrap_or_default(),
+        });
+    }
+    if !inspection.all_present_markers_match() {
+        return Ok(WorkgraphBootstrapState::UnexpectedPartialState);
+    }
+    if inspection.has_node_files || inspection.has_edge_files {
+        return Ok(if inspection.has_node_schema {
+            WorkgraphBootstrapState::ExistingCurrent
+        } else {
+            WorkgraphBootstrapState::MissingNodeSchemaWithState
+        });
+    }
+    if inspection.has_any_current_marker() {
+        return Ok(
+            if inspection.has_manifest && inspection.has_node_schema && inspection.has_edge_schema {
+                WorkgraphBootstrapState::ExistingCurrent
+            } else {
+                WorkgraphBootstrapState::SafePartialCurrent
+            },
+        );
+    }
+    Ok(WorkgraphBootstrapState::Empty)
+}
+
+fn inspect_workgraph_bootstrap_state(wg: &Path) -> PulseResult<WorkgraphBootstrapInspection> {
+    if !wg.exists() {
+        return Ok(WorkgraphBootstrapInspection {
+            has_manifest: false,
+            has_node_schema: false,
+            has_edge_schema: false,
+            has_node_files: false,
+            has_edge_files: false,
+            has_only_safe_entries: true,
+            manifest_matches: true,
+            node_schema_matches: None,
+            edge_schema_matches: true,
+            node_schema_hash: None,
+        });
+    }
+
+    let manifest_path = wg.join("manifest.json");
+    let node_schema_path = wg.join("schemas/node.schema.json");
+    let edge_schema_path = wg.join("schemas/edge.schema.json");
+    let manifest_matches =
+        current_marker_matches(&manifest_path, &to_canonical_bytes(&Manifest::default())?)?;
+    let node_schema_bytes = read_optional_bytes(&node_schema_path)?;
+    let node_schema_matches = node_schema_bytes
+        .as_deref()
+        .map(|current| current == NODE_SCHEMA.as_bytes());
+    let node_schema_hash = node_schema_bytes
+        .as_deref()
+        .filter(|current| *current != NODE_SCHEMA.as_bytes())
+        .map(hash_bytes);
+    Ok(WorkgraphBootstrapInspection {
+        has_manifest: manifest_path.exists(),
+        has_node_schema: node_schema_path.exists(),
+        has_edge_schema: edge_schema_path.exists(),
+        has_node_files: directory_has_json_files(&wg.join("nodes"))?,
+        has_edge_files: directory_has_json_files(&wg.join("edges"))?,
+        has_only_safe_entries: workgraph_subtree_has_only_allowed_entries(
+            wg,
+            &[
+                "manifest.json",
+                "schemas",
+                "schemas/node.schema.json",
+                "schemas/edge.schema.json",
+                "nodes",
+                "edges",
+            ],
+        )?,
+        manifest_matches,
+        node_schema_matches,
+        edge_schema_matches: current_marker_matches(&edge_schema_path, EDGE_SCHEMA.as_bytes())?,
+        node_schema_hash,
+    })
+}
+
+fn current_marker_matches(path: &Path, expected: &[u8]) -> PulseResult<bool> {
+    Ok(match read_optional_bytes(path)? {
+        Some(current) => current == expected,
+        None => true,
+    })
+}
+
+fn read_optional_bytes(path: &Path) -> PulseResult<Option<Vec<u8>>> {
+    match fs::read(path) {
+        Ok(bytes) => Ok(Some(bytes)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(PulseError::io(path, error)),
+    }
+}
+
+fn directory_has_json_files(dir: &Path) -> PulseResult<bool> {
+    if !dir.exists() {
+        return Ok(false);
+    }
+    for entry in fs::read_dir(dir).map_err(|e| PulseError::io(dir, e))? {
+        let entry = entry.map_err(|e| PulseError::io(dir, e))?;
+        let path = entry.path();
+        if path.extension().and_then(|s| s.to_str()) == Some("json") {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+fn workgraph_subtree_has_only_allowed_entries(root: &Path, allowed: &[&str]) -> PulseResult<bool> {
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        for entry in fs::read_dir(&dir).map_err(|e| PulseError::io(&dir, e))? {
+            let entry = entry.map_err(|e| PulseError::io(&dir, e))?;
+            let path = entry.path();
+            let Ok(relative) = path.strip_prefix(root) else {
+                return Ok(false);
+            };
+            let relative = relative.to_string_lossy();
+            if !allowed.iter().any(|candidate| *candidate == relative)
+                && !relative.starts_with("nodes/")
+                && !relative.starts_with("edges/")
+            {
+                return Ok(false);
+            }
+            if entry
+                .file_type()
+                .map_err(|e| PulseError::io(&path, e))?
+                .is_dir()
+            {
+                stack.push(path);
+            }
+        }
+    }
+    Ok(true)
 }
 
 fn superseded_by_edges(edges: &[Edge], from: &str) -> Vec<Edge> {

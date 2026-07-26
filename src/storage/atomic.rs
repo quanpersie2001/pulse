@@ -111,7 +111,7 @@ fn fsync_parent_dir(_parent: &Path) -> (bool, bool, Option<String>) {
         false,
         false,
         Some(
-            "parent directory fsync is not implemented by this slice on Windows; atomic replace \
+            "parent directory fsync is not implemented on Windows; atomic replace \
              is best-effort and crash durability is filesystem-dependent"
                 .to_string(),
         ),

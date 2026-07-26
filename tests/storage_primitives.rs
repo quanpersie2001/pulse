@@ -27,7 +27,7 @@ fn canonical_json_is_deterministic_and_lf_terminated() {
 
 #[test]
 fn canonical_json_rejects_float_numbers() {
-    let error = to_canonical_bytes(&json!({"slice_number": 1.5})).unwrap_err();
+    let error = to_canonical_bytes(&json!({"decimal_number": 1.5})).unwrap_err();
     assert!(matches!(error, PulseError::FloatRejected { .. }));
 }
 

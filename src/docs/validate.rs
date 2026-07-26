@@ -54,7 +54,7 @@ pub fn validate_registry(
 ) -> PulseResult<DocsValidationReport> {
     let mut errors = Vec::new();
     let warnings = Vec::new();
-    if registry.schema_version != crate::docs::model::DOCS_REGISTRY_SCHEMA_VERSION_V2
+    if registry.schema_version != crate::docs::model::DOCS_REGISTRY_SCHEMA_VERSION
         || registry.revision == 0
         || !registry.repository_id.starts_with("repo_")
     {

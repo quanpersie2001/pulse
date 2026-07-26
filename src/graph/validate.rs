@@ -1,6 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::Path;
 
+use crate::graph::contract::{self, ContractValidationMode, NODE_SCHEMA_VERSION};
 use crate::graph::edge::{deterministic_edge_id, Edge, EdgeType};
 use crate::graph::lifecycle::{status_requires_reason, validate_reason, TransitionReason};
 use crate::graph::manifest::Manifest;
@@ -260,7 +261,7 @@ pub fn validate_node(repo_root: &Path, manifest: &Manifest, node: &Node) -> Puls
 }
 
 pub fn validate_node_schema_semantics(node: &Node) -> PulseResult<()> {
-    if node.schema_version != 1 {
+    if node.schema_version != NODE_SCHEMA_VERSION {
         return Err(PulseError::validation(
             "unsupported_node_version",
             "node schema_version must be 1",
@@ -302,6 +303,7 @@ pub fn validate_node_schema_semantics(node: &Node) -> PulseResult<()> {
     if let Some(documentation) = &node.documentation {
         documentation.validate(false)?;
     }
+    contract::validate_node_contract_result(node, ContractValidationMode::CanonicalStorage)?;
     Ok(())
 }
 

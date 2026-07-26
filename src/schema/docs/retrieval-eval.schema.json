@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://pulse.dev/schema/docs/retrieval-eval.schema.json",
   "title": "Pulse Docs Retrieval Eval Fixture",
-  "description": "One JSONL line for the Slice 5 deterministic retrieval evaluation harness. The harness executes the same library search path as CLI search and reports fixture-level quality/reason codes.",
+  "description": "One JSONL line for the deterministic retrieval evaluation harness. The harness executes the same library search path as CLI search and reports fixture-level quality/reason codes.",
   "type": "object",
   "additionalProperties": false,
   "required": ["id", "query", "expected"],

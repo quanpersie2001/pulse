@@ -1,17 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "Pulse Work Graph Edge",
-  "type": "object",
-  "required": [
-    "schema_version",
-    "id",
-    "type",
-    "from",
-    "to",
-    "revision",
-    "created_at",
-    "created_by"
-  ],
+  "additionalProperties": false,
   "properties": {
     "created_at": {
       "format": "date-time",
@@ -40,9 +29,27 @@
       "type": "string"
     },
     "type": {
-      "enum": ["parent", "blocked_by", "preferred_after", "superseded_by", "related", "duplicates"],
+      "enum": [
+        "parent",
+        "blocked_by",
+        "preferred_after",
+        "superseded_by",
+        "related",
+        "duplicates"
+      ],
       "type": "string"
     }
   },
-  "additionalProperties": false
+  "required": [
+    "schema_version",
+    "id",
+    "type",
+    "from",
+    "to",
+    "revision",
+    "created_at",
+    "created_by"
+  ],
+  "title": "Pulse Work Graph Edge",
+  "type": "object"
 }

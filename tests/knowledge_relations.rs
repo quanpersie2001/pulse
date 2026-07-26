@@ -274,7 +274,7 @@ fn validates_disputed_and_promoted_structural_invariants() {
     let repository_id = manifest::load(repo.path()).unwrap().repository_id;
     std::fs::create_dir_all(repo.path().join(".pulse/docs")).unwrap();
     let registry = DocsRegistry {
-        schema_version: 2,
+        schema_version: 1,
         revision: 1,
         repository_id,
         documents: vec![DocumentRecord {

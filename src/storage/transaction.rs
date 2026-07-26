@@ -39,6 +39,8 @@ pub enum FileState {
     Present { hash: String, revision: u64 },
 }
 
+pub const TRANSACTION_INTENT_SCHEMA_VERSION: u32 = 1;
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum IntentState {
@@ -53,10 +55,8 @@ pub struct TransactionIntent {
     pub event_id: String,
     pub operation: String,
     pub actor: String,
-    pub target_path: PathBuf,
+    pub targets: Vec<TransactionTarget>,
     pub event_path: PathBuf,
-    pub before: FileState,
-    pub after: FileState,
     pub event_hash: String,
     pub event_payload: serde_json::Value,
     pub state: IntentState,
@@ -69,7 +69,8 @@ pub struct TransactionTarget {
     pub path: PathBuf,
     pub before: FileState,
     pub after: FileState,
-    pub after_bytes_base64: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub after_bytes_base64: Option<String>,
 }
 
 impl TransactionTarget {
@@ -78,13 +79,22 @@ impl TransactionTarget {
             path,
             before,
             after,
-            after_bytes_base64: BASE64_STANDARD.encode(after_bytes),
+            after_bytes_base64: Some(BASE64_STANDARD.encode(after_bytes)),
         }
     }
 
     pub fn after_bytes(&self) -> Result<Vec<u8>> {
+        let encoded =
+            self.after_bytes_base64
+                .as_deref()
+                .ok_or_else(|| PulseError::InvalidTransaction {
+                    message: format!(
+                        "stored after payload is missing for {}",
+                        self.path.display()
+                    ),
+                })?;
         BASE64_STANDARD
-            .decode(&self.after_bytes_base64)
+            .decode(encoded)
             .map_err(|error| PulseError::InvalidTransaction {
                 message: format!("stored after payload is not base64: {error}"),
             })
@@ -136,15 +146,18 @@ impl TransactionIntent {
         let event_hash = canonical_json::hash_value(&event_payload)?;
         let now = Utc::now();
         Ok(Self {
-            schema_version: 1,
+            schema_version: TRANSACTION_INTENT_SCHEMA_VERSION,
             transaction_id: new_transaction_id(),
             event_id: event_id.into(),
             operation: operation.into(),
             actor: actor.into(),
-            target_path,
+            targets: vec![TransactionTarget {
+                path: target_path,
+                before,
+                after,
+                after_bytes_base64: None,
+            }],
             event_path,
-            before,
-            after,
             event_hash,
             event_payload,
             state: IntentState::Prepared,
@@ -189,7 +202,7 @@ impl MultiTargetTransactionIntent {
         let event_hash = canonical_json::hash_value(&event_payload)?;
         let now = Utc::now();
         Ok(Self {
-            schema_version: 2,
+            schema_version: TRANSACTION_INTENT_SCHEMA_VERSION,
             transaction_id: new_transaction_id(),
             event_id: event_id.into(),
             operation: operation.into(),
@@ -212,6 +225,7 @@ impl MultiTargetTransactionIntent {
 }
 
 pub fn persist_intent(repo_root: &Path, intent: &TransactionIntent) -> Result<PathBuf> {
+    validate_intent_schema(intent.schema_version)?;
     let directory = repo_root.join(".pulse/runtime/transactions");
     fs::create_dir_all(&directory).map_err(|error| PulseError::io(&directory, error))?;
     let path = intent.intent_path(repo_root);
@@ -224,6 +238,7 @@ pub fn persist_multi_target_intent(
     repo_root: &Path,
     intent: &MultiTargetTransactionIntent,
 ) -> Result<PathBuf> {
+    validate_intent_schema(intent.schema_version)?;
     let directory = repo_root.join(".pulse/runtime/transactions");
     fs::create_dir_all(&directory).map_err(|error| PulseError::io(&directory, error))?;
     let path = intent.intent_path(repo_root);
@@ -236,6 +251,7 @@ pub fn prepare_transaction(
     repo_root: &Path,
     intent: TransactionIntent,
 ) -> Result<PreparedTransaction> {
+    validate_intent_schema(intent.schema_version)?;
     let intent_path = persist_intent(repo_root, &intent)?;
     Ok(PreparedTransaction {
         intent,
@@ -247,6 +263,7 @@ pub fn prepare_multi_target_transaction(
     repo_root: &Path,
     intent: MultiTargetTransactionIntent,
 ) -> Result<PreparedMultiTargetTransaction> {
+    validate_intent_schema(intent.schema_version)?;
     let intent_path = persist_multi_target_intent(repo_root, &intent)?;
     Ok(PreparedMultiTargetTransaction {
         intent,
@@ -255,6 +272,7 @@ pub fn prepare_multi_target_transaction(
 }
 
 pub fn complete_and_cleanup_intent(intent_path: &Path, intent: &TransactionIntent) -> Result<()> {
+    validate_intent_schema(intent.schema_version)?;
     let mut complete = intent.clone();
     complete.state = IntentState::Complete;
     complete.updated_at = Utc::now();
@@ -267,12 +285,38 @@ pub fn complete_and_cleanup_multi_target_intent(
     intent_path: &Path,
     intent: &MultiTargetTransactionIntent,
 ) -> Result<()> {
+    validate_intent_schema(intent.schema_version)?;
     let mut complete = intent.clone();
     complete.state = IntentState::Complete;
     complete.updated_at = Utc::now();
     let bytes = canonical_json::to_canonical_bytes_from(&complete)?;
     atomic::atomic_replace(intent_path, &bytes)?;
     fs::remove_file(intent_path).map_err(|error| PulseError::io(intent_path, error))
+}
+
+fn validate_intent_schema(schema_version: u32) -> Result<()> {
+    if schema_version == TRANSACTION_INTENT_SCHEMA_VERSION {
+        Ok(())
+    } else {
+        Err(PulseError::InvalidTransaction {
+            message: format!(
+                "unsupported transaction intent schema_version {schema_version}; expected {TRANSACTION_INTENT_SCHEMA_VERSION}"
+            ),
+        })
+    }
+}
+
+fn single_target(intent: &TransactionIntent) -> Result<&TransactionTarget> {
+    if intent.targets.len() == 1 {
+        Ok(&intent.targets[0])
+    } else {
+        Err(PulseError::InvalidTransaction {
+            message: format!(
+                "single-target transaction intent contains {} targets",
+                intent.targets.len()
+            ),
+        })
+    }
 }
 
 pub fn commit_prepared_transaction(
@@ -285,12 +329,8 @@ pub fn commit_prepared_transaction(
         trigger_failpoint("after_intent")?;
     }
 
-    write_target_respecting_before(
-        &prepared.intent.target_path,
-        &prepared.intent.before,
-        &prepared.intent.after,
-        canonical_bytes,
-    )?;
+    let target = single_target(&prepared.intent)?;
+    write_target_respecting_before(&target.path, &target.before, &target.after, canonical_bytes)?;
     #[cfg(debug_assertions)]
     if failpoint == Some(TransactionFailpoint::AfterCanonical) {
         trigger_failpoint("after_canonical")?;
@@ -373,17 +413,9 @@ pub fn recover_prepared_transactions(repo_root: &Path) -> Result<Vec<RecoveryAct
             continue;
         }
         let bytes = fs::read(&path).map_err(|error| PulseError::io(&path, error))?;
-        let schema_version = serde_json::from_slice::<serde_json::Value>(&bytes)?
-            .get("schema_version")
-            .and_then(|value| value.as_u64())
-            .unwrap_or(1);
-        let action = if schema_version == 2 {
-            let intent: MultiTargetTransactionIntent = serde_json::from_slice(&bytes)?;
-            recover_one_multi_target(&path, &intent)?
-        } else {
-            let intent: TransactionIntent = serde_json::from_slice(&bytes)?;
-            recover_one(&path, &intent)?
-        };
+        let intent: MultiTargetTransactionIntent = serde_json::from_slice(&bytes)?;
+        validate_intent_schema(intent.schema_version)?;
+        let action = recover_one_multi_target(&path, &intent)?;
         actions.push(action);
     }
     Ok(actions)
@@ -398,59 +430,6 @@ pub fn current_file_state(path: &Path, revision: Option<u64>) -> Result<FileStat
         hash: hash_bytes(&bytes),
         revision: revision.unwrap_or(0),
     })
-}
-
-fn recover_one(intent_path: &Path, intent: &TransactionIntent) -> Result<RecoveryAction> {
-    if intent.state == IntentState::Complete {
-        fs::remove_file(intent_path).map_err(|error| PulseError::io(intent_path, error))?;
-        return Ok(RecoveryAction::CleanedComplete {
-            intent_path: intent_path.to_path_buf(),
-        });
-    }
-
-    let target_state = observed_target_state(&intent.target_path, &intent.before, &intent.after)?;
-    let event_state = observed_event_state(&intent.event_path, &intent.event_hash)?;
-
-    match (target_state, event_state) {
-        (ObservedTarget::Before, ObservedEvent::Absent) => {
-            cleanup_target_temp(&intent.target_path)?;
-            fs::remove_file(intent_path).map_err(|error| PulseError::io(intent_path, error))?;
-            Ok(RecoveryAction::RolledBack {
-                intent_path: intent_path.to_path_buf(),
-            })
-        }
-        (ObservedTarget::After, ObservedEvent::Absent) => {
-            write_event_create_new(intent)?;
-            fs::remove_file(intent_path).map_err(|error| PulseError::io(intent_path, error))?;
-            Ok(RecoveryAction::EventCompleted {
-                intent_path: intent_path.to_path_buf(),
-                event_path: intent.event_path.clone(),
-            })
-        }
-        (ObservedTarget::After, ObservedEvent::Matching) => {
-            fs::remove_file(intent_path).map_err(|error| PulseError::io(intent_path, error))?;
-            Ok(RecoveryAction::CleanedComplete {
-                intent_path: intent_path.to_path_buf(),
-            })
-        }
-        (ObservedTarget::Before, ObservedEvent::Matching) => {
-            Err(PulseError::AmbiguousTransaction {
-                transaction_id: intent.transaction_id.clone(),
-                message: "event exists but canonical target is still at before state".to_string(),
-            })
-        }
-        (_, ObservedEvent::Mismatch { actual_hash }) => Err(PulseError::EventMismatch {
-            transaction_id: intent.transaction_id.clone(),
-            message: format!(
-                "event file hash {actual_hash} does not match prepared hash {}",
-                intent.event_hash
-            ),
-        }),
-        (ObservedTarget::Other, _) => Err(PulseError::AmbiguousTransaction {
-            transaction_id: intent.transaction_id.clone(),
-            message: "canonical target matches neither before nor after state".to_string(),
-        }),
-    }
 }
 
 fn recover_one_multi_target(

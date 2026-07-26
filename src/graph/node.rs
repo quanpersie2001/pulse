@@ -1,8 +1,11 @@
-use chrono::{DateTime, Utc};
-use serde::{Deserialize, Serialize};
-
+use crate::graph::contract::{
+    DecisionWorkContract, ImplementationContract, Materialization, QaMetadata, Risk,
+    ShapingPointer, TicketRole, NODE_SCHEMA_VERSION,
+};
 use crate::id::{validate_work_id, WorkKind};
 use crate::{PulseError, PulseResult};
+use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
@@ -11,12 +14,27 @@ pub struct Node {
     pub id: String,
     pub kind: WorkKind,
     pub revision: u64,
+    pub contract_revision: u64,
     pub title: String,
     pub status: NodeStatus,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub status_reason: Option<StatusReason>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub documentation: Option<DocumentationMetadata>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub role: Option<TicketRole>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub risk: Option<Risk>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub materialization: Option<Materialization>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub qa: Option<QaMetadata>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub implementation: Option<ImplementationContract>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub decision_work: Option<DecisionWorkContract>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shaping: Option<ShapingPointer>,
     pub content_dir: String,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
@@ -249,19 +267,41 @@ impl Node {
                 "title must not be empty",
             ));
         }
+        let ticket_defaults = kind == WorkKind::Ticket;
         Ok(Self {
-            schema_version: 1,
+            schema_version: NODE_SCHEMA_VERSION,
             content_dir: format!("works/{id}"),
             id,
             kind,
             revision: 1,
+            contract_revision: 1,
             title,
             status: NodeStatus::Draft,
             status_reason: None,
             documentation: None,
+            role: ticket_defaults.then_some(TicketRole::Implementation),
+            risk: ticket_defaults.then_some(Risk::Unassessed),
+            materialization: ticket_defaults.then_some(Materialization::Unassessed),
+            qa: ticket_defaults.then_some(QaMetadata::default()),
+            implementation: None,
+            decision_work: None,
+            shaping: None,
             created_at: now,
             updated_at: now,
         })
+    }
+
+    pub fn normalize_contract_fields(&mut self) {
+        if let Some(contract) = &mut self.implementation {
+            contract.normalize();
+        }
+        if let Some(contract) = &mut self.decision_work {
+            contract.normalize();
+        }
+        if let Some(qa) = &mut self.qa {
+            qa.impact.affected_case_ids.sort();
+            qa.impact.affected_case_ids.dedup();
+        }
     }
 }
 

@@ -97,7 +97,7 @@ fn setup_repo() -> tempfile::TempDir {
     )
     .unwrap();
     let registry = DocsRegistry {
-        schema_version: 2,
+        schema_version: 1,
         revision: 1,
         repository_id: manifest.repository_id,
         documents: vec![

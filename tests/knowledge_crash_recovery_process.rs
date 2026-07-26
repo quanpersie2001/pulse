@@ -135,6 +135,12 @@ fn setup_repo() -> (TempDir, String) {
             "ticket",
             "--title",
             "Knowledge source",
+            "--role",
+            "implementation",
+            "--risk",
+            "low",
+            "--materialization",
+            "R0",
             "--json",
         ],
     );
@@ -248,7 +254,7 @@ fn write_document_registry(repo: &TempDir) {
     fs::write(repo.path().join("docs/knowledge/learning.md"), b"learning").unwrap();
     fs::create_dir_all(repo.path().join(".pulse/docs")).unwrap();
     let registry = json!({
-        "schema_version": 2,
+        "schema_version": 1,
         "revision": 1,
         "repository_id": "repo_test",
         "retrieval": null,

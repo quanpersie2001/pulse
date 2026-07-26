@@ -43,7 +43,19 @@ fn l31_transition_json_output_and_error_contracts_are_stable() {
     let created = run_ok(
         &repo,
         &[
-            "work", "create", "--kind", "ticket", "--title", "Original", "--json",
+            "work",
+            "create",
+            "--kind",
+            "ticket",
+            "--title",
+            "Original",
+            "--role",
+            "implementation",
+            "--risk",
+            "low",
+            "--materialization",
+            "R0",
+            "--json",
         ],
     );
     let id = created["value"]["id"].as_str().unwrap().to_string();
@@ -106,7 +118,19 @@ fn cli_missing_reason_fails_before_commit() {
     let created = run_ok(
         &repo,
         &[
-            "work", "create", "--kind", "ticket", "--title", "Original", "--json",
+            "work",
+            "create",
+            "--kind",
+            "ticket",
+            "--title",
+            "Original",
+            "--role",
+            "implementation",
+            "--risk",
+            "low",
+            "--materialization",
+            "R0",
+            "--json",
         ],
     );
     let id = created["value"]["id"].as_str().unwrap();
@@ -138,7 +162,19 @@ fn cli_supersede_requires_receipt_and_rejects_inline_assertion() {
     let old = run_ok(
         &repo,
         &[
-            "work", "create", "--kind", "ticket", "--title", "Old", "--json",
+            "work",
+            "create",
+            "--kind",
+            "ticket",
+            "--title",
+            "Old",
+            "--role",
+            "implementation",
+            "--risk",
+            "low",
+            "--materialization",
+            "R0",
+            "--json",
         ],
     );
     let old_id = old["value"]["id"].as_str().unwrap().to_string();
@@ -211,4 +247,85 @@ fn cli_supersede_requires_receipt_and_rejects_inline_assertion() {
     let shown = run_ok(&repo, &["work", "show", &old_id, "--json"]);
     assert_eq!(shown["node"]["status"], "draft");
     assert_eq!(shown["node"]["revision"], 1);
+}
+
+#[test]
+fn public_cli_ticket_create_requires_explicit_assessed_classification() {
+    let repo = tempfile::tempdir().unwrap();
+
+    let missing = run_err(
+        &repo,
+        &[
+            "work", "create", "--kind", "ticket", "--title", "Missing", "--json",
+        ],
+    );
+    assert_eq!(missing["code"], "work_classification_missing");
+
+    let unassessed = run_err(
+        &repo,
+        &[
+            "work",
+            "create",
+            "--kind",
+            "ticket",
+            "--title",
+            "Unassessed",
+            "--role",
+            "implementation",
+            "--risk",
+            "unassessed",
+            "--materialization",
+            "R0",
+            "--json",
+        ],
+    );
+    assert_eq!(unassessed["code"], "risk_materialization_unassessed");
+
+    let created = run_ok(
+        &repo,
+        &[
+            "work",
+            "create",
+            "--kind",
+            "ticket",
+            "--title",
+            "Assessed",
+            "--role",
+            "decision_work",
+            "--risk",
+            "medium",
+            "--materialization",
+            "R2",
+            "--json",
+        ],
+    );
+    assert_eq!(created["code"], "created");
+    assert_eq!(created["value"]["role"], "decision_work");
+    assert_eq!(created["value"]["risk"], "medium");
+    assert_eq!(created["value"]["materialization"], "R2");
+    assert!(created["value"].get("decision_work").is_none());
+}
+
+#[test]
+fn public_cli_rejects_classification_flags_for_non_tickets() {
+    let repo = tempfile::tempdir().unwrap();
+    let err = run_err(
+        &repo,
+        &[
+            "work",
+            "create",
+            "--kind",
+            "story",
+            "--title",
+            "Story",
+            "--role",
+            "implementation",
+            "--risk",
+            "low",
+            "--materialization",
+            "R0",
+            "--json",
+        ],
+    );
+    assert_eq!(err["code"], "work_classification_not_allowed");
 }

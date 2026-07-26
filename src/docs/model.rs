@@ -2,12 +2,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 
 /// Current docs registry envelope schema version.
-///
-/// v1 = Slice 4 (no retrieval metadata). v2 = Slice 5 (adds optional retrieval
-/// config + per-document retrieval overrides). v1 registries that exactly match
-/// the known Slice 4 predecessor are migrated deliberately; they are never
-/// silently reinterpreted as current.
-pub const DOCS_REGISTRY_SCHEMA_VERSION_V2: u32 = 2;
+pub const DOCS_REGISTRY_SCHEMA_VERSION: u32 = 1;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
@@ -17,9 +12,9 @@ pub struct DocsRegistry {
     pub repository_id: String,
     #[serde(default)]
     pub documents: Vec<DocumentRecord>,
-    /// Retrieval configuration projection. Present on every v2 registry (set to
-    /// deterministic defaults by bootstrap/migration). Optional only so that an
-    /// exact v1 predecessor can be loaded for known-predecessor migration.
+    /// Retrieval configuration projection. Present on every registry written by
+    /// bootstrap as deterministic defaults; optional for read-model helpers that
+    /// tolerate absent config by resolving defaults.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub retrieval: Option<RetrievalConfig>,
 }
@@ -29,7 +24,7 @@ pub type DocsRegistryEnvelope = DocsRegistry;
 impl DocsRegistry {
     pub fn empty(repository_id: String) -> Self {
         Self {
-            schema_version: DOCS_REGISTRY_SCHEMA_VERSION_V2,
+            schema_version: DOCS_REGISTRY_SCHEMA_VERSION,
             revision: 1,
             repository_id,
             documents: Vec::new(),
@@ -116,9 +111,9 @@ pub struct GeneratedContract {
     pub freshness_check: String,
 }
 
-/// Envelope-level retrieval/indexing configuration (Slice 5+).
+/// Envelope-level retrieval/indexing configuration.
 ///
-/// Stored under `retrieval` on the v2 docs registry. Determines the managed
+/// Stored under `retrieval` on the docs registry. Determines the managed
 /// documentation root, repository-map/policy inclusion, default indexing/body
 /// behavior, bounded retrieval budgets, auto-refresh cost guards and generated
 /// navigation projection policy. All values are deterministic defaults that

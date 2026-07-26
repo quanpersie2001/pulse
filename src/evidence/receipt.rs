@@ -232,7 +232,7 @@ pub fn verify_receipt(
         bindings.status == "current",
     )?;
     Ok(ValidationReport {
-        schema_version: 2,
+        schema_version: 1,
         receipt_id: id.to_string(),
         receipt_hash: hash,
         integrity: ValidationDimension {
@@ -437,7 +437,7 @@ fn validate_docs_payload(
     receipt: &ReceiptEnvelope,
     p: &DocumentationValidationPayload,
 ) -> Result<()> {
-    if !matches!(p.payload_version, 1 | 2) {
+    if p.payload_version != 1 {
         return Err(PulseError::validation(
             "receipt_version_unsupported",
             "payload",
@@ -450,11 +450,7 @@ fn validate_docs_payload(
         ));
     }
     for doc in &p.documents {
-        match p.payload_version {
-            1 => validate_legacy_document_identity(doc)?,
-            2 => validate_registry_document_identity(doc)?,
-            _ => unreachable!("payload version checked above"),
-        }
+        validate_registry_document_identity(doc)?;
         validate_document_entry_common(receipt, &doc.path, &doc.content_hash)?;
     }
     for check in &p.checks {
@@ -473,47 +469,24 @@ fn validate_docs_payload(
     Ok(())
 }
 
-fn validate_legacy_document_identity(doc: &DocumentationValidationDocument) -> Result<()> {
-    if let Some(id) = doc
-        .document_id
-        .as_deref()
-        .or(doc.proposed_document_id.as_deref())
-    {
-        validate_document_id(id)?;
-    }
-    if matches!(doc.document_revision, Some(0)) {
-        return Err(PulseError::validation(
-            "document_receipt_registry_mismatch",
-            "document revision must be positive when present",
-        ));
-    }
-    Ok(())
-}
-
 fn validate_registry_document_identity(doc: &DocumentationValidationDocument) -> Result<()> {
     let document_id = doc.document_id.as_deref().ok_or_else(|| {
         PulseError::validation(
             "document_receipt_registry_mismatch",
-            "document_id is required for documentation payload v2",
+            "document_id is required for documentation payload",
         )
     })?;
     validate_document_id(document_id)?;
     let Some(document_revision) = doc.document_revision else {
         return Err(PulseError::validation(
             "document_receipt_registry_mismatch",
-            "document_revision is required for documentation payload v2",
+            "document_revision is required for documentation payload",
         ));
     };
     if document_revision == 0 {
         return Err(PulseError::validation(
             "document_receipt_registry_mismatch",
             "document revision must be positive",
-        ));
-    }
-    if doc.proposed_document_id.is_some() {
-        return Err(PulseError::validation(
-            "receipt_schema_invalid",
-            "payload v2 uses document_id, not proposed_document_id",
         ));
     }
     Ok(())
@@ -575,7 +548,7 @@ fn docs_validation_dimensions(
         ));
     };
 
-    if !matches!(payload.payload_version, 1 | 2) {
+    if payload.payload_version != 1 {
         return Ok((
             ValidationDimension {
                 status: "invalid".to_string(),
@@ -596,27 +569,14 @@ fn docs_validation_dimensions(
     let registry = load_docs_registry(repo_root)?;
     let mut registry_codes = Vec::new();
     let mut policies = BTreeSet::new();
-    if payload.payload_version == 1 {
-        registry_codes.push("legacy_unresolved".to_string());
-    }
     for doc in &payload.documents {
-        match payload.payload_version {
-            1 => validate_legacy_doc_against_registry(
-                repo_root,
-                &registry,
-                doc,
-                &mut registry_codes,
-                &mut policies,
-            )?,
-            2 => validate_v2_doc_against_registry(
-                repo_root,
-                &registry,
-                doc,
-                &mut registry_codes,
-                &mut policies,
-            )?,
-            _ => unreachable!("payload version checked above"),
-        }
+        validate_doc_against_registry(
+            repo_root,
+            &registry,
+            doc,
+            &mut registry_codes,
+            &mut policies,
+        )?;
     }
     registry_codes.sort();
     registry_codes.dedup();
@@ -658,20 +618,11 @@ fn docs_validation_dimensions(
     authorization_codes.sort();
     authorization_codes.dedup();
 
-    let legacy_only = registry_codes
-        .iter()
-        .all(|code| code == "legacy_unresolved");
     let registry_dimension = ValidationDimension {
         status: if !current {
             "not_checked"
         } else if registry_codes.is_empty() {
             "current"
-        } else if legacy_only
-            || registry_codes
-                .iter()
-                .any(|code| code == "document_receipt_pre_registry_unresolved")
-        {
-            "legacy_unresolved"
         } else if registry_codes.iter().any(|code| {
             matches!(
                 code.as_str(),
@@ -713,51 +664,7 @@ fn docs_validation_dimensions(
     ))
 }
 
-fn validate_legacy_doc_against_registry(
-    repo_root: &Path,
-    registry: &DocsRegistrySnapshot,
-    doc: &DocumentationValidationDocument,
-    registry_codes: &mut Vec<String>,
-    policies: &mut BTreeSet<String>,
-) -> Result<()> {
-    if doc.proposed_document_id.is_none()
-        && doc.document_id.is_none()
-        && doc.document_revision.is_none()
-    {
-        registry_codes.push("document_receipt_pre_registry_unresolved".to_string());
-        return Ok(());
-    }
-    let matches = registry
-        .documents
-        .iter()
-        .filter(|candidate| candidate.path == doc.path)
-        .collect::<Vec<_>>();
-    if matches.len() == 1 {
-        let record = matches[0];
-        policies.insert(record.review_policy.clone());
-        if let Some(id) = doc.document_id.as_deref() {
-            if id != record.id {
-                registry_codes.push("document_receipt_registry_mismatch".to_string());
-                registry_codes.push("document_receipt_wrong_id_for_path".to_string());
-            }
-        }
-        if let Some(id) = doc.proposed_document_id.as_deref() {
-            if id != record.id {
-                registry_codes.push("document_receipt_registry_mismatch".to_string());
-                registry_codes.push("document_receipt_wrong_id_for_path".to_string());
-            }
-        }
-        if let Some(revision) = doc.document_revision {
-            if record.revision != revision {
-                registry_codes.push("document_receipt_revision_stale".to_string());
-            }
-        }
-        validate_registry_record_state(repo_root, record, doc, registry_codes)?;
-    }
-    Ok(())
-}
-
-fn validate_v2_doc_against_registry(
+fn validate_doc_against_registry(
     repo_root: &Path,
     registry: &DocsRegistrySnapshot,
     doc: &DocumentationValidationDocument,
@@ -1035,23 +942,6 @@ fn normalize_bindings(receipt: &mut ReceiptEnvelope) {
         .bindings
         .artifacts
         .sort_by(|a, b| a.sha256.cmp(&b.sha256));
-    normalize_documentation_payload(receipt);
-}
-
-fn normalize_documentation_payload(receipt: &mut ReceiptEnvelope) {
-    let ReceiptPayload::DocumentationValidation(payload) = &mut receipt.payload else {
-        return;
-    };
-    if payload.payload_version != 1 {
-        return;
-    }
-    for doc in &mut payload.documents {
-        if doc.proposed_document_id.is_none() {
-            doc.proposed_document_id = doc.document_id.take();
-        } else {
-            doc.document_id = None;
-        }
-    }
 }
 fn validate_manifest_kind(
     manifest: &manifest::EvidenceManifest,

@@ -203,7 +203,7 @@ fn validate_public_mutation_restrictions(entry: &Learning, report: &mut Knowledg
         report.push_error(
             "learning_status_claim_unsupported",
             Some(entry.id.clone()),
-            "public Slice 6 mutations may only create/edit candidate records",
+            "public Phase-1 mutations may only create/edit candidate records",
         );
     }
     if entry.validation.confidence != Confidence::Low {

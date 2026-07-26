@@ -53,6 +53,12 @@ fn pulse_mutates_only_the_temporary_fixture_copy() {
         "ticket",
         "--title",
         "Classify refresh-token failures",
+        "--role",
+        "implementation",
+        "--risk",
+        "low",
+        "--materialization",
+        "R0",
         "--json",
     ]);
     let work_id = created["value"]["id"].as_str().expect("created work ID");

@@ -2,12 +2,12 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://pulse.dev/schema/docs/document.schema.json",
   "title": "Pulse Document Registry",
-  "description": "v2: Slice 5 retrieval-capable registry. Adds optional envelope `retrieval` config and per-document `retrieval` overrides. A v1 (Slice 4) registry that exactly matches the known predecessor is migrated deliberately; it is never silently reinterpreted as current.",
+  "description": "Current retrieval-capable registry. Includes optional envelope `retrieval` config and per-document `retrieval` overrides. Existing schema drift is refused unless explicitly overwritten by an operator-controlled flow.",
   "type": "object",
   "additionalProperties": false,
   "required": ["schema_version", "revision", "repository_id", "documents"],
   "properties": {
-    "schema_version": { "const": 2 },
+    "schema_version": { "const": 1 },
     "revision": { "type": "integer", "minimum": 1 },
     "repository_id": { "type": "string", "pattern": "^repo_" },
     "documents": {

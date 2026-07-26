@@ -44,6 +44,12 @@ fn setup_repo_with_learning() -> TempDir {
             "ticket",
             "--title",
             "Knowledge source",
+            "--role",
+            "implementation",
+            "--risk",
+            "low",
+            "--materialization",
+            "R0",
             "--json",
         ],
     );

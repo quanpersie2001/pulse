@@ -1,3 +1,4 @@
+pub mod contract;
 pub mod edge;
 pub mod executability;
 pub mod lifecycle;

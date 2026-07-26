@@ -310,8 +310,18 @@ fn concurrent_relation_retry_is_idempotent_after_entry_revision_bump() {
 
     assert!(first.status.success());
     assert!(second.status.success());
-    assert_eq!(json_from_output(&first)["code"], "created");
-    assert_eq!(json_from_output(&second)["code"], "unchanged");
+    let mut codes = [
+        json_from_output(&first)["code"]
+            .as_str()
+            .unwrap()
+            .to_string(),
+        json_from_output(&second)["code"]
+            .as_str()
+            .unwrap()
+            .to_string(),
+    ];
+    codes.sort();
+    assert_eq!(codes, ["created", "unchanged"]);
 
     let shown = run_ok(&repo, &["knowledge", "show", "LRN-001", "--json"]);
     assert_eq!(shown["learning"]["revision"], 2);

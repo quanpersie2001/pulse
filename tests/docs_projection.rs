@@ -1,4 +1,4 @@
-//! Phase 3 (Slice 5) generated `_index.md` projection tests:
+//! Generated `_index.md` projection tests:
 //! - R4: `index=false` document is registered but excluded from projection.
 //! - R5: informational current doc is included and labeled, never required.
 //! - R5a: registered `AGENTS.md`/`PULSE.md` surface under a virtual Repository area.
@@ -60,7 +60,7 @@ fn registry_with(documents: Vec<DocumentRecord>, retrieval: RetrievalConfig) -> 
     let mut documents = documents;
     documents.sort_by(|a, b| a.id.cmp(&b.id));
     DocsRegistry {
-        schema_version: 2,
+        schema_version: 1,
         revision: 7,
         repository_id: "repo_test".to_string(),
         documents,

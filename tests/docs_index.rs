@@ -44,7 +44,7 @@ fn setup_repo() -> tempfile::TempDir {
     fs::create_dir_all(repo.join("docs/domain")).unwrap();
     fs::write(repo.join("docs/domain/token.md"), b"# Token Lifecycle\n\n## Expired tokens\n\nTokenExpired means a refresh-token expired in v2.1.\n").unwrap();
     let registry = DocsRegistry {
-        schema_version: 2,
+        schema_version: 1,
         revision: 1,
         repository_id: manifest.repository_id,
         documents: vec![doc(

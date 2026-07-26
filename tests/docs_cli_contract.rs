@@ -57,7 +57,7 @@ fn setup_repo() -> TempDir {
     )
     .unwrap();
     let registry = json!({
-        "schema_version": 2,
+        "schema_version": 1,
         "revision": 1,
         "repository_id": manifest["repository_id"].as_str().unwrap(),
         "retrieval": {
@@ -158,7 +158,19 @@ fn docs_applicable_uses_work_metadata_and_reports_unknown_gap() {
     let created = run_ok(
         &repo,
         &[
-            "work", "create", "--kind", "ticket", "--title", "Docs", "--json",
+            "work",
+            "create",
+            "--kind",
+            "ticket",
+            "--title",
+            "Docs",
+            "--role",
+            "implementation",
+            "--risk",
+            "low",
+            "--materialization",
+            "R0",
+            "--json",
         ],
     );
     let id = created["value"]["id"].as_str().unwrap();

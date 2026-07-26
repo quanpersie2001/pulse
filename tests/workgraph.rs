@@ -26,7 +26,7 @@ fn ctx(actor: &str, sec: i64) -> OperationContext {
     }
 }
 
-const SLICE1_NODE_SCHEMA: &str = r#"{
+const NON_CURRENT_NODE_SCHEMA: &str = r#"{
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Pulse Work Graph Node",
   "type": "object",
@@ -92,7 +92,7 @@ fn assertion(source: &str, references: Vec<String>) -> SupersessionAssertion {
 }
 
 #[test]
-fn bootstrap_upgrades_exact_slice1_node_schema_and_emits_migration_event() {
+fn bootstrap_refuses_node_schema_drift_without_overwrite() {
     let dir = tempfile::tempdir().unwrap();
     let wg = dir.path().join(".pulse/workgraph");
     fs::create_dir_all(wg.join("schemas")).unwrap();
@@ -103,24 +103,23 @@ fn bootstrap_upgrades_exact_slice1_node_schema_and_emits_migration_event() {
         to_canonical_bytes(&pulse::graph::manifest::Manifest::default()).unwrap(),
     )
     .unwrap();
-    fs::write(wg.join("schemas/node.schema.json"), SLICE1_NODE_SCHEMA).unwrap();
+    fs::write(wg.join("schemas/node.schema.json"), NON_CURRENT_NODE_SCHEMA).unwrap();
+    let before = fs::read(wg.join("schemas/node.schema.json")).unwrap();
 
     let store = JsonGraphStore::new(dir.path());
-    store.bootstrap().unwrap();
+    let err = store.bootstrap().unwrap_err();
 
-    let upgraded = fs::read(wg.join("schemas/node.schema.json")).unwrap();
-    assert_eq!(upgraded, pulse::graph::manifest::NODE_SCHEMA.as_bytes());
-    let events_dir = dir.path().join(".pulse/events/1970-01-01");
-    assert!(
-        !events_dir.exists(),
-        "migration event should use wall-clock date, not fixture date"
+    assert_eq!(err.code(), "node_schema_drift_refused");
+    assert_eq!(
+        fs::read(wg.join("schemas/node.schema.json")).unwrap(),
+        before
     );
     let event_count = walkdir_count(dir.path().join(".pulse/events"));
-    assert_eq!(event_count, 1);
+    assert_eq!(event_count, 0);
 }
 
 #[test]
-fn bootstrap_refuses_unknown_node_schema_without_overwrite() {
+fn bootstrap_refuses_unknown_node_schema_drift_without_overwrite() {
     let dir = tempfile::tempdir().unwrap();
     let wg = dir.path().join(".pulse/workgraph");
     fs::create_dir_all(wg.join("schemas")).unwrap();
@@ -129,9 +128,206 @@ fn bootstrap_refuses_unknown_node_schema_without_overwrite() {
 
     let store = JsonGraphStore::new(dir.path());
     let err = store.bootstrap().unwrap_err();
-    assert_eq!(err.code(), "node_schema_upgrade_refused");
+    assert_eq!(err.code(), "node_schema_drift_refused");
     let after_hash = hash_bytes(&fs::read(wg.join("schemas/node.schema.json")).unwrap());
     assert_eq!(after_hash, before_hash);
+}
+
+#[test]
+fn bootstrap_completes_safe_partial_current_layout_with_node_schema_only() {
+    let dir = tempfile::tempdir().unwrap();
+    let wg = dir.path().join(".pulse/workgraph");
+    fs::create_dir_all(wg.join("schemas")).unwrap();
+    fs::write(
+        wg.join("schemas/node.schema.json"),
+        pulse::graph::manifest::NODE_SCHEMA.as_bytes(),
+    )
+    .unwrap();
+
+    JsonGraphStore::new(dir.path()).bootstrap().unwrap();
+
+    assert_eq!(
+        fs::read(wg.join("schemas/node.schema.json")).unwrap(),
+        pulse::graph::manifest::NODE_SCHEMA.as_bytes()
+    );
+    assert!(wg.join("manifest.json").exists());
+    assert!(wg.join("schemas/edge.schema.json").exists());
+    assert!(wg.join("nodes").is_dir());
+    assert!(wg.join("edges").is_dir());
+}
+
+#[test]
+fn bootstrap_recovers_safe_current_manifest_edge_partial_layout_missing_node_schema() {
+    let dir = tempfile::tempdir().unwrap();
+    let wg = dir.path().join(".pulse/workgraph");
+    fs::create_dir_all(wg.join("schemas")).unwrap();
+    fs::write(
+        wg.join("manifest.json"),
+        to_canonical_bytes(&pulse::graph::manifest::Manifest::default()).unwrap(),
+    )
+    .unwrap();
+    fs::write(
+        wg.join("schemas/edge.schema.json"),
+        pulse::graph::manifest::EDGE_SCHEMA.as_bytes(),
+    )
+    .unwrap();
+
+    JsonGraphStore::new(dir.path()).bootstrap().unwrap();
+
+    assert_eq!(
+        fs::read(wg.join("schemas/node.schema.json")).unwrap(),
+        pulse::graph::manifest::NODE_SCHEMA.as_bytes()
+    );
+    assert!(wg.join("manifest.json").exists());
+    assert!(wg.join("schemas/edge.schema.json").exists());
+    assert!(wg.join("nodes").is_dir());
+    assert!(wg.join("edges").is_dir());
+}
+
+#[test]
+fn bootstrap_completes_directory_only_current_scaffold() {
+    let dir = tempfile::tempdir().unwrap();
+    let wg = dir.path().join(".pulse/workgraph");
+    fs::create_dir_all(wg.join("schemas")).unwrap();
+    fs::create_dir_all(wg.join("nodes")).unwrap();
+    fs::create_dir_all(wg.join("edges")).unwrap();
+
+    JsonGraphStore::new(dir.path()).bootstrap().unwrap();
+    JsonGraphStore::new(dir.path()).bootstrap().unwrap();
+
+    assert_eq!(
+        fs::read(wg.join("schemas/node.schema.json")).unwrap(),
+        pulse::graph::manifest::NODE_SCHEMA.as_bytes()
+    );
+    assert_eq!(
+        fs::read(wg.join("schemas/edge.schema.json")).unwrap(),
+        pulse::graph::manifest::EDGE_SCHEMA.as_bytes()
+    );
+    assert_eq!(
+        fs::read(wg.join("manifest.json")).unwrap(),
+        to_canonical_bytes(&pulse::graph::manifest::Manifest::default()).unwrap()
+    );
+    assert!(fs::read_dir(wg.join("nodes")).unwrap().next().is_none());
+    assert!(fs::read_dir(wg.join("edges")).unwrap().next().is_none());
+}
+
+#[test]
+fn bootstrap_completes_storage_scaffold_with_current_manifest_and_node_schema() {
+    let dir = tempfile::tempdir().unwrap();
+    let wg = dir.path().join(".pulse/workgraph");
+    pulse::storage::bootstrap(dir.path()).unwrap();
+
+    JsonGraphStore::new(dir.path()).bootstrap().unwrap();
+
+    assert_eq!(
+        fs::read(wg.join("schemas/edge.schema.json")).unwrap(),
+        pulse::graph::manifest::EDGE_SCHEMA.as_bytes()
+    );
+    assert!(wg.join("nodes").is_dir());
+    assert!(wg.join("edges").is_dir());
+}
+
+#[test]
+fn bootstrap_refuses_existing_nodes_without_node_schema() {
+    let dir = tempfile::tempdir().unwrap();
+    let wg = dir.path().join(".pulse/workgraph");
+    fs::create_dir_all(wg.join("nodes")).unwrap();
+    fs::write(wg.join("nodes/TK-001.json"), b"{}\n").unwrap();
+
+    let err = JsonGraphStore::new(dir.path()).bootstrap().unwrap_err();
+
+    assert_eq!(err.code(), "node_schema_missing_refused");
+    assert!(!wg.join("schemas/node.schema.json").exists());
+}
+
+#[test]
+fn bootstrap_refuses_existing_edges_without_node_schema() {
+    let dir = tempfile::tempdir().unwrap();
+    let wg = dir.path().join(".pulse/workgraph");
+    fs::create_dir_all(wg.join("edges")).unwrap();
+    fs::write(wg.join("edges/related--TK-001--TK-002.json"), b"{}\n").unwrap();
+
+    let err = JsonGraphStore::new(dir.path()).bootstrap().unwrap_err();
+
+    assert_eq!(err.code(), "node_schema_missing_refused");
+    assert!(!wg.join("schemas/node.schema.json").exists());
+}
+
+#[test]
+fn bootstrap_refuses_existing_nodes_with_conflicting_manifest() {
+    let dir = tempfile::tempdir().unwrap();
+    let wg = dir.path().join(".pulse/workgraph");
+    fs::create_dir_all(wg.join("schemas")).unwrap();
+    fs::create_dir_all(wg.join("nodes")).unwrap();
+    fs::write(wg.join("manifest.json"), b"{\"schema_version\":999}\n").unwrap();
+    fs::write(
+        wg.join("schemas/node.schema.json"),
+        pulse::graph::manifest::NODE_SCHEMA.as_bytes(),
+    )
+    .unwrap();
+    fs::write(wg.join("nodes/TK-001.json"), b"{}\n").unwrap();
+
+    let err = JsonGraphStore::new(dir.path()).bootstrap().unwrap_err();
+
+    assert_eq!(err.code(), "workgraph_partial_state_refused");
+    assert_eq!(
+        fs::read(wg.join("manifest.json")).unwrap(),
+        b"{\"schema_version\":999}\n"
+    );
+}
+
+#[test]
+fn bootstrap_refuses_unknown_partial_layout_without_overwrite() {
+    let dir = tempfile::tempdir().unwrap();
+    let wg = dir.path().join(".pulse/workgraph");
+    fs::create_dir_all(&wg).unwrap();
+    fs::write(wg.join("unexpected.txt"), b"not current baseline state").unwrap();
+
+    let store = JsonGraphStore::new(dir.path());
+    let err = store.bootstrap().unwrap_err();
+
+    assert_eq!(err.code(), "workgraph_partial_state_refused");
+    assert_eq!(
+        fs::read(wg.join("unexpected.txt")).unwrap(),
+        b"not current baseline state"
+    );
+    assert!(!wg.join("schemas/node.schema.json").exists());
+}
+
+#[test]
+fn bootstrap_refuses_modified_manifest_partial_layout_without_overwrite() {
+    let dir = tempfile::tempdir().unwrap();
+    let wg = dir.path().join(".pulse/workgraph");
+    fs::create_dir_all(wg.join("schemas")).unwrap();
+    fs::write(wg.join("manifest.json"), b"{\"schema_version\":999}\n").unwrap();
+
+    let store = JsonGraphStore::new(dir.path());
+    let err = store.bootstrap().unwrap_err();
+
+    assert_eq!(err.code(), "workgraph_partial_state_refused");
+    assert_eq!(
+        fs::read(wg.join("manifest.json")).unwrap(),
+        b"{\"schema_version\":999}\n"
+    );
+    assert!(!wg.join("schemas/node.schema.json").exists());
+}
+
+#[test]
+fn bootstrap_refuses_modified_edge_schema_partial_layout_without_overwrite() {
+    let dir = tempfile::tempdir().unwrap();
+    let wg = dir.path().join(".pulse/workgraph");
+    fs::create_dir_all(wg.join("schemas")).unwrap();
+    fs::write(wg.join("schemas/edge.schema.json"), b"{\"unknown\":true}\n").unwrap();
+
+    let store = JsonGraphStore::new(dir.path());
+    let err = store.bootstrap().unwrap_err();
+
+    assert_eq!(err.code(), "workgraph_partial_state_refused");
+    assert_eq!(
+        fs::read(wg.join("schemas/edge.schema.json")).unwrap(),
+        b"{\"unknown\":true}\n"
+    );
+    assert!(!wg.join("schemas/node.schema.json").exists());
 }
 
 fn walkdir_count(path: impl AsRef<std::path::Path>) -> usize {
@@ -625,13 +821,13 @@ fn corrupt_cache_rebuilds_without_changing_projection() {
 }
 
 #[test]
-fn schema_template_mismatch_refuses_unknown_upgrade_without_overwrite() {
+fn schema_template_mismatch_refuses_node_schema_drift_without_overwrite() {
     let (dir, store) = repo();
     let schema_path = dir.path().join(".pulse/workgraph/schemas/node.schema.json");
     fs::write(&schema_path, b"{\"schema_version\":999}\n").unwrap();
     let before = fs::read(&schema_path).unwrap();
     let err = store.validate().unwrap_err();
-    assert_eq!(err.code(), "node_schema_upgrade_refused");
+    assert_eq!(err.code(), "node_schema_drift_refused");
     assert_eq!(fs::read(&schema_path).unwrap(), before);
 }
 

@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://pulse.dev/schema/docs/docs-section.schema.json",
   "title": "Pulse Docs Section Record",
-  "description": "Derived Slice 5 section/chunk record stored in disposable docs-search sections.jsonl. Canonical prose remains the registered Markdown file; this schema documents the cache/eval contract, not a writable truth source.",
+  "description": "Derived section/chunk record stored in disposable docs-search sections.jsonl. Canonical prose remains the registered Markdown file; this schema documents the cache/eval contract, not a writable truth source.",
   "type": "object",
   "additionalProperties": false,
   "required": [

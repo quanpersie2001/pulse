@@ -118,7 +118,19 @@ fn two_processes_setting_same_ticket_documentation_revision_have_one_winner() {
     let created = run_ok(
         &repo,
         &[
-            "work", "create", "--kind", "ticket", "--title", "Docs", "--json",
+            "work",
+            "create",
+            "--kind",
+            "ticket",
+            "--title",
+            "Docs",
+            "--role",
+            "implementation",
+            "--risk",
+            "low",
+            "--materialization",
+            "R0",
+            "--json",
         ],
     );
     let id = created["value"]["id"]

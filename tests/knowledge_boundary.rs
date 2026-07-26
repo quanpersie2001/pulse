@@ -198,7 +198,7 @@ fn write_docs_registry(repo: &std::path::Path, manifest_repo_id: String, documen
     fs::write(repo.join("docs/domain/auth.md"), b"# Auth\n").unwrap();
     fs::create_dir_all(repo.join(".pulse/docs")).unwrap();
     let registry = DocsRegistry {
-        schema_version: 2,
+        schema_version: 1,
         revision: 1,
         repository_id: manifest_repo_id,
         documents: vec![document],

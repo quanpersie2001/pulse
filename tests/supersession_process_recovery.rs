@@ -147,13 +147,37 @@ fn setup(repo: &TempDir) -> (String, String, String) {
     let old = run_ok(
         repo,
         &[
-            "work", "create", "--kind", "ticket", "--title", "Old", "--json",
+            "work",
+            "create",
+            "--kind",
+            "ticket",
+            "--title",
+            "Old",
+            "--role",
+            "implementation",
+            "--risk",
+            "low",
+            "--materialization",
+            "R0",
+            "--json",
         ],
     );
     let replacement = run_ok(
         repo,
         &[
-            "work", "create", "--kind", "ticket", "--title", "New", "--json",
+            "work",
+            "create",
+            "--kind",
+            "ticket",
+            "--title",
+            "New",
+            "--role",
+            "implementation",
+            "--risk",
+            "low",
+            "--materialization",
+            "R0",
+            "--json",
         ],
     );
     let old_id = old["value"]["id"].as_str().unwrap().to_string();

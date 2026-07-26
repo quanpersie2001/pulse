@@ -1,4 +1,4 @@
-//! Documentation section extraction scenarios (Slice 5, Phase 2).
+//! Documentation section extraction scenarios.
 //!
 //! These are pure unit tests over bytes plus a [`DocumentRecord`]: extraction
 //! has no disk dependency. They cover the test-matrix rows R8-R17 that are

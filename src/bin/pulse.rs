@@ -5,6 +5,7 @@ use pulse::docs::model::{
     DocumentAuthority, DocumentKind, DocumentLifecycle, DocumentPatch, DocumentRecord,
 };
 use pulse::evidence::model::{ReceiptKind, ReceiptResult};
+use pulse::graph::contract::{Materialization, PublicCreateClassification, Risk, TicketRole};
 use pulse::graph::edge::EdgeType;
 use pulse::graph::lifecycle::TransitionReason;
 use pulse::graph::node::{DocumentationImpactPosture, NodeStatus};
@@ -327,6 +328,12 @@ enum WorkCommand {
         #[arg(long)]
         title: String,
         #[arg(long)]
+        role: Option<TicketRoleArg>,
+        #[arg(long)]
+        risk: Option<RiskArg>,
+        #[arg(long)]
+        materialization: Option<MaterializationArg>,
+        #[arg(long)]
         json: bool,
     },
     Show {
@@ -634,6 +641,33 @@ enum KindArg {
     Decision,
 }
 
+#[derive(Clone, Copy, ValueEnum)]
+#[value(rename_all = "snake_case")]
+enum TicketRoleArg {
+    Implementation,
+    DecisionWork,
+}
+
+#[derive(Clone, Copy, ValueEnum)]
+#[value(rename_all = "snake_case")]
+enum RiskArg {
+    Unassessed,
+    Low,
+    Medium,
+    High,
+    Critical,
+}
+
+#[derive(Clone, Copy, ValueEnum)]
+#[value(rename_all = "verbatim")]
+enum MaterializationArg {
+    Unassessed,
+    R0,
+    R1,
+    R2,
+    R3,
+}
+
 #[derive(Clone, ValueEnum)]
 #[value(rename_all = "snake_case")]
 enum StatusArg {
@@ -673,6 +707,39 @@ impl From<KindArg> for WorkKind {
             KindArg::Story => WorkKind::Story,
             KindArg::Ticket => WorkKind::Ticket,
             KindArg::Decision => WorkKind::Decision,
+        }
+    }
+}
+
+impl From<TicketRoleArg> for TicketRole {
+    fn from(value: TicketRoleArg) -> Self {
+        match value {
+            TicketRoleArg::Implementation => TicketRole::Implementation,
+            TicketRoleArg::DecisionWork => TicketRole::DecisionWork,
+        }
+    }
+}
+
+impl From<RiskArg> for Risk {
+    fn from(value: RiskArg) -> Self {
+        match value {
+            RiskArg::Unassessed => Risk::Unassessed,
+            RiskArg::Low => Risk::Low,
+            RiskArg::Medium => Risk::Medium,
+            RiskArg::High => Risk::High,
+            RiskArg::Critical => Risk::Critical,
+        }
+    }
+}
+
+impl From<MaterializationArg> for Materialization {
+    fn from(value: MaterializationArg) -> Self {
+        match value {
+            MaterializationArg::Unassessed => Materialization::Unassessed,
+            MaterializationArg::R0 => Materialization::R0,
+            MaterializationArg::R1 => Materialization::R1,
+            MaterializationArg::R2 => Materialization::R2,
+            MaterializationArg::R3 => Materialization::R3,
         }
     }
 }
@@ -877,8 +944,25 @@ fn main() {
 fn run(store: JsonGraphStore, command: Command) -> Result<(), PulseError> {
     match command {
         Command::Work { command } => match command {
-            WorkCommand::Create { kind, title, json } => {
-                let out = store.create_node(kind.into(), title)?;
+            WorkCommand::Create {
+                kind,
+                title,
+                role,
+                risk,
+                materialization,
+                json,
+            } => {
+                let classification = PublicCreateClassification {
+                    role: role.map(Into::into),
+                    risk: risk.map(Into::into),
+                    materialization: materialization.map(Into::into),
+                };
+                let out = store.create_node_public_with_context(
+                    kind.into(),
+                    title,
+                    classification,
+                    pulse::graph::store::OperationContext::default(),
+                )?;
                 render(json, &out, format!("created {}", out.value.id))
             }
             WorkCommand::Show { id, json } => {

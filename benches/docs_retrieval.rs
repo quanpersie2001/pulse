@@ -141,7 +141,7 @@ fn run(profile: Profile) -> Result<BenchmarkReport, Box<dyn std::error::Error>> 
     let passed = scenarios.iter().all(|scenario| scenario.passed);
     Ok(BenchmarkReport {
         schema_version: 1,
-        benchmark: "slice5_docs_retrieval",
+        benchmark: "docs_retrieval",
         profile: profile.name.to_string(),
         platform: Platform {
             os: env::consts::OS.to_string(),
@@ -299,7 +299,7 @@ fn setup_repo(repo: &Path, documents: usize) -> Result<(), Box<dyn std::error::E
         });
     }
     let registry = DocsRegistry {
-        schema_version: 2,
+        schema_version: 1,
         revision: 1,
         repository_id: evidence.repository_id,
         documents: records,

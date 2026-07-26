@@ -201,21 +201,14 @@ pub struct DocumentationValidationPayload {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct DocumentationValidationDocument {
-    /// Slice 3's pre-registry document identity claim is intentionally only a
-    /// proposal by the receipt author. Historical v1 receipts may use this
-    /// field; registry-bound Slice 4+ receipts should use [`Self::document_id`]
-    /// with payload version 2.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub proposed_document_id: Option<String>,
-    /// Canonical registry document identity. Required for payload v2; optional
-    /// in the Rust model so legacy v1 receipts can deserialize. V1 historical
-    /// inputs may also contain `document_id`; validation treats that as a legacy
-    /// proposed identity, and canonical v1 test fixtures use
-    /// `proposed_document_id`.
+    /// Canonical registry document identity. Required for the documentation
+    /// validation payload; optional in the Rust model so validation can return a
+    /// domain error instead of failing deserialization first.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub document_id: Option<String>,
-    /// Receipt-bound document record revision. Required for payload v2;
-    /// optional for historical/pre-registry payload v1 compatibility.
+    /// Receipt-bound document record revision. Required for the documentation
+    /// validation payload; optional in the Rust model so validation can return a
+    /// domain error instead of failing deserialization first.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub document_revision: Option<u64>,
     pub path: String,

@@ -65,7 +65,7 @@ pub struct HardBlockerReport {
 pub enum BlockerResolution {
     Satisfied,
     Unsatisfied,
-    UnknownToSlice,
+    UnknownToResolver,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -256,7 +256,7 @@ fn resolve_blocker(
             vec![],
         ),
         Some(node) if node.kind != WorkKind::Ticket => (
-            BlockerResolution::UnknownToSlice,
+            BlockerResolution::UnknownToResolver,
             "non_ticket_blocker".to_string(),
             vec![subject.to_string(), blocker.to_string()],
             vec!["typed_prerequisite_resolver".to_string()],
@@ -277,7 +277,7 @@ fn resolve_blocker(
                         let resolution = if chain.satisfied {
                             BlockerResolution::Satisfied
                         } else if chain.unknown {
-                            BlockerResolution::UnknownToSlice
+                            BlockerResolution::UnknownToResolver
                         } else {
                             BlockerResolution::Unsatisfied
                         };
@@ -291,7 +291,7 @@ fn resolve_blocker(
                         )
                     }
                     None => (
-                        BlockerResolution::UnknownToSlice,
+                        BlockerResolution::UnknownToResolver,
                         "superseded_decision_or_missing_replacement_resolver".to_string(),
                         vec![subject.to_string(), blocker.to_string()],
                         vec!["decision_resolution".to_string()],
