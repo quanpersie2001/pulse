@@ -165,6 +165,14 @@ pub fn head_commit(repo_root: &Path) -> Result<String> {
     Ok(git(repo_root, ["rev-parse", "HEAD"])?.trim().to_string())
 }
 
+fn packet_head_commit(repo_root: &Path) -> Result<String> {
+    Ok(
+        packet_git(repo_root, ["rev-parse", "--verify", "HEAD^{commit}"])?
+            .trim()
+            .to_string(),
+    )
+}
+
 fn path_dirty(repo_root: &Path, path: &str) -> bool {
     match git(repo_root, ["status", "--porcelain", "--", path]) {
         Ok(value) => !value.trim().is_empty(),
@@ -179,6 +187,18 @@ fn is_evidence_only_path(path: &str) -> bool {
 }
 
 fn git<const N: usize>(repo_root: &Path, args: [&str; N]) -> Result<String> {
+    git_with_code(repo_root, args, "source_binding_stale")
+}
+
+fn packet_git<const N: usize>(repo_root: &Path, args: [&str; N]) -> Result<String> {
+    git_with_code(repo_root, args, "work_packet_source_unavailable")
+}
+
+fn git_with_code<const N: usize>(
+    repo_root: &Path,
+    args: [&str; N],
+    error_code: &'static str,
+) -> Result<String> {
     let output = Command::new("git")
         .args(args)
         .current_dir(repo_root)
@@ -186,7 +206,7 @@ fn git<const N: usize>(repo_root: &Path, args: [&str; N]) -> Result<String> {
         .map_err(|error| PulseError::io(repo_root.join(".git"), error))?;
     if !output.status.success() {
         return Err(PulseError::validation(
-            "source_binding_stale",
+            error_code,
             String::from_utf8_lossy(&output.stderr).trim().to_string(),
         ));
     }
@@ -202,12 +222,7 @@ fn git<const N: usize>(repo_root: &Path, args: [&str; N]) -> Result<String> {
 /// - `work_packet_dirty_source_unsupported` if the worktree is dirty;
 /// - `work_packet_source_operation_in_progress` if a Git operation is active.
 pub fn packet_base_snapshot(repo_root: &Path, repository_id: &str) -> Result<PacketSourceSnapshot> {
-    let commit = head_commit(repo_root).map_err(|_| {
-        PulseError::validation(
-            "work_packet_source_unavailable",
-            "HEAD does not resolve to a usable Git commit",
-        )
-    })?;
+    let commit = packet_head_commit(repo_root)?;
     if commit.len() != 40 || !commit.chars().all(|c| c.is_ascii_hexdigit()) {
         return Err(PulseError::validation(
             "work_packet_source_unavailable",
@@ -216,7 +231,7 @@ pub fn packet_base_snapshot(repo_root: &Path, repository_id: &str) -> Result<Pac
     }
 
     let head_ref = resolve_head_ref(repo_root)?;
-    let worktree_root_kind = detect_worktree_kind(repo_root);
+    let worktree_root_kind = detect_worktree_kind(repo_root)?;
 
     // P2S1-D4: clean committed source only.
     let cleanliness = check_cleanliness(repo_root)?;
@@ -257,7 +272,7 @@ pub fn packet_base_snapshot(repo_root: &Path, repository_id: &str) -> Result<Pac
 /// unified `work_packet_source_changed` code when the expected snapshot had a
 /// different value.
 pub fn revalidate_packet_base(repo_root: &Path, expected: &PacketSourceSnapshot) -> Result<()> {
-    let commit = head_commit(repo_root).map_err(|_| {
+    let commit = packet_head_commit(repo_root).map_err(|_| {
         PulseError::validation(
             "work_packet_source_changed",
             "source HEAD changed during packet build",
@@ -267,8 +282,16 @@ pub fn revalidate_packet_base(repo_root: &Path, expected: &PacketSourceSnapshot)
     let cleanliness = check_cleanliness(repo_root)?;
     let operation_state = detect_operation_state(repo_root)?;
 
+    let worktree_root_kind = detect_worktree_kind(repo_root).map_err(|_| {
+        PulseError::validation(
+            "work_packet_source_changed",
+            "source worktree state changed during packet build",
+        )
+    })?;
+
     if commit != expected.commit
         || head_ref != expected.head_ref
+        || worktree_root_kind != expected.worktree_root_kind
         || cleanliness != expected.cleanliness
         || operation_state != expected.operation_state
     {
@@ -283,7 +306,7 @@ pub fn revalidate_packet_base(repo_root: &Path, expected: &PacketSourceSnapshot)
 /// Check whether the worktree is clean (no tracked or untracked non-ignored
 /// changes).
 pub fn check_cleanliness(repo_root: &Path) -> Result<SourceCleanliness> {
-    let output = git(
+    let output = packet_git(
         repo_root,
         ["status", "--porcelain=v1", "--untracked-files=all"],
     )?;
@@ -298,35 +321,52 @@ pub fn check_cleanliness(repo_root: &Path) -> Result<SourceCleanliness> {
 ///
 /// Returns `Ok(None)` when HEAD is detached, `Ok(Some(ref))` when on a branch.
 fn resolve_head_ref(repo_root: &Path) -> Result<Option<String>> {
-    match git(repo_root, ["symbolic-ref", "--short", "HEAD"]) {
-        Ok(refname) => {
-            let trimmed = refname.trim().to_string();
-            if trimmed.is_empty() {
-                return Ok(None);
-            }
-            // Convert short ref to full ref name.
-            let full = git(repo_root, ["rev-parse", "--symbolic-full-name", "HEAD"])?;
-            Ok(Some(full.trim().to_string()))
+    let output = Command::new("git")
+        .args(["symbolic-ref", "--quiet", "HEAD"])
+        .current_dir(repo_root)
+        .output()
+        .map_err(|error| PulseError::io(repo_root.join(".git"), error))?;
+    if output.status.success() {
+        let refname = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if refname.is_empty() {
+            return Err(PulseError::validation(
+                "work_packet_source_unavailable",
+                "HEAD symbolic ref resolved to an empty ref name",
+            ));
         }
-        Err(_) => Ok(None), // detached HEAD
+        return Ok(Some(refname));
+    }
+    match output.status.code() {
+        Some(1) => Ok(None), // detached HEAD
+        _ => Err(PulseError::validation(
+            "work_packet_source_unavailable",
+            String::from_utf8_lossy(&output.stderr).trim().to_string(),
+        )),
     }
 }
 
 /// Detect the worktree root kind using `git rev-parse --git-dir`.
-fn detect_worktree_kind(repo_root: &Path) -> WorktreeRootKind {
-    match git(repo_root, ["rev-parse", "--git-dir"]) {
-        Ok(path) => {
-            let trimmed = path.trim();
-            // In a primary worktree, --git-dir returns ".git" or the absolute
-            // path to ".git". In a linked worktree, it returns a path inside
-            // ".git/worktrees/<id>".
-            if trimmed.contains("/worktrees/") || trimmed.contains("\\worktrees\\") {
-                WorktreeRootKind::LinkedWorktree
-            } else {
-                WorktreeRootKind::PrimaryOrExistingWorktree
-            }
-        }
-        Err(_) => WorktreeRootKind::PrimaryOrExistingWorktree,
+fn detect_worktree_kind(repo_root: &Path) -> Result<WorktreeRootKind> {
+    let common_dir = packet_git(
+        repo_root,
+        ["rev-parse", "--path-format=absolute", "--git-common-dir"],
+    )?;
+    let git_dir = packet_git(
+        repo_root,
+        ["rev-parse", "--path-format=absolute", "--git-dir"],
+    )?;
+    let common_dir = common_dir.trim();
+    let git_dir = git_dir.trim();
+    if common_dir.is_empty() || git_dir.is_empty() {
+        return Err(PulseError::validation(
+            "work_packet_source_unavailable",
+            "Git directory could not be resolved",
+        ));
+    }
+    if common_dir == git_dir {
+        Ok(WorktreeRootKind::PrimaryOrExistingWorktree)
+    } else {
+        Ok(WorktreeRootKind::LinkedWorktree)
     }
 }
 
@@ -362,13 +402,20 @@ pub fn detect_operation_state(repo_root: &Path) -> Result<RepositoryOperationSta
 /// Check whether a path exists in the Git directory, using `git rev-parse
 /// --git-path` for correct linked-worktree resolution.
 fn git_path_exists(repo_root: &Path, relative: &str) -> Result<bool> {
-    let output = git(repo_root, ["rev-parse", "--git-path", relative])?;
+    let output = packet_git(
+        repo_root,
+        [
+            "rev-parse",
+            "--path-format=absolute",
+            "--git-path",
+            relative,
+        ],
+    )?;
     let git_path = output.trim().to_string();
     if git_path.is_empty() {
         return Ok(false);
     }
-    let abs = repo_root.join(&git_path);
-    Ok(abs.exists())
+    Ok(Path::new(&git_path).exists())
 }
 
 impl From<PacketSourceSnapshot> for crate::work_packet::PacketSource {
@@ -399,55 +446,60 @@ impl From<PacketSourceSnapshot> for crate::work_packet::PacketSource {
 pub fn check_repository_identity(
     repo_root: &Path,
 ) -> Result<crate::evidence::manifest::EvidenceManifest> {
-    let evidence = crate::evidence::manifest::load_existing(repo_root)?.ok_or_else(|| {
-        PulseError::validation(
-            "work_packet_repository_identity_missing",
-            "existing repository identity (evidence manifest) not found",
-        )
-    })?;
+    let evidence = map_manifest_error(crate::evidence::manifest::load_existing(repo_root))?
+        .ok_or_else(|| {
+            PulseError::validation(
+                "work_packet_repository_identity_missing",
+                "existing repository identity (evidence manifest) not found",
+            )
+        })?;
 
     let repo_id = &evidence.repository_id;
 
-    // Check docs registry if it exists.
-    let docs_registry_path = repo_root.join(".pulse/docs/registry.json");
-    if docs_registry_path.exists() {
-        let registry: serde_json::Value = crate::storage::read_json(&docs_registry_path)?;
-        if let Some(docs_repo_id) = registry.get("repository_id").and_then(|v| v.as_str()) {
-            if docs_repo_id != repo_id {
-                return Err(PulseError::validation(
-                    "work_packet_repository_identity_mismatch",
-                    format!(
-                        "docs registry repository_id '{}' does not match evidence manifest '{}'",
-                        docs_repo_id, repo_id,
-                    ),
-                ));
-            }
-        }
-    } else {
+    let docs_registry = map_manifest_error(crate::docs::manifest::load_existing(repo_root))?
+        .ok_or_else(|| {
+            PulseError::validation(
+                "work_packet_docs_registry_missing",
+                "docs registry not found; packet requires existing docs manifest/registry",
+            )
+        })?;
+    if &docs_registry.repository_id != repo_id {
         return Err(PulseError::validation(
-            "work_packet_docs_registry_missing",
-            "docs registry not found; packet requires existing docs manifest/registry",
+            "work_packet_repository_identity_mismatch",
+            format!(
+                "docs registry repository_id '{}' does not match evidence manifest '{}'",
+                docs_registry.repository_id, repo_id,
+            ),
         ));
     }
 
-    // Check knowledge manifest if it exists (optional).
-    let knowledge_manifest_path = repo_root.join(".pulse/knowledge/manifest.json");
-    if knowledge_manifest_path.exists() {
-        let kn_manifest: serde_json::Value = crate::storage::read_json(&knowledge_manifest_path)?;
-        if let Some(kn_repo_id) = kn_manifest.get("repository_id").and_then(|v| v.as_str()) {
-            if kn_repo_id != repo_id {
-                return Err(PulseError::validation(
-                    "work_packet_repository_identity_mismatch",
-                    format!(
-                        "knowledge manifest repository_id '{}' does not match evidence manifest '{}'",
-                        kn_repo_id, repo_id,
-                    ),
-                ));
-            }
+    if let Some(knowledge) =
+        map_manifest_error(crate::knowledge::manifest::load_existing(repo_root))?
+    {
+        if &knowledge.repository_id != repo_id {
+            return Err(PulseError::validation(
+                "work_packet_repository_identity_mismatch",
+                format!(
+                    "knowledge manifest repository_id '{}' does not match evidence manifest '{}'",
+                    knowledge.repository_id, repo_id,
+                ),
+            ));
         }
     }
 
     Ok(evidence)
+}
+
+fn map_manifest_error<T>(result: Result<T>) -> Result<T> {
+    result.map_err(|error| match error.code() {
+        "work_packet_repository_identity_missing"
+        | "work_packet_docs_registry_missing"
+        | "work_packet_repository_identity_mismatch" => error,
+        code => PulseError::validation(
+            "work_packet_manifest_invalid",
+            format!("cause_code={code}: {error}"),
+        ),
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -459,6 +511,14 @@ mod tests {
     use super::*;
     use std::fs;
     use std::process::Command;
+
+    fn run_git(path: &Path, args: &[&str]) -> std::process::Output {
+        Command::new("git")
+            .args(args)
+            .current_dir(path)
+            .output()
+            .expect("git command")
+    }
 
     fn init_repo(path: &Path) {
         let git = |args: &[&str]| {
@@ -489,7 +549,7 @@ mod tests {
     }
 
     fn commit_file(path: &Path, rel: &str, content: &[u8]) {
-        let parent = path.parent().unwrap_or(path);
+        let parent = path.join(rel).parent().unwrap().to_path_buf();
         fs::create_dir_all(parent).unwrap();
         fs::write(path.join(rel), content).unwrap();
         let output = Command::new("git")
@@ -498,7 +558,7 @@ mod tests {
             .output()
             .expect("git add");
         assert!(output.status.success(), "git add failed");
-        Command::new("git")
+        let commit = Command::new("git")
             .args([
                 "-c",
                 "user.name=Test",
@@ -511,6 +571,11 @@ mod tests {
             .current_dir(path)
             .output()
             .expect("git commit");
+        assert!(
+            commit.status.success(),
+            "git commit failed: {}",
+            String::from_utf8_lossy(&commit.stderr)
+        );
     }
 
     #[test]
@@ -604,16 +669,16 @@ mod tests {
     fn rebase_in_progress_detected() {
         let tmp = tempfile::tempdir().unwrap();
         init_repo(tmp.path());
-        commit_file(tmp.path(), "README.md", b"base");
+        commit_file(tmp.path(), "README.md", b"base\n");
         git(tmp.path(), ["checkout", "-b", "feature"]).unwrap();
-        commit_file(tmp.path(), "feature.txt", b"feature");
+        commit_file(tmp.path(), "README.md", b"feature\n");
         git(tmp.path(), ["checkout", "main"]).unwrap();
-        commit_file(tmp.path(), "README.md", b"main change");
-        let _ = git(tmp.path(), ["rebase", "feature"]);
+        commit_file(tmp.path(), "README.md", b"main\n");
+        let rebase_result = git(tmp.path(), ["rebase", "feature"]);
+        assert!(rebase_result.is_err(), "rebase should have conflicted");
         let state = detect_operation_state(tmp.path()).unwrap();
-        if state == RepositoryOperationState::RebaseInProgress {
-            let _ = git(tmp.path(), ["rebase", "--abort"]);
-        }
+        assert_eq!(state, RepositoryOperationState::RebaseInProgress);
+        let _ = git(tmp.path(), ["rebase", "--abort"]);
     }
 
     #[test]
@@ -626,26 +691,31 @@ mod tests {
         let feature_commit = head_commit(tmp.path()).unwrap();
         git(tmp.path(), ["checkout", "main"]).unwrap();
         commit_file(tmp.path(), "feature.txt", b"main already has this");
-        let _ = git(tmp.path(), ["cherry-pick", &feature_commit]);
+        let cherry_pick_result = git(tmp.path(), ["cherry-pick", &feature_commit]);
+        assert!(
+            cherry_pick_result.is_err(),
+            "cherry-pick should have conflicted"
+        );
         let state = detect_operation_state(tmp.path()).unwrap();
-        if state == RepositoryOperationState::CherryPickInProgress {
-            let _ = git(tmp.path(), ["cherry-pick", "--abort"]);
-        }
+        assert_eq!(state, RepositoryOperationState::CherryPickInProgress);
+        let _ = git(tmp.path(), ["cherry-pick", "--abort"]);
     }
 
     #[test]
     fn revert_in_progress_detected() {
         let tmp = tempfile::tempdir().unwrap();
         init_repo(tmp.path());
-        commit_file(tmp.path(), "README.md", b"first");
-        head_commit(tmp.path()).unwrap();
-        commit_file(tmp.path(), "README.md", b"second");
-        let second_commit = head_commit(tmp.path()).unwrap();
-        let _ = git(tmp.path(), ["revert", "--no-commit", &second_commit]);
+        commit_file(tmp.path(), "README.md", b"first\n");
+        let first_commit = head_commit(tmp.path()).unwrap();
+        commit_file(tmp.path(), "README.md", b"second\n");
+        git(tmp.path(), ["checkout", "-b", "side", &first_commit]).unwrap();
+        commit_file(tmp.path(), "README.md", b"side\n");
+        git(tmp.path(), ["checkout", "main"]).unwrap();
+        let revert_result = git(tmp.path(), ["revert", "--no-commit", &first_commit]);
+        assert!(revert_result.is_err(), "revert should have conflicted");
         let state = detect_operation_state(tmp.path()).unwrap();
-        if state == RepositoryOperationState::RevertInProgress {
-            let _ = git(tmp.path(), ["revert", "--abort"]);
-        }
+        assert_eq!(state, RepositoryOperationState::RevertInProgress);
+        let _ = git(tmp.path(), ["revert", "--abort"]);
     }
 
     #[test]
@@ -712,6 +782,92 @@ mod tests {
         let result = packet_base_snapshot(tmp.path(), "repo_test");
         assert!(result.is_err());
         assert_eq!(result.unwrap_err().code(), "work_packet_source_unavailable");
+    }
+
+    #[test]
+    fn linked_worktree_is_classified_and_uses_git_path_operations() {
+        let tmp = tempfile::tempdir().unwrap();
+        let primary = tmp.path().join("primary");
+        let linked = tmp.path().join("linked");
+        fs::create_dir_all(&primary).unwrap();
+        init_repo(&primary);
+        commit_file(&primary, "README.md", b"hello");
+        let output = run_git(
+            &primary,
+            &[
+                "worktree",
+                "add",
+                "--detach",
+                linked.to_str().unwrap(),
+                "HEAD",
+            ],
+        );
+        assert!(
+            output.status.success(),
+            "git worktree add failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let snapshot = packet_base_snapshot(&linked, "repo_test").unwrap();
+        assert_eq!(
+            snapshot.worktree_root_kind,
+            WorktreeRootKind::LinkedWorktree
+        );
+        let git_file = fs::read_to_string(linked.join(".git")).expect("linked worktree git file");
+        let git_dir: std::path::PathBuf = git_file
+            .trim_start_matches("gitdir: ")
+            .trim()
+            .parse()
+            .unwrap();
+        fs::write(
+            git_dir.join("MERGE_HEAD"),
+            b"0123456789abcdef0123456789abcdef01234567\n",
+        )
+        .unwrap();
+        assert_eq!(
+            detect_operation_state(&linked).unwrap(),
+            RepositoryOperationState::MergeInProgress
+        );
+    }
+
+    #[test]
+    fn preserve_loaders_do_not_bootstrap_missing_planes() {
+        let tmp = tempfile::tempdir().unwrap();
+        init_repo(tmp.path());
+        assert!(crate::evidence::manifest::load_existing(tmp.path())
+            .unwrap()
+            .is_none());
+        assert!(crate::docs::manifest::load_existing(tmp.path())
+            .unwrap()
+            .is_none());
+        assert!(crate::knowledge::manifest::load_existing(tmp.path())
+            .unwrap()
+            .is_none());
+        assert!(!tmp.path().join(".pulse").exists());
+    }
+
+    #[test]
+    fn docs_registry_without_evidence_does_not_bootstrap_identity() {
+        let tmp = tempfile::tempdir().unwrap();
+        init_repo(tmp.path());
+        fs::create_dir_all(tmp.path().join(".pulse/docs")).unwrap();
+        fs::write(tmp.path().join(".pulse/docs/registry.json"), b"{}").unwrap();
+        let result = crate::docs::manifest::load_existing(tmp.path());
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().code(), "docs_registry_evidence_missing");
+        assert!(!tmp.path().join(".pulse/evidence").exists());
+    }
+
+    #[test]
+    fn malformed_existing_manifest_maps_to_packet_manifest_invalid() {
+        let tmp = tempfile::tempdir().unwrap();
+        init_repo(tmp.path());
+        fs::create_dir_all(tmp.path().join(".pulse/evidence")).unwrap();
+        fs::write(tmp.path().join(".pulse/evidence/manifest.json"), b"{}").unwrap();
+        let result = check_repository_identity(tmp.path());
+        assert!(result.is_err());
+        let error = result.unwrap_err();
+        assert_eq!(error.code(), "work_packet_manifest_invalid");
+        assert!(error.to_string().contains("cause_code="));
     }
 
     #[test]

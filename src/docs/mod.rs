@@ -47,8 +47,8 @@ pub use lexical::{
     LexicalSchema, TANTIVY_COMPAT_VERSION,
 };
 pub use manifest::{
-    bootstrap, load, DocsBootstrapOutcome, DOCS_INDEX_STATE_SCHEMA, DOCS_SECTION_SCHEMA,
-    DOCUMENT_SCHEMA, RETRIEVAL_EVAL_SCHEMA,
+    bootstrap, load, load_existing, DocsBootstrapOutcome, DOCS_INDEX_STATE_SCHEMA,
+    DOCS_SECTION_SCHEMA, DOCUMENT_SCHEMA, RETRIEVAL_EVAL_SCHEMA,
 };
 pub use markdown::{
     extract_document_title, extract_sections, ExtractionOutcome, ExtractionWarning, TitleSource,
