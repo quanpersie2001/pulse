@@ -24,7 +24,8 @@
     "assurance",
     "dispatch",
     "budget",
-    "packet_fingerprint"
+    "packet_fingerprint",
+    "reason_codes"
   ],
   "properties": {
     "schema_version": {
@@ -112,10 +113,26 @@
         "work_surface",
         "plan_policy",
         "semantic_impact",
+        "effort",
         "verification_profile",
+        "brief",
         "objective",
         "current_behavior",
-        "target_behavior"
+        "target_behavior",
+        "code_anchors",
+        "documentation_anchors",
+        "configuration_anchors",
+        "data_anchors",
+        "research_refs",
+        "required_changes",
+        "invariants",
+        "acceptance",
+        "scope",
+        "implementation_freedom",
+        "required_decisions",
+        "shared_approach_refs",
+        "expected_evidence",
+        "expected_handoff"
       ],
       "properties": {
         "mode": { "type": "string", "enum": ["locked", "guided", "open"] },
@@ -133,13 +150,18 @@
         },
         "verification_profile": { "type": "string" },
         "brief": {
-          "type": "object",
-          "additionalProperties": false,
-          "required": ["path", "content_hash"],
-          "properties": {
-            "path": { "type": "string" },
-            "content_hash": { "$ref": "#/$defs/content_hash" }
-          }
+          "anyOf": [
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["path", "content_hash"],
+              "properties": {
+                "path": { "type": "string" },
+                "content_hash": { "$ref": "#/$defs/content_hash" }
+              }
+            },
+            { "type": "null" }
+          ]
         },
         "objective": { "type": "string" },
         "current_behavior": { "type": "string" },
@@ -185,6 +207,11 @@
         "receipt_hash",
         "owning_work",
         "shape_mode",
+        "destination",
+        "map",
+        "critical_branches",
+        "bounded_fog",
+        "remaining_uncertainty",
         "decision_frontier"
       ],
       "properties": {
@@ -193,8 +220,18 @@
         "receipt_hash": { "type": "string" },
         "owning_work": { "$ref": "#/$defs/shaping_work_binding" },
         "shape_mode": { "type": "string" },
-        "destination": { "$ref": "#/$defs/shaping_destination" },
-        "map": { "$ref": "#/$defs/shaping_map_snapshot" },
+        "destination": {
+          "anyOf": [
+            { "$ref": "#/$defs/shaping_destination" },
+            { "type": "null" }
+          ]
+        },
+        "map": {
+          "anyOf": [
+            { "$ref": "#/$defs/shaping_map_snapshot" },
+            { "type": "null" }
+          ]
+        },
         "critical_branches": { "type": "array", "items": { "$ref": "#/$defs/critical_branch" }, "default": [] },
         "bounded_fog": { "type": "array", "items": { "$ref": "#/$defs/bounded_fog" }, "default": [] },
         "remaining_uncertainty": { "type": "array", "items": { "$ref": "#/$defs/remaining_uncertainty" }, "default": [] },
@@ -204,19 +241,24 @@
     "graph": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["structural_state"],
+      "required": ["structural_state", "hard_blockers", "soft_preferences", "supersession", "relations"],
       "properties": {
         "structural_state": { "type": "string" },
         "hard_blockers": { "type": "array", "items": { "$ref": "#/$defs/blocker_item" }, "default": [] },
         "soft_preferences": { "type": "array", "items": { "$ref": "#/$defs/blocker_item" }, "default": [] },
-        "supersession": { "$ref": "#/$defs/supersession_ref" },
+        "supersession": {
+          "anyOf": [
+            { "$ref": "#/$defs/supersession_ref" },
+            { "type": "null" }
+          ]
+        },
         "relations": { "$ref": "#/$defs/relation_bundle" }
       }
     },
     "documentation": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["applicability", "suggestion_query", "read_budget", "index"],
+      "required": ["applicability", "suggestion_query", "suggested_sections", "read_budget", "index"],
       "properties": {
         "applicability": { "$ref": "#/$defs/docs_applicability" },
         "suggestion_query": { "$ref": "#/$defs/suggestion_query" },
@@ -228,11 +270,11 @@
     "knowledge": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["status", "owner_phase"],
+      "required": ["status", "owner_phase", "knowledge_fingerprint", "required", "recommended", "suggested", "excluded"],
       "properties": {
         "status": { "type": "string" },
         "owner_phase": { "type": "integer" },
-        "knowledge_fingerprint": { "type": "string" },
+        "knowledge_fingerprint": { "type": ["string", "null"] },
         "required": { "type": "array", "items": { "type": "string" }, "default": [] },
         "recommended": { "type": "array", "items": { "type": "string" }, "default": [] },
         "suggested": { "type": "array", "items": { "type": "string" }, "default": [] },
@@ -255,7 +297,7 @@
         "repository_id": { "type": "string" },
         "kind": { "type": "string" },
         "commit": { "type": "string", "pattern": "^[A-Fa-f0-9]{40}$" },
-        "head_ref": { "type": "string" },
+        "head_ref": { "type": ["string", "null"] },
         "worktree_root_kind": { "type": "string" },
         "cleanliness": { "type": "string" },
         "operation_state": { "type": "string" },
@@ -265,10 +307,10 @@
     "workspace": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["binding_status", "required_strategy", "base_repository_id", "base_commit"],
+      "required": ["binding_status", "workspace_id", "required_strategy", "base_repository_id", "base_commit", "requirements"],
       "properties": {
         "binding_status": { "type": "string" },
-        "workspace_id": { "type": "string" },
+        "workspace_id": { "type": ["string", "null"] },
         "required_strategy": { "type": "string" },
         "base_repository_id": { "type": "string" },
         "base_commit": { "type": "string" },
@@ -278,19 +320,19 @@
     "capabilities": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["evaluation_status"],
+      "required": ["evaluation_status", "required", "optional", "missing", "inventory_identity"],
       "properties": {
         "evaluation_status": { "type": "string" },
         "required": { "type": "array", "items": { "type": "string" }, "default": [] },
         "optional": { "type": "array", "items": { "type": "string" }, "default": [] },
         "missing": { "type": "array", "items": { "type": "string" }, "default": [] },
-        "inventory_identity": { "type": "string" }
+        "inventory_identity": { "type": ["string", "null"] }
       }
     },
     "scope": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["scope_hints", "enforcement"],
+      "required": ["scope_hints", "implementation_freedom", "hard_stops", "enforcement"],
       "properties": {
         "scope_hints": { "$ref": "#/$defs/scope_hints" },
         "implementation_freedom": { "type": "array", "items": { "$ref": "#/$defs/contract_item" }, "default": [] },
@@ -309,7 +351,7 @@
     "assurance": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["verification_profile", "qa", "promotion_policy", "close_gate"],
+      "required": ["verification_profile", "expected_evidence", "expected_handoff", "documentation_impact", "qa", "promotion_policy", "close_gate"],
       "properties": {
         "verification_profile": { "type": "string" },
         "expected_evidence": { "type": "array", "items": { "type": "string" }, "default": [] },
@@ -317,6 +359,7 @@
         "documentation_impact": {
           "type": "object",
           "additionalProperties": false,
+          "required": ["posture", "status", "required_doc_ids"],
           "properties": {
             "posture": { "type": "string" },
             "status": { "type": "string" },
@@ -326,7 +369,7 @@
         "qa": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["posture", "status"],
+          "required": ["posture", "status", "affected_case_ids"],
           "properties": {
             "posture": { "type": "string" },
             "status": { "type": "string" },
@@ -340,7 +383,7 @@
     "dispatch": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["reservation_candidate", "dispatch_authorized", "authorization_status"],
+      "required": ["reservation_candidate", "dispatch_authorized", "authorization_status", "gate_families", "revalidation_preconditions"],
       "properties": {
         "reservation_candidate": { "type": "boolean" },
         "dispatch_authorized": { "type": "boolean" },
@@ -352,7 +395,7 @@
     "budget": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["profile", "max_canonical_json_bytes", "max_incident_relations", "max_decision_frontier_items", "max_suggested_sections", "max_snippet_bytes_each", "recommended_initial_sections", "max_initial_lines"],
+      "required": ["profile", "max_canonical_json_bytes", "max_incident_relations", "max_decision_frontier_items", "max_suggested_sections", "max_snippet_bytes_each", "recommended_initial_sections", "max_initial_lines", "actual_canonical_json_bytes", "truncations"],
       "properties": {
         "profile": { "type": "string" },
         "max_canonical_json_bytes": { "type": "integer", "minimum": 0 },
@@ -375,11 +418,16 @@
     "surface_ref": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["path"],
+      "required": ["path", "symbol", "content_hash"],
       "properties": {
         "path": { "type": "string" },
-        "symbol": { "type": "string" },
-        "content_hash": { "$ref": "#/$defs/content_hash" }
+        "symbol": { "type": ["string", "null"] },
+        "content_hash": {
+          "anyOf": [
+            { "$ref": "#/$defs/content_hash" },
+            { "type": "null" }
+          ]
+        }
       }
     },
     "contract_item": {
@@ -394,6 +442,7 @@
     "contract_scope": {
       "type": "object",
       "additionalProperties": false,
+      "required": ["included", "excluded"],
       "properties": {
         "included": { "type": "array", "items": { "type": "string" }, "default": [] },
         "excluded": { "type": "array", "items": { "type": "string" }, "default": [] }
@@ -402,11 +451,16 @@
     "required_decision_ref": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["id", "contract_revision"],
+      "required": ["id", "contract_revision", "acceptance_receipt"],
       "properties": {
         "id": { "type": "string" },
         "contract_revision": { "type": "integer", "minimum": 0 },
-        "acceptance_receipt": { "$ref": "#/$defs/receipt_ref" }
+        "acceptance_receipt": {
+          "anyOf": [
+            { "$ref": "#/$defs/receipt_ref" },
+            { "type": "null" }
+          ]
+        }
       }
     },
     "receipt_ref": {
@@ -454,14 +508,19 @@
     "decision_context_ref": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["id", "revision", "contract_revision", "status", "title"],
+      "required": ["id", "revision", "contract_revision", "status", "title", "acceptance_receipt", "content_refs"],
       "properties": {
         "id": { "type": "string" },
         "revision": { "type": "integer", "minimum": 0 },
         "contract_revision": { "type": "integer", "minimum": 0 },
         "status": { "type": "string" },
         "title": { "type": "string" },
-        "acceptance_receipt": { "$ref": "#/$defs/receipt_ref" },
+        "acceptance_receipt": {
+          "anyOf": [
+            { "$ref": "#/$defs/receipt_ref" },
+            { "type": "null" }
+          ]
+        },
         "content_refs": { "type": "array", "items": { "$ref": "#/$defs/content_ref" }, "default": [] }
       }
     },
@@ -487,7 +546,7 @@
     "shaping_destination": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["summary"],
+      "required": ["summary", "scope_boundary", "exit_conditions"],
       "properties": {
         "summary": { "type": "string" },
         "scope_boundary": { "type": "array", "items": { "type": "string" }, "default": [] },
@@ -507,7 +566,7 @@
     "critical_branch": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["id", "question", "gap_kind", "disposition"],
+      "required": ["id", "question", "gap_kind", "affected_work", "disposition"],
       "properties": {
         "id": { "type": "string" },
         "question": { "type": "string" },
@@ -519,11 +578,16 @@
     "branch_disposition": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["kind"],
+      "required": ["kind", "resolution", "non_blocking_context"],
       "properties": {
         "kind": { "type": "string" },
-        "resolution": { "$ref": "#/$defs/resolution" },
-        "non_blocking_context": { "type": "string" }
+        "resolution": {
+          "anyOf": [
+            { "$ref": "#/$defs/resolution" },
+            { "type": "null" }
+          ]
+        },
+        "non_blocking_context": { "type": ["string", "null"] }
       }
     },
     "resolution": {
@@ -540,7 +604,7 @@
     "bounded_fog": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["id", "statement", "why_not_precise", "trigger"],
+      "required": ["id", "statement", "bounds", "why_not_precise", "trigger", "affected_work"],
       "properties": {
         "id": { "type": "string" },
         "statement": { "type": "string" },
@@ -562,7 +626,7 @@
     "decision_frontier": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["status"],
+      "required": ["status", "items"],
       "properties": {
         "status": { "type": "string" },
         "items": { "type": "array", "items": { "$ref": "#/$defs/decision_frontier_item" }, "default": [] }
@@ -604,20 +668,24 @@
     "relation_item": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["relation", "id", "kind", "revision", "title", "status", "edge_id"],
+      "required": ["edge_id", "edge_type", "from", "to", "edge_revision", "opposite_id", "opposite_kind", "opposite_status", "opposite_revision", "opposite_title"],
       "properties": {
-        "relation": { "type": "string" },
-        "id": { "type": "string" },
-        "kind": { "type": "string" },
-        "revision": { "type": "integer", "minimum": 0 },
-        "title": { "type": "string" },
-        "status": { "type": "string" },
-        "edge_id": { "type": "string" }
+        "edge_id": { "type": "string" },
+        "edge_type": { "type": "string" },
+        "from": { "type": "string" },
+        "to": { "type": "string" },
+        "edge_revision": { "type": "integer", "minimum": 0 },
+        "opposite_id": { "type": "string" },
+        "opposite_kind": { "type": "string" },
+        "opposite_status": { "type": "string" },
+        "opposite_revision": { "type": "integer", "minimum": 0 },
+        "opposite_title": { "type": "string" }
       }
     },
     "relation_bundle": {
       "type": "object",
       "additionalProperties": false,
+      "required": ["outgoing", "incoming"],
       "properties": {
         "outgoing": { "type": "array", "items": { "$ref": "#/$defs/relation_item" }, "default": [] },
         "incoming": { "type": "array", "items": { "$ref": "#/$defs/relation_item" }, "default": [] }
@@ -626,7 +694,7 @@
     "docs_applicability": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["status"],
+      "required": ["status", "required", "optional", "write_candidates", "excluded"],
       "properties": {
         "status": { "type": "string" },
         "required": { "type": "array", "items": { "$ref": "#/$defs/doc_ref" }, "default": [] },
@@ -638,7 +706,7 @@
     "doc_ref": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["id", "path", "kind", "authority", "owner", "summary", "revision", "content_hash"],
+      "required": ["id", "path", "kind", "authority", "owner", "summary", "revision", "content_hash", "reasons"],
       "properties": {
         "id": { "type": "string" },
         "path": { "type": "string" },
@@ -654,18 +722,18 @@
     "excluded_doc_ref": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["id", "reason_codes"],
+      "required": ["id", "path", "reason_codes", "replacement"],
       "properties": {
         "id": { "type": "string" },
-        "path": { "type": "string" },
+        "path": { "type": ["string", "null"] },
         "reason_codes": { "type": "array", "items": { "type": "string" } },
-        "replacement": { "type": "string" }
+        "replacement": { "type": ["string", "null"] }
       }
     },
     "suggestion_query": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["text"],
+      "required": ["text", "normalized_terms"],
       "properties": {
         "text": { "type": "string" },
         "normalized_terms": { "type": "array", "items": { "type": "string" }, "default": [] }
@@ -674,7 +742,7 @@
     "suggested_section": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["rank", "score_micros", "lexical_score_micros", "section_ref", "heading_path", "line_range", "document_id", "document_hash", "section_hash", "summary", "snippet", "authority", "owner", "kind"],
+      "required": ["rank", "score_micros", "lexical_score_micros", "section_ref", "heading_path", "line_range", "document_id", "document_hash", "section_hash", "summary", "snippet", "authority", "owner", "kind", "matched_fields", "applicability_reasons"],
       "properties": {
         "rank": { "type": "integer", "minimum": 0 },
         "score_micros": { "type": "integer", "minimum": 0 },
@@ -727,6 +795,7 @@
     "scope_hints": {
       "type": "object",
       "additionalProperties": false,
+      "required": ["source_paths", "documentation_paths", "configuration_paths", "data_paths", "included", "excluded"],
       "properties": {
         "source_paths": { "type": "array", "items": { "type": "string" }, "default": [] },
         "documentation_paths": { "type": "array", "items": { "type": "string" }, "default": [] },
@@ -748,7 +817,7 @@
     "gate_family": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["family", "status"],
+      "required": ["family", "status", "reason_codes"],
       "properties": {
         "family": { "type": "string" },
         "status": { "type": "string" },

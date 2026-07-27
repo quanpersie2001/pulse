@@ -134,7 +134,6 @@ pub struct PacketImplementationContractV1 {
     #[serde(default)]
     pub effort: PacketEffortMetadata,
     pub verification_profile: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub brief: Option<PacketContentRef>,
     pub objective: String,
     pub current_behavior: String,
@@ -196,9 +195,7 @@ pub struct PacketContentRef {
 #[serde(deny_unknown_fields)]
 pub struct PacketSurfaceRef {
     pub path: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub symbol: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub content_hash: Option<String>,
 }
 
@@ -224,7 +221,6 @@ pub struct PacketContractScope {
 pub struct PacketRequiredDecisionRef {
     pub id: String,
     pub contract_revision: u64,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub acceptance_receipt: Option<PacketReceiptRef>,
 }
 
@@ -284,7 +280,6 @@ pub struct PacketDecisionRef {
     pub contract_revision: u64,
     pub status: String,
     pub title: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub acceptance_receipt: Option<PacketReceiptRef>,
     #[serde(default)]
     pub content_refs: Vec<PacketContentRef>,
@@ -302,9 +297,7 @@ pub struct PacketShaping {
     pub receipt_hash: String,
     pub owning_work: PacketShapingWorkBinding,
     pub shape_mode: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub destination: Option<PacketShapingDestination>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub map: Option<PacketShapingMapSnapshot>,
     #[serde(default)]
     pub critical_branches: Vec<PacketCriticalBranch>,
@@ -357,9 +350,7 @@ pub struct PacketCriticalBranch {
 #[serde(deny_unknown_fields)]
 pub struct PacketBranchDisposition {
     pub kind: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub resolution: Option<PacketResolution>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub non_blocking_context: Option<String>,
 }
 
@@ -423,7 +414,6 @@ pub struct PacketGraph {
     pub hard_blockers: Vec<PacketBlockerItem>,
     #[serde(default)]
     pub soft_preferences: Vec<PacketBlockerItem>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub supersession: Option<PacketSupersessionRef>,
     #[serde(default)]
     pub relations: PacketRelationBundle,
@@ -459,13 +449,16 @@ pub struct PacketRelationBundle {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct PacketRelationItem {
-    pub relation: String,
-    pub id: String,
-    pub kind: String,
-    pub revision: u64,
-    pub title: String,
-    pub status: String,
     pub edge_id: String,
+    pub edge_type: String,
+    pub from: String,
+    pub to: String,
+    pub edge_revision: u64,
+    pub opposite_id: String,
+    pub opposite_kind: String,
+    pub opposite_status: String,
+    pub opposite_revision: u64,
+    pub opposite_title: String,
 }
 
 // ---------------------------------------------------------------------------
@@ -516,10 +509,8 @@ pub struct PacketDocRef {
 #[serde(deny_unknown_fields)]
 pub struct PacketExcludedDocRef {
     pub id: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub path: Option<String>,
     pub reason_codes: Vec<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub replacement: Option<String>,
 }
 
@@ -609,7 +600,6 @@ pub struct PacketSource {
     pub repository_id: String,
     pub kind: String,
     pub commit: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub head_ref: Option<String>,
     pub worktree_root_kind: String,
     pub cleanliness: String,
@@ -864,15 +854,17 @@ impl PacketGraph {
         self.hard_blockers.sort_by(|a, b| a.id.cmp(&b.id));
         self.soft_preferences.sort_by(|a, b| a.id.cmp(&b.id));
         self.relations.outgoing.sort_by(|a, b| {
-            a.relation
-                .cmp(&b.relation)
-                .then(a.id.cmp(&b.id))
+            a.edge_type
+                .cmp(&b.edge_type)
+                .then(a.from.cmp(&b.from))
+                .then(a.to.cmp(&b.to))
                 .then(a.edge_id.cmp(&b.edge_id))
         });
         self.relations.incoming.sort_by(|a, b| {
-            a.relation
-                .cmp(&b.relation)
-                .then(a.id.cmp(&b.id))
+            a.edge_type
+                .cmp(&b.edge_type)
+                .then(a.from.cmp(&b.from))
+                .then(a.to.cmp(&b.to))
                 .then(a.edge_id.cmp(&b.edge_id))
         });
     }
@@ -1048,10 +1040,14 @@ fn strip_self_referential_fields(value: &Value) -> Value {
         Value::Object(map) => {
             let mut out = Map::new();
             for (key, child) in map {
-                let cleaned = if key == "packet_fingerprint" {
-                    Value::String(String::new())
-                } else if key == "budget" {
+                if key == "packet_fingerprint" {
+                    continue;
+                }
+
+                let cleaned = if key == "budget" {
                     strip_budget_actual_size(child)
+                } else if key == "dispatch" {
+                    strip_dispatch_fingerprint_precondition(child)
                 } else {
                     strip_self_referential_fields(child)
                 };
@@ -1071,17 +1067,54 @@ fn strip_budget_actual_size(value: &Value) -> Value {
         Value::Object(map) => {
             let mut out = Map::new();
             for (key, child) in map {
-                let cleaned = if key == "actual_canonical_json_bytes" {
-                    Value::Number(serde_json::Number::from(0u64))
+                if key == "actual_canonical_json_bytes" {
+                    continue;
+                }
+                out.insert(key.clone(), strip_self_referential_fields(child));
+            }
+            Value::Object(out)
+        }
+        other => strip_self_referential_fields(other),
+    }
+}
+
+fn strip_dispatch_fingerprint_precondition(value: &Value) -> Value {
+    match value {
+        Value::Object(map) => {
+            let mut out = Map::new();
+            for (key, child) in map {
+                let cleaned = if key == "revalidation_preconditions" {
+                    strip_packet_fingerprint_preconditions(child)
                 } else {
-                    child.clone()
+                    strip_self_referential_fields(child)
                 };
                 out.insert(key.clone(), cleaned);
             }
             Value::Object(out)
         }
-        other => other.clone(),
+        other => strip_self_referential_fields(other),
     }
+}
+
+fn strip_packet_fingerprint_preconditions(value: &Value) -> Value {
+    match value {
+        Value::Array(items) => Value::Array(
+            items
+                .iter()
+                .filter(|item| !is_packet_fingerprint_precondition(item))
+                .map(strip_self_referential_fields)
+                .collect(),
+        ),
+        other => strip_self_referential_fields(other),
+    }
+}
+
+fn is_packet_fingerprint_precondition(value: &Value) -> bool {
+    value
+        .as_object()
+        .and_then(|map| map.get("field"))
+        .and_then(Value::as_str)
+        == Some("packet_fingerprint")
 }
 
 // ---------------------------------------------------------------------------
@@ -1638,6 +1671,49 @@ mod tests {
         );
     }
 
+    #[test]
+    fn normalize_relations_by_edge_type_from_to_id() {
+        let mut packet = minimal_packet("");
+        packet.graph.relations.outgoing = vec![
+            PacketRelationItem {
+                edge_id: "edge-2".to_string(),
+                edge_type: "blocks".to_string(),
+                from: "TK-002".to_string(),
+                to: "TK-001".to_string(),
+                edge_revision: 1,
+                opposite_id: "TK-002".to_string(),
+                opposite_kind: "ticket".to_string(),
+                opposite_status: "ready".to_string(),
+                opposite_revision: 2,
+                opposite_title: "Second".to_string(),
+            },
+            PacketRelationItem {
+                edge_id: "edge-1".to_string(),
+                edge_type: "blocks".to_string(),
+                from: "TK-001".to_string(),
+                to: "TK-003".to_string(),
+                edge_revision: 1,
+                opposite_id: "TK-003".to_string(),
+                opposite_kind: "ticket".to_string(),
+                opposite_status: "ready".to_string(),
+                opposite_revision: 3,
+                opposite_title: "Third".to_string(),
+            },
+        ];
+
+        packet.normalize();
+        assert_eq!(
+            packet
+                .graph
+                .relations
+                .outgoing
+                .iter()
+                .map(|item| item.edge_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["edge-1", "edge-2"]
+        );
+    }
+
     // -----------------------------------------------------------------------
     // Fingerprint determinism
     // -----------------------------------------------------------------------
@@ -1647,6 +1723,30 @@ mod tests {
         let fp1 = minimal_packet("").compute_fingerprint().unwrap();
         let fp2 = minimal_packet("").compute_fingerprint().unwrap();
         assert_eq!(fp1, fp2, "same inputs must produce same fingerprint");
+    }
+
+    #[test]
+    fn serialized_minimal_packet_contains_required_null_and_empty_fields() {
+        let packet = minimal_packet("");
+        let value = serde_json::to_value(&packet).unwrap();
+
+        assert_eq!(value["contract"]["brief"], Value::Null);
+        assert_eq!(value["contract"]["code_anchors"], serde_json::json!([]));
+        assert_eq!(value["context"]["decisions"], serde_json::json!([]));
+        assert_eq!(value["shaping"]["map"], Value::Null);
+        assert_eq!(value["graph"]["supersession"], Value::Null);
+        assert_eq!(value["source"]["head_ref"], "refs/heads/main");
+        assert_eq!(value["workspace"]["workspace_id"], Value::Null);
+        assert_eq!(value["capabilities"]["inventory_identity"], Value::Null);
+        assert_eq!(value["knowledge"]["knowledge_fingerprint"], Value::Null);
+    }
+
+    #[test]
+    fn serialized_detached_head_packet_contains_null_head_ref() {
+        let mut packet = minimal_packet("");
+        packet.source.head_ref = None;
+        let value = serde_json::to_value(&packet).unwrap();
+        assert_eq!(value["source"]["head_ref"], Value::Null);
     }
 
     #[test]
@@ -1699,6 +1799,60 @@ mod tests {
             p1.compute_fingerprint().unwrap(),
             p2.compute_fingerprint().unwrap(),
             "different reason codes must change fingerprint"
+        );
+    }
+
+    #[test]
+    fn fingerprint_excludes_packet_fingerprint_revalidation_precondition() {
+        let mut p1 = minimal_packet("");
+        let mut p2 = minimal_packet("");
+        p1.dispatch.revalidation_preconditions = vec![
+            PacketRevalidationPrecondition {
+                field: "source_commit".to_string(),
+                value: p1.snapshot.source_commit.clone(),
+            },
+            PacketRevalidationPrecondition {
+                field: "packet_fingerprint".to_string(),
+                value: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                    .to_string(),
+            },
+        ];
+        p2.dispatch.revalidation_preconditions = vec![
+            PacketRevalidationPrecondition {
+                field: "source_commit".to_string(),
+                value: p2.snapshot.source_commit.clone(),
+            },
+            PacketRevalidationPrecondition {
+                field: "packet_fingerprint".to_string(),
+                value: "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+                    .to_string(),
+            },
+        ];
+
+        assert_eq!(
+            p1.compute_fingerprint().unwrap(),
+            p2.compute_fingerprint().unwrap(),
+            "packet_fingerprint revalidation precondition must be excluded"
+        );
+    }
+
+    #[test]
+    fn fingerprint_changes_when_non_self_revalidation_precondition_changes() {
+        let mut p1 = minimal_packet("");
+        let mut p2 = minimal_packet("");
+        p1.dispatch.revalidation_preconditions = vec![PacketRevalidationPrecondition {
+            field: "source_commit".to_string(),
+            value: "0123456789abcdef0123456789abcdef01234567".to_string(),
+        }];
+        p2.dispatch.revalidation_preconditions = vec![PacketRevalidationPrecondition {
+            field: "source_commit".to_string(),
+            value: "fedcba9876543210fedcba9876543210fedcba98".to_string(),
+        }];
+
+        assert_ne!(
+            p1.compute_fingerprint().unwrap(),
+            p2.compute_fingerprint().unwrap(),
+            "non-self revalidation preconditions are packet preconditions"
         );
     }
 
@@ -1838,6 +1992,45 @@ mod tests {
     fn work_packet_schema_is_embedded() {
         assert!(!WORK_PACKET_SCHEMA.is_empty());
         assert!(WORK_PACKET_SCHEMA.contains("WorkPacketV1"));
+    }
+
+    #[test]
+    fn schema_lists_contract_fields_as_required() {
+        let schema: Value = serde_json::from_str(WORK_PACKET_SCHEMA).unwrap();
+        let required = schema["properties"]["contract"]["required"]
+            .as_array()
+            .expect("contract required list");
+        for field in [
+            "mode",
+            "work_surface",
+            "plan_policy",
+            "semantic_impact",
+            "effort",
+            "verification_profile",
+            "brief",
+            "objective",
+            "current_behavior",
+            "target_behavior",
+            "code_anchors",
+            "documentation_anchors",
+            "configuration_anchors",
+            "data_anchors",
+            "research_refs",
+            "required_changes",
+            "invariants",
+            "acceptance",
+            "scope",
+            "implementation_freedom",
+            "required_decisions",
+            "shared_approach_refs",
+            "expected_evidence",
+            "expected_handoff",
+        ] {
+            assert!(
+                required.contains(&Value::String(field.to_string())),
+                "contract.required must contain {field}"
+            );
+        }
     }
 
     // -----------------------------------------------------------------------
