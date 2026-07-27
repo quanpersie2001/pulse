@@ -276,26 +276,74 @@ Before claiming implementation work is done, run:
 
 ```bash
 cargo fmt --check
-cargo clippy --all-targets --quiet
+cargo clippy --all-targets --quiet -- -D warnings
 cargo test --all-targets
 ```
 
-For docs retrieval changes, also consider targeted suites:
+`cargo test --all-targets` is the reliability bar: it must pass under its
+default threading. Never work around a flaky suite by lowering `--test-threads`;
+fix the underlying race, failpoint synchronization or global-state collision.
+
+Optional retrieval benchmark smoke (not covered by `--all-targets`):
 
 ```bash
-cargo test --test docs_search_get_tree --test docs_index --test docs_retrieval_eval
+cargo bench --bench docs_retrieval -- --smoke
 ```
 
-For evidence/receipt changes:
+### Test layout convention
+
+Integration tests are organized as one Cargo integration crate per domain:
+
+- `tests/<domain>.rs` — the only top-level entry file per domain. It is the
+  crate root and wires its submodules explicitly with `#[path = "..."]`.
+- `tests/<domain>/` — the submodules for that crate (e.g. `tests/graph/`).
+  There is no bare `tests/<name>.rs` per coverage area; run a single area by
+  passing its module name as a filter to the domain crate.
+- `tests/common/` — shared mechanical helpers (CLI binary resolver, git
+  plumbing, canonical-JSON writer, `fixture_repo::TestRepo`). Each crate
+  includes only the helper files it uses via `#[path = "common/<file>.rs"]`,
+  because a helper compiled into one integration crate is invisible to the
+  others and unused helpers trip `dead_code` under `-D warnings`.
+- `tests/fixtures/target-repos/minimal-service/` — the immutable, read-only
+  target-repository template. Tests copy it out of repo via `TestRepo`; never
+  run Pulse against it in place and never commit generated `.pulse/` state.
+- No legacy Node/`.test.mjs` behavioral runners remain in the active test tree
+  (they were removed during the reboot). Do not reintroduce them.
+
+The current domain crates are: `docs`, `evidence`, `graph`, `knowledge`,
+`process`, `storage`, `target_repo`. The `process` crate isolates the
+subprocess-spawning, timing-sensitive suites (multi-process CAS, failpoint
+crash recovery, supersession process recovery) so per-crate parallelism stays
+bounded; keep timing-sensitive suites there rather than in `graph`.
+
+### Focused suites
+
+Target a coverage area by running its domain crate with a module-name filter:
 
 ```bash
-cargo test --test evidence_receipts --test docs_receipt_registry --test crash_recovery_process
-```
+# Docs retrieval / index / search
+cargo test --test docs -- docs_search_get_tree
+cargo test --test docs -- docs_index
+cargo test --test docs -- docs_retrieval_eval
 
-For graph/lifecycle changes:
+# Evidence / receipts / crash recovery
+cargo test --test evidence -- evidence_receipts
+cargo test --test docs -- docs_receipt_registry
+cargo test --test process -- crash_recovery_process
 
-```bash
-cargo test --test lifecycle --test workgraph --test workgraph_transaction --test workgraph_read_models
+# Graph / lifecycle
+cargo test --test graph -- lifecycle
+cargo test --test graph -- workgraph
+cargo test --test graph -- workgraph_transaction
+cargo test --test graph -- workgraph_read_models
+
+# Process / concurrency / recovery (timing-sensitive suite)
+cargo test --test process
+cargo test --test knowledge -- knowledge_crash_recovery_process
+cargo test --test knowledge -- knowledge_process_concurrency
+
+# Storage recovery primitives
+cargo test --test storage -- transaction_recovery
 ```
 
 ## Session Completion

@@ -5,8 +5,7 @@ use crate::storage::atomic;
 use base64::prelude::*;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use std::fs::{self, OpenOptions};
-use std::io::Write;
+use std::fs;
 use std::path::{Path, PathBuf};
 #[cfg(debug_assertions)]
 use std::time::Duration;
@@ -642,33 +641,31 @@ fn write_event_create_new_parts(
     if let Some(parent) = event_path.parent() {
         fs::create_dir_all(parent).map_err(|error| PulseError::io(parent, error))?;
     }
-    let mut file = match OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(event_path)
-    {
-        Ok(file) => file,
-        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
-            if event_matches_parts(event_path, event_hash)? {
-                return Ok(());
-            }
-            return Err(PulseError::EventMismatch {
-                transaction_id: transaction_id.to_string(),
-                message: format!(
-                    "event file already exists at {} with different content",
-                    event_path.display()
-                ),
-            });
+    if event_path.exists() {
+        // Recovery/idempotency fast path and genuine-corruption guard. A
+        // pre-existing event file must match the prepared hash. A mismatch is
+        // externally written corruption, not a torn write: the write below is
+        // atomic (temp + rename), so a crash can never leave a half-written
+        // event file at this path. Recovery therefore hard-fails instead of
+        // silently overwriting unexpected content.
+        if event_matches_parts(event_path, event_hash)? {
+            return Ok(());
         }
-        Err(error) => return Err(PulseError::io(event_path, error)),
-    };
-    file.write_all(&bytes)
-        .map_err(|error| PulseError::io(event_path, error))?;
-    file.flush()
-        .map_err(|error| PulseError::io(event_path, error))?;
-    file.sync_all()
-        .map_err(|error| PulseError::io(event_path, error))?;
-    Ok(())
+        return Err(PulseError::EventMismatch {
+            transaction_id: transaction_id.to_string(),
+            message: format!(
+                "event file already exists at {} with different content",
+                event_path.display()
+            ),
+        });
+    }
+    // Crash-safe event write: stage the canonical bytes in a sibling temp file,
+    // fsync it, then atomically rename it into the final event path. A crash
+    // before the rename leaves no file at `event_path` (only an orphan temp,
+    // swept by `cleanup_orphan_transaction_temps` on recovery), so recovery
+    // observes an absent event and (re)writes it rather than surfacing a torn,
+    // half-written file as an unrecoverable `EventMismatch`.
+    atomic::atomic_replace(event_path, &bytes).map(|_| ())
 }
 
 fn cleanup_target_temp(target_path: &Path) -> Result<()> {
