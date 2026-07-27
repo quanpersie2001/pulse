@@ -1,6 +1,9 @@
 # Phase 1 — Slice 3: Evidence Identity + Gate-Grade Receipt Foundation
 
-> Trạng thái: **proposal để review**, chưa phải work contract hay compatibility contract.
+> Trạng thái: **implemented và verified historical implementation record**.
+> Current receipt/artifact contract được xác định bởi embedded schemas, source
+> và active tests; checklist/proposed wording bên dưới không phải compatibility
+> contract.
 > Tiền đề: [`phase1-slice2-lifecycle-executability.md`](phase1-slice2-lifecycle-executability.md) đã hoàn thành và cung cấp lifecycle, supersession, structural executability, multi-target recovery và graph read consistency.
 > Sở hữu: implementation strategy cho lát cắt Phase 1 tiếp theo: immutable receipt identity, content-addressed artifacts, source/content/work-revision binding, typed validation và integration đầu tiên với supersession.
 > Tham chiếu normative: [`PULSE_REBOOT.md`](../PULSE_REBOOT.md), [`02-work-graph.md`](../pulse-reboot/02-work-graph.md), [`03-story-qa.md`](../pulse-reboot/03-story-qa.md), [`04-runtime-harness.md`](../pulse-reboot/04-runtime-harness.md), [`07-verification-ratchet.md`](../pulse-reboot/07-verification-ratchet.md), [`08-implementation-roadmap.md`](../pulse-reboot/08-implementation-roadmap.md), [`09-decisions-and-dod.md`](../pulse-reboot/09-decisions-and-dod.md), [`10-documentation-system.md`](../pulse-reboot/10-documentation-system.md).

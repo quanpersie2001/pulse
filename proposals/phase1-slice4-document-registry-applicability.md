@@ -1,6 +1,9 @@
 # Phase 1 — Slice 4: Document Registry + Applicable-Doc Projection
 
-> Trạng thái: **proposal để review**, chưa phải work contract hay compatibility contract.
+> Trạng thái: **implemented và verified historical implementation record**.
+> Current documentation receipt contract dùng completed payload v1; proposed v2
+> wording trong planning history đã bị later single-baseline rebaseline thay thế
+> và không phải supported predecessor contract.
 > Tiền đề: [`phase1-slice3-evidence-receipts.md`](phase1-slice3-evidence-receipts.md) đã hoàn thành và cung cấp immutable receipt identity, content-addressed artifacts, source/content/work bindings và documentation receipt foundation.
 > Sở hữu: implementation strategy cho lát cắt Phase 1 tiếp theo: canonical Document Registry, document identity/lifecycle/authority metadata, Ticket documentation-impact posture, deterministic applicable-doc projection và registry-aware documentation receipt validation.
 > Tham chiếu normative: [`PULSE_REBOOT.md`](../PULSE_REBOOT.md), [`02-work-graph.md`](../pulse-reboot/02-work-graph.md), [`04-runtime-harness.md`](../pulse-reboot/04-runtime-harness.md), [`07-verification-ratchet.md`](../pulse-reboot/07-verification-ratchet.md), [`08-implementation-roadmap.md`](../pulse-reboot/08-implementation-roadmap.md), [`09-decisions-and-dod.md`](../pulse-reboot/09-decisions-and-dod.md), [`10-documentation-system.md`](../pulse-reboot/10-documentation-system.md), [`11-documentation-retrieval.md`](../pulse-reboot/11-documentation-retrieval.md).

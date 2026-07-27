@@ -109,4 +109,21 @@ Human -> Orchestration Agent -> independent Agent tasks/threads
 
 ## Bước tiếp theo
 
-Đọc [`09-decisions-and-dod.md`](pulse-reboot/09-decisions-and-dod.md), [`10-documentation-system.md`](pulse-reboot/10-documentation-system.md), [`11-documentation-retrieval.md`](pulse-reboot/11-documentation-retrieval.md) và [`12-knowledge-compounding.md`](pulse-reboot/12-knowledge-compounding.md), khóa các quyết định còn mở, rồi triển khai Phase 0 và Phase 1 trong [`08-implementation-roadmap.md`](pulse-reboot/08-implementation-roadmap.md). Mọi thay đổi lớn sau đó phải cập nhật đúng tài liệu sở hữu thay vì làm `PULSE_REBOOT.md` phình trở lại.
+Phase 1 local graph, documentation, evidence, knowledge-store và
+shaping/readiness foundations đã được implement qua Slice 1–7. Frontier hiện tại
+là **Phase 2 single-agent run**:
+
+1. implement accepted bounded preview `WorkPacketV1` proposal tại
+   [`proposals/phase2-slice1-work-packet-dispatch-foundation.md`](proposals/phase2-slice1-work-packet-dispatch-foundation.md);
+2. thiết kế/implement assignment lease, workspace binding và
+   `PreparedAssignmentV1` để mở gated `ready -> active`;
+3. thêm runner, cancel/resume và source/workspace recovery;
+4. thêm typed handoff, verification và proof-driven close gate để một Ticket đi
+   tới `done|rework|blocked`.
+
+Không bắt đầu full Phase 3 QA, Phase 4 compounding hoặc Phase 5 orchestration
+trước khi Phase 2 exit proof pass. Chi tiết sequencing và acceptance thuộc
+[`08-implementation-roadmap.md`](pulse-reboot/08-implementation-roadmap.md);
+Definition of Done hiện hành thuộc
+[`09-decisions-and-dod.md`](pulse-reboot/09-decisions-and-dod.md). Mọi thay đổi
+lớn phải cập nhật đúng tài liệu sở hữu thay vì làm trang L0 này phình trở lại.

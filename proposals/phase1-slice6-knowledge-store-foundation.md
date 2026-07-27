@@ -1,7 +1,9 @@
 # Phase 1 — Slice 6: Knowledge Store Foundation
 
-> Trạng thái: **proposal để review**, chưa phải work contract hay compatibility
-> contract.
+> Trạng thái: **implemented và verified historical implementation record**.
+> Current knowledge-store contract được xác định bởi source, schemas và active
+> tests. Full compound/search/applicable/injection vẫn thuộc Phase 4; checklist
+> bên dưới ghi Slice 6 foundation scope, không phải compatibility contract.
 > Tiền đề:
 > [`phase1-slice5-docs-section-lexical-retrieval.md`](phase1-slice5-docs-section-lexical-retrieval.md)
 > đã được implement và verify.

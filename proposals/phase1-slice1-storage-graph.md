@@ -1,6 +1,9 @@
 # Phase 1 — Slice 1: Transactional Storage Primitive + Minimal Work Graph
 
-> Trạng thái: **proposal để review**, chưa phải work contract hay compatibility contract.
+> Trạng thái: **implemented và verified historical implementation record**.
+> Current contract được xác định bởi source, schemas, active tests và later
+> single-baseline decisions; checklist/proposed wording bên dưới ghi planning
+> history, không phải compatibility contract.
 > Sở hữu: implementation strategy cho lát cắt đầu tiên của Phase 1: storage primitive và work-graph mechanics tối thiểu.
 > Tham chiếu normative: [`PULSE_REBOOT.md`](../PULSE_REBOOT.md), [`02-work-graph.md`](../pulse-reboot/02-work-graph.md), [`04-runtime-harness.md`](../pulse-reboot/04-runtime-harness.md), [`08-implementation-roadmap.md`](../pulse-reboot/08-implementation-roadmap.md), [`09-decisions-and-dod.md`](../pulse-reboot/09-decisions-and-dod.md), [`10-documentation-system.md`](../pulse-reboot/10-documentation-system.md), [`12-knowledge-compounding.md`](../pulse-reboot/12-knowledge-compounding.md).
 

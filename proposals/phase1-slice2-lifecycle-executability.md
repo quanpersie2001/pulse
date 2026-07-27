@@ -1,6 +1,10 @@
 # Phase 1 — Slice 2: Lifecycle, Supersession + Structural Executability
 
-> Trạng thái: **proposal để review**, chưa phải work contract hay compatibility contract.
+> Trạng thái: **implemented và verified historical implementation record**.
+> Current contract được xác định bởi source, schemas, active tests và later
+> single-baseline decisions. Node schema v2 wording trong planning history đã bị
+> current node schema baseline v1 thay thế; không có migration family cho
+> internal Slice shape cũ.
 > Tiền đề: [`phase1-slice1-storage-graph.md`](phase1-slice1-storage-graph.md) đã hoàn thành và cung cấp storage/transaction/work-graph primitive.
 > Sở hữu: implementation strategy cho lát cắt Phase 1 tiếp theo: lifecycle mutation, supersession semantics, dependency-aware structural executability và các graph queries cần để giải thích chúng.
 > Tham chiếu normative: [`PULSE_REBOOT.md`](../PULSE_REBOOT.md), [`02-work-graph.md`](../pulse-reboot/02-work-graph.md), [`04-runtime-harness.md`](../pulse-reboot/04-runtime-harness.md), [`06-priority-reconciliation.md`](../pulse-reboot/06-priority-reconciliation.md), [`07-verification-ratchet.md`](../pulse-reboot/07-verification-ratchet.md), [`08-implementation-roadmap.md`](../pulse-reboot/08-implementation-roadmap.md), [`09-decisions-and-dod.md`](../pulse-reboot/09-decisions-and-dod.md), [`10-documentation-system.md`](../pulse-reboot/10-documentation-system.md).

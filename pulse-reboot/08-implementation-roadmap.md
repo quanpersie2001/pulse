@@ -99,6 +99,15 @@ thành.
 
 ### Phase 2 - Single-agent run
 
+**Current implementation frontier:** proposal đầu tiên của Phase 2 đã được
+accept tại
+[`proposals/phase2-slice1-work-packet-dispatch-foundation.md`](../proposals/phase2-slice1-work-packet-dispatch-foundation.md).
+Slice này chỉ sở hữu preview `WorkPacketV1`, exact clean source-base identity và
+pre-reservation dispatch requirements; nó chưa acquire lease, chưa allocate
+workspace, chưa tạo `PreparedAssignmentV1`, chưa mở `ready -> active` và chưa
+chạy Agent. Lease/workspace, runner/cancel/resume, handoff/verification và close
+gate vẫn là các slice Phase 2 tiếp theo.
+
 - Codex adapter cho một run.
 - Minimal `pulse-shape` path để tạo/review shaping result trước dispatch; đủ cho R0/R1 và làm nền cho capability pack đầy đủ ở Phase 3.
 - Shaping reconciliation mutation path: persist resolution, update pointers, graduate precise fog, supersede invalid branches và recompute frontier/readiness bằng graph CAS.

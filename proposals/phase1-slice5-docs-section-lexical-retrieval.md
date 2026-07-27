@@ -1,6 +1,9 @@
 # Phase 1 — Slice 5: Documentation Section Extraction + Lexical Retrieval
 
-> Trạng thái: **proposal để review**, chưa phải work contract hay compatibility contract.
+> Trạng thái: **implemented và verified historical implementation record**.
+> Current section/index/search contract được xác định bởi source, schemas,
+> benchmarks và active tests; checklist/proposed wording bên dưới là delivery
+> history, không phải compatibility contract.
 > Tiền đề: [`phase1-slice4-document-registry-applicability.md`](phase1-slice4-document-registry-applicability.md) đã được implement và cung cấp canonical document identity, lifecycle/authority/owner/scope metadata, Ticket documentation-impact posture, deterministic document-level applicability và registry-aware documentation receipt validation.
 > Sở hữu: implementation strategy cho lát cắt Phase 1 tiếp theo: retrieval metadata, heading-aware Markdown section extraction, stable section references, generated documentation navigation, disposable Tantivy BM25 index, bounded `search|get|tree`, incremental rebuild, corruption recovery và retrieval evaluation.
 > Tham chiếu normative: [`PULSE_REBOOT.md`](../PULSE_REBOOT.md), [`04-runtime-harness.md`](../pulse-reboot/04-runtime-harness.md), [`07-verification-ratchet.md`](../pulse-reboot/07-verification-ratchet.md), [`08-implementation-roadmap.md`](../pulse-reboot/08-implementation-roadmap.md), [`09-decisions-and-dod.md`](../pulse-reboot/09-decisions-and-dod.md), [`10-documentation-system.md`](../pulse-reboot/10-documentation-system.md), [`11-documentation-retrieval.md`](../pulse-reboot/11-documentation-retrieval.md).

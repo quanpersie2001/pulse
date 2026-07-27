@@ -85,24 +85,24 @@ Khi một quyết định đổi, tạo Decision work item, cập nhật file ch
 Core v1 hoàn thành khi:
 
 - [ ] `pulse init` bootstrap fixture repository mà không phá file user.
-- [ ] Work graph lưu/đọc/diff Epic, Story, Ticket, Decision bằng independent JSON node/edge files.
-- [ ] `docs/`, top-level `works/`, `.pulse/workgraph/`, evidence và runtime có folder/source hierarchy không mâu thuẫn.
-- [ ] Document registry query được ID/path/kind/owner/authority/scope/summary/aliases và không cần đăng ký mọi Markdown file.
-- [ ] Generated root/selected-area `_index.md` projections deterministic, marked generated và rebuildable.
-- [ ] Markdown heading parser tạo section refs có document ID, heading path, line range và content hash.
-- [ ] Pure-Rust lexical BM25+ index (tantivy) search được section-level, offline và không tải model.
-- [ ] Lifecycle, deterministic edges, inverse projection, revision CAS, atomic recovery và supersession có unit/integration tests.
-- [ ] `graph export` rebuild deterministic sau khi xóa cache; SQLite không cần cho correctness/performance target v1.
+- [x] Work graph lưu/đọc/diff Epic, Story, Ticket, Decision bằng independent JSON node/edge files. Verified by Phase 1 Slices 1–2 and active graph/store integration tests.
+- [ ] `docs/`, top-level `works/`, `.pulse/workgraph/`, evidence và runtime có folder/source hierarchy không mâu thuẫn. **Foundation complete:** domain layouts/bootstrap và target-repository fixture boundary đã có; safe top-level `pulse init` composition vẫn thuộc Phase 3.
+- [x] Document registry query được ID/path/kind/owner/authority/scope/summary/aliases và không cần đăng ký mọi Markdown file. Verified by Slice 4 registry/applicability implementation and docs CLI tests.
+- [x] Generated root/selected-area `_index.md` projections deterministic, marked generated và rebuildable. Verified by Slice 5 projection/index tests; broader declared-generated freshness enforcement remains a later docs-validation gate.
+- [x] Markdown heading parser tạo section refs có document ID, heading path, line range và content hash. Verified by Slice 5 section extraction tests.
+- [x] Pure-Rust lexical BM25+ index (tantivy) search được section-level, offline và không tải model. Verified by Slice 5 search/get/tree and retrieval-eval tests.
+- [x] Lifecycle, deterministic edges, inverse projection, revision CAS, atomic recovery và supersession có unit/integration tests. Verified by Phase 1 graph/storage/process suites.
+- [x] `graph export` rebuild deterministic sau khi xóa cache; SQLite không cần cho correctness/performance target v1. Verified by workgraph projection/cache tests.
 - [ ] Agent nhận `work packet` đầy đủ, gồm required/suggested section refs và read budget, không phải search raw graph files hoặc đọc toàn bộ docs tree để hiểu assignment.
 - [x] Node schema có normal CAS `revision` và semantic `contract_revision`; create/edit/draft flows ghi assessed values hoặc explicit `unassessed` domain value cho risk/materialization khi classification chưa đủ chắc, không fabricate defaults và không derive values từ older on-disk shapes. Verified by Slice 7 commit `677c593`.
 - [x] Ticket role `implementation|decision_work` có typed contract riêng; precise decision work không bị recursive readiness loop. Verified by Slice 7 commit `677c593`.
 - [x] Implementation Ticket ready gate kiểm tra objective/current/target, work surface/anchors, required changes, invariants, acceptance, mode, plan policy, verification/evidence/handoff contract. Verified by Slice 7 commit `677c593`.
 - [x] Ready gate từ chối critical ambiguity chưa disposition; `delegated` phải nằm trong implementation freedom, `deferred` phải có owner/target + trigger hoặc linked work, và semantic shaping receipt phải source/revision-bound khi policy yêu cầu. Verified by Slice 7 commit `677c593`.
 - [ ] `pulse-shape` đọc repo/docs trước khi hỏi, đi decision branches theo dependency order, hỏi human từng câu kèm recommendation khi có strong default, và materialize kết quả vào đúng Story/Ticket/Decision/docs owner theo risk.
-- [ ] R0 clear/low-risk work qua short ambiguity self-check mà không bị ép tạo full brainstorm artifact hoặc hỏi human không cần thiết.
-- [ ] R2/R3 multi-session shaping hỗ trợ approved destination/exit condition, canonical resolution pointers, derived decision frontier, bounded `not_yet_specified` và out-of-scope boundary.
-- [ ] Precise fact/intent/trade-off/fidelity/prerequisite gaps được route đúng sang research, grilling, Decision, prototype hoặc enabling work; fog chưa precise không bị materialize sớm thành speculative Tickets.
-- [ ] Resolve decision work reconcile dependencies, graduate newly precise fog, supersede/cancel invalidated branches và recompute readiness với CAS/audit.
+- [ ] R0 clear/low-risk work qua short ambiguity self-check mà không bị ép tạo full brainstorm artifact hoặc hỏi human không cần thiết. **Foundation complete:** concise shaping mode/receipt contract đã có; Agent capability path vẫn thuộc Phase 2/3.
+- [ ] R2/R3 multi-session shaping hỗ trợ approved destination/exit condition, canonical resolution pointers, derived decision frontier, bounded `not_yet_specified` và out-of-scope boundary. **Foundation complete:** typed destination/map/branch/fog/frontier contracts đã có; conversational multi-session workflow vẫn chưa implement.
+- [ ] Precise fact/intent/trade-off/fidelity/prerequisite gaps được route đúng sang research, grilling, Decision, prototype hoặc enabling work; fog chưa precise không bị materialize sớm thành speculative Tickets. **Foundation complete:** typed gap/branch/fog vocabulary đã có; semantic routing capability vẫn chưa implement.
+- [ ] Resolve decision work reconcile dependencies, graduate newly precise fog, supersede/cancel invalidated branches và recompute readiness với CAS/audit. **Foundation complete:** shaping apply/invalidate và readiness/frontier recomputation primitives đã có; full reconciliation mutation choreography vẫn chưa implement.
 - [x] CLI phân biệt decision frontier với execution frontier và không persist claim state hoặc frontier list thành writable graph truth; trước lease resolver claim state là `not_evaluated`. Verified by Slice 7 commit `677c593`.
 - [x] `.pulse/policy/authority.json` validate/fingerprint deterministic, default-deny, không có implicit human superuser và kernel derive grant từ operation/posture. Verified by Slice 7 commit `677c593`.
 - [x] Hard-to-reverse Decision cần current immutable acceptance proof; Decision existence hoặc shaping approval không đủ. Verified by Slice 7 commit `677c593`.
@@ -111,23 +111,23 @@ Core v1 hoàn thành khi:
 - [ ] Một Ticket standalone đi qua create -> ready -> active -> verifying -> done/rework/blocked.
 - [ ] Codex single-agent run dùng bounded context và có thể cancel/resume.
 - [ ] Risk policy chọn materialization/verification gate đúng.
-- [ ] Evidence receipts immutable, source-bound và hash-validated.
-- [ ] Documentation impact hỗ trợ `required`, `none` + rationale và policy-governed `deferred`.
-- [ ] Documentation receipts source/content-bound; file thay đổi làm receipt cũ invalid.
-- [ ] Generated docs freshness có deterministic contract/check.
+- [x] Evidence receipts immutable, source-bound và hash-validated. Verified for current Phase 1 receipt kinds by Slice 3/7 evidence and binding tests; run/handoff/verification/QA receipt kinds remain later phases.
+- [x] Documentation impact hỗ trợ `required`, `none` + rationale và policy-governed `deferred`. Verified by Slice 4 docs-impact model/CLI/policy tests.
+- [x] Documentation receipts source/content-bound; file thay đổi làm receipt cũ invalid. Verified by Slice 4/5 registry-aware receipt tests.
+- [ ] Generated docs freshness có deterministic contract/check. **Foundation complete:** generated `_index.md` projection state/check đã có; broader declared-generated source/link/profile enforcement remains Phase 3.
 - [ ] Promotion candidates từ work handoff được promote, classify non-durable hoặc defer có authority.
 - [ ] `pulse doctor` phát hiện docs missing/stale/conflict/orphan/duplicate/generated/work-leak/context-gap và index/retrieval findings.
-- [ ] `pulse docs index|status|search|get|tree` có stable human/JSON contracts.
-- [ ] `search` trả bounded snippets; `get` mặc định trả section; full document cần explicit opt-in.
-- [ ] Docs-search cache content-hash keyed, atomic, disposable và incremental-rebuildable.
-- [ ] Retrieval eval đo Recall@K/MRR, exclusions, latency và context bytes trước useful section.
+- [x] `pulse docs index|status|search|get|tree` có stable human/JSON contracts. Verified by Slice 5 CLI contract and retrieval integration tests.
+- [x] `search` trả bounded snippets; `get` mặc định trả section; full document cần explicit opt-in. Verified by Slice 5 search/get/tree tests.
+- [x] Docs-search cache content-hash keyed, atomic, disposable và incremental-rebuildable. Verified by Slice 5 cache/index concurrency, corruption and incremental rebuild tests.
+- [ ] Retrieval eval đo Recall@K/MRR, exclusions, latency và context bytes trước useful section. **Partial:** Recall@K/MRR, exclusions và context-byte fixtures đã có; production latency threshold/reporting vẫn chưa hoàn tất.
 - [ ] Story QA baseline có scope, acceptance/risk coverage, stable cases, applicability và exit criteria parse/validate được.
 - [ ] Behavior-affecting Ticket khai báo QA impact; targeted checkpoint chọn đúng affected/new cases.
 - [ ] Story QA baseline chạy được ít nhất qua một deterministic browser/Playwright executor và một structured non-browser API/CLI executor.
 - [ ] QA environment start/healthcheck/fixture reset/cleanup và source-to-build identity tham gia receipt validity.
 - [ ] Story không đóng nếu required behavioral receipt thiếu/invalid/fail/flaky/inconclusive hoặc coverage gap chưa disposition.
 - [ ] Retry giữ failed attempts; waiver/non-applicability có rationale, authority và audit.
-- [ ] Knowledge store validate one-learning-per-record, revision CAS, typed applicability/provenance/promotion/freshness và relations.
+- [x] Knowledge store validate one-learning-per-record, revision CAS, typed applicability/provenance/promotion/freshness và relations. Verified by Slice 6 knowledge schema/store/relation/concurrency/recovery tests; compound and retrieval remain Phase 4.
 - [ ] `pulse compound` synthesize/deduplicate/disposition candidates và cho phép `no_reusable_learning` trung thực.
 - [ ] `pulse knowledge search|get|applicable|index|status` có stable human/JSON contracts, bounded output và explainable match/exclusion.
 - [ ] Work packet inject role/moment-specific required/recommended learning summaries trong budget; candidate/stale/disputed không auto-inject.
@@ -136,8 +136,8 @@ Core v1 hoàn thành khi:
 - [ ] Usage feedback có thể reinforce/revise/retire và repeated failure sau injection được classify retrieval/apply/guardrail gap.
 - [ ] `pulse doctor` tạo actionable findings có proposed work.
 - [ ] Một failure thật được chuyển thành harness improvement + replay eval.
-- [ ] Offline vẫn query work, history và evidence metadata.
-- [ ] Docs progressive-disclosure đủ để Agent tìm đúng command/policy mà không nạp toàn bộ.
+- [x] Offline vẫn query work, history và evidence metadata. Verified by local graph/event/evidence CLI and store tests; run-history expansion remains Phase 2.
+- [x] Docs progressive-disclosure đủ để Agent tìm đúng command/policy mà không nạp toàn bộ. Verified at registry/section search/get/tree layer; automatic work-packet routing remains Phase 2.
 - [ ] Brownfield docs migration snapshot trước semantic restructure và không overwrite khi chưa approve.
 - [ ] Core acceptance scenarios 1-65 trong roadmap pass tự động hoặc có receipt hợp lệ.
 
