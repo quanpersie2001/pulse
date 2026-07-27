@@ -6,5 +6,6 @@
 
 pub mod frontier;
 pub mod lifecycle;
+pub mod packet;
 pub mod readiness;
 pub mod shaping;
