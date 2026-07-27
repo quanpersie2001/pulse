@@ -7,9 +7,11 @@
 //!
 //! See `proposals/phase2-slice1-work-packet-dispatch-foundation.md` § P2S1-I3.
 
+use std::collections::BTreeMap;
 use std::fs;
 
-use crate::docs::applicability::ApplicableDocsReport;
+use crate::docs::applicability::{ApplicableDocsReport, ApplicableDocument};
+use crate::docs::model::{DocumentAuthority, DocumentKind};
 use crate::evidence::model::{BranchCriticality, BranchDisposition, ShapeMode};
 use crate::graph::contract::{
     ExpectedEvidence, ImplementationMode, PlanPolicy, QaImpactPosture, Risk, TicketRole,
@@ -27,6 +29,7 @@ use crate::graph::store::JsonGraphStore;
 use crate::id::WorkKind;
 use crate::kernel::readiness::ReadinessSnapshot;
 use crate::source::{check_repository_identity, packet_base_snapshot};
+use crate::storage::safe_repo_relative;
 use crate::storage::transaction::recover_prepared_transactions;
 use crate::storage::WriteGuard;
 use crate::work_packet;
@@ -37,9 +40,9 @@ use crate::work_packet::{
     PacketDocsApplicability, PacketDocumentation, PacketDocumentationImpact, PacketExcludedDocRef,
     PacketFutureGate, PacketGraph, PacketKnowledge, PacketParentRef, PacketQaStatus,
     PacketReadBudget, PacketRelationBundle, PacketRelationItem, PacketRemainingUncertainty,
-    PacketResolution, PacketScope, PacketScopeHints, PacketShaping, PacketShapingDestination,
-    PacketShapingMapSnapshot, PacketShapingWorkBinding, PacketSource, PacketSurfaceRef,
-    PacketWorkspace, SubjectSnapshot, WorkPacketV1,
+    PacketResolution, PacketRevalidationPrecondition, PacketScope, PacketScopeHints, PacketShaping,
+    PacketShapingDestination, PacketShapingMapSnapshot, PacketShapingWorkBinding, PacketSource,
+    PacketSurfaceRef, PacketWorkspace, SubjectSnapshot, WorkPacketV1,
 };
 use crate::{PulseError, PulseResult};
 
@@ -71,7 +74,7 @@ impl JsonGraphStore {
         self.verify_packet_eligible(&node)?;
 
         // ---- Step 4: Build readiness snapshot -----------------------------
-        let readiness = self.build_readiness_snapshot(&node)?;
+        let readiness = self.build_readiness_snapshot_from_projection(&node, &projection)?;
         let inputs = readiness.as_inputs(&node);
         let readiness_report = evaluate_readiness(&inputs, EvalProfile::Ready)?;
 
@@ -83,15 +86,17 @@ impl JsonGraphStore {
         let subject = extract_subject(&node);
         let snapshot = extract_snapshot(&readiness, &projection);
         let contract = extract_contract_dto(&node)?;
-        let context = extract_context(&node, &projection, &self.repo_root);
+        let context = extract_context(&node, &projection, &readiness);
         let shaping = extract_shaping(&node, &readiness.shaping, &projection)?;
         let graph = extract_graph(&readiness, &projection)?;
-        let documentation = extract_documentation(&readiness.docs);
+        let documentation = extract_documentation(&readiness.docs)?;
         let source = extract_source_snapshot(&self.repo_root, &repository_id)?;
         let workspace = extract_workspace(&node, &source, &repository_id);
         let capabilities = extract_capabilities(&node);
         let scope = extract_scope(&node);
         let assurance = extract_assurance(&node);
+        let snapshot = complete_snapshot(snapshot, &documentation, &source);
+        let dispatch = build_dispatch(&readiness_report, &snapshot, &source);
 
         // ---- Step 6: Assemble, normalize, fingerprint, finalize -----------
         let mut packet = WorkPacketV1 {
@@ -119,7 +124,7 @@ impl JsonGraphStore {
             capabilities,
             scope,
             assurance,
-            dispatch: build_dispatch(&readiness_report),
+            dispatch,
             budget: PacketBudget::default(),
             packet_fingerprint: String::new(),
             reason_codes: vec![],
@@ -252,6 +257,16 @@ fn extract_snapshot(
     }
 }
 
+fn complete_snapshot(
+    mut snapshot: work_packet::SnapshotReport,
+    documentation: &PacketDocumentation,
+    source: &PacketSource,
+) -> work_packet::SnapshotReport {
+    snapshot.docs_index_fingerprint = documentation.index.fingerprint.clone();
+    snapshot.source_commit = source.commit.clone();
+    snapshot
+}
+
 fn extract_contract_dto(node: &Node) -> PulseResult<work_packet::PacketImplementationContractV1> {
     let contract = node.implementation.as_ref().ok_or_else(|| {
         PulseError::validation(
@@ -334,12 +349,12 @@ fn extract_contract_dto(node: &Node) -> PulseResult<work_packet::PacketImplement
         expected_evidence: contract
             .expected_evidence
             .iter()
-            .map(|e| format!("{e:?}"))
+            .map(|e| expected_evidence_str(*e).to_string())
             .collect(),
         expected_handoff: contract
             .expected_handoff
             .iter()
-            .map(|h| format!("{h:?}"))
+            .map(|h| expected_handoff_str(*h).to_string())
             .collect(),
     })
 }
@@ -347,11 +362,15 @@ fn extract_contract_dto(node: &Node) -> PulseResult<work_packet::PacketImplement
 fn extract_context(
     node: &Node,
     projection: &GraphProjection,
-    repo_root: &std::path::Path,
+    readiness: &ReadinessSnapshot,
 ) -> work_packet::PacketContext {
     let parents = extract_parents(node, projection);
-    let decisions = extract_decisions(node, projection, repo_root);
+    let decisions = extract_decisions(node, projection, readiness);
     work_packet::PacketContext { parents, decisions }
+}
+
+fn node_by_id<'a>(projection: &'a GraphProjection, id: &str) -> Option<&'a Node> {
+    projection.nodes.iter().find(|node| node.id == id)
 }
 
 fn extract_parents(node: &Node, projection: &GraphProjection) -> Vec<PacketParentRef> {
@@ -363,7 +382,7 @@ fn extract_parents(node: &Node, projection: &GraphProjection) -> Vec<PacketParen
         if edge.from != node.id {
             continue;
         }
-        if let Some(parent) = projection.nodes.iter().find(|n| n.id == edge.to) {
+        if let Some(parent) = node_by_id(projection, &edge.to) {
             parents.push(PacketParentRef {
                 relation: "parent_of".to_string(),
                 id: parent.id.clone(),
@@ -382,7 +401,7 @@ fn extract_parents(node: &Node, projection: &GraphProjection) -> Vec<PacketParen
                 if ancestor_edge.from != parent.id {
                     continue;
                 }
-                if let Some(ancestor) = projection.nodes.iter().find(|n| n.id == ancestor_edge.to) {
+                if let Some(ancestor) = node_by_id(projection, &ancestor_edge.to) {
                     parents.push(PacketParentRef {
                         relation: "parent_of".to_string(),
                         id: ancestor.id.clone(),
@@ -404,14 +423,19 @@ fn extract_parents(node: &Node, projection: &GraphProjection) -> Vec<PacketParen
 fn extract_decisions(
     node: &Node,
     projection: &GraphProjection,
-    repo_root: &std::path::Path,
+    readiness: &ReadinessSnapshot,
 ) -> Vec<work_packet::PacketDecisionRef> {
     let Some(contract) = &node.implementation else {
         return Vec::new();
     };
+    let proofs: BTreeMap<&str, _> = readiness
+        .decision_proofs
+        .iter()
+        .map(|proof| (proof.decision_id.as_str(), proof))
+        .collect();
     let mut decisions = Vec::new();
     for required in &contract.required_decisions {
-        let decision_node = projection.nodes.iter().find(|n| n.id == required.id);
+        let decision_node = node_by_id(projection, &required.id);
         let (status, revision, contract_revision, title) = match decision_node {
             Some(dn) => (
                 node_status_str(dn.status),
@@ -421,26 +445,25 @@ fn extract_decisions(
             ),
             None => continue,
         };
-        let receipt = match crate::evidence::receipt::load_receipt(
-            repo_root,
-            &required.acceptance_receipt.id,
-        ) {
-            Ok((receipt, hash)) if hash == required.acceptance_receipt.hash => {
-                Some(work_packet::PacketReceiptRef {
-                    id: receipt.id,
-                    hash,
-                })
-            }
-            _ => None,
-        };
+        let proof = proofs.get(required.id.as_str());
         decisions.push(work_packet::PacketDecisionRef {
             id: required.id.clone(),
             revision,
             contract_revision,
             status,
             title,
-            acceptance_receipt: receipt,
-            content_refs: vec![],
+            acceptance_receipt: proof.map(|proof| work_packet::PacketReceiptRef {
+                id: proof.receipt_id.clone(),
+                hash: proof.receipt_hash.clone(),
+            }),
+            content_refs: proof
+                .map(|proof| {
+                    vec![PacketContentRef {
+                        path: proof.payload.decision.content.path.clone(),
+                        content_hash: proof.payload.decision.content.content_hash.clone(),
+                    }]
+                })
+                .unwrap_or_default(),
         });
     }
     decisions.sort_by(|a, b| a.id.cmp(&b.id));
@@ -527,21 +550,32 @@ fn extract_shaping(
         })
         .collect();
 
-    // Decision frontier: max 16 items
+    let included_branch_by_resolution: BTreeMap<&str, &PacketCriticalBranch> = critical_branches
+        .iter()
+        .filter_map(|branch| {
+            branch
+                .disposition
+                .resolution
+                .as_ref()
+                .map(|resolution| (resolution.id.as_str(), branch))
+        })
+        .collect();
     let frontier_items: Vec<PacketDecisionFrontierItem> = payload
         .resolution_pointers
         .iter()
-        .filter(|rp| critical_branches.iter().any(|cb| cb.id == rp.id))
-        .map(|rp| PacketDecisionFrontierItem {
-            id: rp.id.clone(),
-            revision: rp.revision,
-            gap_kind: "resolved".to_string(),
-            question: String::new(),
-            status: "evaluated".to_string(),
+        .filter_map(|rp| {
+            let branch = included_branch_by_resolution.get(rp.id.as_str())?;
+            Some(PacketDecisionFrontierItem {
+                id: rp.id.clone(),
+                revision: rp.revision,
+                gap_kind: branch.gap_kind.clone(),
+                question: branch.question.clone(),
+                status: "evaluated".to_string(),
+            })
         })
         .collect();
 
-    if payload.resolution_pointers.len() > 16 {
+    if frontier_items.len() > work_packet::MAX_DECISION_FRONTIER_ITEMS {
         return Err(PulseError::validation(
             "work_packet_decision_frontier_overflow",
             "more than 16 relevant decision-frontier items",
@@ -602,7 +636,9 @@ fn extract_graph(
         .map(|b| work_packet::PacketBlockerItem {
             id: b.id.clone(),
             relation: "blocked_by".to_string(),
-            title: b.path.join(" -> "),
+            title: node_by_id(projection, &b.id)
+                .map(|node| node.title.clone())
+                .unwrap_or_else(|| b.path.join(" -> ")),
         })
         .collect();
 
@@ -612,19 +648,22 @@ fn extract_graph(
         .map(|p| work_packet::PacketBlockerItem {
             id: p.preferred_after.clone(),
             relation: "preferred_after".to_string(),
-            title: String::new(),
+            title: node_by_id(projection, &p.preferred_after)
+                .map(|node| node.title.clone())
+                .unwrap_or_default(),
         })
         .collect();
 
     let supersession = structural.supersession.as_ref().and_then(|s| {
-        s.replacement
-            .clone()
-            .map(|repl| work_packet::PacketSupersessionRef {
+        s.replacement.clone().map(|repl| {
+            let node = node_by_id(projection, &repl);
+            work_packet::PacketSupersessionRef {
                 id: repl,
-                revision: 0,
-                status: String::new(),
-                title: String::new(),
-            })
+                revision: node.map(|n| n.revision).unwrap_or(0),
+                status: node.map(|n| node_status_str(n.status)).unwrap_or_default(),
+                title: node.map(|n| n.title.clone()).unwrap_or_default(),
+            }
+        })
     });
 
     let structural_state = match structural.structural_state {
@@ -645,7 +684,7 @@ fn extract_graph(
             total += 1;
         }
     }
-    if total > 128 {
+    if total > work_packet::MAX_INCIDENT_RELATIONS {
         return Err(PulseError::validation(
             "work_packet_relation_overflow",
             "more than 128 incident edges",
@@ -654,7 +693,7 @@ fn extract_graph(
 
     for edge in &projection.edges {
         if edge.from == *subject_id {
-            if let Some(opp) = projection.nodes.iter().find(|n| n.id == edge.to) {
+            if let Some(opp) = node_by_id(projection, &edge.to) {
                 outgoing.push(PacketRelationItem {
                     edge_id: edge.id.clone(),
                     edge_type: edge_type_str(edge.edge_type),
@@ -669,7 +708,7 @@ fn extract_graph(
                 });
             }
         } else if edge.to == *subject_id {
-            if let Some(opp) = projection.nodes.iter().find(|n| n.id == edge.from) {
+            if let Some(opp) = node_by_id(projection, &edge.from) {
                 incoming.push(PacketRelationItem {
                     edge_id: edge.id.clone(),
                     edge_type: edge_type_str(edge.edge_type),
@@ -695,52 +734,47 @@ fn extract_graph(
     })
 }
 
-fn extract_documentation(docs: &ApplicableDocsReport) -> PacketDocumentation {
-    let required: Vec<PacketDocRef> = docs
+fn extract_documentation(docs: &ApplicableDocsReport) -> PulseResult<PacketDocumentation> {
+    if docs.gate.status != "complete" {
+        return Err(PulseError::validation(
+            "work_packet_docs_context_incomplete",
+            format!(
+                "documentation applicability gate status is {}",
+                docs.gate.status
+            ),
+        ));
+    }
+    let required: Vec<PacketDocRef> = docs.required.iter().map(packet_doc_ref).collect();
+    let optional: Vec<PacketDocRef> = docs.optional.iter().map(packet_doc_ref).collect();
+
+    let by_id: BTreeMap<&str, &ApplicableDocument> = docs
         .required
         .iter()
-        .map(|d| PacketDocRef {
-            id: d.id.clone(),
-            path: d.path.clone(),
-            kind: format!("{:?}", d.kind),
-            authority: format!("{:?}", d.authority),
-            owner: d.owner.clone(),
-            summary: d.summary.clone(),
-            revision: d.document_revision,
-            content_hash: d.content_hash.clone(),
-            reasons: d.reasons.clone(),
-        })
+        .chain(docs.optional.iter())
+        .map(|doc| (doc.id.as_str(), doc))
         .collect();
-
-    let optional: Vec<PacketDocRef> = docs
-        .optional
-        .iter()
-        .map(|d| PacketDocRef {
-            id: d.id.clone(),
-            path: d.path.clone(),
-            kind: format!("{:?}", d.kind),
-            authority: format!("{:?}", d.authority),
-            owner: d.owner.clone(),
-            summary: d.summary.clone(),
-            revision: d.document_revision,
-            content_hash: d.content_hash.clone(),
-            reasons: d.reasons.clone(),
-        })
-        .collect();
-
     let write_candidates: Vec<PacketDocRef> = docs
         .write_candidates
         .iter()
-        .map(|wc| PacketDocRef {
-            id: wc.id.clone(),
-            path: String::new(),
-            kind: String::new(),
-            authority: String::new(),
-            owner: String::new(),
-            summary: String::new(),
-            revision: 0,
-            content_hash: String::new(),
-            reasons: wc.reasons.clone(),
+        .map(|wc| {
+            by_id
+                .get(wc.id.as_str())
+                .map(|doc| {
+                    let mut dto = packet_doc_ref(doc);
+                    dto.reasons = wc.reasons.clone();
+                    dto
+                })
+                .unwrap_or_else(|| PacketDocRef {
+                    id: wc.id.clone(),
+                    path: String::new(),
+                    kind: String::new(),
+                    authority: String::new(),
+                    owner: String::new(),
+                    summary: String::new(),
+                    revision: 0,
+                    content_hash: String::new(),
+                    reasons: wc.reasons.clone(),
+                })
         })
         .collect();
 
@@ -755,7 +789,7 @@ fn extract_documentation(docs: &ApplicableDocsReport) -> PacketDocumentation {
         })
         .collect();
 
-    PacketDocumentation {
+    Ok(PacketDocumentation {
         applicability: PacketDocsApplicability {
             status: docs.gate.status.clone(),
             required,
@@ -764,8 +798,8 @@ fn extract_documentation(docs: &ApplicableDocsReport) -> PacketDocumentation {
             excluded,
         },
         suggestion_query: work_packet::PacketSuggestionQuery {
-            text: String::new(),
-            normalized_terms: vec![],
+            text: docs.work.id.clone(),
+            normalized_terms: vec![docs.work.id.clone()],
         },
         suggested_sections: vec![],
         read_budget: PacketReadBudget {
@@ -776,10 +810,24 @@ fn extract_documentation(docs: &ApplicableDocsReport) -> PacketDocumentation {
             snippet_max_bytes_each: work_packet::MAX_SNIPPET_BYTES_EACH as u64,
         },
         index: work_packet::PacketDocsIndex {
-            state: "current".to_string(),
+            state: "not_installed".to_string(),
             fingerprint: docs.registry.fingerprint.clone(),
             mode: "lexical".to_string(),
         },
+    })
+}
+
+fn packet_doc_ref(document: &ApplicableDocument) -> PacketDocRef {
+    PacketDocRef {
+        id: document.id.clone(),
+        path: document.path.clone(),
+        kind: document_kind_str(document.kind).to_string(),
+        authority: document_authority_str(document.authority).to_string(),
+        owner: document.owner.clone(),
+        summary: document.summary.clone(),
+        revision: document.document_revision,
+        content_hash: document.content_hash.clone(),
+        reasons: document.reasons.clone(),
     }
 }
 
@@ -865,19 +913,37 @@ fn extract_scope(node: &Node) -> PacketScope {
     let mut hints = PacketScopeHints::default();
     if let Some(contract) = &node.implementation {
         for anchor in &contract.code_anchors {
-            hints.source_paths.push(anchor.path.clone());
+            if let Some(path) = validated_hint_path(&anchor.path) {
+                hints.source_paths.push(path);
+            }
         }
         for anchor in &contract.documentation_anchors {
-            hints.documentation_paths.push(anchor.path.clone());
+            if let Some(path) = validated_hint_path(&anchor.path) {
+                hints.documentation_paths.push(path);
+            }
         }
         for anchor in &contract.configuration_anchors {
-            hints.configuration_paths.push(anchor.path.clone());
+            if let Some(path) = validated_hint_path(&anchor.path) {
+                hints.configuration_paths.push(path);
+            }
         }
         for anchor in &contract.data_anchors {
-            hints.data_paths.push(anchor.path.clone());
+            if let Some(path) = validated_hint_path(&anchor.path) {
+                hints.data_paths.push(path);
+            }
         }
-        hints.included = contract.scope.included.clone();
-        hints.excluded = contract.scope.excluded.clone();
+        hints.included = contract
+            .scope
+            .included
+            .iter()
+            .filter_map(|path| validated_hint_path(path))
+            .collect();
+        hints.excluded = contract
+            .scope
+            .excluded
+            .iter()
+            .filter_map(|path| validated_hint_path(path))
+            .collect();
     }
     hints.source_paths.sort();
     hints.source_paths.dedup();
@@ -935,7 +1001,7 @@ fn extract_assurance(node: &Node) -> PacketAssurance {
         .map(|c| {
             c.expected_evidence
                 .iter()
-                .map(|e| format!("{e:?}"))
+                .map(|e| expected_evidence_str(*e).to_string())
                 .collect()
         })
         .unwrap_or_default();
@@ -946,7 +1012,7 @@ fn extract_assurance(node: &Node) -> PacketAssurance {
         .map(|c| {
             c.expected_handoff
                 .iter()
-                .map(|h| format!("{h:?}"))
+                .map(|h| expected_handoff_str(*h).to_string())
                 .collect()
         })
         .unwrap_or_default();
@@ -1015,8 +1081,44 @@ fn extract_assurance(node: &Node) -> PacketAssurance {
     }
 }
 
-fn build_dispatch(report: &ReadinessReport) -> PacketDispatch {
-    let mut dispatch = PacketDispatch::default();
+fn build_dispatch(
+    report: &ReadinessReport,
+    snapshot: &work_packet::SnapshotReport,
+    source: &PacketSource,
+) -> PacketDispatch {
+    let mut dispatch = PacketDispatch {
+        revalidation_preconditions: vec![
+            PacketRevalidationPrecondition {
+                field: "snapshot.graph_fingerprint".to_string(),
+                value: snapshot.graph_fingerprint.clone(),
+            },
+            PacketRevalidationPrecondition {
+                field: "snapshot.readiness_fingerprint".to_string(),
+                value: snapshot.readiness_fingerprint.clone(),
+            },
+            PacketRevalidationPrecondition {
+                field: "snapshot.authority_policy_fingerprint".to_string(),
+                value: snapshot.authority_policy_fingerprint.clone(),
+            },
+            PacketRevalidationPrecondition {
+                field: "snapshot.docs_registry_fingerprint".to_string(),
+                value: snapshot.docs_registry_fingerprint.clone(),
+            },
+            PacketRevalidationPrecondition {
+                field: "snapshot.docs_index_fingerprint".to_string(),
+                value: snapshot.docs_index_fingerprint.clone(),
+            },
+            PacketRevalidationPrecondition {
+                field: "snapshot.source_commit".to_string(),
+                value: snapshot.source_commit.clone(),
+            },
+            PacketRevalidationPrecondition {
+                field: "source.cleanliness".to_string(),
+                value: source.cleanliness.clone(),
+            },
+        ],
+        ..PacketDispatch::default()
+    };
     for gate in &mut dispatch.gate_families {
         match gate.family.as_str() {
             "readiness" => {
@@ -1033,7 +1135,8 @@ fn build_dispatch(report: &ReadinessReport) -> PacketDispatch {
                 gate.status = "passed".to_string();
             }
             "documentation_context" => {
-                gate.status = "passed".to_string();
+                gate.status = "not_evaluated".to_string();
+                gate.reason_codes = vec!["docs_search_not_integrated".to_string()];
             }
             _ => {}
         }
@@ -1152,6 +1255,62 @@ fn edge_type_str(edge_type: EdgeType) -> String {
     .to_string()
 }
 
+fn document_kind_str(kind: DocumentKind) -> &'static str {
+    match kind {
+        DocumentKind::RepositoryMap => "repository_map",
+        DocumentKind::Policy => "policy",
+        DocumentKind::Product => "product",
+        DocumentKind::Architecture => "architecture",
+        DocumentKind::Domain => "domain",
+        DocumentKind::Operations => "operations",
+        DocumentKind::Reference => "reference",
+        DocumentKind::DecisionProjection => "decision_projection",
+        DocumentKind::Generated => "generated",
+        DocumentKind::Informational => "informational",
+    }
+}
+
+fn document_authority_str(authority: DocumentAuthority) -> &'static str {
+    match authority {
+        DocumentAuthority::Draft => "draft",
+        DocumentAuthority::Approved => "approved",
+        DocumentAuthority::Informational => "informational",
+        DocumentAuthority::Generated => "generated",
+    }
+}
+
+fn expected_evidence_str(evidence: ExpectedEvidence) -> &'static str {
+    match evidence {
+        ExpectedEvidence::FocusedTestOutput => "focused_test_output",
+        ExpectedEvidence::AcceptanceMapping => "acceptance_mapping",
+        ExpectedEvidence::ClientContractInventory => "client_contract_inventory",
+        ExpectedEvidence::PrototypeEvidence => "prototype_evidence",
+        ExpectedEvidence::ResearchNotes => "research_notes",
+        ExpectedEvidence::DecisionRecord => "decision_record",
+        ExpectedEvidence::DocumentationDiff => "documentation_diff",
+        ExpectedEvidence::ConfigurationDiff => "configuration_diff",
+        ExpectedEvidence::DataSample => "data_sample",
+    }
+}
+
+fn expected_handoff_str(handoff: crate::graph::contract::ExpectedHandoff) -> &'static str {
+    use crate::graph::contract::ExpectedHandoff;
+    match handoff {
+        ExpectedHandoff::SourceSnapshot => "source_snapshot",
+        ExpectedHandoff::AcceptanceToEvidence => "acceptance_to_evidence",
+        ExpectedHandoff::RemainingRisks => "remaining_risks",
+        ExpectedHandoff::DocumentationFindings => "documentation_findings",
+        ExpectedHandoff::DecisionSummary => "decision_summary",
+        ExpectedHandoff::FollowUpWork => "follow_up_work",
+    }
+}
+
+fn validated_hint_path(path: &str) -> Option<String> {
+    safe_repo_relative(path)
+        .ok()
+        .map(|path| path.to_string_lossy().replace('\\', "/"))
+}
+
 fn branch_disposition_to_packet(disposition: &BranchDisposition) -> PacketBranchDisposition {
     match disposition {
         BranchDisposition::Resolved { resolution } => PacketBranchDisposition {
@@ -1194,5 +1353,623 @@ fn branch_disposition_to_packet(disposition: &BranchDisposition) -> PacketBranch
             resolution: None,
             non_blocking_context: linked_decision_work.clone(),
         },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::docs::applicability::{
+        ApplicabilityGate, ApplicableRegistry, ApplicableWork, WriteCandidate,
+    };
+    use crate::docs::model::DocumentationPosture;
+    use crate::evidence::model::{
+        FogReview, RemainingUncertainty, ShapingApproval, ShapingBranch, ShapingDestination,
+        ShapingFog, ShapingResolutionPointer, ShapingValidationPayload, ShapingWorkBinding,
+        SourcePosture,
+    };
+    use crate::graph::edge::Edge;
+    use crate::graph::executability::{LifecycleSummary, StructuralExecutabilityReport};
+    use crate::graph::projection::{self, GraphProjection};
+    use crate::graph::readiness::{GateFamilyReport, GateStatus};
+    use crate::graph::{contract, node};
+    use crate::identity::ActorKind;
+    use crate::policy::AuthorityPolicyReport;
+    use chrono::Utc;
+    use std::path::PathBuf;
+
+    fn base_node(id: &str, kind: WorkKind, title: &str) -> Node {
+        Node {
+            schema_version: contract::NODE_SCHEMA_VERSION,
+            id: id.to_string(),
+            kind,
+            revision: 1,
+            contract_revision: 1,
+            title: title.to_string(),
+            status: NodeStatus::Ready,
+            status_reason: None,
+            documentation: Some(node::DocumentationMetadata {
+                impact: node::DocumentationImpact {
+                    posture: DocumentationImpactPosture::None,
+                    rationale: Some("No docs change.".to_string()),
+                    required_documents: vec![],
+                    deferred_to: vec![],
+                },
+                routing: node::DocumentationRouting::default(),
+            }),
+            role: Some(TicketRole::Implementation),
+            risk: Some(Risk::Low),
+            materialization: Some(contract::Materialization::R1),
+            qa: Some(contract::QaMetadata {
+                impact: contract::QaImpact {
+                    posture: QaImpactPosture::None,
+                    rationale: Some("No behavior change.".to_string()),
+                    behavioral_owner: None,
+                    affected_case_ids: vec![],
+                },
+            }),
+            implementation: Some(contract::ImplementationContract {
+                mode: ImplementationMode::Guided,
+                work_surface: WorkSurface::Code,
+                plan_policy: PlanPolicy::None,
+                semantic_impact:
+                    contract::ImplementationSemanticImpact::NoBehaviorOrPublicRiskChange,
+                effort: contract::EffortMetadata::default(),
+                verification_profile: "service-change".to_string(),
+                brief: None,
+                objective: "Objective".to_string(),
+                current_behavior: "Current".to_string(),
+                target_behavior: "Target".to_string(),
+                code_anchors: vec![contract::SurfaceRef::path("src/token.rs")],
+                documentation_anchors: vec![],
+                configuration_anchors: vec![],
+                data_anchors: vec![],
+                research_refs: vec![],
+                required_changes: vec![],
+                invariants: vec![],
+                acceptance: vec![],
+                scope: contract::ContractScope::default(),
+                implementation_freedom: vec![],
+                required_decisions: vec![],
+                shared_approach_refs: vec![],
+                expected_evidence: vec![],
+                expected_handoff: vec![],
+            }),
+            decision_work: None,
+            shaping: None,
+            content_dir: format!("works/{id}"),
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+        }
+    }
+
+    fn edge(edge_type: EdgeType, from: &str, to: &str) -> Edge {
+        Edge::new(
+            edge_type,
+            from.to_string(),
+            to.to_string(),
+            "human:tester".to_string(),
+            Utc::now(),
+        )
+        .unwrap()
+    }
+
+    fn projection(nodes: Vec<Node>, edges: Vec<Edge>) -> GraphProjection {
+        let node_files = nodes
+            .into_iter()
+            .map(|node| (PathBuf::from(format!("nodes/{}.json", node.id)), node))
+            .collect::<Vec<_>>();
+        let edge_files = edges
+            .into_iter()
+            .map(|edge| (PathBuf::from(format!("edges/{}.json", edge.id)), edge))
+            .collect::<Vec<_>>();
+        projection::build_projection("sha256:graph".to_string(), &node_files, &edge_files)
+    }
+
+    fn readiness_snapshot(projection: &GraphProjection, subject: &str) -> ReadinessSnapshot {
+        ReadinessSnapshot {
+            graph_fingerprint: projection.graph_fingerprint.clone(),
+            structural: StructuralExecutabilityReport {
+                schema_version: 1,
+                subject: subject.to_string(),
+                graph_fingerprint: projection.graph_fingerprint.clone(),
+                structural_state: StructuralState::Candidate,
+                dispatch_authorized: false,
+                lifecycle: LifecycleSummary {
+                    status: NodeStatus::Ready,
+                    revision: 1,
+                },
+                hard_blockers: vec![],
+                soft_preferences: vec![],
+                supersession: None,
+                gate_coverage: vec![],
+                missing_gate_families: vec![],
+                reason_codes: vec![],
+            },
+            shaping: None,
+            decision_proofs: vec![],
+            docs: docs_report_complete(),
+            authority: AuthorityPolicyReport {
+                schema_version: 1,
+                code: "ok".to_string(),
+                available: true,
+                valid: true,
+                policy_revision: Some(1),
+                fingerprint: Some("sha256:policy".to_string()),
+                principals: vec![],
+                reason_codes: vec![],
+            },
+            content_bindings: vec![],
+        }
+    }
+
+    fn docs_report_complete() -> ApplicableDocsReport {
+        ApplicableDocsReport {
+            schema_version: 1,
+            work: ApplicableWork {
+                id: "TK-001".to_string(),
+                revision: 1,
+                documentation_posture: DocumentationPosture::None,
+            },
+            registry: ApplicableRegistry {
+                revision: 3,
+                fingerprint: "sha256:registry".to_string(),
+            },
+            required: vec![],
+            optional: vec![],
+            write_candidates: vec![],
+            excluded: vec![],
+            gate: ApplicabilityGate {
+                status: "complete".to_string(),
+                reason_codes: vec![],
+                policy_status: "not_evaluated".to_string(),
+            },
+        }
+    }
+
+    fn packet_doc(id: &str) -> ApplicableDocument {
+        ApplicableDocument {
+            id: id.to_string(),
+            path: format!("docs/{id}.md"),
+            kind: DocumentKind::Architecture,
+            authority: DocumentAuthority::Approved,
+            owner: "docs-team".to_string(),
+            summary: format!("{id} summary"),
+            content_hash: format!("sha256:{id}"),
+            document_revision: 4,
+            reasons: vec!["route".to_string()],
+        }
+    }
+
+    fn shaping_payload(
+        branches: Vec<ShapingBranch>,
+        pointers: Vec<ShapingResolutionPointer>,
+    ) -> ShapingValidationPayload {
+        ShapingValidationPayload {
+            payload_version: 1,
+            owning_work: ShapingWorkBinding {
+                id: "ST-001".to_string(),
+                revision_observed: 2,
+                contract_revision: 1,
+            },
+            materialization: "R1".to_string(),
+            shape_mode: ShapeMode::FocusedBranches,
+            source_posture: SourcePosture::NotRequiredContentBound,
+            destination: Some(ShapingDestination {
+                summary: "Deliver stable packet context".to_string(),
+                scope_boundary: vec!["No dispatch".to_string()],
+                exit_conditions: vec!["Packet coherent".to_string()],
+            }),
+            map: None,
+            affected_work: vec![],
+            branches,
+            fog: vec![
+                ShapingFog {
+                    id: "FOG-B".to_string(),
+                    statement: "B".to_string(),
+                    bounds: vec!["bounded".to_string()],
+                    why_not_precise: "later".to_string(),
+                    review: FogReview::BoundedNonBlocking,
+                    trigger: "when needed".to_string(),
+                    affected_work: vec!["TK-001".to_string()],
+                },
+                ShapingFog {
+                    id: "FOG-A".to_string(),
+                    statement: "A".to_string(),
+                    bounds: vec!["bounded".to_string()],
+                    why_not_precise: "later".to_string(),
+                    review: FogReview::BoundedNonBlocking,
+                    trigger: "when needed".to_string(),
+                    affected_work: vec!["TK-001".to_string()],
+                },
+            ],
+            out_of_scope: vec![],
+            resolution_pointers: pointers,
+            approval: ShapingApproval {
+                approved_by: crate::identity::ActorRef {
+                    kind: ActorKind::Human,
+                    id: "tester".to_string(),
+                },
+                reference: "approval".to_string(),
+            },
+            reconciliation: None,
+            remaining_uncertainty: vec![
+                RemainingUncertainty {
+                    summary: "Z uncertainty".to_string(),
+                    trigger: "later".to_string(),
+                },
+                RemainingUncertainty {
+                    summary: "A uncertainty".to_string(),
+                    trigger: "later".to_string(),
+                },
+            ],
+        }
+    }
+
+    #[test]
+    fn packet_uses_same_projection_for_readiness_snapshot() {
+        let node = base_node("TK-001", WorkKind::Ticket, "Ticket");
+        let parent = base_node("ST-001", WorkKind::Story, "Story");
+        let projection = projection(
+            vec![node.clone(), parent],
+            vec![edge(EdgeType::Parent, "TK-001", "ST-001")],
+        );
+        let snapshot = readiness_snapshot(&projection, "TK-001");
+        let extracted = extract_snapshot(&snapshot, &projection);
+        assert_eq!(extracted.graph_fingerprint, projection.graph_fingerprint);
+        assert_eq!(snapshot.graph_fingerprint, projection.graph_fingerprint);
+    }
+
+    #[test]
+    fn relation_projection_orders_and_includes_opposite_endpoint_metadata() {
+        let subject = base_node("TK-001", WorkKind::Ticket, "Subject");
+        let a = base_node("TK-002", WorkKind::Ticket, "Alpha");
+        let b = base_node("TK-003", WorkKind::Ticket, "Beta");
+        let c = base_node("TK-004", WorkKind::Ticket, "Gamma");
+        let edges = vec![
+            edge(EdgeType::Related, "TK-004", "TK-001"),
+            edge(EdgeType::PreferredAfter, "TK-001", "TK-003"),
+            edge(EdgeType::BlockedBy, "TK-001", "TK-002"),
+        ];
+        let projection = projection(vec![subject, a, b, c], edges);
+        let snapshot = readiness_snapshot(&projection, "TK-001");
+
+        let mut graph = extract_graph(&snapshot, &projection).unwrap();
+        graph.normalize();
+        let outgoing = graph
+            .relations
+            .outgoing
+            .iter()
+            .map(|item| {
+                (
+                    item.edge_type.as_str(),
+                    item.to.as_str(),
+                    item.opposite_title.as_str(),
+                )
+            })
+            .collect::<Vec<_>>();
+        let incoming = graph
+            .relations
+            .incoming
+            .iter()
+            .map(|item| {
+                (
+                    item.edge_type.as_str(),
+                    item.from.as_str(),
+                    item.opposite_title.as_str(),
+                )
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            outgoing,
+            vec![
+                ("blocked_by", "TK-002", "Alpha"),
+                ("preferred_after", "TK-003", "Beta"),
+                ("related", "TK-004", "Gamma"),
+            ]
+        );
+        assert!(incoming.is_empty());
+    }
+
+    #[test]
+    fn relation_projection_rejects_more_than_128_incident_edges() {
+        let subject = base_node("TK-001", WorkKind::Ticket, "Subject");
+        let mut nodes = vec![subject];
+        let mut edges = Vec::new();
+        for i in 0..=work_packet::MAX_INCIDENT_RELATIONS {
+            let id = format!("TK-X{i:03}");
+            nodes.push(base_node(&id, WorkKind::Ticket, &format!("Node {i}")));
+            edges.push(edge(EdgeType::Related, "TK-001", &id));
+        }
+        let projection = projection(nodes, edges);
+        let snapshot = readiness_snapshot(&projection, "TK-001");
+
+        let err = extract_graph(&snapshot, &projection).unwrap_err();
+        assert_eq!(err.code(), "work_packet_relation_overflow");
+    }
+
+    #[test]
+    fn decision_frontier_filters_relevant_resolved_critical_branches_and_sorts() {
+        let node = base_node("TK-001", WorkKind::Ticket, "Ticket");
+        let branch_z = ShapingBranch {
+            id: "BR-Z".to_string(),
+            question: "Z question".to_string(),
+            gap_kind: "tradeoff_gap".to_string(),
+            criticality: BranchCriticality::Critical,
+            affected_work: vec!["TK-001".to_string()],
+            disposition: BranchDisposition::Resolved {
+                resolution: ShapingResolutionPointer {
+                    kind: "decision".to_string(),
+                    id: "DEC-Z".to_string(),
+                    revision: 7,
+                    gist: "Z".to_string(),
+                },
+            },
+        };
+        let branch_a = ShapingBranch {
+            id: "BR-A".to_string(),
+            question: "A question".to_string(),
+            gap_kind: "architecture_gap".to_string(),
+            criticality: BranchCriticality::Critical,
+            affected_work: vec!["TK-001".to_string()],
+            disposition: BranchDisposition::Resolved {
+                resolution: ShapingResolutionPointer {
+                    kind: "decision".to_string(),
+                    id: "DEC-A".to_string(),
+                    revision: 3,
+                    gist: "A".to_string(),
+                },
+            },
+        };
+        let irrelevant = ShapingBranch {
+            id: "BR-OTHER".to_string(),
+            question: "Other".to_string(),
+            gap_kind: "tradeoff_gap".to_string(),
+            criticality: BranchCriticality::Critical,
+            affected_work: vec!["TK-OTHER".to_string()],
+            disposition: BranchDisposition::Resolved {
+                resolution: ShapingResolutionPointer {
+                    kind: "decision".to_string(),
+                    id: "DEC-OTHER".to_string(),
+                    revision: 1,
+                    gist: "Other".to_string(),
+                },
+            },
+        };
+        let payload = shaping_payload(
+            vec![branch_z, irrelevant, branch_a],
+            vec![
+                ShapingResolutionPointer {
+                    kind: "decision".to_string(),
+                    id: "DEC-Z".to_string(),
+                    revision: 7,
+                    gist: "Z".to_string(),
+                },
+                ShapingResolutionPointer {
+                    kind: "decision".to_string(),
+                    id: "DEC-OTHER".to_string(),
+                    revision: 1,
+                    gist: "Other".to_string(),
+                },
+                ShapingResolutionPointer {
+                    kind: "decision".to_string(),
+                    id: "DEC-A".to_string(),
+                    revision: 3,
+                    gist: "A".to_string(),
+                },
+            ],
+        );
+        let shaping = Some(ShapingReceiptSnapshot {
+            receipt_id: "rcpt_shape".to_string(),
+            receipt_hash: "sha256:shape".to_string(),
+            payload,
+            integrity_valid: true,
+            binding_codes: vec![],
+            map_current: true,
+        });
+
+        let mut packet_shaping =
+            extract_shaping(&node, &shaping, &projection(vec![node.clone()], vec![])).unwrap();
+        packet_shaping.normalize();
+        assert_eq!(
+            packet_shaping
+                .decision_frontier
+                .items
+                .iter()
+                .map(|item| (
+                    item.id.as_str(),
+                    item.question.as_str(),
+                    item.gap_kind.as_str()
+                ))
+                .collect::<Vec<_>>(),
+            vec![
+                ("DEC-A", "A question", "architecture_gap"),
+                ("DEC-Z", "Z question", "tradeoff_gap"),
+            ]
+        );
+        assert_eq!(
+            packet_shaping
+                .bounded_fog
+                .iter()
+                .map(|fog| fog.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["FOG-A", "FOG-B"]
+        );
+        assert_eq!(
+            packet_shaping
+                .remaining_uncertainty
+                .iter()
+                .map(|u| u.summary.as_str())
+                .collect::<Vec<_>>(),
+            vec!["A uncertainty", "Z uncertainty"]
+        );
+    }
+
+    #[test]
+    fn decision_frontier_rejects_more_than_16_relevant_items() {
+        let node = base_node("TK-001", WorkKind::Ticket, "Ticket");
+        let mut branches = Vec::new();
+        let mut pointers = Vec::new();
+        for i in 0..=work_packet::MAX_DECISION_FRONTIER_ITEMS {
+            let decision_id = format!("DEC-{i:03}");
+            branches.push(ShapingBranch {
+                id: format!("BR-{i:03}"),
+                question: format!("Question {i}"),
+                gap_kind: "tradeoff_gap".to_string(),
+                criticality: BranchCriticality::Critical,
+                affected_work: vec!["TK-001".to_string()],
+                disposition: BranchDisposition::Resolved {
+                    resolution: ShapingResolutionPointer {
+                        kind: "decision".to_string(),
+                        id: decision_id.clone(),
+                        revision: 1,
+                        gist: "gist".to_string(),
+                    },
+                },
+            });
+            pointers.push(ShapingResolutionPointer {
+                kind: "decision".to_string(),
+                id: decision_id,
+                revision: 1,
+                gist: "gist".to_string(),
+            });
+        }
+        let shaping = Some(ShapingReceiptSnapshot {
+            receipt_id: "rcpt_shape".to_string(),
+            receipt_hash: "sha256:shape".to_string(),
+            payload: shaping_payload(branches, pointers),
+            integrity_valid: true,
+            binding_codes: vec![],
+            map_current: true,
+        });
+
+        let err =
+            extract_shaping(&node, &shaping, &projection(vec![node.clone()], vec![])).unwrap_err();
+        assert_eq!(err.code(), "work_packet_decision_frontier_overflow");
+    }
+
+    #[test]
+    fn documentation_gate_incomplete_rejects_and_write_candidates_join_metadata() {
+        let mut docs = docs_report_complete();
+        docs.required = vec![packet_doc("DOC-A")];
+        docs.optional = vec![packet_doc("DOC-B")];
+        docs.write_candidates = vec![WriteCandidate {
+            id: "DOC-A".to_string(),
+            reasons: vec!["impact_required".to_string()],
+        }];
+        let packet_docs = extract_documentation(&docs).unwrap();
+        assert_eq!(
+            packet_docs.applicability.write_candidates[0].path,
+            "docs/DOC-A.md"
+        );
+        assert_eq!(
+            packet_docs.applicability.write_candidates[0].authority,
+            "approved"
+        );
+        assert_eq!(
+            packet_docs.applicability.write_candidates[0].reasons,
+            vec!["impact_required"]
+        );
+        assert_eq!(packet_docs.index.state, "not_installed");
+        assert_eq!(packet_docs.suggested_sections.len(), 0);
+
+        docs.gate.status = "incomplete".to_string();
+        let err = extract_documentation(&docs).unwrap_err();
+        assert_eq!(err.code(), "work_packet_docs_context_incomplete");
+    }
+
+    #[test]
+    fn scope_hints_reject_traversal_without_fabricating_enforcement() {
+        let mut node = base_node("TK-001", WorkKind::Ticket, "Ticket");
+        let contract = node.implementation.as_mut().unwrap();
+        contract.code_anchors = vec![
+            contract::SurfaceRef::path("src/z.rs"),
+            contract::SurfaceRef::path("../escape.rs"),
+            contract::SurfaceRef::path("src/a.rs"),
+        ];
+        contract.scope.included = vec!["src".to_string(), "/tmp/abs".to_string()];
+        let scope = extract_scope(&node);
+        assert_eq!(scope.scope_hints.source_paths, vec!["src/a.rs", "src/z.rs"]);
+        assert_eq!(scope.scope_hints.included, vec!["src"]);
+        assert_eq!(scope.enforcement.status, "not_installed");
+    }
+
+    #[test]
+    fn dispatch_remains_preview_and_revalidation_omits_packet_fingerprint() {
+        let report = ReadinessReport {
+            schema_version: 1,
+            code: "ready".to_string(),
+            subject: crate::graph::readiness::ReadinessSubject {
+                id: "TK-001".to_string(),
+                revision: 1,
+                contract_revision: 1,
+                status: NodeStatus::Ready,
+            },
+            profile: "phase1_contract_readiness_v1".to_string(),
+            status: ReadinessStatus::Ready,
+            transition_eligible: true,
+            dispatch_authorized: false,
+            readiness_fingerprint: "sha256:ready".to_string(),
+            graph_fingerprint_observed: "sha256:graph".to_string(),
+            gate_families: vec![GateFamilyReport {
+                family: "readiness".to_string(),
+                status: GateStatus::Passed,
+                reason_codes: vec![],
+            }],
+            destination: None,
+            remaining_non_blocking_uncertainty: vec![],
+            future_gate_families: vec![],
+            reason_codes: vec![],
+        };
+        let snapshot = work_packet::SnapshotReport {
+            graph_fingerprint: "sha256:graph".to_string(),
+            readiness_profile: "phase1_contract_readiness_v1".to_string(),
+            readiness_fingerprint: "sha256:ready".to_string(),
+            readiness_status: "ready".to_string(),
+            authority_policy_revision: 1,
+            authority_policy_fingerprint: "sha256:policy".to_string(),
+            docs_registry_revision: 1,
+            docs_registry_fingerprint: "sha256:registry".to_string(),
+            docs_index_fingerprint: "sha256:registry".to_string(),
+            source_commit: "0123456789abcdef0123456789abcdef01234567".to_string(),
+        };
+        let source = PacketSource {
+            repository_id: "repo".to_string(),
+            kind: "git_commit".to_string(),
+            commit: snapshot.source_commit.clone(),
+            head_ref: Some("refs/heads/main".to_string()),
+            worktree_root_kind: "primary_or_existing_worktree".to_string(),
+            cleanliness: "clean".to_string(),
+            operation_state: "normal".to_string(),
+            currentness: "current".to_string(),
+        };
+        let dispatch = build_dispatch(&report, &snapshot, &source);
+        assert!(dispatch.reservation_candidate);
+        assert!(!dispatch.dispatch_authorized);
+        assert_eq!(dispatch.authorization_status, "not_reserved");
+        assert!(!dispatch
+            .revalidation_preconditions
+            .iter()
+            .any(|precondition| precondition.field == "packet_fingerprint"));
+        let documentation_context = dispatch
+            .gate_families
+            .iter()
+            .find(|gate| gate.family == "documentation_context")
+            .unwrap();
+        assert_eq!(documentation_context.status, "not_evaluated");
+        assert_eq!(
+            documentation_context.reason_codes,
+            vec!["docs_search_not_integrated"]
+        );
+        assert_eq!(
+            dispatch
+                .gate_families
+                .iter()
+                .find(|gate| gate.family == "lease")
+                .unwrap()
+                .status,
+            "not_evaluated"
+        );
     }
 }

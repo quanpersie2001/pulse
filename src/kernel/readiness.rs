@@ -40,7 +40,18 @@ impl JsonGraphStore {
     /// bound content) are consistent. Caller is expected to have recovered.
     pub(crate) fn build_readiness_snapshot(&self, node: &Node) -> PulseResult<ReadinessSnapshot> {
         let projection = self.export_unlocked()?;
-        let structural = structural_executability(&projection, &node.id).or_else(|err| {
+        self.build_readiness_snapshot_from_projection(node, &projection)
+    }
+
+    /// Build readiness from a caller-supplied graph projection. Packet assembly
+    /// uses this to ensure subject, relations and readiness all observe the
+    /// same canonical graph snapshot under the already-held repository fence.
+    pub(crate) fn build_readiness_snapshot_from_projection(
+        &self,
+        node: &Node,
+        projection: &crate::graph::projection::GraphProjection,
+    ) -> PulseResult<ReadinessSnapshot> {
+        let structural = structural_executability(projection, &node.id).or_else(|err| {
             if matches!(err, PulseError::NotFound { .. }) {
                 Ok(self.empty_structural_report(&node.id))
             } else {
