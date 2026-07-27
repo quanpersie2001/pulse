@@ -72,6 +72,12 @@ Mỗi phần salvage phải đi qua contract/test mới; không kéo cả depend
 
 ### Phase 1 - Local work graph và documentation foundations
 
+**Implementation status:** foundation này đã được implement qua Slice 1–7.
+Slice 7 shaping/readiness/frontier contract được verify tại commit `677c593`
+với 340 tests pass. Exit này chỉ xác nhận Phase 1 kernel foundations; Phase 2
+runner/lease/work packet và Phase 3 QA baseline/case resolver vẫn chưa hoàn
+thành.
+
 - `manifest.json`, node/edge JSON Schemas và sharded file layout.
 - Top-level `works/` boundary, document registry schema và durable docs source hierarchy.
 - Node/edge create/show/list/edit với revision CAS, deterministic edge IDs và atomic rename.

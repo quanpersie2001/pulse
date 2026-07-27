@@ -1,6 +1,7 @@
 # Phase 1 — Slice 7: Shaping Contract, Readiness Projection + Decision/Execution Frontier
 
-> Trạng thái: **proposal để review**, chưa phải work contract hay compatibility
+> Trạng thái: **implemented và verified** tại commit `677c593`; proposal này
+> ghi implementation strategy và verification scope, không phải compatibility
 > contract.
 > Tiền đề:
 > [`phase1-slice6-knowledge-store-foundation.md`](phase1-slice6-knowledge-store-foundation.md)
@@ -19,9 +20,9 @@
 > [`10-documentation-system.md`](../pulse-reboot/10-documentation-system.md) và
 > [`11-documentation-retrieval.md`](../pulse-reboot/11-documentation-retrieval.md).
 
-## Trạng thái đã verify trước proposal này
+## Baseline trước khi triển khai Slice 7
 
-Repository hiện đã implement Slice 1–6:
+Trước Slice 7, repository đã implement Slice 1–6:
 
 - sharded work graph, lifecycle, supersession, structural executability,
   traversal, roll-up, CAS, crash recovery và immutable events;
@@ -54,21 +55,42 @@ Sau single-baseline cleanup, current node schema/Rust implementation đã có:
 - current node `schema_version: 1`, không có predecessor model hoặc migration
   path cho internal Slice state.
 
-CLI hiện có `work transition`, `work executability`, `docs applicable` và
-`evidence receipt verify`, nhưng chưa có contract/QA setters, shaping
-apply/show/invalidate, readiness-policy query, `work ready`, hoặc decision/
-execution frontier commands. Lifecycle source cũng chưa mở typed gated path
-`draft -> shaped -> ready` theo owner contract.
+Tại baseline đó, CLI đã có `work transition`, `work executability`,
+`docs applicable` và `evidence receipt verify`, nhưng chưa có contract/QA
+setters, shaping apply/show/invalidate, readiness-policy query, `work ready`,
+hoặc decision/execution frontier commands. Lifecycle source cũng chưa mở typed
+gated path `draft -> shaped -> ready` theo owner contract.
 
-`shaping_validation` receipt hiện chỉ có skeletal payload v1 với
+`shaping_validation` receipt khi đó chỉ có skeletal payload v1 với
 `owning_work`, `risk`, một `destination` string, summary arrays và
 `approval_assertion`; JSON Schema trên disk chỉ enforce `payload_version`.
-Slice 7 hoàn thiện chính current payload v1 này. Internal placeholder bytes are
-not a historical compatibility family.
+Slice 7 đã hoàn thiện chính current payload v1 này. Internal placeholder bytes
+không trở thành historical compatibility family.
 
-Vì vậy Slice 7 là lát cắt đúng tiếp theo và là foundation còn thiếu để đóng
-Phase 1 theo roadmap. Nó không phải Phase 2 runner và không phải full
-conversational `pulse-shape` capability.
+## Implementation và verification record
+
+Commit `677c593` triển khai Slice 7 trên current baseline v1:
+
+- typed event envelope v1 với typed actor/subject và optional correlation;
+- completed `shaping_validation` payload v1, `decision_acceptance` payload v1 và
+  schema/manifest validation;
+- tracked default-deny authority policy với validation/fingerprint/query;
+- contract, QA-impact và shaping mutation APIs/CLI với CAS, authority,
+  idempotency, typed events và recovery;
+- deterministic readiness composition, narrow fingerprint, stale-ready
+  semantics và gated `draft -> shaped -> ready` transitions;
+- deterministic derived decision/execution frontiers với
+  `claim_state=not_evaluated` trước Phase 2.
+
+Final verification chạy `cargo fmt --check`, Clippy với `-D warnings`,
+`cargo test --all-targets`, focused crash/concurrency/recovery suites và
+`git diff --check`: **340 tests passed, 0 failed**. Read-only readiness/frontier
+queries không bootstrap docs/evidence planes; missing Decision acceptance proof
+được report `unavailable`; gated QA authority được re-check dưới repository
+fence.
+
+Slice exit không bao gồm Phase 2 runner/lease/work packet hoặc full
+conversational `pulse-shape`, và không bao gồm Phase 3 QA baseline/case resolver.
 
 ## Vị trí của slice trong Pulse Reboot
 
@@ -2201,77 +2223,79 @@ Decision/docs/map bindings.
 
 ## Definition of Done của slice
 
-- [ ] Current node schema v1, Rust model, bootstrap template, tests and fixtures
+Các mục dưới đây đã được verify tại commit `677c593` và full test run 340 tests:
+
+- [x] Current node schema v1, Rust model, bootstrap template, tests and fixtures
   agree; no v2/predecessor/migration path is introduced.
-- [ ] Ticket có typed `implementation|decision_work` role; không thêm node kind
+- [x] Ticket có typed `implementation|decision_work` role; không thêm node kind
   hoặc hierarchy thứ hai.
-- [ ] New public Tickets have explicit assessed risk/materialization; explicit
+- [x] New public Tickets have explicit assessed risk/materialization; explicit
   canonical draft/bootstrap `unassessed` remains non-ready without fabricated
   semantic defaults.
-- [ ] Contract revision separates semantic freshness from lifecycle/pointer CAS;
+- [x] Contract revision separates semantic freshness from lifecycle/pointer CAS;
   shaping apply và ready transition do not invalidate their own proof.
-- [ ] Implementation contract cover objective/current/target, mode, work
+- [x] Implementation contract cover objective/current/target, mode, work
   surface, plan policy, brief hash, anchors, changes, invariants, acceptance,
   scope, freedom, Decision/approach refs, verification profile, expected evidence
   và expected handoff.
-- [ ] Decision-work contract cover destination owner, branch/fog provenance,
+- [x] Decision-work contract cover destination owner, branch/fog provenance,
   gap kind, precise question, expected output/evidence và optional resolution
   target.
-- [ ] Current shaping pointer reference immutable receipt ID/hash và optional
+- [x] Current shaping pointer reference immutable receipt ID/hash và optional
   map path/revision/hash; node không embed frontier/branch truth.
-- [ ] Current shaping receipt payload v1 schema/typed decoder cover contract revisions,
+- [x] Current shaping receipt payload v1 schema/typed decoder cover contract revisions,
   destination, branches, dispositions, fog, out-of-scope, resolution pointers,
   approval, reconciliation và remaining uncertainty.
-- [ ] Evidence manifest/bootstrap references the completed current shaping
+- [x] Evidence manifest/bootstrap references the completed current shaping
   payload v1 schema; read-only queries never bootstrap or rewrite it.
-- [ ] Internal placeholder receipt bytes are regenerated or rejected as drift,
+- [x] Internal placeholder receipt bytes are regenerated or rejected as drift,
   not preserved through a compatibility decoder.
-- [ ] Hard-to-reverse Decision references require immutable acceptance proof and
+- [x] Hard-to-reverse Decision references require immutable acceptance proof and
   authority; node existence alone is not approval.
-- [ ] Receipt-first shaping apply uses expected revision, idempotent retry,
+- [x] Receipt-first shaping apply uses expected revision, idempotent retry,
   immutable event and crash recovery.
-- [ ] R0 concise self-check path does not require map, ADR, plan or unnecessary
+- [x] R0 concise self-check path does not require map, ADR, plan or unnecessary
   human approval beyond policy.
-- [ ] R2 requires persisted map only for typed multi-session/multi-decision/
+- [x] R2 requires persisted map only for typed multi-session/multi-decision/
   resume conditions; R3 always requires destination, exit conditions and
   content-bound persisted map.
-- [ ] Critical missing/blocking branch fails readiness.
-- [ ] Delegated branch resolves explicit implementation freedom and cannot
+- [x] Critical missing/blocking branch fails readiness.
+- [x] Delegated branch resolves explicit implementation freedom and cannot
   exceed mode/contract.
-- [ ] Deferred branch requires reason, owner/target, trigger/linked work and
+- [x] Deferred branch requires reason, owner/target, trigger/linked work and
   explicit non-blocking scope.
-- [ ] Fog is typed/bounded/non-blocking and distinct from precise branch,
+- [x] Fog is typed/bounded/non-blocking and distinct from precise branch,
   deferred work and out-of-scope.
-- [ ] Local authority policy is default-deny, typed, fingerprinted, derives
+- [x] Local authority policy is default-deny, typed, fingerprinted, derives
   required grants in kernel and does not infer grant from actor kind/receipt.
-- [ ] Minimal QA impact metadata blocks `unknown`; `none` and
+- [x] Minimal QA impact metadata blocks `unknown`; `none` and
   `covered_by_story_close` have structural rules, while required case resolution
   remains unavailable until Phase 3.
-- [ ] Readiness composition keeps gate-family statuses and stable reason codes;
+- [x] Readiness composition keeps gate-family statuses and stable reason codes;
   no opaque persisted `is_ready` boolean.
-- [ ] Narrow readiness fingerprint avoids unrelated graph/registry invalidation
+- [x] Narrow readiness fingerprint avoids unrelated graph/registry invalidation
   and includes exact relevant work/docs/Decision/map/policy hashes.
-- [ ] `draft -> shaped` and `shaped -> ready` recompute gates under fence and
+- [x] `draft -> shaped` and `shaped -> ready` recompute gates under fence and
   have no `--force`; blocked resume uses audited `blocked -> shaped -> ready`.
-- [ ] Ready status may become stale projection; execution frontier excludes it
+- [x] Ready status may become stale projection; execution frontier excludes it
   without hidden mutation.
-- [ ] Decision frontier contains relevant precise decision-work Tickets with
+- [x] Decision frontier contains relevant precise decision-work Tickets with
   satisfied hard dependencies, including draft work without requiring a nested
   shaping receipt.
-- [ ] Execution frontier contains only current-ready implementation Tickets.
-- [ ] Frontier does not persist/claim runtime lease state and reports
+- [x] Execution frontier contains only current-ready implementation Tickets.
+- [x] Frontier does not persist/claim runtime lease state and reports
   `claim_state=not_evaluated` until Phase 2.
-- [ ] Frontier ordering is deterministic membership, not semantic priority
+- [x] Frontier ordering is deterministic membership, not semantic priority
   ranking.
-- [ ] Cache delete/corrupt/rebuild does not change readiness/frontier semantics.
-- [ ] Scenario #9, #10, #19, #34, #35 và #37–40 have automated fixtures.
-- [ ] Process concurrency, crash recovery, TOCTOU content hash and JSON CLI
+- [x] Cache delete/corrupt/rebuild does not change readiness/frontier semantics.
+- [x] Scenario #9, #10, #19, #34, #35 và #37–40 have automated fixtures.
+- [x] Process concurrency, crash recovery, TOCTOU content hash and JSON CLI
   contract tests pass.
-- [ ] CLI remains thin; graph/docs/evidence/policy ownership boundaries remain
+- [x] CLI remains thin; graph/docs/evidence/policy ownership boundaries remain
   typed and separate.
-- [ ] `cargo fmt --check`, `cargo clippy --all-targets --quiet -- -D warnings`
+- [x] `cargo fmt --check`, `cargo clippy --all-targets --quiet -- -D warnings`
   and `cargo test --all-targets` pass.
-- [ ] No conversational shaping, work packet, runner, lease, QA baseline,
+- [x] No conversational shaping, work packet, runner, lease, QA baseline,
   verification/close gate or knowledge retrieval is smuggled into Slice 7.
 
 ## Handoff sang Phase 2 — Minimal Shaping + Single-Agent Run

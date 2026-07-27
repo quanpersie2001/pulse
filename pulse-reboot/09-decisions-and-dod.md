@@ -94,20 +94,20 @@ Core v1 hoàn thành khi:
 - [ ] Lifecycle, deterministic edges, inverse projection, revision CAS, atomic recovery và supersession có unit/integration tests.
 - [ ] `graph export` rebuild deterministic sau khi xóa cache; SQLite không cần cho correctness/performance target v1.
 - [ ] Agent nhận `work packet` đầy đủ, gồm required/suggested section refs và read budget, không phải search raw graph files hoặc đọc toàn bộ docs tree để hiểu assignment.
-- [ ] Node schema có normal CAS `revision` và semantic `contract_revision`; create/edit/draft flows ghi assessed values hoặc explicit `unassessed` domain value cho risk/materialization khi classification chưa đủ chắc, không fabricate defaults và không derive values từ older on-disk shapes.
-- [ ] Ticket role `implementation|decision_work` có typed contract riêng; precise decision work không bị recursive readiness loop.
-- [ ] Implementation Ticket ready gate kiểm tra objective/current/target, work surface/anchors, required changes, invariants, acceptance, mode, plan policy, verification/evidence/handoff contract.
-- [ ] Ready gate từ chối critical ambiguity chưa disposition; `delegated` phải nằm trong implementation freedom, `deferred` phải có owner/target + trigger hoặc linked work, và semantic shaping receipt phải source/revision-bound khi policy yêu cầu.
+- [x] Node schema có normal CAS `revision` và semantic `contract_revision`; create/edit/draft flows ghi assessed values hoặc explicit `unassessed` domain value cho risk/materialization khi classification chưa đủ chắc, không fabricate defaults và không derive values từ older on-disk shapes. Verified by Slice 7 commit `677c593`.
+- [x] Ticket role `implementation|decision_work` có typed contract riêng; precise decision work không bị recursive readiness loop. Verified by Slice 7 commit `677c593`.
+- [x] Implementation Ticket ready gate kiểm tra objective/current/target, work surface/anchors, required changes, invariants, acceptance, mode, plan policy, verification/evidence/handoff contract. Verified by Slice 7 commit `677c593`.
+- [x] Ready gate từ chối critical ambiguity chưa disposition; `delegated` phải nằm trong implementation freedom, `deferred` phải có owner/target + trigger hoặc linked work, và semantic shaping receipt phải source/revision-bound khi policy yêu cầu. Verified by Slice 7 commit `677c593`.
 - [ ] `pulse-shape` đọc repo/docs trước khi hỏi, đi decision branches theo dependency order, hỏi human từng câu kèm recommendation khi có strong default, và materialize kết quả vào đúng Story/Ticket/Decision/docs owner theo risk.
 - [ ] R0 clear/low-risk work qua short ambiguity self-check mà không bị ép tạo full brainstorm artifact hoặc hỏi human không cần thiết.
 - [ ] R2/R3 multi-session shaping hỗ trợ approved destination/exit condition, canonical resolution pointers, derived decision frontier, bounded `not_yet_specified` và out-of-scope boundary.
 - [ ] Precise fact/intent/trade-off/fidelity/prerequisite gaps được route đúng sang research, grilling, Decision, prototype hoặc enabling work; fog chưa precise không bị materialize sớm thành speculative Tickets.
 - [ ] Resolve decision work reconcile dependencies, graduate newly precise fog, supersede/cancel invalidated branches và recompute readiness với CAS/audit.
-- [ ] CLI phân biệt decision frontier với execution frontier và không persist claim state hoặc frontier list thành writable graph truth; trước lease resolver claim state là `not_evaluated`.
-- [ ] `.pulse/policy/authority.json` validate/fingerprint deterministic, default-deny, không có implicit human superuser và kernel derive grant từ operation/posture.
-- [ ] Hard-to-reverse Decision cần current immutable acceptance proof; Decision existence hoặc shaping approval không đủ.
-- [ ] QA impact `unknown` chặn ready; `none`/`covered_by_story_close` cần rationale/owner và grant tương ứng; `required` không pass giả trước baseline/case resolver.
-- [ ] Readiness dùng narrow relevant-input fingerprint; status `ready` bị stale thì không vào execution frontier và read path không tự rewrite canonical node.
+- [x] CLI phân biệt decision frontier với execution frontier và không persist claim state hoặc frontier list thành writable graph truth; trước lease resolver claim state là `not_evaluated`. Verified by Slice 7 commit `677c593`.
+- [x] `.pulse/policy/authority.json` validate/fingerprint deterministic, default-deny, không có implicit human superuser và kernel derive grant từ operation/posture. Verified by Slice 7 commit `677c593`.
+- [x] Hard-to-reverse Decision cần current immutable acceptance proof; Decision existence hoặc shaping approval không đủ. Verified by Slice 7 commit `677c593`.
+- [x] QA impact `unknown` chặn ready; `none`/`covered_by_story_close` cần rationale/owner và grant tương ứng; `required` không pass giả trước baseline/case resolver. Verified by Slice 7 commit `677c593`; full required-case resolution remains Phase 3.
+- [x] Readiness dùng narrow relevant-input fingerprint; status `ready` bị stale thì không vào execution frontier và read path không tự rewrite canonical node. Verified by Slice 7 commit `677c593`.
 - [ ] Một Ticket standalone đi qua create -> ready -> active -> verifying -> done/rework/blocked.
 - [ ] Codex single-agent run dùng bounded context và có thể cancel/resume.
 - [ ] Risk policy chọn materialization/verification gate đúng.
