@@ -12,6 +12,7 @@ pub mod knowledge;
 pub mod policy;
 pub mod source;
 pub mod storage;
+pub mod work_packet;
 
 pub use error::{PulseError, PulseResult, Result};
 pub use graph::store::JsonGraphStore;

@@ -26,6 +26,11 @@ use pulse::policy::AuthorityPolicy;
 use pulse::source::head_commit;
 use pulse::storage::transaction::{recover_prepared_transactions, TransactionFailpoint};
 use pulse::storage::{bootstrap as storage_bootstrap, safe_repo_relative, MANIFEST_JSON};
+use pulse::work_packet::{
+    PacketBudget, PacketCapabilities, PacketDispatch, PacketKnowledge, PacketSource,
+    PacketWorkspace, WorkPacketV1, BUDGET_PROFILE, MAX_CANONICAL_JSON_BYTES, PACKET_PROFILE,
+    WORK_PACKET_SCHEMA,
+};
 use pulse::{JsonGraphStore, PulseError, PulseResult, Result};
 
 #[test]
@@ -210,4 +215,62 @@ fn evidence_receipt_public_paths_compile() {
     let _: Option<pulse::evidence::ReceiptList> = None;
     let _: Option<pulse::evidence::receipt::ReceiptStatus> = None;
     let _: Option<pulse::evidence::receipt::ReceiptSummary> = None;
+}
+
+#[test]
+fn work_packet_public_paths_compile() {
+    // Verify `pulse::work_packet` public types and constants are reachable
+    // from integration tests (external crate consumers).
+
+    // Constants.
+    assert_eq!(PACKET_PROFILE, "phase2_work_packet_preview_v1");
+    assert_eq!(BUDGET_PROFILE, "phase2_work_packet_preview_budget_v1");
+    assert_eq!(MAX_CANONICAL_JSON_BYTES, 131_072);
+
+    // Schema & defaults.
+    assert!(WORK_PACKET_SCHEMA.contains("WorkPacketV1"));
+
+    let budget = PacketBudget::default();
+    assert_eq!(budget.profile, BUDGET_PROFILE);
+
+    let caps = PacketCapabilities {
+        evaluation_status: "not_evaluated".to_string(),
+        required: vec!["source.read".to_string()],
+        optional: vec![],
+        missing: vec![],
+        inventory_identity: None,
+    };
+    assert!(caps.required.contains(&"source.read".to_string()));
+
+    let knowledge = PacketKnowledge {
+        status: "not_installed".to_string(),
+        owner_phase: 4,
+        knowledge_fingerprint: None,
+        required: vec![],
+        recommended: vec![],
+        suggested: vec![],
+        excluded: vec![],
+    };
+    assert_eq!(knowledge.owner_phase, 4);
+
+    let workspace = PacketWorkspace {
+        binding_status: "not_allocated".to_string(),
+        workspace_id: None,
+        required_strategy: "isolated_worktree_required".to_string(),
+        base_repository_id: "repo".to_string(),
+        base_commit: "0000000000000000000000000000000000000000".to_string(),
+        requirements: vec![],
+    };
+    // Verify typed access.
+    let _s: &str = &workspace.required_strategy;
+
+    // Verify that all major public DTO paths compile.
+    fn _accepts_packet(_: WorkPacketV1) {}
+    fn _accepts_dispatch(_: PacketDispatch) {}
+    fn _accepts_source(_: PacketSource) {}
+    _accepts_dispatch(PacketDispatch::default());
+    let dispatch = PacketDispatch::default();
+    assert!(dispatch.reservation_candidate);
+    assert!(!dispatch.dispatch_authorized);
+    assert_eq!(dispatch.authorization_status, "not_reserved");
 }
