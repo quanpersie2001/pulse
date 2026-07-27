@@ -1,11 +1,16 @@
-//! Coherent canonical packet snapshot builder (P2S1-I3).
+//! Coherent canonical packet snapshot builder (P2S1-I3 / P2S1-I4).
 //!
-//! This module composes the cross-domain [`WorkPacketV1`] under a repository
-//! fence, reusing readiness snapshots and preserving the Phase 1 readiness
-//! contract.  No docs search/index or CLI rendering is owned here — only
-//! graph/source/authority plane composition.
+//! This module composes the cross-domain [`WorkPacketV1`] using a two-fence
+//! algorithm: the first fence validates graph/source/authority state and builds
+//! the deterministic query; the fence is released for a cache-only docs index
+//! refresh; the second fence revalidates all preconditions before searching
+//! suggestions and assembling the packet.
 //!
-//! See `proposals/phase2-slice1-work-packet-dispatch-foundation.md` § P2S1-I3.
+//! P2S1-I4 adds the deterministic suggestion query builder, integer micro-score
+//! conversion, cache-only refresh that never writes `docs/**/_index.md`, and
+//! two-fence revalidation with no internal retry.
+//!
+//! See `proposals/phase2-slice1-work-packet-dispatch-foundation.md` § P2S1-I3/I4.
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -57,54 +62,215 @@ impl JsonGraphStore {
     /// Follows a single-fence snapshot algorithm: acquire fence, recover,
     /// load projection + readiness snapshot, extract all packet fields,
     /// normalize, compute fingerprint, finalize size.
+    /// Build a coherent preview work packet for a `ready` implementation
+    /// Ticket.
+    ///
+    /// Uses a two-fence algorithm (P2S1-D9):
+    ///   1. First fence: validate, load subject, build query, save preconditions.
+    ///   2. Release fence, build/search cache-only docs index (never writes
+    ///      tracked `docs/**/_index.md`).
+    ///   3. Second fence: revalidate all preconditions, search suggestions,
+    ///      assemble packet, compute fingerprint, enforce budget.
+    ///
+    /// No internal retry: if state changed during docs search the caller must
+    /// retry.
     pub fn work_packet(&self, id: &str) -> PulseResult<WorkPacketV1> {
-        // ---- Step 1: Validate enrollment ---------------------------------
+        // ==================================================================
+        // Phase 1 — First fence: validate, load, extract query, snapshot
+        // ==================================================================
         let evidence = check_repository_identity(&self.repo_root)?;
         let repository_id = evidence.repository_id.clone();
 
-        // ---- Step 2: Acquire fence, recover, load graph -------------------
-        let _guard = WriteGuard::acquire(&self.repo_root)?;
+        let guard = WriteGuard::acquire(&self.repo_root)?;
         self.bootstrap_unlocked()?;
         recover_prepared_transactions(&self.repo_root)?;
-
         let projection = self.export_unlocked()?;
 
-        // ---- Step 3: Load subject and verify eligibility ------------------
         let node = self.load_subject(id, &projection)?;
         self.verify_packet_eligible(&node)?;
 
-        // ---- Step 4: Build readiness snapshot -----------------------------
         let readiness = self.build_readiness_snapshot_from_projection(&node, &projection)?;
         let inputs = readiness.as_inputs(&node);
         let readiness_report = evaluate_readiness(&inputs, EvalProfile::Ready)?;
-
         if readiness_report.code != "ready" {
             return self.readiness_error(&readiness_report);
         }
 
-        // ---- Step 5: Extract every packet section -------------------------
+        // Extract sections that do NOT depend on docs search or source.
         let subject = extract_subject(&node);
-        let snapshot = extract_snapshot(&readiness, &projection);
+        let snapshot_pre = extract_snapshot(&readiness, &projection);
         let contract = extract_contract_dto(&node)?;
         let context = extract_context(&node, &projection, &readiness);
         let shaping = extract_shaping(&node, &readiness.shaping, &projection)?;
         let graph = extract_graph(&readiness, &projection)?;
-        let documentation = extract_documentation(&readiness.docs)?;
-        let source = extract_source_snapshot(&self.repo_root, &repository_id)?;
-        let workspace = extract_workspace(&node, &source, &repository_id);
+        let documentation_base = extract_documentation(&readiness.docs)?;
+        let workspace = extract_workspace(
+            &node,
+            &crate::work_packet::PacketSource {
+                repository_id: repository_id.clone(),
+                kind: "git_commit".to_string(),
+                commit: String::new(),
+                head_ref: None,
+                worktree_root_kind: String::new(),
+                cleanliness: String::new(),
+                operation_state: String::new(),
+                currentness: String::new(),
+            },
+            &repository_id,
+        );
         let capabilities = extract_capabilities(&node);
         let scope = extract_scope(&node);
         let assurance = extract_assurance(&node);
-        let snapshot = complete_snapshot(snapshot, &documentation, &source);
-        let dispatch = build_dispatch(&readiness_report, &snapshot, &source);
 
-        // ---- Step 6: Assemble, normalize, fingerprint, finalize -----------
+        // Build deterministic suggestion query (P2S1-D14).
+        let suggestion_query = build_suggestion_query(&node, &shaping)?;
+        let excluded_doc_ids: Vec<String> = documentation_base
+            .applicability
+            .excluded
+            .iter()
+            .map(|e| e.id.clone())
+            .collect();
+
+        // Save preconditions for revalidation after docs search.
+        let pre_graph_fingerprint = projection.graph_fingerprint.clone();
+        let pre_subject_revision = node.revision;
+        let pre_subject_status = node.status;
+        let _pre_readiness_fingerprint = readiness_report.readiness_fingerprint.clone();
+        let pre_authority_fingerprint = readiness.authority.fingerprint.clone();
+        let pre_docs_registry_fingerprint = readiness.docs.registry.fingerprint.clone();
+        let pre_subject_id = node.id.clone();
+        let pre_suggestion_query = suggestion_query.clone();
+        let pre_excluded_doc_ids = excluded_doc_ids.clone();
+
+        // Phase 1 complete: drop first fence.
+        drop(guard);
+
+        // ==================================================================
+        // Between fences — cache-only docs index refresh
+        // ==================================================================
+        let index_opts = crate::docs::index::IndexOptions {
+            changed: false,
+            rebuild: false,
+            check: false,
+            include_draft: false,
+            include_stale: false,
+        };
+        // Build/search cache-only disposable docs index (never writes
+        // projections). If the cache is already current this is a no-op.
+        crate::docs::index::build_search_cache(&self.repo_root, index_opts)?;
+
+        let source = extract_source_snapshot(&self.repo_root, &repository_id)?;
+        let docs_cache_fp = crate::docs::index::current_cache_fingerprint(&self.repo_root)?;
+
+        // ==================================================================
+        // Phase 2 — Second fence: revalidate, search, assemble
+        // ==================================================================
+        let guard2 = WriteGuard::acquire(&self.repo_root)?;
+        self.bootstrap_unlocked()?;
+        recover_prepared_transactions(&self.repo_root)?;
+        let projection2 = self.export_unlocked()?;
+
+        // Revalidate graph fingerprint.
+        if projection2.graph_fingerprint != pre_graph_fingerprint {
+            return Err(PulseError::validation(
+                "work_packet_snapshot_changed",
+                "graph fingerprint changed during work packet build",
+            ));
+        }
+
+        // Revalidate subject.
+        let node2 = self.load_subject(&pre_subject_id, &projection2)?;
+        if node2.revision != pre_subject_revision || node2.status != pre_subject_status {
+            return Err(PulseError::validation(
+                "work_packet_snapshot_changed",
+                "subject revision or status changed during work packet build",
+            ));
+        }
+
+        // Revalidate authority and docs registry fingerprints.
+        let readiness2 = self.build_readiness_snapshot_from_projection(&node2, &projection2)?;
+        if readiness2.authority.fingerprint != pre_authority_fingerprint {
+            return Err(PulseError::validation(
+                "work_packet_snapshot_changed",
+                "authority policy fingerprint changed during work packet build",
+            ));
+        }
+        if readiness2.docs.registry.fingerprint != pre_docs_registry_fingerprint {
+            return Err(PulseError::validation(
+                "work_packet_snapshot_changed",
+                "docs registry fingerprint changed during work packet build",
+            ));
+        }
+
+        // Revalidate source (HEAD, cleanliness, operation state).
+        let pre_source = crate::source::PacketSourceSnapshot {
+            repository_id: source.repository_id.clone(),
+            kind: source.kind.clone(),
+            commit: source.commit.clone(),
+            head_ref: source.head_ref.clone(),
+            worktree_root_kind: match source.worktree_root_kind.as_str() {
+                "linked_worktree" => crate::source::WorktreeRootKind::LinkedWorktree,
+                _ => crate::source::WorktreeRootKind::PrimaryOrExistingWorktree,
+            },
+            cleanliness: match source.cleanliness.as_str() {
+                "dirty" => crate::source::SourceCleanliness::Dirty,
+                _ => crate::source::SourceCleanliness::Clean,
+            },
+            operation_state: match source.operation_state.as_str() {
+                "merge_in_progress" => crate::source::RepositoryOperationState::MergeInProgress,
+                "rebase_in_progress" => crate::source::RepositoryOperationState::RebaseInProgress,
+                "cherry_pick_in_progress" => {
+                    crate::source::RepositoryOperationState::CherryPickInProgress
+                }
+                "revert_in_progress" => crate::source::RepositoryOperationState::RevertInProgress,
+                "bisect_in_progress" => crate::source::RepositoryOperationState::BisectInProgress,
+                _ => crate::source::RepositoryOperationState::Normal,
+            },
+            currentness: source.currentness.clone(),
+        };
+        crate::source::revalidate_packet_base(&self.repo_root, &pre_source)?;
+
+        // Permission check: no retry on snapshot/source change.
+        drop(guard2);
+
+        // ==================================================================
+        // Search suggestions and build documentation with search results
+        // ==================================================================
+        let suggested_sections = search_suggestions(
+            &self.repo_root,
+            &pre_suggestion_query,
+            &pre_excluded_doc_ids,
+        )?;
+
+        let snapshot_done = complete_snapshot(snapshot_pre, &documentation_base, &source);
+
+        // Build fully integrated documentation section.
+        let documentation = PacketDocumentation {
+            applicability: documentation_base.applicability,
+            suggestion_query: pre_suggestion_query,
+            suggested_sections,
+            read_budget: documentation_base.read_budget,
+            index: work_packet::PacketDocsIndex {
+                state: if docs_cache_fp.is_some() {
+                    "current".to_string()
+                } else {
+                    "not_installed".to_string()
+                },
+                fingerprint: docs_cache_fp
+                    .unwrap_or_else(|| readiness2.docs.registry.fingerprint.clone()),
+                mode: "lexical".to_string(),
+            },
+        };
+
+        let dispatch = build_dispatch(&readiness_report, &snapshot_done, &source);
+
+        // ---- Assemble ----
         let mut packet = WorkPacketV1 {
             schema_version: work_packet::PACKET_SCHEMA_VERSION,
             profile: work_packet::PACKET_PROFILE.to_string(),
             code: "reservation_candidate".to_string(),
             subject,
-            snapshot,
+            snapshot: snapshot_done,
             contract,
             context,
             shaping,
@@ -1135,8 +1301,8 @@ fn build_dispatch(
                 gate.status = "passed".to_string();
             }
             "documentation_context" => {
-                gate.status = "not_evaluated".to_string();
-                gate.reason_codes = vec!["docs_search_not_integrated".to_string()];
+                gate.status = "passed".to_string();
+                gate.reason_codes = vec![];
             }
             _ => {}
         }
@@ -1309,6 +1475,312 @@ fn validated_hint_path(path: &str) -> Option<String> {
     safe_repo_relative(path)
         .ok()
         .map(|path| path.to_string_lossy().replace('\\', "/"))
+}
+
+// ===================================================================
+// P2S1-I4: Deterministic suggestion query, score conversion, search
+// ===================================================================
+
+/// Build the deterministic suggestion query string per P2S1-D14.
+///
+/// Order of fragments:
+/// 1. Ticket title
+/// 2. objective
+/// 3. target_behavior
+/// 4. Each acceptance summary (by acceptance ID)
+/// 5. Basename + optional symbol of code/config/data/docs anchors
+/// 6. Documentation routing domains, then labels (lexical sort)
+/// 7. Required Decision titles (sort by Decision ID)
+/// 8. Shaping destination summary, then exit_conditions by order
+/// 9. Critical branch question (sort by branch ID)
+///
+/// Normalized and truncated to at most 32 terms / 256 UTF-8 bytes.
+pub fn build_suggestion_query(
+    node: &Node,
+    shaping: &PacketShaping,
+) -> PulseResult<work_packet::PacketSuggestionQuery> {
+    let mut fragments: Vec<String> = Vec::new();
+
+    // 1. Ticket title
+    if !node.title.is_empty() {
+        fragments.push(node.title.clone());
+    }
+
+    if let Some(contract) = &node.implementation {
+        // 2. objective
+        if !contract.objective.is_empty() {
+            fragments.push(contract.objective.clone());
+        }
+        // 3. target_behavior
+        if !contract.target_behavior.is_empty() {
+            fragments.push(contract.target_behavior.clone());
+        }
+        // 4. Each acceptance summary (by acceptance ID)
+        if !contract.acceptance.is_empty() {
+            for item in &contract.acceptance {
+                if !item.summary.is_empty() {
+                    fragments.push(item.summary.clone());
+                }
+            }
+        }
+        // 5. Anchor basename + optional symbol
+        let mut anchor_fragments: Vec<(String, Option<String>)> = Vec::new();
+        for anchor in &contract.code_anchors {
+            anchor_fragments.push((anchor.path.clone(), anchor.symbol.clone()));
+        }
+        for anchor in &contract.configuration_anchors {
+            anchor_fragments.push((anchor.path.clone(), anchor.symbol.clone()));
+        }
+        for anchor in &contract.data_anchors {
+            anchor_fragments.push((anchor.path.clone(), anchor.symbol.clone()));
+        }
+        for anchor in &contract.documentation_anchors {
+            anchor_fragments.push((anchor.path.clone(), anchor.symbol.clone()));
+        }
+        anchor_fragments.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)));
+        for (path, symbol) in anchor_fragments {
+            if let Some(basename) = std::path::Path::new(&path).file_name() {
+                let mut frag = basename.to_string_lossy().to_string();
+                if let Some(sym) = &symbol {
+                    frag.push(' ');
+                    frag.push_str(sym);
+                }
+                if !frag.is_empty() {
+                    fragments.push(frag);
+                }
+            }
+        }
+    }
+
+    // 7. Required Decision titles (sort by Decision ID)
+    if let Some(contract) = &node.implementation {
+        if !contract.required_decisions.is_empty() {
+            for req_dec in &contract.required_decisions {
+                // Title not available in required_decisions list, use ID as fallback
+                fragments.push(format!("decision:{}", req_dec.id));
+            }
+        }
+    }
+
+    // 8. Shaping destination summary + exit_conditions
+    if let Some(dest) = &shaping.destination {
+        if !dest.summary.is_empty() {
+            fragments.push(dest.summary.clone());
+        }
+        for ec in &dest.exit_conditions {
+            if !ec.is_empty() {
+                fragments.push(ec.clone());
+            }
+        }
+    }
+
+    // 9. Critical branch question (sort by branch ID)
+    if !shaping.critical_branches.is_empty() {
+        let mut branches = shaping.critical_branches.clone();
+        branches.sort_by(|a, b| a.id.cmp(&b.id));
+        for branch in &branches {
+            if !branch.question.is_empty() {
+                fragments.push(branch.question.clone());
+            }
+        }
+    }
+
+    // Normalize fragments
+    let normalized = normalize_query_fragments(&fragments);
+
+    // Tokenize and build prefix
+    let all_terms: Vec<String> = normalized
+        .iter()
+        .flat_map(|frag| crate::docs::lexical::tokenize_query_text(frag))
+        .collect();
+
+    // Deduplicate preserving order
+    let mut seen = std::collections::BTreeSet::new();
+    let unique_terms: Vec<String> = all_terms
+        .into_iter()
+        .filter(|t| seen.insert(t.clone()))
+        .collect();
+
+    // Take prefix: at most 32 terms, total byte length <= 256 when joined by space
+    let final_terms = truncate_query_terms(&unique_terms, 32, 256);
+
+    if final_terms.is_empty() {
+        return Err(PulseError::validation(
+            "work_packet_docs_query_empty",
+            "deterministic suggestion query produced no terms",
+        ));
+    }
+
+    let query_text = final_terms.join(" ");
+    Ok(work_packet::PacketSuggestionQuery {
+        text: query_text,
+        normalized_terms: final_terms,
+    })
+}
+
+/// Normalize query fragments: trim, collapse whitespace, dedup, cap at 280
+/// Unicode scalar values per fragment.
+fn normalize_query_fragments(fragments: &[String]) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut seen = std::collections::BTreeSet::new();
+    for frag in fragments {
+        let trimmed: String = frag.split_whitespace().collect::<Vec<_>>().join(" ");
+        if trimmed.is_empty() {
+            continue;
+        }
+        let capped: String = trimmed.chars().take(280).collect();
+        if seen.insert(capped.clone()) {
+            out.push(capped);
+        }
+    }
+    out
+}
+
+/// Truncate terms to at most `max_terms` and total byte length at most
+/// `max_bytes` when joined by one ASCII space. Never cuts a term.
+fn truncate_query_terms(terms: &[String], max_terms: usize, max_bytes: usize) -> Vec<String> {
+    let mut result = Vec::new();
+    let mut byte_len = 0usize;
+    for term in terms {
+        if result.len() >= max_terms {
+            break;
+        }
+        let add_bytes = if result.is_empty() {
+            term.len()
+        } else {
+            1 + term.len() // preceding space + term
+        };
+        if byte_len + add_bytes > max_bytes {
+            break;
+        }
+        byte_len += add_bytes;
+        result.push(term.clone());
+    }
+    result
+}
+
+/// Convert an f64 search score to a non-negative integer micro-score.
+///
+/// Per P2S1-D13:
+///   score_micros = round_nonnegative(score * 1_000_000)
+/// Rules:
+///   - input must be finite and >= 0
+///   - rounding uses f64::round
+///   - checked conversion to u64
+///   - violation => work_packet_docs_score_invalid
+pub fn score_to_micros(score: f64) -> PulseResult<u64> {
+    if !score.is_finite() || score < 0.0 {
+        return Err(PulseError::validation(
+            "work_packet_docs_score_invalid",
+            format!("search score must be finite and non-negative: {}", score),
+        ));
+    }
+    let product = score * 1_000_000.0;
+    let rounded = product.round();
+    if rounded < 0.0 || rounded > (u64::MAX as f64) {
+        return Err(PulseError::validation(
+            "work_packet_docs_score_invalid",
+            format!("score micros out of range: {}", rounded),
+        ));
+    }
+    // Safe: checked above
+    Ok(rounded as u64)
+}
+
+/// Search the cache-only docs index for suggested sections, excluding any
+/// sections belonging to excluded documents.
+fn search_suggestions(
+    repo_root: &std::path::Path,
+    query: &work_packet::PacketSuggestionQuery,
+    excluded_doc_ids: &[String],
+) -> PulseResult<Vec<work_packet::PacketSuggestedSection>> {
+    if query.normalized_terms.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    // Open the current generation for reading.
+    let generation = match crate::docs::index::current_generation(repo_root)? {
+        Some(gen) => gen,
+        None => return Ok(Vec::new()),
+    };
+
+    // Query lexical index with the suggestion terms.
+    let limit = work_packet::MAX_SUGGESTED_SECTIONS * 4; // Fetch more for filtering
+    let hits =
+        match crate::docs::lexical::query(&generation.tantivy_path, &query.normalized_terms, limit)
+        {
+            Ok(h) => h,
+            Err(_) => return Ok(Vec::new()),
+        };
+
+    let excluded: std::collections::BTreeSet<&str> =
+        excluded_doc_ids.iter().map(|id| id.as_str()).collect();
+
+    // Load the sections index file for snippet extraction.
+    let mut results = Vec::new();
+    for hit in &hits {
+        if excluded.contains(hit.section.document_id.as_str()) {
+            continue;
+        }
+
+        let score_micros = match score_to_micros(hit.score) {
+            Ok(s) => s,
+            Err(_) => continue,
+        };
+        let lexical_score_micros = match score_to_micros(hit.score) {
+            Ok(s) => s,
+            Err(_) => continue,
+        };
+
+        // Build snippet using the stored record.
+        let snippet = hit.section.summary.clone();
+        let truncated_snippet = if snippet.len() > work_packet::MAX_SNIPPET_BYTES_EACH {
+            let mut end = work_packet::MAX_SNIPPET_BYTES_EACH;
+            while !snippet.is_char_boundary(end) {
+                end -= 1;
+            }
+            snippet[..end].to_string()
+        } else {
+            snippet
+        };
+
+        results.push(work_packet::PacketSuggestedSection {
+            rank: 0, // Will be set after sorting
+            score_micros,
+            lexical_score_micros,
+            section_ref: hit.section.section_ref.clone(),
+            heading_path: hit.section.heading_path.join(" > "),
+            line_range: work_packet::PacketLineRange {
+                start: hit.section.range.start_line as u64,
+                end: hit.section.range.end_line as u64,
+            },
+            document_id: hit.section.document_id.clone(),
+            document_hash: hit.section.document_content_hash.clone(),
+            section_hash: hit.section.section_content_hash.clone(),
+            summary: hit.section.summary.clone(),
+            snippet: truncated_snippet,
+            authority: hit.section.authority.clone(),
+            owner: hit.section.owner.clone(),
+            kind: hit.section.kind.clone(),
+            matched_fields: hit.matched_fields.clone(),
+            applicability_reasons: vec![],
+        });
+    }
+
+    // Sort by score descending, then section_ref for determinism.
+    results.sort_by(|a, b| {
+        b.lexical_score_micros
+            .cmp(&a.lexical_score_micros)
+            .then_with(|| a.section_ref.cmp(&b.section_ref))
+    });
+    results.truncate(work_packet::MAX_SUGGESTED_SECTIONS);
+
+    // Assign ranks after final ordering.
+    for (idx, result) in results.iter_mut().enumerate() {
+        result.rank = (idx as u64) + 1;
+    }
+
+    Ok(results)
 }
 
 fn branch_disposition_to_packet(disposition: &BranchDisposition) -> PacketBranchDisposition {
@@ -1895,6 +2367,200 @@ mod tests {
         assert_eq!(scope.enforcement.status, "not_installed");
     }
 
+    // ===================================================================
+    // P2S1-I4: Deterministic suggestion query
+    // ===================================================================
+
+    #[test]
+    fn build_suggestion_query_uses_all_fragments() {
+        let mut node = base_node("TK-001", WorkKind::Ticket, "Token Rotation");
+        if let Some(contract) = &mut node.implementation {
+            contract.objective = "Rotate refresh tokens atomically".to_string();
+            contract.target_behavior = "Concurrent rotation is serialized".to_string();
+            contract.acceptance = vec![
+                contract::ContractItem {
+                    id: "A1".to_string(),
+                    summary: "Tokens rotate without race".to_string(),
+                },
+                contract::ContractItem {
+                    id: "A2".to_string(),
+                    summary: "Old token remains valid briefly".to_string(),
+                },
+            ];
+            contract.code_anchors = vec![
+                contract::SurfaceRef::path("src/z_last.rs"),
+                contract::SurfaceRef::path("src/a_first.rs"),
+            ];
+        }
+        let shaping = PacketShaping {
+            destination: Some(PacketShapingDestination {
+                summary: "Deliver rotation".to_string(),
+                scope_boundary: vec![],
+                exit_conditions: vec!["Concurrent pass".to_string()],
+            }),
+            critical_branches: vec![PacketCriticalBranch {
+                id: "BR-C".to_string(),
+                question: "How to serialize?".to_string(),
+                gap_kind: "tradeoff_gap".to_string(),
+                affected_work: vec!["TK-001".to_string()],
+                disposition: PacketBranchDisposition {
+                    kind: "resolved".to_string(),
+                    resolution: Some(PacketResolution {
+                        kind: "decision".to_string(),
+                        id: "DEC-001".to_string(),
+                        revision: 1,
+                        gist: "Use single-use".to_string(),
+                    }),
+                    non_blocking_context: None,
+                },
+            }],
+            ..Default::default()
+        };
+
+        let query = build_suggestion_query(&node, &shaping).unwrap();
+        assert!(!query.text.is_empty(), "query must not be empty");
+        assert!(!query.normalized_terms.is_empty(), "must have terms");
+        assert!(
+            query.text.len() <= 256,
+            "query text must not exceed 256 bytes"
+        );
+        assert!(query.normalized_terms.len() <= 32, "at most 32 terms");
+        // Verify title, objective, target_behavior are present
+        assert!(
+            query.text.contains("token") || query.text.contains("Token"),
+            "query should contain rotation-related terms"
+        );
+        assert!(
+            query.text.contains("rotate") || query.text.contains("rotation"),
+            "query should include objective"
+        );
+    }
+
+    #[test]
+    fn build_suggestion_query_empty_rejects() {
+        let node = Node {
+            schema_version: 1,
+            id: "TK-001".to_string(),
+            kind: WorkKind::Ticket,
+            revision: 1,
+            contract_revision: 1,
+            title: String::new(),
+            status: NodeStatus::Ready,
+            status_reason: None,
+            documentation: None,
+            role: Some(TicketRole::Implementation),
+            risk: Some(Risk::Low),
+            materialization: Some(contract::Materialization::R1),
+            qa: None,
+            implementation: None,
+            decision_work: None,
+            shaping: None,
+            content_dir: String::new(),
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+        };
+        let shaping = PacketShaping::default();
+        let result = build_suggestion_query(&node, &shaping);
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().code(), "work_packet_docs_query_empty");
+    }
+
+    #[test]
+    fn build_suggestion_query_truncates_long_fragments() {
+        let mut node = base_node("TK-001", WorkKind::Ticket, &"a ".repeat(200));
+        if let Some(contract) = &mut node.implementation {
+            contract.objective = "b ".repeat(200);
+        }
+        let shaping = PacketShaping::default();
+        let query = build_suggestion_query(&node, &shaping).unwrap();
+        assert!(!query.text.is_empty());
+        assert!(query.normalized_terms.len() <= 32);
+        assert!(query.text.len() <= 256);
+    }
+
+    // ===================================================================
+    // P2S1-I4: Score micro conversion
+    // ===================================================================
+
+    #[test]
+    fn score_to_micros_converts_positive_scores() {
+        assert_eq!(score_to_micros(0.0).unwrap(), 0);
+        assert_eq!(score_to_micros(0.5).unwrap(), 500_000);
+        assert_eq!(score_to_micros(1.0).unwrap(), 1_000_000);
+        assert_eq!(score_to_micros(0.000001).unwrap(), 1);
+        assert_eq!(score_to_micros(1.5).unwrap(), 1_500_000);
+    }
+
+    #[test]
+    fn score_to_micros_rounds_correctly() {
+        // Values that require rounding
+        assert_eq!(score_to_micros(0.1234567).unwrap(), 123_457);
+        assert_eq!(score_to_micros(0.9999999).unwrap(), 1_000_000);
+    }
+
+    #[test]
+    fn score_to_micros_rejects_negative_scores() {
+        let result = score_to_micros(-0.5);
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().code(), "work_packet_docs_score_invalid");
+    }
+
+    #[test]
+    fn score_to_micros_rejects_nan() {
+        let result = score_to_micros(f64::NAN);
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().code(), "work_packet_docs_score_invalid");
+    }
+
+    #[test]
+    fn score_to_micros_rejects_infinity() {
+        let result = score_to_micros(f64::INFINITY);
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().code(), "work_packet_docs_score_invalid");
+        let result = score_to_micros(f64::NEG_INFINITY);
+        assert!(result.is_err());
+    }
+
+    // ===================================================================
+    // P2S1-I4: Query term truncation
+    // ===================================================================
+
+    #[test]
+    fn truncate_query_terms_respects_max_terms() {
+        let terms: Vec<String> = (0..50).map(|i| format!("t{i}")).collect();
+        let result = truncate_query_terms(&terms, 10, 9999);
+        assert_eq!(result.len(), 10);
+    }
+
+    #[test]
+    fn truncate_query_terms_respects_max_bytes() {
+        let terms: Vec<String> = vec![
+            "aaa".to_string(),
+            "bbb".to_string(),
+            "ccc".to_string(),
+            "ddd".to_string(),
+        ];
+        // "aaa bbb ccc ddd" = 15 bytes. With limit 10, only first 2 fit:
+        // "aaa" (3) + " bbb" (4) = 7 <= 10, " ccc" (4) would make 11 > 10.
+        let result = truncate_query_terms(&terms, 10, 10);
+        assert_eq!(result, vec!["aaa", "bbb"]);
+    }
+
+    #[test]
+    fn truncate_query_terms_empty_input() {
+        let result = truncate_query_terms(&[], 10, 100);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn truncate_query_terms_never_cuts_term() {
+        let terms: Vec<String> = vec!["verylongterm".to_string(), "short".to_string()];
+        // "verylongterm" is 12 chars, " verylongterm short" would be 24 bytes
+        // With limit 5, even the first term doesn't fit.
+        let result = truncate_query_terms(&terms, 10, 5);
+        assert!(result.is_empty());
+    }
+
     #[test]
     fn dispatch_remains_preview_and_revalidation_omits_packet_fingerprint() {
         let report = ReadinessReport {
@@ -1957,11 +2623,8 @@ mod tests {
             .iter()
             .find(|gate| gate.family == "documentation_context")
             .unwrap();
-        assert_eq!(documentation_context.status, "not_evaluated");
-        assert_eq!(
-            documentation_context.reason_codes,
-            vec!["docs_search_not_integrated"]
-        );
+        assert_eq!(documentation_context.status, "passed");
+        assert!(documentation_context.reason_codes.is_empty());
         assert_eq!(
             dispatch
                 .gate_families

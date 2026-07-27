@@ -114,7 +114,17 @@ struct Capture {
     total_source_bytes: u64,
 }
 
-pub fn build_index(repo_root: &Path, opts: IndexOptions) -> PulseResult<IndexBuildReport> {
+/// Build a disposable docs-search cache without writing tracked projections.
+///
+/// Per P2S1-D9, `work packet` must never write generated navigation
+/// (`docs/**/_index.md`) because that would dirty a clean worktree and
+/// invalidate the packet source snapshot. This function builds and publishes
+/// only the cache generation under `.pulse/cache/docs-search/`, which is
+/// already git-ignored.
+///
+/// The returned `IndexBuildReport` has `projections.state = "cache_only"`
+/// to indicate that generated navigation was intentionally skipped.
+pub fn build_search_cache(repo_root: &Path, opts: IndexOptions) -> PulseResult<IndexBuildReport> {
     if opts.check {
         return check_index(repo_root);
     }
@@ -141,16 +151,13 @@ pub fn build_index(repo_root: &Path, opts: IndexOptions) -> PulseResult<IndexBui
     fs::create_dir_all(&build_dir).map_err(|e| PulseError::io(&build_dir, e))?;
     let sections_path = build_dir.join("sections.jsonl");
     let sections_bytes = write_sections_jsonl(&sections_path, &sections)?;
-    // The generation is only published after its content is durable enough for a
-    // crash not to expose a CURRENT pointer to missing/partial files.
     sync_file(&sections_path)?;
     let tantivy_path = build_dir.join("tantivy");
     let bodies = section_bodies(&capture, &sections);
     build_tantivy_index(&tantivy_path, &sections, &bodies)?;
-    // Tantivy commit makes the index logically complete; walk the index tree to
-    // persist committed segment/meta files and best-effort directory entries.
     sync_directory_tree(&tantivy_path)?;
-    let projection_hashes = expected_projection_hashes(repo_root, &capture.registry, true)?;
+    // Cache-only: use empty projection hashes instead of computing actual ones.
+    let projection_hashes = BTreeMap::new();
     let state = generation_state(
         &capture,
         &sections,
@@ -162,8 +169,6 @@ pub fn build_index(repo_root: &Path, opts: IndexOptions) -> PulseResult<IndexBui
     let state_path = build_dir.join("state.json");
     fs::write(&state_path, state_bytes).map_err(|e| PulseError::io(&state_path, e))?;
     sync_file(&state_path)?;
-    // Persist the build directory's child names before atomically moving the
-    // whole generation into the generations namespace.
     sync_directory_best_effort(&build_dir)?;
 
     // Revalidate cheap inputs before publishing.
@@ -195,8 +200,6 @@ pub fn build_index(repo_root: &Path, opts: IndexOptions) -> PulseResult<IndexBui
             }
             fs::rename(&final_dir, &replace_dir).map_err(|e| PulseError::io(&replace_dir, e))?;
             fs::rename(&build_dir, &final_dir).map_err(|e| PulseError::io(&final_dir, e))?;
-            // Persist the visible generation name before cleanup; readers either
-            // see the old CURRENT generation or this complete replacement.
             sync_generations_parent(repo_root)?;
             fs::remove_dir_all(&replace_dir).map_err(|e| PulseError::io(&replace_dir, e))?;
             sync_generations_parent(repo_root)?;
@@ -208,7 +211,8 @@ pub fn build_index(repo_root: &Path, opts: IndexOptions) -> PulseResult<IndexBui
         }
     }
     publish_current(repo_root, &generation_id)?;
-    write_projections(repo_root, &capture.registry)?;
+    // IMPORTANT: Do NOT write tracked projections (docs/**/_index.md) here.
+    // Per P2S1-D9, `work packet` must not dirty the worktree.
     cleanup_generations(repo_root, true)?;
 
     Ok(report_from_state(
@@ -217,8 +221,44 @@ pub fn build_index(repo_root: &Path, opts: IndexOptions) -> PulseResult<IndexBui
         Some(&state),
         &capture,
         changed_docs,
-        projection_state_string(repo_root, &capture.registry)?,
+        ProjectionReport {
+            state: "cache_only".to_string(),
+            files: vec![],
+        },
     ))
+}
+
+pub fn build_index(repo_root: &Path, opts: IndexOptions) -> PulseResult<IndexBuildReport> {
+    if opts.check {
+        return check_index(repo_root);
+    }
+    // Build the cache first (captures changed docs correctly).
+    let cache_report = build_search_cache(repo_root, opts)?;
+
+    // Re-read the current cache generation for projection computation.
+    let _generation = current_generation(repo_root)?.ok_or_else(|| {
+        PulseError::validation(
+            "docs_index_missing",
+            "docs-search generation missing after cache build",
+        )
+    })?;
+
+    // Now write projections using the current registry.
+    let registry: DocsRegistry = crate::storage::read_json(&registry_path(repo_root))?;
+    write_projections(repo_root, &registry)?;
+
+    let projection = projection_state_string(repo_root, &registry)?;
+    Ok(IndexBuildReport {
+        schema_version: cache_report.schema_version,
+        code: cache_report.code,
+        registry: cache_report.registry,
+        index: cache_report.index,
+        documents: cache_report.documents,
+        sections: cache_report.sections,
+        chunks: cache_report.chunks,
+        projections: projection,
+        warnings: cache_report.warnings,
+    })
 }
 
 pub fn index_status(repo_root: &Path) -> PulseResult<IndexStatusReport> {
@@ -304,6 +344,17 @@ pub fn within_auto_refresh_limits(config: &RetrievalConfig, docs: usize, bytes: 
 
 pub fn current_generation(repo_root: &Path) -> PulseResult<Option<ValidatedGeneration>> {
     crate::docs::cache::open_reader_generation(repo_root)
+}
+
+/// Current cache generation content fingerprint, or None if the cache is
+/// absent or invalid. Uses the lightweight `classify` path instead of
+/// building a full generation object.
+pub fn current_cache_fingerprint(repo_root: &Path) -> PulseResult<Option<String>> {
+    let (state, valid) = crate::docs::cache::classify(repo_root)?;
+    if state != CacheState::Current {
+        return Ok(None);
+    }
+    Ok(valid.map(|v| v.state.fingerprint.clone()))
 }
 
 pub fn index_status_with_options(
@@ -603,6 +654,7 @@ fn generation_state(
     }
 }
 
+#[allow(dead_code)]
 fn expected_projection_hashes(
     repo_root: &Path,
     registry: &DocsRegistry,

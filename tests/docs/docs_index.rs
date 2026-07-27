@@ -254,3 +254,50 @@ fn status_reports_missing_then_current() {
     assert_eq!(index_status(repo).unwrap().index.state, "current");
     assert!(current_generation(repo).unwrap().is_some());
 }
+
+// ===================================================================
+// P2S1-I4: Cache-only search build does not write tracked projections
+// ===================================================================
+
+#[test]
+fn build_search_cache_never_writes_tracked_projections() {
+    // Per P2S1-D9: cache-only build must not write docs/**/_index.md
+    // because that would dirty a clean worktree.
+    let tmp = setup_repo();
+    let repo = tmp.path();
+
+    // Check that no _index.md exists before.
+    let root_index = repo.join("docs/_index.md");
+    let existed_before = root_index.exists();
+
+    let report = pulse::docs::build_search_cache(repo, IndexOptions::default()).unwrap();
+    assert_eq!(report.code, "indexed");
+    assert_eq!(report.index.state, "current");
+    assert_eq!(
+        report.projections.state, "cache_only",
+        "cache-only build must report cache_only projection state"
+    );
+    assert!(
+        report.projections.files.is_empty(),
+        "cache-only build must not list any projection files"
+    );
+
+    // Verify no tracked _index.md was created by the cache-only build.
+    let exists_after = root_index.exists();
+    assert_eq!(
+        existed_before, exists_after,
+        "cache-only build must not create or remove docs/_index.md"
+    );
+
+    // Verify the cache generation is queryable.
+    let gen = pulse::docs::current_generation(repo).unwrap();
+    assert!(gen.is_some());
+    assert!(gen.unwrap().tantivy_path.exists());
+
+    // Verify the full build_index still writes projections.
+    let _full = pulse::docs::build_index(repo, IndexOptions::default()).unwrap();
+    assert!(
+        root_index.exists(),
+        "full build_index must create docs/_index.md"
+    );
+}

@@ -289,7 +289,7 @@ pub struct PacketDecisionRef {
 // Shaping
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct PacketShaping {
     pub status: String,
@@ -308,7 +308,7 @@ pub struct PacketShaping {
     pub decision_frontier: PacketDecisionFrontier,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct PacketShapingWorkBinding {
     pub id: String,
