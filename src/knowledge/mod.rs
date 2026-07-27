@@ -5,7 +5,7 @@ pub mod relation;
 pub mod store;
 pub mod validate;
 
-pub use manifest::{bootstrap, load, KnowledgeBootstrapOutcome, KnowledgeManifest};
+pub use manifest::{bootstrap, load, load_existing, KnowledgeBootstrapOutcome, KnowledgeManifest};
 pub use model::*;
 pub use projection::*;
 pub use relation::*;

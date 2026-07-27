@@ -102,6 +102,27 @@ pub fn load(repo_root: &Path) -> Result<KnowledgeManifest> {
     Ok(manifest)
 }
 
+/// Load the knowledge manifest **without bootstrapping** any canonical plane.
+///
+/// Returns `Ok(None)` when the knowledge manifest file is absent, typed error
+/// when the file is present but malformed/unsupported, and
+/// `Ok(Some(manifest))` on success.
+pub fn load_existing(repo_root: &Path) -> Result<Option<KnowledgeManifest>> {
+    let manifest_path = repo_root.join(".pulse/knowledge/manifest.json");
+    if !manifest_path.exists() {
+        return Ok(None);
+    }
+    let evidence = evidence_manifest::load_existing(repo_root)?.ok_or_else(|| {
+        PulseError::validation(
+            "knowledge_manifest_evidence_missing",
+            "knowledge manifest exists but evidence manifest is missing",
+        )
+    })?;
+    let manifest: KnowledgeManifest = crate::storage::read_json(&manifest_path)?;
+    validate_manifest(repo_root, &manifest, &evidence.repository_id)?;
+    Ok(Some(manifest))
+}
+
 pub fn default_manifest(repository_id: String) -> Result<KnowledgeManifest> {
     Ok(KnowledgeManifest {
         schema_version: 1,

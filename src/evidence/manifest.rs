@@ -123,6 +123,25 @@ pub fn load(repo_root: &Path) -> Result<EvidenceManifest> {
     Ok(manifest)
 }
 
+/// Load the evidence manifest **without bootstrapping** any canonical plane.
+///
+/// Returns `Ok(None)` when the evidence manifest file is absent, typed error
+/// when the file is present but malformed/unsupported, and
+/// `Ok(Some(manifest))` on success.
+///
+/// This is the read-path loader used by packet source snapshot and repository
+/// identity checks so they never create the evidence manifest (or its
+/// associated directories/schemas) as a side effect of a query.
+pub fn load_existing(repo_root: &Path) -> Result<Option<EvidenceManifest>> {
+    let manifest_path = repo_root.join(".pulse/evidence/manifest.json");
+    if !manifest_path.exists() {
+        return Ok(None);
+    }
+    let manifest: EvidenceManifest = crate::storage::read_json(&manifest_path)?;
+    validate_manifest(repo_root, &manifest)?;
+    Ok(Some(manifest))
+}
+
 fn default_manifest(repo_root: &Path) -> Result<EvidenceManifest> {
     let mut receipt_schemas = BTreeMap::new();
     receipt_schemas.insert(
