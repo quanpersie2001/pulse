@@ -91,7 +91,7 @@ fn mutation_recovers_prior_after_canonical_intent_before_allocating_next_id() {
     let intent = TransactionIntent::prepared(
         event.id.clone(),
         event.event_type.clone(),
-        event.actor.clone(),
+        event.actor.legacy_id(),
         target.clone(),
         pulse::event::event_path(repo, &event),
         FileState::Absent,

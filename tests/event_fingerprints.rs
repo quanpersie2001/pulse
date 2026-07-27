@@ -1,5 +1,5 @@
 use chrono::{TimeZone, Utc};
-use pulse::event::EventEnvelope;
+use pulse::event::{EventActorKind, EventEnvelope};
 use pulse::graph::lifecycle::TransitionReason;
 use pulse::graph::node::NodeStatus;
 use pulse::graph::store::{
@@ -80,6 +80,13 @@ fn lifecycle_transition_event_records_graph_fingerprints_before_and_after() {
 
     let transitioned = events(dir.path(), "work.node.transitioned");
     assert_eq!(transitioned.len(), 1);
+    assert_eq!(transitioned[0].schema_version, 1);
+    assert_eq!(transitioned[0].actor.kind, EventActorKind::System);
+    assert_eq!(transitioned[0].actor.id, "test");
+    assert_eq!(transitioned[0].subject.kind, "ticket");
+    assert_eq!(transitioned[0].subject.id, ticket.id);
+    assert_eq!(transitioned[0].subject.revision, Some(ticket.revision + 1));
+    assert_eq!(transitioned[0].correlation, None);
     let payload = &transitioned[0].payload;
     assert_eq!(payload["graph_fingerprint_before"], before);
     assert_eq!(payload["graph_fingerprint_after"], after);
@@ -117,6 +124,11 @@ fn supersession_event_records_graph_fingerprints_before_and_after() {
 
     let superseded = events(dir.path(), "work.node.superseded");
     assert_eq!(superseded.len(), 1);
+    assert_eq!(superseded[0].actor.kind, EventActorKind::Human);
+    assert_eq!(superseded[0].actor.id, "test");
+    assert_eq!(superseded[0].subject.kind, "ticket");
+    assert_eq!(superseded[0].subject.id, old.id);
+    assert_eq!(superseded[0].subject.revision, Some(old.revision + 1));
     let payload = &superseded[0].payload;
     assert_eq!(payload["graph_fingerprint_before"], before);
     assert_eq!(payload["graph_fingerprint_after"], after);

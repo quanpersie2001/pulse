@@ -30,6 +30,7 @@
       "enum": [
         "supersession_reconciliation",
         "shaping_validation",
+        "decision_acceptance",
         "documentation_validation"
       ]
     },

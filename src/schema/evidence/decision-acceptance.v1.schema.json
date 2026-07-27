@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Pulse decision acceptance receipt payload v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "payload_version",
+    "decision",
+    "accepted_outcome",
+    "approver",
+    "source_posture"
+  ],
+  "properties": {
+    "payload_version": { "const": 1 },
+    "decision": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "revision_observed", "contract_revision", "content"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^DEC-[0-9]{3,}$" },
+        "revision_observed": { "type": "integer", "minimum": 1 },
+        "contract_revision": { "type": "integer", "minimum": 1 },
+        "content": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["path", "content_hash"],
+          "properties": {
+            "path": { "type": "string", "minLength": 1 },
+            "content_hash": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" }
+          }
+        }
+      }
+    },
+    "accepted_outcome": { "type": "string", "minLength": 1, "maxLength": 4096 },
+    "approver": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "id"],
+      "properties": {
+        "kind": { "enum": ["human", "agent", "system"] },
+        "id": { "type": "string", "minLength": 1, "maxLength": 128 }
+      }
+    },
+    "source_posture": { "enum": ["clean_git_commit", "not_required_content_bound"] }
+  }
+}

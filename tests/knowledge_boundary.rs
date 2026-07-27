@@ -5,9 +5,9 @@ use pulse::docs::model::{
     DocumentScope, RetrievalConfig, ReviewPolicy,
 };
 use pulse::evidence::model::{
-    ActorKind, ActorRef, ApprovalAssertion, BranchSummary, ReceiptBindings, ReceiptEnvelope,
-    ReceiptKind, ReceiptPayload, ReceiptResult, ShapingValidationPayload, SourceBinding,
-    SubjectRef, WorkBinding, WorkRevisionRef,
+    ActorKind, ActorRef, ReceiptBindings, ReceiptEnvelope, ReceiptKind, ReceiptPayload,
+    ReceiptResult, ShapeMode, ShapingApproval, ShapingValidationPayload, ShapingWorkBinding,
+    SourceBinding, SourcePosture, SubjectRef, WorkBinding,
 };
 use pulse::graph::store::OperationContext as WorkCtx;
 use pulse::id::WorkKind;
@@ -137,24 +137,39 @@ fn make_receipt(
                 commit: source_commit,
                 repository_id: manifest.repository_id.clone(),
             }),
-            content: vec![],
+            content: vec![pulse::evidence::model::ContentBinding {
+                path: format!("works/{}/ticket.md", node.id),
+                sha256: hash_bytes(format!("content {}", node.id).as_bytes()),
+            }],
             artifacts: vec![],
             graph_fingerprint_observed: None,
         },
         payload: ReceiptPayload::ShapingValidation(ShapingValidationPayload {
             payload_version: 1,
-            owning_work: WorkRevisionRef {
+            owning_work: ShapingWorkBinding {
                 id: node.id.clone(),
-                revision: node.revision,
+                revision_observed: node.revision,
+                contract_revision: node.contract_revision,
             },
-            risk: "R1".to_string(),
+            materialization: "R1".to_string(),
+            shape_mode: ShapeMode::FocusedBranches,
+            source_posture: SourcePosture::CleanGitCommit,
             destination: None,
-            branch_summary: BranchSummary::default(),
-            remaining_uncertainty: vec![],
-            approval_assertion: ApprovalAssertion {
-                required: false,
-                reference: None,
+            map: None,
+            affected_work: vec![],
+            branches: vec![],
+            fog: vec![],
+            out_of_scope: vec![],
+            resolution_pointers: vec![],
+            approval: ShapingApproval {
+                approved_by: ActorRef {
+                    kind: ActorKind::Human,
+                    id: "tester".to_string(),
+                },
+                reference: "PULSE.md#human-judgment-boundaries".to_string(),
             },
+            reconciliation: None,
+            remaining_uncertainty: vec![],
         }),
     }
 }
@@ -340,6 +355,12 @@ fn relation_endpoint_revision_and_hash_bindings_are_checked() {
         "knowledge_relation_endpoint_revision_mismatch"
     );
 
+    fs::create_dir_all(repo.path().join(format!("works/{work}"))).unwrap();
+    fs::write(
+        repo.path().join(format!("works/{work}/ticket.md")),
+        format!("content {work}"),
+    )
+    .unwrap();
     let source_commit = init_git(repo.path());
     let evidence_manifest = pulse::evidence::bootstrap(repo.path()).unwrap().manifest;
     let current_node = graph.show_node(&work).unwrap();

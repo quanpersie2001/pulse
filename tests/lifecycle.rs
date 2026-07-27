@@ -90,14 +90,21 @@ fn table_covers_every_from_to_expectation() {
 }
 
 #[test]
-fn l1_draft_to_shaped_is_gated() {
-    let err = validate_transition(
+fn l1_draft_to_shaped_has_installed_shaped_gate() {
+    use pulse::graph::lifecycle::{installed_gate, GateProfile};
+    // The shaped gate is now installed: the pure direction check no longer
+    // reports the gate as unavailable; the store evaluates the gate.
+    let exp = validate_transition(
         NodeStatus::Draft,
         NodeStatus::Shaped,
         Some(&reason("shape")),
     )
-    .unwrap_err();
-    assert_eq!(err.code(), "transition_gate_unavailable");
+    .unwrap();
+    assert_eq!(exp.policy, TransitionPolicy::Gated);
+    assert_eq!(
+        installed_gate(NodeStatus::Draft, NodeStatus::Shaped),
+        Some(GateProfile::Shaped)
+    );
 }
 
 #[test]
@@ -139,15 +146,32 @@ fn l3_illegal_transition_reports_code() {
 }
 
 #[test]
-fn l4_shaped_to_ready_is_gate_unavailable() {
-    let err = validate_transition(
+fn l4_shaped_to_ready_has_installed_ready_gate() {
+    use pulse::graph::lifecycle::{installed_gate, GateProfile};
+    let exp = validate_transition(
         NodeStatus::Shaped,
+        NodeStatus::Ready,
+        Some(&reason("ready")),
+    )
+    .unwrap();
+    assert_eq!(exp.policy, TransitionPolicy::Gated);
+    assert_eq!(
+        installed_gate(NodeStatus::Shaped, NodeStatus::Ready),
+        Some(GateProfile::Ready)
+    );
+}
+
+#[test]
+fn l4b_direct_blocked_to_ready_remains_gate_unavailable() {
+    // Per the accepted proposal, direct blocked -> ready is intentionally NOT
+    // opened: blocked resumes via blocked -> shaped -> ready.
+    let err = validate_transition(
+        NodeStatus::Blocked,
         NodeStatus::Ready,
         Some(&reason("ready")),
     )
     .unwrap_err();
     assert_eq!(err.code(), "transition_gate_unavailable");
-    assert!(err.to_string().contains("required_gate_families"));
 }
 
 #[test]

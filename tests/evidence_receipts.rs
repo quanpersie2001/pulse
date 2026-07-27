@@ -54,7 +54,11 @@ fn event_count(repo: &std::path::Path, event_type: &str, subject: &str) -> usize
             let value: serde_json::Value =
                 serde_json::from_slice(&fs::read(entry.unwrap().path()).unwrap()).unwrap();
             if value.get("event_type").and_then(|value| value.as_str()) == Some(event_type)
-                && value.get("subject").and_then(|value| value.as_str()) == Some(subject)
+                && value
+                    .get("subject")
+                    .and_then(|value| value.get("id"))
+                    .and_then(|value| value.as_str())
+                    == Some(subject)
             {
                 count += 1;
             }
@@ -105,18 +109,30 @@ fn make_shaping_receipt(
         },
         payload: ReceiptPayload::ShapingValidation(ShapingValidationPayload {
             payload_version: 1,
-            owning_work: WorkRevisionRef {
+            owning_work: ShapingWorkBinding {
                 id: node.id.clone(),
-                revision: node.revision,
+                revision_observed: node.revision,
+                contract_revision: node.contract_revision,
             },
-            risk: "R1".to_string(),
+            materialization: "R1".to_string(),
+            shape_mode: ShapeMode::FocusedBranches,
+            source_posture: SourcePosture::CleanGitCommit,
             destination: None,
-            branch_summary: BranchSummary::default(),
-            remaining_uncertainty: vec![],
-            approval_assertion: ApprovalAssertion {
-                required: false,
-                reference: None,
+            map: None,
+            affected_work: vec![],
+            branches: vec![],
+            fog: vec![],
+            out_of_scope: vec![],
+            resolution_pointers: vec![],
+            approval: ShapingApproval {
+                approved_by: ActorRef {
+                    kind: ActorKind::Human,
+                    id: "tester".to_string(),
+                },
+                reference: "PULSE.md#human-judgment-boundaries".to_string(),
             },
+            reconciliation: None,
+            remaining_uncertainty: vec![],
         }),
     }
 }
@@ -369,7 +385,7 @@ fn same_receipt_id_different_bytes_conflicts_and_concurrent_same_id_is_determini
     write_json(&file, &receipt);
     pulse::evidence::record_receipt(repo, None, &file).unwrap();
     if let ReceiptPayload::ShapingValidation(payload) = &mut receipt.payload {
-        payload.risk = "R2".to_string();
+        payload.materialization = "R2".to_string();
     }
     write_json(&file, &receipt);
     let err = pulse::evidence::record_receipt(repo, None, &file).unwrap_err();

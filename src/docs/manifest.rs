@@ -92,6 +92,30 @@ pub(crate) fn load_unlocked(repo_root: &Path) -> Result<DocsRegistryEnvelope> {
     load_existing_registry(repo_root, &evidence.repository_id)
 }
 
+/// Load the docs registry **without bootstrapping** any canonical plane.
+///
+/// Returns `Ok(None)` when the docs registry file is absent. This is the
+/// read-path loader used by read-only readiness/frontier projections so they
+/// never create the docs registry (or, transitively, the evidence manifest) as
+/// a side effect of a query.
+///
+/// When the registry file *is* present, the evidence manifest is guaranteed to
+/// exist (docs bootstrap always materializes the evidence manifest first), so
+/// `evidence_manifest::load` will not bootstrap here either. The caller is
+/// expected to have recovered pending transactions.
+pub(crate) fn load_unlocked_preserve(repo_root: &Path) -> Result<Option<DocsRegistryEnvelope>> {
+    let registry_path = repo_root.join(".pulse/docs/registry.json");
+    if !registry_path.exists() {
+        return Ok(None);
+    }
+    let evidence = evidence_manifest::load(repo_root)?;
+    recover_prepared_transactions(repo_root)?;
+    Ok(Some(load_existing_registry(
+        repo_root,
+        &evidence.repository_id,
+    )?))
+}
+
 pub(crate) fn load_existing_registry(
     repo_root: &Path,
     repository_id: &str,

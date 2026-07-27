@@ -21,6 +21,44 @@ pub enum TransitionPolicy {
     Illegal,
 }
 
+/// Typed gate profiles installed by the readiness/shaping subsystem.
+///
+/// A direction may be a valid `Gated` direction in the lifecycle table but only
+/// a subset of those gates are actually implemented. [`installed_gate`] reports
+/// which gate profile (if any) is available for a given direction so the store
+/// can evaluate it instead of merely reporting `transition_gate_unavailable`.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum GateProfile {
+    /// `draft -> shaped` shaping gate (`phase1_shaped_v1`).
+    Shaped,
+    /// `shaped -> ready` full readiness gate (`phase1_contract_readiness_v1`).
+    Ready,
+}
+
+impl GateProfile {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            GateProfile::Shaped => "phase1_shaped_v1",
+            GateProfile::Ready => "phase1_contract_readiness_v1",
+        }
+    }
+}
+
+/// Gate profiles installed for a transition direction.
+///
+/// Blocked resume is intentionally `blocked -> shaped -> ready` (proposal
+/// blocked-resume design): `blocked -> shaped` is a reason-based supported
+/// resume, and a direct `blocked -> ready` is *not* opened because structural
+/// executability classifies explicit `blocked` as paused.
+pub fn installed_gate(from: NodeStatus, to: NodeStatus) -> Option<GateProfile> {
+    match (from, to) {
+        (NodeStatus::Draft, NodeStatus::Shaped) => Some(GateProfile::Shaped),
+        (NodeStatus::Shaped, NodeStatus::Ready) => Some(GateProfile::Ready),
+        _ => None,
+    }
+}
+
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct TransitionExpectation {
     pub from: NodeStatus,
@@ -99,13 +137,18 @@ pub fn validate_transition(
     match exp.policy {
         TransitionPolicy::Supported => {}
         TransitionPolicy::Gated => {
-            return Err(PulseError::validation(
-                "transition_gate_unavailable",
-                format!(
-                    "transition direction {from:?} -> {to:?} is valid but required gate capabilities are not installed; required_gate_families={:?}",
-                    exp.required_gate_families
-                ),
-            ));
+            // An installed gate profile is evaluated by the store under the
+            // repository fence; the pure lifecycle check must allow it to
+            // proceed rather than report the gate as unavailable.
+            if installed_gate(from, to).is_none() {
+                return Err(PulseError::validation(
+                    "transition_gate_unavailable",
+                    format!(
+                        "transition direction {from:?} -> {to:?} is valid but required gate capabilities are not installed; required_gate_families={:?}",
+                        exp.required_gate_families
+                    ),
+                ));
+            }
         }
         TransitionPolicy::SupersessionOnly | TransitionPolicy::Illegal => {
             return Err(PulseError::validation(

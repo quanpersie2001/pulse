@@ -119,8 +119,11 @@ fn required_impact_updates_ticket_revision_and_event_but_not_status() {
         .iter()
         .find(|event| event.event_type == "work.documentation_impact.updated")
         .unwrap_or_else(|| panic!("documentation impact event missing"));
-    assert_eq!(event.actor, "human:docs");
-    assert_eq!(event.subject, ticket.id);
+    assert_eq!(event.actor.kind, pulse::event::EventActorKind::Human);
+    assert_eq!(event.actor.id, "docs");
+    assert_eq!(event.subject.kind, "ticket");
+    assert_eq!(event.subject.id, ticket.id);
+    assert_eq!(event.subject.revision, Some(ticket.revision + 1));
     assert_eq!(event.payload["expected_revision"], ticket.revision);
     assert_eq!(event.payload["new_revision"], ticket.revision + 1);
 }

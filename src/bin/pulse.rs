@@ -5,17 +5,22 @@ use pulse::docs::model::{
     DocumentAuthority, DocumentKind, DocumentLifecycle, DocumentPatch, DocumentRecord,
 };
 use pulse::evidence::model::{ReceiptKind, ReceiptResult};
-use pulse::graph::contract::{Materialization, PublicCreateClassification, Risk, TicketRole};
+use pulse::graph::contract::{
+    Materialization, PublicCreateClassification, QaImpactPosture, Risk, TicketRole,
+};
 use pulse::graph::edge::EdgeType;
 use pulse::graph::lifecycle::TransitionReason;
 use pulse::graph::node::{DocumentationImpactPosture, NodeStatus};
-use pulse::graph::store::{DocumentationImpactUpdate, SupersessionTarget};
+use pulse::graph::store::{
+    ContractSetRequest, DocumentationImpactUpdate, QaImpactUpdate, SupersessionTarget,
+};
 use pulse::id::WorkKind;
 use pulse::knowledge::model::{LearningDraft, LearningKind, LearningPatch, LearningStatus};
 use pulse::knowledge::relation::{EndpointKind, RelationType};
 use pulse::knowledge::store::{
     KnowledgeStore, OperationContext as KnowledgeOperationContext, RelationAdd,
 };
+use pulse::policy;
 #[cfg(debug_assertions)]
 use pulse::storage::transaction::TransactionFailpoint;
 use pulse::{JsonGraphStore, PulseError};
@@ -390,6 +395,8 @@ enum WorkCommand {
         #[arg(long)]
         reference: Option<String>,
         #[arg(long)]
+        expected_readiness_fingerprint: Option<String>,
+        #[arg(long)]
         json: bool,
     },
     Executability {
@@ -397,8 +404,154 @@ enum WorkCommand {
         #[arg(long)]
         json: bool,
     },
+    Ready {
+        id: String,
+        #[arg(long)]
+        profile: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
     Rollup {
         id: String,
+        #[arg(long)]
+        json: bool,
+    },
+    Frontier {
+        #[arg(long, value_enum)]
+        kind: FrontierKindArg,
+        #[arg(long)]
+        for_: Option<String>,
+        #[arg(long)]
+        profile: Option<String>,
+        #[arg(long)]
+        include_excluded: bool,
+        #[arg(long)]
+        json: bool,
+    },
+    ReadinessPolicy {
+        #[command(subcommand)]
+        command: ReadinessPolicyCommand,
+    },
+    Contract {
+        #[command(subcommand)]
+        command: ContractCommand,
+    },
+    QaImpact {
+        #[command(subcommand)]
+        command: QaImpactCommand,
+    },
+    Shaping {
+        #[command(subcommand)]
+        command: ShapingCommand,
+    },
+}
+
+#[derive(Subcommand)]
+enum ContractCommand {
+    Set {
+        ticket_id: String,
+        #[arg(long)]
+        file: PathBuf,
+        #[arg(long)]
+        expected_revision: u64,
+        #[arg(long)]
+        actor: String,
+        #[arg(long)]
+        json: bool,
+    },
+    Show {
+        ticket_id: String,
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+#[derive(Subcommand)]
+enum QaImpactCommand {
+    Set {
+        ticket_id: String,
+        #[arg(long)]
+        posture: QaImpactPostureArg,
+        #[arg(long)]
+        rationale: Option<String>,
+        #[arg(long)]
+        behavioral_owner: Option<String>,
+        #[arg(long = "case")]
+        cases: Vec<String>,
+        #[arg(long)]
+        expected_revision: u64,
+        #[arg(long)]
+        actor: String,
+        #[arg(long)]
+        json: bool,
+    },
+    Show {
+        ticket_id: String,
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+#[derive(Subcommand)]
+enum ShapingCommand {
+    Apply {
+        owner_id: String,
+        #[arg(long)]
+        receipt: String,
+        #[arg(long)]
+        expected_revision: u64,
+        #[arg(long)]
+        expected_current_receipt: Option<String>,
+        #[arg(long)]
+        actor: String,
+        #[arg(long)]
+        json: bool,
+    },
+    Show {
+        owner_id: String,
+        #[arg(long)]
+        json: bool,
+    },
+    Invalidate {
+        owner_id: String,
+        #[arg(long)]
+        expected_revision: u64,
+        #[arg(long)]
+        reason: String,
+        #[arg(long)]
+        actor: String,
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+#[derive(Clone, ValueEnum)]
+#[value(rename_all = "snake_case")]
+enum QaImpactPostureArg {
+    Unknown,
+    Required,
+    CoveredByStoryClose,
+    None,
+}
+
+impl From<QaImpactPostureArg> for QaImpactPosture {
+    fn from(value: QaImpactPostureArg) -> Self {
+        match value {
+            QaImpactPostureArg::Unknown => QaImpactPosture::Unknown,
+            QaImpactPostureArg::Required => QaImpactPosture::Required,
+            QaImpactPostureArg::CoveredByStoryClose => QaImpactPosture::CoveredByStoryClose,
+            QaImpactPostureArg::None => QaImpactPosture::None,
+        }
+    }
+}
+
+#[derive(Subcommand)]
+enum ReadinessPolicyCommand {
+    Show {
+        #[arg(long)]
+        json: bool,
+    },
+    Validate {
         #[arg(long)]
         json: bool,
     },
@@ -650,6 +803,22 @@ enum TicketRoleArg {
 
 #[derive(Clone, Copy, ValueEnum)]
 #[value(rename_all = "snake_case")]
+enum FrontierKindArg {
+    Decision,
+    Execution,
+}
+
+impl From<FrontierKindArg> for pulse::graph::frontier::FrontierKind {
+    fn from(value: FrontierKindArg) -> Self {
+        match value {
+            FrontierKindArg::Decision => pulse::graph::frontier::FrontierKind::Decision,
+            FrontierKindArg::Execution => pulse::graph::frontier::FrontierKind::Execution,
+        }
+    }
+}
+
+#[derive(Clone, Copy, ValueEnum)]
+#[value(rename_all = "snake_case")]
 enum RiskArg {
     Unassessed,
     Low,
@@ -891,6 +1060,7 @@ impl From<KnowledgeEndpointKindArg> for EndpointKind {
 enum ReceiptKindArg {
     SupersessionReconciliation,
     ShapingValidation,
+    DecisionAcceptance,
     DocumentationValidation,
 }
 
@@ -899,6 +1069,7 @@ impl From<ReceiptKindArg> for ReceiptKind {
         match value {
             ReceiptKindArg::SupersessionReconciliation => ReceiptKind::SupersessionReconciliation,
             ReceiptKindArg::ShapingValidation => ReceiptKind::ShapingValidation,
+            ReceiptKindArg::DecisionAcceptance => ReceiptKind::DecisionAcceptance,
             ReceiptKindArg::DocumentationValidation => ReceiptKind::DocumentationValidation,
         }
     }
@@ -1038,6 +1209,7 @@ fn run(store: JsonGraphStore, command: Command) -> Result<(), PulseError> {
                 reason_code,
                 reason,
                 reference,
+                expected_readiness_fingerprint,
                 json,
             } => {
                 let transition_reason = match (reason_code, reason, reference) {
@@ -1054,12 +1226,16 @@ fn run(store: JsonGraphStore, command: Command) -> Result<(), PulseError> {
                         ));
                     }
                 };
-                let out = store.transition_node(
+                let out = store.transition_node_gated_with_context(
                     &id,
                     to.into(),
                     expected_revision,
                     transition_reason,
-                    actor,
+                    expected_readiness_fingerprint.as_deref(),
+                    pulse::graph::store::OperationContext {
+                        actor: actor.clone(),
+                        now: chrono::Utc::now(),
+                    },
                 )?;
                 render(json, &out, format!("transitioned {}", out.value.id))
             }
@@ -1071,10 +1247,189 @@ fn run(store: JsonGraphStore, command: Command) -> Result<(), PulseError> {
                     format!("{:?} {}", out.structural_state, out.subject),
                 )
             }
+            WorkCommand::Ready { id, profile, json } => {
+                if profile.is_some()
+                    && profile.as_deref() != Some(pulse::graph::readiness::READINESS_PROFILE)
+                {
+                    return Err(PulseError::validation(
+                        "readiness_profile_unsupported",
+                        format!(
+                            "unsupported readiness profile; only {} is available in this release",
+                            pulse::graph::readiness::READINESS_PROFILE
+                        ),
+                    ));
+                }
+                let out = store.readiness(&id)?;
+                let human = format!(
+                    "{} {} ({} families passing)",
+                    out.subject.id,
+                    out.status_as_word(),
+                    out.gate_families
+                        .iter()
+                        .filter(|family| {
+                            matches!(
+                                family.status,
+                                pulse::graph::readiness::GateStatus::Passed
+                                    | pulse::graph::readiness::GateStatus::NotApplicable
+                            )
+                        })
+                        .count()
+                );
+                render(json, &out, human)?;
+                if out.status == pulse::graph::readiness::ReadinessStatus::Ready {
+                    Ok(())
+                } else {
+                    Err(PulseError::validation(
+                        "readiness_not_ready",
+                        format!(
+                            "work {} is {} under {}",
+                            out.subject.id,
+                            out.status_as_word(),
+                            out.profile
+                        ),
+                    ))
+                }
+            }
             WorkCommand::Rollup { id, json } => {
                 let out = store.rollup(&id)?;
                 render(json, &out, format!("rollup {}", out.subject))
             }
+            WorkCommand::Frontier {
+                kind,
+                for_,
+                profile,
+                include_excluded,
+                json,
+            } => {
+                let out = store.frontier(
+                    kind.into(),
+                    for_.as_deref(),
+                    profile.as_deref(),
+                    include_excluded,
+                )?;
+                match out {
+                    pulse::graph::frontier::FrontierReport::Decision(report) => {
+                        let human = format!(
+                            "decision frontier: {} item(s){}",
+                            report.items.len(),
+                            report
+                                .for_
+                                .as_ref()
+                                .map(|owner| format!(" for {owner}"))
+                                .unwrap_or_default()
+                        );
+                        render(json, &report, human)
+                    }
+                    pulse::graph::frontier::FrontierReport::Execution(report) => {
+                        let human = format!(
+                            "execution frontier: {} item(s){}",
+                            report.items.len(),
+                            report
+                                .for_
+                                .as_ref()
+                                .map(|owner| format!(" for {owner}"))
+                                .unwrap_or_default()
+                        );
+                        render(json, &report, human)
+                    }
+                }
+            }
+            WorkCommand::ReadinessPolicy { command } => match command {
+                ReadinessPolicyCommand::Show { json } => {
+                    let out = policy::load_authority_policy(store.repo_root())?;
+                    render(json, &out, readiness_policy_human(&out))
+                }
+                ReadinessPolicyCommand::Validate { json } => {
+                    let out = policy::validate_authority_policy_file(store.repo_root())?;
+                    if out.valid {
+                        render(json, &out, "readiness policy valid".to_string())
+                    } else {
+                        Err(PulseError::validation(
+                            "readiness_policy_invalid",
+                            serde_json::to_string(&out.reason_codes)?,
+                        ))
+                    }
+                }
+            },
+            WorkCommand::Contract { command } => match command {
+                ContractCommand::Set {
+                    ticket_id,
+                    file,
+                    expected_revision,
+                    actor,
+                    json,
+                } => {
+                    let bytes = std::fs::read(&file)
+                        .map_err(|error| PulseError::io(file.clone(), error))?;
+                    let request: ContractSetRequest = serde_json::from_slice(&bytes)
+                        .map_err(|error| PulseError::json(file.clone(), error))?;
+                    let out = store.set_contract(&ticket_id, expected_revision, request, actor)?;
+                    render(json, &out, format!("updated {}", out.value.id))
+                }
+                ContractCommand::Show { ticket_id, json } => {
+                    let out = store.show_contract(&ticket_id)?;
+                    render(json, &out, format!("contract {}", ticket_id))
+                }
+            },
+            WorkCommand::QaImpact { command } => match command {
+                QaImpactCommand::Set {
+                    ticket_id,
+                    posture,
+                    rationale,
+                    behavioral_owner,
+                    cases,
+                    expected_revision,
+                    actor,
+                    json,
+                } => {
+                    let update = QaImpactUpdate {
+                        posture: posture.into(),
+                        rationale,
+                        behavioral_owner,
+                        affected_case_ids: cases,
+                    };
+                    let out = store.set_qa_impact(&ticket_id, expected_revision, update, actor)?;
+                    render(json, &out, format!("updated {}", out.value.id))
+                }
+                QaImpactCommand::Show { ticket_id, json } => {
+                    let out = store.show_qa_impact(&ticket_id)?;
+                    render(json, &out, format!("qa-impact {}", ticket_id))
+                }
+            },
+            WorkCommand::Shaping { command } => match command {
+                ShapingCommand::Apply {
+                    owner_id,
+                    receipt,
+                    expected_revision,
+                    expected_current_receipt,
+                    actor,
+                    json,
+                } => {
+                    let out = store.apply_shaping(
+                        &owner_id,
+                        expected_revision,
+                        &receipt,
+                        expected_current_receipt.as_deref(),
+                        actor,
+                    )?;
+                    render(json, &out, format!("{} {}", out.code, owner_id))
+                }
+                ShapingCommand::Show { owner_id, json } => {
+                    let out = store.show_shaping(&owner_id)?;
+                    render(json, &out, format!("shaping {}", owner_id))
+                }
+                ShapingCommand::Invalidate {
+                    owner_id,
+                    expected_revision,
+                    reason,
+                    actor,
+                    json,
+                } => {
+                    let out =
+                        store.invalidate_shaping(&owner_id, expected_revision, reason, actor)?;
+                    render(json, &out, format!("{} {}", out.code, owner_id))
+                }
+            },
         },
         Command::Knowledge { command } => {
             let knowledge = {
@@ -1669,6 +2024,23 @@ fn run(store: JsonGraphStore, command: Command) -> Result<(), PulseError> {
                 render(json, &out, format!("affected-by {}", out.subject))
             }
         },
+    }
+}
+
+fn readiness_policy_human(report: &policy::AuthorityPolicyReport) -> String {
+    if !report.available {
+        return "readiness policy unavailable (default deny)".to_string();
+    }
+    if report.valid {
+        format!(
+            "readiness policy valid revision {}",
+            report.policy_revision.unwrap_or_default()
+        )
+    } else {
+        format!(
+            "readiness policy invalid: {}",
+            report.reason_codes.join(",")
+        )
     }
 }
 

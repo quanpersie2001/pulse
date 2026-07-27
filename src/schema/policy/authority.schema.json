@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Pulse authority policy v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "revision", "principals"],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "revision": { "type": "integer", "minimum": 1 },
+    "principals": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["kind", "id", "grants"],
+        "properties": {
+          "kind": { "enum": ["human", "agent", "system"] },
+          "id": { "type": "string", "minLength": 1, "maxLength": 128 },
+          "grants": {
+            "type": "array",
+            "items": { "type": "string", "pattern": "^[a-z0-9_-]+(\\.[a-z0-9_-]+)+$" },
+            "uniqueItems": true
+          }
+        }
+      }
+    }
+  }
+}

@@ -6,6 +6,7 @@ pub mod evidence;
 pub mod graph;
 pub mod id;
 pub mod knowledge;
+pub mod policy;
 pub mod source;
 pub mod storage;
 

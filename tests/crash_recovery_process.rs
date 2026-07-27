@@ -97,7 +97,11 @@ fn event_count_by_type_and_subject(repo: &TempDir, event_type: &str, subject: &s
             let value: Value =
                 serde_json::from_slice(&fs::read(entry.unwrap().path()).unwrap()).unwrap();
             if value.get("event_type").and_then(Value::as_str) == Some(event_type)
-                && value.get("subject").and_then(Value::as_str) == Some(subject)
+                && value
+                    .get("subject")
+                    .and_then(|value| value.get("id"))
+                    .and_then(Value::as_str)
+                    == Some(subject)
             {
                 count += 1;
             }
@@ -388,12 +392,20 @@ fn killed_receipt_record_after_file_recovers_event_once() {
         },
         "payload": {
             "payload_version": 1,
-            "owning_work": {"id": id, "revision": 1},
-            "risk": "R1",
+            "owning_work": {"id": id, "revision_observed": 1, "contract_revision": 1},
+            "materialization": "R1",
+            "shape_mode": "focused_branches",
+            "source_posture": "clean_git_commit",
             "destination": null,
-            "branch_summary": {"resolved": [], "rejected": [], "delegated": [], "deferred": [], "blocking": []},
-            "remaining_uncertainty": [],
-            "approval_assertion": {"required": false, "reference": null}
+            "map": null,
+            "affected_work": [],
+            "branches": [],
+            "fog": [],
+            "out_of_scope": [],
+            "resolution_pointers": [],
+            "approval": {"approved_by": {"kind": "human", "id": "tester"}, "reference": "PULSE.md#human-judgment-boundaries"},
+            "reconciliation": null,
+            "remaining_uncertainty": []
         }
     });
     let receipt_file = repo.path().join("receipt.json");

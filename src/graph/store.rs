@@ -9,17 +9,28 @@ use serde_json::json;
 use crate::canonical_json::{hash_bytes, to_canonical_bytes};
 use crate::event::{event_path, EventEnvelope};
 use crate::graph::contract::{
-    validate_public_create_classification, ContractValidationMode, PublicCreateClassification,
+    validate_node_contract_result, validate_public_create_classification, ContractValidationMode,
+    DecisionWorkContract, ImplementationContract, PublicCreateClassification, QaImpactPosture,
+    QaMetadata, ReceiptRef, ShapingMapRef, ShapingPointer, TicketRole,
 };
 use crate::graph::edge::{canonical_endpoints, deterministic_edge_id, Edge, EdgeType};
 use crate::graph::executability::{structural_executability, StructuralExecutabilityReport};
-use crate::graph::lifecycle::{status_requires_reason, validate_transition, TransitionReason};
+use crate::graph::frontier::{
+    self, branch_context_from_shaping, DecisionBranchContext, FrontierKind, FrontierReport,
+};
+use crate::graph::lifecycle::{
+    installed_gate, status_requires_reason, validate_transition, GateProfile, TransitionReason,
+};
 use crate::graph::manifest::{Manifest, EDGE_SCHEMA, NODE_SCHEMA};
 use crate::graph::node::{
     DocumentationImpact, DocumentationImpactPosture, DocumentationMetadata, DocumentationRouting,
     Node, NodeStatus, StatusReason,
 };
 use crate::graph::projection::{export_with_cache, graph_fingerprint, GraphProjection};
+use crate::graph::readiness::{
+    self, ContentHashBinding, DecisionProofSnapshot, EvalProfile, ReadinessInputs, ReadinessReport,
+    ShapingReceiptSnapshot,
+};
 use crate::graph::rollup::{rollup, RollupReport};
 use crate::graph::traversal::{affected_by, neighborhood, AffectedByReport, NeighborhoodReport};
 use crate::graph::validate::{
@@ -68,6 +79,77 @@ pub struct DocumentationImpactUpdate {
     pub paths: Vec<String>,
     pub domains: Vec<String>,
     pub labels: Vec<String>,
+}
+
+/// Typed whole-replacement request for `work contract set`.
+///
+/// The contract setter is a safe typed replacement rather than an arbitrary
+/// JSON Patch: exactly one role-specific contract may be supplied and it must
+/// match the Ticket's declared role. Contract mutation bumps both the normal
+/// CAS `revision` and the semantic `contract_revision`.
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ContractSetRequest {
+    pub role: TicketRole,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub implementation: Option<ImplementationContract>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub decision_work: Option<DecisionWorkContract>,
+}
+
+/// Minimal readiness-only QA impact update for `work qa-impact set`.
+///
+/// QA impact is a semantic contract input: mutation bumps both `revision` and
+/// `contract_revision`. The `none` and `covered_by_story_close` postures are
+/// authority-gated; baseline/case resolution remains a future Phase 3 family.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct QaImpactUpdate {
+    pub posture: QaImpactPosture,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rationale: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub behavioral_owner: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub affected_case_ids: Vec<String>,
+}
+
+/// Read-only view returned by `work shaping show`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ShapingView {
+    pub schema_version: u32,
+    pub code: String,
+    pub owner_id: String,
+    pub revision: u64,
+    pub contract_revision: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub shaping: Option<ShapingPointer>,
+}
+
+/// Read-only view returned by `work contract show`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ContractView {
+    pub schema_version: u32,
+    pub code: String,
+    pub ticket_id: String,
+    pub revision: u64,
+    pub contract_revision: u64,
+    pub role: Option<TicketRole>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub implementation: Option<ImplementationContract>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub decision_work: Option<DecisionWorkContract>,
+}
+
+/// Read-only view returned by `work qa-impact show`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct QaImpactView {
+    pub schema_version: u32,
+    pub code: String,
+    pub ticket_id: String,
+    pub revision: u64,
+    pub contract_revision: u64,
+    pub qa: Option<QaMetadata>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -557,12 +639,1141 @@ impl JsonGraphStore {
         )
     }
 
+    /// Typed whole-replacement of a Ticket's role-specific contract.
+    ///
+    /// Contract mutation bumps both the normal CAS `revision` and the semantic
+    /// `contract_revision`, because shaping/readiness review treats the contract
+    /// as a freshness boundary. The supplied role must match the Ticket's
+    /// declared role and exactly one role-specific contract must be present.
+    pub fn set_contract_with_context(
+        &self,
+        ticket_id: &str,
+        expected_revision: u64,
+        request: ContractSetRequest,
+        ctx: OperationContext,
+    ) -> PulseResult<MutationOutcome<Node>> {
+        let role_contract_present = match request.role {
+            TicketRole::Implementation => request.implementation.is_some(),
+            TicketRole::DecisionWork => request.decision_work.is_some(),
+        };
+        if !role_contract_present {
+            return Err(PulseError::validation(
+                "implementation_contract_missing",
+                "contract set request must supply the contract matching the declared role",
+            ));
+        }
+        if request.role == TicketRole::Implementation && request.decision_work.is_some() {
+            return Err(PulseError::validation(
+                "work_role_invalid",
+                "implementation role must not carry a decision_work contract",
+            ));
+        }
+        if request.role == TicketRole::DecisionWork && request.implementation.is_some() {
+            return Err(PulseError::validation(
+                "work_role_invalid",
+                "decision_work role must not carry an implementation contract",
+            ));
+        }
+
+        let _guard = WriteGuard::acquire(&self.repo_root)?;
+        self.bootstrap_unlocked()?;
+        recover_prepared_transactions(&self.repo_root)?;
+        let path = self.node_path(ticket_id);
+        if !path.exists() {
+            return Err(PulseError::NotFound {
+                subject: ticket_id.to_string(),
+            });
+        }
+        let before_bytes = fs::read(&path).map_err(|error| PulseError::io(&path, error))?;
+        let mut node: Node = serde_json::from_slice(&before_bytes)
+            .map_err(|error| PulseError::json(&path, error))?;
+        if node.kind != WorkKind::Ticket {
+            return Err(PulseError::validation(
+                "work_role_invalid",
+                format!("contract can only be set on tickets: {ticket_id}"),
+            ));
+        }
+        if node.revision != expected_revision {
+            return Err(PulseError::CasConflict {
+                subject: ticket_id.to_string(),
+                expected_revision,
+                current_revision: node.revision,
+            });
+        }
+        if node.role != Some(request.role) {
+            return Err(PulseError::validation(
+                "work_role_invalid",
+                format!(
+                    "contract role {:?} does not match ticket role {:?}",
+                    request.role, node.role
+                ),
+            ));
+        }
+
+        let previous_implementation = node.implementation.clone();
+        let previous_decision_work = node.decision_work.clone();
+        node.normalize_contract_fields();
+        match request.role {
+            TicketRole::Implementation => {
+                node.implementation = request.implementation;
+                node.decision_work = None;
+            }
+            TicketRole::DecisionWork => {
+                node.decision_work = request.decision_work;
+                node.implementation = None;
+            }
+        }
+        node.normalize_contract_fields();
+        node.contract_revision += 1;
+        node.revision += 1;
+        node.updated_at = ctx.now;
+
+        validate_node_contract_result(&node, ContractValidationMode::CanonicalStorage)?;
+        let node_values = self
+            .load_nodes_with_override(node.clone())?
+            .into_values()
+            .collect::<Vec<_>>();
+        let edge_values = self
+            .load_edges()?
+            .iter()
+            .map(|(_, e)| e.clone())
+            .collect::<Vec<_>>();
+        validate_graph(
+            &self.repo_root,
+            &self.manifest()?,
+            &node_values,
+            &edge_values,
+        )
+        .into_result()?;
+        let after_bytes = to_canonical_bytes(&node)?;
+        self.commit_mutation(
+            "work.contract.updated",
+            ctx.actor,
+            ticket_id,
+            json!({
+                "ticket_id": ticket_id,
+                "expected_revision": expected_revision,
+                "new_revision": node.revision,
+                "previous_contract_revision": node.contract_revision.saturating_sub(1),
+                "new_contract_revision": node.contract_revision,
+                "role": request.role,
+                "previous_implementation": previous_implementation,
+                "previous_decision_work": previous_decision_work,
+                "implementation": node.implementation,
+                "decision_work": node.decision_work,
+                "gate_coverage": ["ticket_kind", "node_revision_cas", "role_match", "contract_validation", "graph_integrity"]
+            }),
+            &path,
+            FileState::Present {
+                hash: hash_bytes(&before_bytes),
+                revision: expected_revision,
+            },
+            FileState::Present {
+                hash: hash_bytes(&after_bytes),
+                revision: expected_revision + 1,
+            },
+            &after_bytes,
+            ctx.now,
+        )?;
+        Ok(MutationOutcome {
+            schema_version: 1,
+            code: "updated".to_string(),
+            status: MutationStatus::Updated,
+            value: node,
+        })
+    }
+
+    pub fn set_contract(
+        &self,
+        ticket_id: &str,
+        expected_revision: u64,
+        request: ContractSetRequest,
+        actor: String,
+    ) -> PulseResult<MutationOutcome<Node>> {
+        self.set_contract_with_context(
+            ticket_id,
+            expected_revision,
+            request,
+            OperationContext {
+                actor,
+                now: Utc::now(),
+            },
+        )
+    }
+
+    /// Minimal readiness-only QA impact posture mutation.
+    ///
+    /// QA impact is a semantic contract input: mutation bumps both `revision`
+    /// and `contract_revision`. The `none` and `covered_by_story_close`
+    /// postures are authority-gated against the local default-deny policy.
+    pub fn set_qa_impact_with_context(
+        &self,
+        ticket_id: &str,
+        expected_revision: u64,
+        update: QaImpactUpdate,
+        ctx: OperationContext,
+    ) -> PulseResult<MutationOutcome<Node>> {
+        let qa = QaMetadata {
+            impact: crate::graph::contract::QaImpact {
+                posture: update.posture,
+                rationale: update.rationale,
+                behavioral_owner: update.behavioral_owner,
+                affected_case_ids: update.affected_case_ids,
+            },
+        };
+
+        let required_grants: Vec<&str> = match update.posture {
+            QaImpactPosture::None => vec!["qa.none.approve"],
+            QaImpactPosture::CoveredByStoryClose => vec!["qa.defer_to_story_close"],
+            QaImpactPosture::Unknown | QaImpactPosture::Required => vec![],
+        };
+
+        let _guard = WriteGuard::acquire(&self.repo_root)?;
+        self.bootstrap_unlocked()?;
+        recover_prepared_transactions(&self.repo_root)?;
+        // Authority is resolved under the held fence so a concurrent policy
+        // revocation cannot authorize a stale grant (consistency with shaping
+        // apply/invalidate and the ready transition).
+        if !required_grants.is_empty() {
+            let report = crate::policy::load_authority_policy(&self.repo_root)?;
+            let actor = crate::policy::parse_actor(&ctx.actor);
+            crate::policy::authorize(&report, &actor, &required_grants)?;
+        }
+        let path = self.node_path(ticket_id);
+        if !path.exists() {
+            return Err(PulseError::NotFound {
+                subject: ticket_id.to_string(),
+            });
+        }
+        let before_bytes = fs::read(&path).map_err(|error| PulseError::io(&path, error))?;
+        let mut node: Node = serde_json::from_slice(&before_bytes)
+            .map_err(|error| PulseError::json(&path, error))?;
+        if node.kind != WorkKind::Ticket {
+            return Err(PulseError::validation(
+                "qa_impact_invalid",
+                format!("qa impact can only be set on tickets: {ticket_id}"),
+            ));
+        }
+        if node.revision != expected_revision {
+            return Err(PulseError::CasConflict {
+                subject: ticket_id.to_string(),
+                expected_revision,
+                current_revision: node.revision,
+            });
+        }
+
+        let previous_qa = node.qa.clone();
+        node.qa = Some(qa.clone());
+        node.normalize_contract_fields();
+        node.contract_revision += 1;
+        node.revision += 1;
+        node.updated_at = ctx.now;
+
+        validate_node_contract_result(&node, ContractValidationMode::CanonicalStorage)?;
+        let node_values = self
+            .load_nodes_with_override(node.clone())?
+            .into_values()
+            .collect::<Vec<_>>();
+        let edge_values = self
+            .load_edges()?
+            .iter()
+            .map(|(_, e)| e.clone())
+            .collect::<Vec<_>>();
+        validate_graph(
+            &self.repo_root,
+            &self.manifest()?,
+            &node_values,
+            &edge_values,
+        )
+        .into_result()?;
+        let after_bytes = to_canonical_bytes(&node)?;
+        self.commit_mutation(
+            "work.qa_impact.updated",
+            ctx.actor,
+            ticket_id,
+            json!({
+                "ticket_id": ticket_id,
+                "expected_revision": expected_revision,
+                "new_revision": node.revision,
+                "previous_contract_revision": node.contract_revision.saturating_sub(1),
+                "new_contract_revision": node.contract_revision,
+                "previous_qa": previous_qa,
+                "qa": qa,
+                "gate_coverage": ["ticket_kind", "node_revision_cas", "qa_impact_validation", "authority", "graph_integrity"]
+            }),
+            &path,
+            FileState::Present {
+                hash: hash_bytes(&before_bytes),
+                revision: expected_revision,
+            },
+            FileState::Present {
+                hash: hash_bytes(&after_bytes),
+                revision: expected_revision + 1,
+            },
+            &after_bytes,
+            ctx.now,
+        )?;
+        Ok(MutationOutcome {
+            schema_version: 1,
+            code: "updated".to_string(),
+            status: MutationStatus::Updated,
+            value: node,
+        })
+    }
+
+    pub fn set_qa_impact(
+        &self,
+        ticket_id: &str,
+        expected_revision: u64,
+        update: QaImpactUpdate,
+        actor: String,
+    ) -> PulseResult<MutationOutcome<Node>> {
+        self.set_qa_impact_with_context(
+            ticket_id,
+            expected_revision,
+            update,
+            OperationContext {
+                actor,
+                now: Utc::now(),
+            },
+        )
+    }
+
+    /// Apply an already-recorded immutable `shaping_validation` v1 receipt to an
+    /// owning work node.
+    ///
+    /// Receipt-first apply: the immutable receipt was recorded separately, so
+    /// this is a node + event single-target transaction that re-verifies receipt
+    /// identity/hash/current content/source/contract-revision bindings and
+    /// kernel-derived authority under the repository fence immediately before
+    /// commit. Applying a pointer bumps only the normal `revision`, never
+    /// `contract_revision`, so the proof it binds remains current.
+    pub fn apply_shaping_with_context(
+        &self,
+        owner_id: &str,
+        expected_revision: u64,
+        receipt_id: &str,
+        expected_current_receipt: Option<&str>,
+        ctx: OperationContext,
+    ) -> PulseResult<MutationOutcome<Node>> {
+        let _guard = WriteGuard::acquire(&self.repo_root)?;
+        self.bootstrap_unlocked()?;
+        recover_prepared_transactions(&self.repo_root)?;
+        let path = self.node_path(owner_id);
+        if !path.exists() {
+            return Err(PulseError::NotFound {
+                subject: owner_id.to_string(),
+            });
+        }
+        let before_bytes = fs::read(&path).map_err(|error| PulseError::io(&path, error))?;
+        let mut node: Node = serde_json::from_slice(&before_bytes)
+            .map_err(|error| PulseError::json(&path, error))?;
+        if !matches!(
+            node.kind,
+            WorkKind::Epic | WorkKind::Story | WorkKind::Ticket
+        ) {
+            return Err(PulseError::validation(
+                "shaping_receipt_subject_mismatch",
+                format!("shaping can only be applied to epic/story/ticket: {owner_id}"),
+            ));
+        }
+
+        let (receipt, receipt_hash) =
+            crate::evidence::receipt::load_receipt(&self.repo_root, receipt_id)?;
+        let payload = shaping_payload_for_apply(&receipt)?;
+        if receipt.id != receipt_id {
+            return Err(PulseError::validation(
+                "shaping_receipt_hash_mismatch",
+                "loaded receipt id does not match requested id",
+            ));
+        }
+        if receipt.subject.id != owner_id || payload.owning_work.id != owner_id {
+            return Err(PulseError::validation(
+                "shaping_receipt_subject_mismatch",
+                "shaping receipt subject must match the owning work",
+            ));
+        }
+
+        // Idempotency: a pointer to the same receipt id+hash is unchanged even
+        // when the expected revision is stale, after verifying a prior apply
+        // event. Same id with a different hash is corruption.
+        if let Some(current) = &node.shaping {
+            if current.receipt.id == receipt_id {
+                if current.receipt.hash != receipt_hash {
+                    return Err(PulseError::validation(
+                        "shaping_receipt_hash_mismatch",
+                        "current shaping pointer references the same receipt id with a different hash",
+                    ));
+                }
+                if self.has_shaping_applied_event(owner_id, receipt_id, &receipt_hash)? {
+                    return Ok(MutationOutcome {
+                        schema_version: 1,
+                        code: "unchanged".to_string(),
+                        status: MutationStatus::Unchanged,
+                        value: node,
+                    });
+                }
+            }
+        }
+
+        if node.revision != expected_revision {
+            return Err(PulseError::CasConflict {
+                subject: owner_id.to_string(),
+                expected_revision,
+                current_revision: node.revision,
+            });
+        }
+
+        if let Some(expected_current) = expected_current_receipt {
+            let current_id = node.shaping.as_ref().map(|s| s.receipt.id.as_str());
+            if current_id != Some(expected_current) {
+                return Err(PulseError::validation(
+                    "shaping_expected_current_receipt_conflict",
+                    "expected-current receipt does not match the node's current shaping receipt",
+                ));
+            }
+        }
+
+        // Shaping currentness is by contract_revision: the generic work
+        // normal-revision binding is intentionally not a staleness signal here.
+        if payload.owning_work.contract_revision != node.contract_revision {
+            return Err(PulseError::validation(
+                "shaping_receipt_stale",
+                format!(
+                    "shaping receipt binds contract_revision {} but owner is at {}",
+                    payload.owning_work.contract_revision, node.contract_revision
+                ),
+            ));
+        }
+        let binding_codes = crate::evidence::receipt::content_source_binding_codes(
+            &self.repo_root,
+            &receipt.bindings,
+            None,
+        )?;
+        if let Some(code) = binding_codes.first() {
+            return Err(PulseError::validation(
+                crate::evidence::receipt::code_to_static(code),
+                "shaping receipt content/source bindings are not current",
+            ));
+        }
+        if let Some(map) = &payload.map {
+            verify_map_current(&self.repo_root, map)?;
+        }
+
+        let policy_report = crate::policy::load_authority_policy(&self.repo_root)?;
+        let caller = crate::policy::parse_actor(&ctx.actor);
+        crate::policy::authorize(&policy_report, &caller, &["shape.apply"])?;
+        let approve_grant =
+            crate::graph::shaping::materialization_approve_grant(&payload.materialization)?;
+        crate::policy::authorize(
+            &policy_report,
+            &payload.approval.approved_by,
+            &[approve_grant.as_str()],
+        )?;
+
+        let previous = node.shaping.clone();
+        let pointer = ShapingPointer {
+            receipt: ReceiptRef {
+                id: receipt_id.to_string(),
+                hash: receipt_hash.clone(),
+            },
+            map: payload.map.as_ref().map(|map| ShapingMapRef {
+                path: map.path.clone(),
+                revision: map.revision,
+                content_hash: map.content_hash.clone(),
+            }),
+            applied_at: ctx.now,
+            applied_by: ctx.actor.clone(),
+        };
+        node.shaping = Some(pointer.clone());
+        node.revision += 1;
+        node.updated_at = ctx.now;
+        validate_node_contract_result(&node, ContractValidationMode::CanonicalStorage)?;
+        let node_values = self
+            .load_nodes_with_override(node.clone())?
+            .into_values()
+            .collect::<Vec<_>>();
+        let edge_values = self
+            .load_edges()?
+            .iter()
+            .map(|(_, e)| e.clone())
+            .collect::<Vec<_>>();
+        validate_graph(
+            &self.repo_root,
+            &self.manifest()?,
+            &node_values,
+            &edge_values,
+        )
+        .into_result()?;
+        let after_bytes = to_canonical_bytes(&node)?;
+        let affected_work: Vec<String> = std::iter::once(owner_id.to_string())
+            .chain(payload.affected_work.iter().map(|w| w.id.clone()))
+            .collect::<std::collections::BTreeSet<String>>()
+            .into_iter()
+            .collect();
+        self.commit_mutation(
+            "work.shaping.applied",
+            ctx.actor,
+            owner_id,
+            json!({
+                "owner_id": owner_id,
+                "expected_revision": expected_revision,
+                "new_revision": node.revision,
+                "contract_revision": node.contract_revision,
+                "previous_receipt": previous.as_ref().map(|p| &p.receipt),
+                "receipt": {"id": receipt_id, "hash": receipt_hash},
+                "map_revision": payload.map.as_ref().map(|m| m.revision),
+                "materialization": payload.materialization,
+                "affected_work": affected_work,
+                "gate_coverage": ["owner_kind", "node_revision_cas", "expected_current_receipt", "receipt_identity", "receipt_integrity", "contract_revision_binding", "content_source_bindings", "map_currentness", "authority", "graph_integrity"]
+            }),
+            &path,
+            FileState::Present {
+                hash: hash_bytes(&before_bytes),
+                revision: expected_revision,
+            },
+            FileState::Present {
+                hash: hash_bytes(&after_bytes),
+                revision: expected_revision + 1,
+            },
+            &after_bytes,
+            ctx.now,
+        )?;
+        Ok(MutationOutcome {
+            schema_version: 1,
+            code: "applied".to_string(),
+            status: MutationStatus::Updated,
+            value: node,
+        })
+    }
+
+    pub fn apply_shaping(
+        &self,
+        owner_id: &str,
+        expected_revision: u64,
+        receipt_id: &str,
+        expected_current_receipt: Option<&str>,
+        actor: String,
+    ) -> PulseResult<MutationOutcome<Node>> {
+        self.apply_shaping_with_context(
+            owner_id,
+            expected_revision,
+            receipt_id,
+            expected_current_receipt,
+            OperationContext {
+                actor,
+                now: Utc::now(),
+            },
+        )
+    }
+
+    /// Clear the current shaping pointer with authority.
+    ///
+    /// Only the pointer is cleared; the historical receipt and any map content
+    /// remain. Pointer-only mutation bumps the normal `revision` only, not the
+    /// semantic `contract_revision`. Lifecycle status is not auto-mutated.
+    pub fn invalidate_shaping_with_context(
+        &self,
+        owner_id: &str,
+        expected_revision: u64,
+        reason: String,
+        ctx: OperationContext,
+    ) -> PulseResult<MutationOutcome<Node>> {
+        if reason.trim().is_empty() {
+            return Err(PulseError::validation(
+                "reason_required",
+                "shaping invalidate requires a non-empty reason",
+            ));
+        }
+        let _guard = WriteGuard::acquire(&self.repo_root)?;
+        self.bootstrap_unlocked()?;
+        recover_prepared_transactions(&self.repo_root)?;
+        let path = self.node_path(owner_id);
+        if !path.exists() {
+            return Err(PulseError::NotFound {
+                subject: owner_id.to_string(),
+            });
+        }
+        let before_bytes = fs::read(&path).map_err(|error| PulseError::io(&path, error))?;
+        let mut node: Node = serde_json::from_slice(&before_bytes)
+            .map_err(|error| PulseError::json(&path, error))?;
+        if node.revision != expected_revision {
+            return Err(PulseError::CasConflict {
+                subject: owner_id.to_string(),
+                expected_revision,
+                current_revision: node.revision,
+            });
+        }
+        let previous = node.shaping.clone();
+        if previous.is_none() {
+            return Err(PulseError::validation(
+                "shaping_receipt_missing",
+                format!("work has no current shaping pointer to invalidate: {owner_id}"),
+            ));
+        }
+
+        let policy_report = crate::policy::load_authority_policy(&self.repo_root)?;
+        let caller = crate::policy::parse_actor(&ctx.actor);
+        crate::policy::authorize(&policy_report, &caller, &["shape.invalidate"])?;
+
+        node.shaping = None;
+        node.revision += 1;
+        node.updated_at = ctx.now;
+        let node_values = self
+            .load_nodes_with_override(node.clone())?
+            .into_values()
+            .collect::<Vec<_>>();
+        let edge_values = self
+            .load_edges()?
+            .iter()
+            .map(|(_, e)| e.clone())
+            .collect::<Vec<_>>();
+        validate_graph(
+            &self.repo_root,
+            &self.manifest()?,
+            &node_values,
+            &edge_values,
+        )
+        .into_result()?;
+        let after_bytes = to_canonical_bytes(&node)?;
+        self.commit_mutation(
+            "work.shaping.invalidated",
+            ctx.actor,
+            owner_id,
+            json!({
+                "owner_id": owner_id,
+                "expected_revision": expected_revision,
+                "new_revision": node.revision,
+                "contract_revision": node.contract_revision,
+                "previous_receipt": previous.as_ref().map(|p| &p.receipt),
+                "reason": reason,
+                "gate_coverage": ["node_revision_cas", "authority", "graph_integrity"]
+            }),
+            &path,
+            FileState::Present {
+                hash: hash_bytes(&before_bytes),
+                revision: expected_revision,
+            },
+            FileState::Present {
+                hash: hash_bytes(&after_bytes),
+                revision: expected_revision + 1,
+            },
+            &after_bytes,
+            ctx.now,
+        )?;
+        Ok(MutationOutcome {
+            schema_version: 1,
+            code: "invalidated".to_string(),
+            status: MutationStatus::Updated,
+            value: node,
+        })
+    }
+
+    pub fn invalidate_shaping(
+        &self,
+        owner_id: &str,
+        expected_revision: u64,
+        reason: String,
+        actor: String,
+    ) -> PulseResult<MutationOutcome<Node>> {
+        self.invalidate_shaping_with_context(
+            owner_id,
+            expected_revision,
+            reason,
+            OperationContext {
+                actor,
+                now: Utc::now(),
+            },
+        )
+    }
+
+    pub fn show_shaping(&self, owner_id: &str) -> PulseResult<ShapingView> {
+        let node = self.show_node(owner_id)?;
+        Ok(ShapingView {
+            schema_version: 1,
+            code: "ok".to_string(),
+            owner_id: node.id,
+            revision: node.revision,
+            contract_revision: node.contract_revision,
+            shaping: node.shaping,
+        })
+    }
+
+    pub fn show_contract(&self, ticket_id: &str) -> PulseResult<ContractView> {
+        let node = self.show_node(ticket_id)?;
+        Ok(ContractView {
+            schema_version: 1,
+            code: "ok".to_string(),
+            ticket_id: node.id,
+            revision: node.revision,
+            contract_revision: node.contract_revision,
+            role: node.role,
+            implementation: node.implementation,
+            decision_work: node.decision_work,
+        })
+    }
+
+    pub fn show_qa_impact(&self, ticket_id: &str) -> PulseResult<QaImpactView> {
+        let node = self.show_node(ticket_id)?;
+        Ok(QaImpactView {
+            schema_version: 1,
+            code: "ok".to_string(),
+            ticket_id: node.id,
+            revision: node.revision,
+            contract_revision: node.contract_revision,
+            qa: node.qa,
+        })
+    }
+
+    /// Read-only readiness query (`pulse work ready`).
+    ///
+    /// Recovers under the repository fence, captures a coherent
+    /// graph/docs/evidence/policy snapshot with canonical content hashes, and
+    /// composes the deterministic readiness report. The query never mutates
+    /// status: a `ready` node whose inputs no longer pass is reported `stale`
+    /// with `ready_state_stale`, not silently demoted.
+    pub fn readiness(&self, id: &str) -> PulseResult<ReadinessReport> {
+        let _guard = WriteGuard::acquire(&self.repo_root)?;
+        self.bootstrap_unlocked()?;
+        recover_prepared_transactions(&self.repo_root)?;
+        // Read the node directly (not via `show_node`, which re-acquires the
+        // fence and would deadlock the guard we already hold).
+        let path = self.node_path(id);
+        if !path.exists() {
+            return Err(PulseError::NotFound {
+                subject: id.to_string(),
+            });
+        }
+        let bytes = fs::read(&path).map_err(|error| PulseError::io(&path, error))?;
+        let node: Node =
+            serde_json::from_slice(&bytes).map_err(|error| PulseError::json(&path, error))?;
+        let snapshot = self.build_readiness_snapshot(&node)?;
+        let inputs = snapshot.as_inputs(&node);
+        readiness::evaluate(&inputs, EvalProfile::Ready)
+    }
+
+    /// Read-only deterministic decision/execution frontier projection
+    /// (`pulse work frontier`). Never mutates state and never persists
+    /// claim/lease/assignment: before the Phase 2 lease resolver the report
+    /// always carries `claim_state=not_evaluated`.
+    ///
+    /// Recovers under the repository fence and captures a coherent graph
+    /// snapshot. The execution frontier additionally recomputes the current
+    /// readiness report for every in-scope `ready` implementation Ticket so
+    /// stale-ready nodes are excluded with an explicit reason.
+    pub fn frontier(
+        &self,
+        kind: FrontierKind,
+        for_owner: Option<&str>,
+        profile: Option<&str>,
+        include_excluded: bool,
+    ) -> PulseResult<FrontierReport> {
+        let _guard = WriteGuard::acquire(&self.repo_root)?;
+        self.bootstrap_unlocked()?;
+        recover_prepared_transactions(&self.repo_root)?;
+        let projection = self.export_unlocked()?;
+        let graph_fingerprint = projection.graph_fingerprint.clone();
+
+        // Validate optional `--for` destination owner: must be an Epic or Story
+        // that exists in the coherent snapshot.
+        if let Some(owner) = for_owner {
+            let owner_kind = crate::id::kind_for_id(owner).map_err(|_| {
+                PulseError::validation(
+                    "frontier_destination_invalid",
+                    format!("--for must be an Epic or Story id: {owner}"),
+                )
+            })?;
+            if !matches!(owner_kind, WorkKind::Epic | WorkKind::Story) {
+                return Err(PulseError::validation(
+                    "frontier_destination_invalid",
+                    format!("--for must be an Epic or Story id, not {owner}"),
+                ));
+            }
+            if !projection.nodes.iter().any(|node| node.id == owner) {
+                return Err(PulseError::NotFound {
+                    subject: owner.to_string(),
+                });
+            }
+        }
+
+        match kind {
+            FrontierKind::Decision => {
+                let branch_contexts = self.build_decision_branch_contexts(&projection)?;
+                let report = frontier::project_decision_frontier(
+                    &projection,
+                    for_owner,
+                    &branch_contexts,
+                    &graph_fingerprint,
+                    include_excluded,
+                )?;
+                Ok(FrontierReport::Decision(report))
+            }
+            FrontierKind::Execution => {
+                let readiness_profile = match profile {
+                    Some(profile) => profile,
+                    None => frontier::execution_readiness_profile(),
+                };
+                if readiness_profile != frontier::execution_readiness_profile() {
+                    return Err(PulseError::validation(
+                        "readiness_profile_unsupported",
+                        format!(
+                            "unsupported readiness profile; only {} is available in this release",
+                            frontier::execution_readiness_profile()
+                        ),
+                    ));
+                }
+                let reports = self.build_execution_readiness_reports(&projection, for_owner)?;
+                let report = frontier::project_execution_frontier(
+                    &projection,
+                    for_owner,
+                    &reports,
+                    &graph_fingerprint,
+                    readiness_profile,
+                    include_excluded,
+                )?;
+                Ok(FrontierReport::Execution(report))
+            }
+        }
+    }
+
+    /// Build per-destination-owner branch-disposal context for the decision
+    /// frontier from each owner's current shaping receipt snapshot.
+    fn build_decision_branch_contexts(
+        &self,
+        projection: &GraphProjection,
+    ) -> PulseResult<BTreeMap<String, DecisionBranchContext>> {
+        let mut owners: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+        for node in &projection.nodes {
+            if node.kind == WorkKind::Ticket && node.role == Some(TicketRole::DecisionWork) {
+                if let Some(contract) = &node.decision_work {
+                    owners.insert(contract.destination_owner.id.clone());
+                }
+            }
+        }
+        let mut contexts = BTreeMap::new();
+        for owner in owners {
+            let path = self.node_path(&owner);
+            if !path.exists() {
+                contexts.insert(owner, DecisionBranchContext::default());
+                continue;
+            }
+            let bytes = fs::read(&path).map_err(|error| PulseError::io(&path, error))?;
+            let node: Node =
+                serde_json::from_slice(&bytes).map_err(|error| PulseError::json(&path, error))?;
+            let shaping = self.build_shaping_snapshot(&node)?;
+            contexts.insert(owner, branch_context_from_shaping(shaping.as_ref()));
+        }
+        Ok(contexts)
+    }
+
+    /// Recompute the current readiness report for every in-scope `ready`
+    /// implementation Ticket, keyed by id. The execution frontier includes only
+    /// those whose current readiness passes under the requested profile.
+    fn build_execution_readiness_reports(
+        &self,
+        projection: &GraphProjection,
+        for_owner: Option<&str>,
+    ) -> PulseResult<BTreeMap<String, ReadinessReport>> {
+        let scope = for_owner.map(|owner| frontier::scope_tickets(projection, owner));
+        let mut reports = BTreeMap::new();
+        for node in &projection.nodes {
+            if node.kind != WorkKind::Ticket
+                || node.role != Some(TicketRole::Implementation)
+                || node.status != NodeStatus::Ready
+            {
+                continue;
+            }
+            if let Some(scope) = &scope {
+                if !scope.contains(&node.id) {
+                    continue;
+                }
+            }
+            let snapshot = self.build_readiness_snapshot(node)?;
+            let inputs = snapshot.as_inputs(node);
+            let report = readiness::evaluate(&inputs, EvalProfile::Ready)?;
+            reports.insert(node.id.clone(), report);
+        }
+        Ok(reports)
+    }
+
+    /// Build a coherent readiness snapshot for a subject node. Acquires the
+    /// repository fence so multi-plane reads (graph, docs, evidence, policy,
+    /// bound content) are consistent. Caller is expected to have recovered.
+    fn build_readiness_snapshot(&self, node: &Node) -> PulseResult<ReadinessSnapshot> {
+        let projection = self.export_unlocked()?;
+        let structural = structural_executability(&projection, &node.id).or_else(|err| {
+            if matches!(err, PulseError::NotFound { .. }) {
+                Ok(self.empty_structural_report(&node.id))
+            } else {
+                Err(err)
+            }
+        })?;
+        let shaping = self.build_shaping_snapshot(node)?;
+        let decision_proofs = self.build_decision_proofs(node)?;
+        let docs = self.build_docs_applicability(node)?;
+        let authority = crate::policy::load_authority_policy(&self.repo_root)?;
+        let content_bindings = self.build_content_bindings(node, &shaping, &decision_proofs)?;
+        Ok(ReadinessSnapshot {
+            graph_fingerprint: projection.graph_fingerprint.clone(),
+            structural,
+            shaping,
+            decision_proofs,
+            docs,
+            authority,
+            content_bindings,
+        })
+    }
+
+    fn empty_structural_report(&self, id: &str) -> StructuralExecutabilityReport {
+        StructuralExecutabilityReport {
+            schema_version: 1,
+            subject: id.to_string(),
+            graph_fingerprint: String::new(),
+            structural_state: crate::graph::executability::StructuralState::Invalid,
+            dispatch_authorized: false,
+            lifecycle: crate::graph::executability::LifecycleSummary {
+                status: NodeStatus::Draft,
+                revision: 0,
+            },
+            hard_blockers: vec![],
+            soft_preferences: vec![],
+            supersession: None,
+            gate_coverage: vec![],
+            missing_gate_families: vec![],
+            reason_codes: vec!["structural_invalid".to_string()],
+        }
+    }
+
+    fn build_shaping_snapshot(&self, node: &Node) -> PulseResult<Option<ShapingReceiptSnapshot>> {
+        let Some(pointer) = &node.shaping else {
+            return Ok(None);
+        };
+        let snapshot =
+            match crate::evidence::receipt::load_receipt(&self.repo_root, &pointer.receipt.id) {
+                Ok((receipt, hash)) => {
+                    let payload = match &receipt.payload {
+                        crate::evidence::model::ReceiptPayload::ShapingValidation(payload) => {
+                            Some(payload.clone())
+                        }
+                        _ => None,
+                    };
+                    let integrity_valid = hash == pointer.receipt.hash
+                        && receipt.kind == crate::evidence::model::ReceiptKind::ShapingValidation
+                        && receipt.result == crate::evidence::model::ReceiptResult::Passed
+                        && payload.as_ref().is_some_and(|p| p.payload_version == 1);
+                    let payload = payload.unwrap_or_else(default_shaping_payload);
+                    let binding_codes = crate::evidence::receipt::content_source_binding_codes(
+                        &self.repo_root,
+                        &receipt.bindings,
+                        None,
+                    )
+                    .unwrap_or_default();
+                    let map_current = payload
+                        .map
+                        .as_ref()
+                        .map(|map| verify_map_current(&self.repo_root, map).is_ok())
+                        .unwrap_or(true);
+                    ShapingReceiptSnapshot {
+                        receipt_id: pointer.receipt.id.clone(),
+                        receipt_hash: hash,
+                        payload,
+                        integrity_valid,
+                        binding_codes,
+                        map_current,
+                    }
+                }
+                Err(_) => ShapingReceiptSnapshot {
+                    receipt_id: pointer.receipt.id.clone(),
+                    receipt_hash: pointer.receipt.hash.clone(),
+                    payload: default_shaping_payload(),
+                    integrity_valid: false,
+                    binding_codes: vec!["shaping_receipt_missing".to_string()],
+                    map_current: true,
+                },
+            };
+        Ok(Some(snapshot))
+    }
+
+    fn build_decision_proofs(&self, node: &Node) -> PulseResult<Vec<DecisionProofSnapshot>> {
+        let Some(contract) = &node.implementation else {
+            return Ok(Vec::new());
+        };
+        if contract.required_decisions.is_empty() {
+            return Ok(Vec::new());
+        }
+        let nodes = self.load_nodes()?;
+        let mut proofs = Vec::new();
+        for decision in &contract.required_decisions {
+            let snapshot = match crate::evidence::receipt::load_receipt(
+                &self.repo_root,
+                &decision.acceptance_receipt.id,
+            ) {
+                Ok((receipt, hash)) => {
+                    let payload = match &receipt.payload {
+                        crate::evidence::model::ReceiptPayload::DecisionAcceptance(p) => {
+                            Some(p.clone())
+                        }
+                        _ => None,
+                    };
+                    let integrity_valid = hash == decision.acceptance_receipt.hash
+                        && receipt.kind == crate::evidence::model::ReceiptKind::DecisionAcceptance
+                        && payload.is_some();
+                    let payload = payload.unwrap_or_else(default_decision_payload);
+                    let content_current =
+                        content_hash_option(&self.repo_root, &payload.decision.content.path)
+                            .map(|h| h == payload.decision.content.content_hash)
+                            .unwrap_or(false);
+                    let decision_node = nodes.get(&decision.id);
+                    DecisionProofSnapshot {
+                        decision_id: decision.id.clone(),
+                        required_contract_revision: decision.contract_revision,
+                        receipt_id: decision.acceptance_receipt.id.clone(),
+                        receipt_hash: hash,
+                        payload,
+                        integrity_valid,
+                        decision_node_present: decision_node.is_some(),
+                        decision_terminal: decision_node
+                            .map(|n| {
+                                matches!(n.status, NodeStatus::Cancelled | NodeStatus::Superseded)
+                            })
+                            .unwrap_or(false),
+                        decision_contract_revision: decision_node
+                            .map(|n| n.contract_revision)
+                            .unwrap_or(0),
+                        content_current,
+                    }
+                }
+                Err(error) if error.code() == "receipt_not_found" => {
+                    // The acceptance proof does not exist yet. Per the proposal,
+                    // work depending on a not-yet-accepted Decision is
+                    // `unavailable` (decision_acceptance_missing), not stale. We
+                    // omit the proof so the readiness gate sees `None`.
+                    continue;
+                }
+                Err(_) => DecisionProofSnapshot {
+                    decision_id: decision.id.clone(),
+                    required_contract_revision: decision.contract_revision,
+                    receipt_id: decision.acceptance_receipt.id.clone(),
+                    receipt_hash: decision.acceptance_receipt.hash.clone(),
+                    payload: default_decision_payload(),
+                    integrity_valid: false,
+                    decision_node_present: nodes.contains_key(&decision.id),
+                    decision_terminal: false,
+                    decision_contract_revision: nodes
+                        .get(&decision.id)
+                        .map(|n| n.contract_revision)
+                        .unwrap_or(0),
+                    content_current: false,
+                },
+            };
+            proofs.push(snapshot);
+        }
+        Ok(proofs)
+    }
+
+    fn build_docs_applicability(
+        &self,
+        node: &Node,
+    ) -> PulseResult<crate::docs::applicability::ApplicableDocsReport> {
+        let work = node
+            .documentation
+            .as_ref()
+            .map(|documentation| {
+                crate::docs::WorkDocumentationContext::from((
+                    node.id.as_str(),
+                    node.revision,
+                    documentation,
+                ))
+            })
+            .unwrap_or_else(|| {
+                crate::docs::WorkDocumentationContext::unknown(node.id.clone(), node.revision)
+            });
+        // Read-only readiness/frontier projections must never bootstrap the
+        // docs registry (or, transitively, the evidence manifest) as a side
+        // effect of a query. When the registry is absent, compute applicability
+        // against an empty docs set instead of materializing canonical state.
+        let registry = crate::docs::manifest::load_unlocked_preserve(&self.repo_root)?
+            .unwrap_or_else(|| crate::docs::model::DocsRegistry::empty(String::new()));
+        let resolver = crate::docs::FsContentResolver::new(&self.repo_root);
+        crate::docs::applicable_docs(
+            &work,
+            &registry,
+            &resolver,
+            crate::docs::ApplicabilityOptions::default(),
+        )
+    }
+
+    fn build_content_bindings(
+        &self,
+        node: &Node,
+        shaping: &Option<ShapingReceiptSnapshot>,
+        decision_proofs: &[DecisionProofSnapshot],
+    ) -> PulseResult<Vec<ContentHashBinding>> {
+        let mut bindings = Vec::new();
+        if let Some(contract) = &node.implementation {
+            if let Some(brief) = &contract.brief {
+                bindings.push(ContentHashBinding {
+                    label: "brief".to_string(),
+                    path: brief.path.clone(),
+                    bound_hash: brief.content_hash.clone(),
+                    current_hash: content_hash_option(&self.repo_root, &brief.path),
+                });
+            }
+            for approach in &contract.shared_approach_refs {
+                bindings.push(ContentHashBinding {
+                    label: format!("shared_approach:{}", approach.path),
+                    path: approach.path.clone(),
+                    bound_hash: approach.content_hash.clone(),
+                    current_hash: content_hash_option(&self.repo_root, &approach.path),
+                });
+            }
+        }
+        if let Some(shaping) = shaping {
+            if let Some(map) = &shaping.payload.map {
+                bindings.push(ContentHashBinding {
+                    label: "map".to_string(),
+                    path: map.path.clone(),
+                    bound_hash: map.content_hash.clone(),
+                    current_hash: content_hash_option(&self.repo_root, &map.path),
+                });
+            }
+        }
+        for proof in decision_proofs {
+            bindings.push(ContentHashBinding {
+                label: format!("decision:{}", proof.decision_id),
+                path: proof.payload.decision.content.path.clone(),
+                bound_hash: proof.payload.decision.content.content_hash.clone(),
+                current_hash: content_hash_option(
+                    &self.repo_root,
+                    &proof.payload.decision.content.path,
+                ),
+            });
+        }
+        Ok(bindings)
+    }
+
     pub fn transition_node_with_context(
         &self,
         id: &str,
         to: crate::graph::node::NodeStatus,
         expected_revision: u64,
         reason: Option<TransitionReason>,
+        ctx: OperationContext,
+    ) -> PulseResult<MutationOutcome<Node>> {
+        self.transition_node_gated_with_context(id, to, expected_revision, reason, None, ctx)
+    }
+
+    /// Transition a node, evaluating the installed gate (if any) under the held
+    /// repository fence. `expected_readiness_fingerprint` lets strict callers
+    /// (automation/orchestrator) guard against acting on a stale readiness
+    /// query; interactive callers may pass `None`.
+    pub fn transition_node_gated_with_context(
+        &self,
+        id: &str,
+        to: crate::graph::node::NodeStatus,
+        expected_revision: u64,
+        reason: Option<TransitionReason>,
+        expected_readiness_fingerprint: Option<&str>,
         ctx: OperationContext,
     ) -> PulseResult<MutationOutcome<Node>> {
         let _guard = WriteGuard::acquire(&self.repo_root)?;
@@ -586,6 +1797,12 @@ impl JsonGraphStore {
         }
         let from = node.status;
         let exp = validate_transition(from, to, reason.as_ref())?;
+        // Evaluate the installed gate (if any) under the held fence on the
+        // current pre-transition node, before any status mutation. The gate
+        // result (profile + evaluated fingerprint) is embedded in the committed
+        // event; recovery replays the prepared result rather than recomputing.
+        let gate_outcome =
+            self.evaluate_transition_gate(&node, from, to, &ctx, expected_readiness_fingerprint)?;
         let transition_reason = reason.clone();
         node.status = to;
         node.status_reason = if status_requires_reason(to) {
@@ -624,20 +1841,29 @@ impl JsonGraphStore {
         let graph_fingerprint_before = self.graph_fingerprint_current_unlocked()?;
         let graph_fingerprint_after = self.graph_fingerprint_with_planned_workgraph(&node, None)?;
         let after_bytes = to_canonical_bytes(&node)?;
+        let mut payload = json!({
+            "from": from,
+            "to": to,
+            "expected_revision": expected_revision,
+            "reason": transition_reason,
+            "graph_fingerprint_before": graph_fingerprint_before,
+            "graph_fingerprint_after": graph_fingerprint_after,
+            "gate_coverage": gate_coverage_for(from, to, gate_outcome.as_ref()),
+            "target_requires_status_reason": exp.target_requires_status_reason,
+        });
+        if let Some(gate) = &gate_outcome {
+            payload["gate_profile"] = json!(gate.profile);
+            payload["input_fingerprint"] = json!(gate.fingerprint);
+            payload["gate_status"] = json!(gate.status);
+            if let Some(shaping) = &gate.shaping_receipt {
+                payload["shaping_receipt"] = json!(shaping);
+            }
+        }
         self.commit_mutation(
             "work.node.transitioned",
             ctx.actor,
             id,
-            json!({
-                "from": from,
-                "to": to,
-                "expected_revision": expected_revision,
-                "reason": transition_reason,
-                "graph_fingerprint_before": graph_fingerprint_before,
-                "graph_fingerprint_after": graph_fingerprint_after,
-                "gate_coverage": ["transition_direction", "graph_integrity"],
-                "target_requires_status_reason": exp.target_requires_status_reason,
-            }),
+            payload,
             &path,
             FileState::Present {
                 hash: hash_bytes(&before_bytes),
@@ -676,6 +1902,78 @@ impl JsonGraphStore {
                 now: Utc::now(),
             },
         )
+    }
+
+    /// Evaluate the installed gate for a transition direction on the current
+    /// node. Returns `None` when no gate is installed (ordinary supported
+    /// direction); otherwise evaluates the readiness/shaping gate under the
+    /// held fence and embeds the result in the committed event.
+    ///
+    /// Authority is default-deny: the transition caller must hold the
+    /// direction-specific grant (`work.transition.shaped` /
+    /// `work.transition.ready`) in addition to the readiness `authority` family
+    /// which checks policy availability and the shaping approver grant.
+    fn evaluate_transition_gate(
+        &self,
+        node: &Node,
+        from: NodeStatus,
+        to: NodeStatus,
+        ctx: &OperationContext,
+        expected_readiness_fingerprint: Option<&str>,
+    ) -> PulseResult<Option<GateEvaluationOutcome>> {
+        let Some(profile_kind) = installed_gate(from, to) else {
+            return Ok(None);
+        };
+
+        let policy_report = crate::policy::load_authority_policy(&self.repo_root)?;
+        let caller = crate::policy::parse_actor(&ctx.actor);
+        let grant = match profile_kind {
+            GateProfile::Shaped => "work.transition.shaped",
+            GateProfile::Ready => "work.transition.ready",
+        };
+        crate::policy::authorize(&policy_report, &caller, &[grant])?;
+
+        let eval_profile = match profile_kind {
+            GateProfile::Shaped => EvalProfile::Shaped,
+            GateProfile::Ready => EvalProfile::Ready,
+        };
+        let snapshot = self.build_readiness_snapshot(node)?;
+        let inputs = snapshot.as_inputs(node);
+        let report = readiness::evaluate(&inputs, eval_profile)?;
+
+        if !report.transition_eligible {
+            return Err(PulseError::validation(
+                "readiness_not_ready",
+                format!(
+                    "transition {} -> {:?} requires a passing {} gate; status={}, reason_codes={:?}",
+                    node.id,
+                    to,
+                    report.profile,
+                    report.status_as_word(),
+                    report.reason_codes
+                ),
+            ));
+        }
+
+        if let Some(expected) = expected_readiness_fingerprint {
+            if expected != report.readiness_fingerprint {
+                return Err(PulseError::validation(
+                    "readiness_fingerprint_mismatch",
+                    "expected readiness fingerprint no longer matches current inputs; reload and retry",
+                ));
+            }
+        }
+
+        let shaping_receipt = snapshot.shaping.as_ref().map(
+            |shaping| serde_json::json!({"id": shaping.receipt_id, "hash": shaping.receipt_hash}),
+        );
+
+        Ok(Some(GateEvaluationOutcome {
+            profile: profile_kind.as_str().to_string(),
+            fingerprint: report.readiness_fingerprint.clone(),
+            status: report.status_as_word().to_string(),
+            shaping_receipt,
+        }))
     }
 
     pub fn supersede_work_with_context(
@@ -1353,6 +2651,13 @@ impl JsonGraphStore {
         let _guard = WriteGuard::acquire(&self.repo_root)?;
         self.bootstrap_unlocked()?;
         recover_prepared_transactions(&self.repo_root)?;
+        self.export_unlocked()
+    }
+
+    /// Build the graph projection assuming the repository fence is already held
+    /// and transactions recovered. Used by readiness/gate evaluation which runs
+    /// inside a transition's held guard and must not re-acquire the flock.
+    pub fn export_unlocked(&self) -> PulseResult<GraphProjection> {
         let manifest = self.manifest()?;
         let node_files = self.load_node_files()?;
         let edge_files = self.load_edge_files()?;
@@ -2111,7 +3416,7 @@ impl JsonGraphStore {
                     continue;
                 };
                 if event.event_type == "work.node.superseded"
-                    && event.subject == old_id
+                    && event.subject.id == old_id
                     && event.payload.get("target") == Some(&target_value)
                     && event.payload.get("assertion") == Some(&assertion_value)
                 {
@@ -2149,7 +3454,7 @@ impl JsonGraphStore {
                     continue;
                 };
                 if event.event_type == "work.node.superseded"
-                    && event.subject == old_id
+                    && event.subject.id == old_id
                     && event.payload.get("target") == Some(&target_value)
                     && receipt_value.get("id").and_then(|v| v.as_str()) == Some(receipt_id)
                 {
@@ -2167,11 +3472,243 @@ impl JsonGraphStore {
         }
         Ok(None)
     }
+
+    /// Verify a prior `work.shaping.applied` event recorded this receipt for the
+    /// owner. Used to confirm idempotent retry of an already-applied receipt.
+    fn has_shaping_applied_event(
+        &self,
+        owner_id: &str,
+        receipt_id: &str,
+        receipt_hash: &str,
+    ) -> PulseResult<bool> {
+        let events_dir = self.repo_root.join(".pulse/events");
+        let Ok(date_dirs) = fs::read_dir(events_dir) else {
+            return Ok(false);
+        };
+        for date_dir in date_dirs.flatten() {
+            let Ok(entries) = fs::read_dir(date_dir.path()) else {
+                continue;
+            };
+            for entry in entries.flatten() {
+                if entry.path().extension().and_then(|ext| ext.to_str()) != Some("json") {
+                    continue;
+                }
+                let Ok(event) = storage::read_json::<EventEnvelope>(&entry.path()) else {
+                    continue;
+                };
+                if event.event_type == "work.shaping.applied"
+                    && event.subject.id == owner_id
+                    && event
+                        .payload
+                        .get("receipt")
+                        .and_then(|v| v.get("id"))
+                        .and_then(|v| v.as_str())
+                        == Some(receipt_id)
+                    && event
+                        .payload
+                        .get("receipt")
+                        .and_then(|v| v.get("hash"))
+                        .and_then(|v| v.as_str())
+                        == Some(receipt_hash)
+                {
+                    return Ok(true);
+                }
+            }
+        }
+        Ok(false)
+    }
+}
+
+/// Extract and integrity-check the `shaping_validation` v1 payload from a
+/// receipt for shaping apply. Only a current payload v1 receipt with
+/// `result=passed` can support a current shaping pointer.
+fn shaping_payload_for_apply(
+    receipt: &crate::evidence::model::ReceiptEnvelope,
+) -> PulseResult<crate::evidence::model::ShapingValidationPayload> {
+    use crate::evidence::model::{ReceiptKind, ReceiptPayload, ReceiptResult};
+    if receipt.kind != ReceiptKind::ShapingValidation {
+        return Err(PulseError::validation(
+            "shaping_receipt_version_ineligible",
+            "shaping apply requires a shaping_validation receipt",
+        ));
+    }
+    if receipt.result != ReceiptResult::Passed {
+        return Err(PulseError::validation(
+            "shaping_receipt_version_ineligible",
+            "only a passed shaping receipt can support a current shaping pointer",
+        ));
+    }
+    match &receipt.payload {
+        ReceiptPayload::ShapingValidation(payload) => {
+            if payload.payload_version != 1 {
+                return Err(PulseError::validation(
+                    "shaping_receipt_version_ineligible",
+                    "shaping apply requires current payload version 1",
+                ));
+            }
+            Ok(payload.clone())
+        }
+        _ => Err(PulseError::validation(
+            "shaping_receipt_version_ineligible",
+            "receipt payload does not match shaping_validation",
+        )),
+    }
+}
+
+/// Verify a shaping map snapshot's content hash is current under the repository
+/// fence. The map is an optional human-facing index bound by path/revision/hash.
+fn verify_map_current(
+    repo_root: &Path,
+    map: &crate::evidence::model::ShapingMapSnapshot,
+) -> PulseResult<()> {
+    let rel = crate::storage::safe_repo_relative(&map.path)?;
+    let path = repo_root.join(rel);
+    match fs::read(&path) {
+        Ok(bytes) if hash_bytes(&bytes) == map.content_hash => Ok(()),
+        Ok(_) => Err(PulseError::validation(
+            "shaping_map_content_stale",
+            "shaping map content no longer matches the receipt binding",
+        )),
+        Err(_) => Err(PulseError::validation(
+            "shaping_map_missing",
+            "shaping receipt references a map that no longer exists",
+        )),
+    }
 }
 
 fn file_state_revision(state: &FileState) -> Option<u64> {
     match state {
         FileState::Absent => None,
         FileState::Present { revision, .. } => Some(*revision),
+    }
+}
+
+/// Result of evaluating an installed transition gate, embedded in the committed
+/// transition event so recovery replays the prepared result rather than
+/// recomputing readiness against a later repository state.
+struct GateEvaluationOutcome {
+    profile: String,
+    fingerprint: String,
+    status: String,
+    shaping_receipt: Option<serde_json::Value>,
+}
+
+/// Stable `gate_coverage` list recorded on transition events. Installed gates
+/// add their evaluated coverage; ordinary supported transitions keep the
+/// minimal structural coverage.
+fn gate_coverage_for(
+    from: NodeStatus,
+    to: NodeStatus,
+    gate: Option<&GateEvaluationOutcome>,
+) -> Vec<&'static str> {
+    let mut coverage = vec!["transition_direction", "graph_integrity"];
+    if gate.is_some() {
+        coverage.push("gate_evaluation");
+        if installed_gate(from, to).is_some() {
+            coverage.push("authority");
+            coverage.push("readiness_fingerprint");
+        }
+    }
+    coverage
+}
+
+/// Owned coherent snapshot assembled under the repository fence for readiness
+/// evaluation. Borrowing it as [`ReadinessInputs`] keeps the pure evaluator free
+/// of I/O while the owning store method keeps the local values alive.
+struct ReadinessSnapshot {
+    graph_fingerprint: String,
+    structural: StructuralExecutabilityReport,
+    shaping: Option<ShapingReceiptSnapshot>,
+    decision_proofs: Vec<DecisionProofSnapshot>,
+    docs: crate::docs::applicability::ApplicableDocsReport,
+    authority: crate::policy::AuthorityPolicyReport,
+    content_bindings: Vec<ContentHashBinding>,
+}
+
+impl ReadinessSnapshot {
+    fn as_inputs<'a>(&'a self, node: &'a Node) -> ReadinessInputs<'a> {
+        ReadinessInputs {
+            subject: node,
+            graph_valid: true,
+            structural: &self.structural,
+            shaping: self.shaping.as_ref(),
+            decision_proofs: self.decision_proofs.clone(),
+            docs: &self.docs,
+            authority: &self.authority,
+            content_bindings: self.content_bindings.clone(),
+            graph_fingerprint: self.graph_fingerprint.clone(),
+        }
+    }
+}
+
+/// Current canonical content hash of a repository-relative file, or `None` when
+/// the file is missing/unreadable. Used for content-reference currentness.
+fn content_hash_option(repo_root: &Path, path: &str) -> Option<String> {
+    let rel = crate::storage::safe_repo_relative(path).ok()?;
+    let bytes = fs::read(repo_root.join(rel)).ok()?;
+    Some(hash_bytes(&bytes))
+}
+
+/// Placeholder shaping payload used when a current shaping receipt cannot be
+/// loaded as a valid v1 passed payload. The evaluator flags the family via
+/// `integrity_valid=false`; payload contents are irrelevant in that case.
+fn default_shaping_payload() -> crate::evidence::model::ShapingValidationPayload {
+    use crate::evidence::model::{
+        ActorKind, ActorRef, ShapeMode, ShapingApproval, ShapingValidationPayload,
+        ShapingWorkBinding, SourcePosture,
+    };
+    ShapingValidationPayload {
+        payload_version: 1,
+        owning_work: ShapingWorkBinding {
+            id: String::new(),
+            revision_observed: 0,
+            contract_revision: 0,
+        },
+        materialization: "R0".to_string(),
+        shape_mode: ShapeMode::ConciseSelfCheck,
+        source_posture: SourcePosture::NotRequiredContentBound,
+        destination: None,
+        map: None,
+        affected_work: vec![],
+        branches: vec![],
+        fog: vec![],
+        out_of_scope: vec![],
+        resolution_pointers: vec![],
+        approval: ShapingApproval {
+            approved_by: ActorRef {
+                kind: ActorKind::System,
+                id: String::new(),
+            },
+            reference: String::new(),
+        },
+        reconciliation: None,
+        remaining_uncertainty: vec![],
+    }
+}
+
+/// Placeholder Decision acceptance payload used when the referenced receipt
+/// cannot be loaded as a valid Decision acceptance proof.
+fn default_decision_payload() -> crate::evidence::model::DecisionAcceptancePayload {
+    use crate::evidence::model::{
+        ActorKind, ActorRef, DecisionAcceptanceDecision, DecisionAcceptancePayload,
+        DecisionContentSnapshot, SourcePosture,
+    };
+    DecisionAcceptancePayload {
+        payload_version: 1,
+        decision: DecisionAcceptanceDecision {
+            id: String::new(),
+            revision_observed: 0,
+            contract_revision: 0,
+            content: DecisionContentSnapshot {
+                path: String::new(),
+                content_hash: String::new(),
+            },
+        },
+        accepted_outcome: String::new(),
+        approver: ActorRef {
+            kind: ActorKind::System,
+            id: String::new(),
+        },
+        source_posture: SourcePosture::NotRequiredContentBound,
     }
 }

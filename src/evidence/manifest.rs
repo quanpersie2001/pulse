@@ -11,6 +11,8 @@ pub const SUPERSESSION_SCHEMA: &str =
     include_str!("../schema/evidence/supersession-reconciliation.v1.schema.json");
 pub const SHAPING_SCHEMA: &str =
     include_str!("../schema/evidence/shaping-validation.v1.schema.json");
+pub const DECISION_ACCEPTANCE_SCHEMA: &str =
+    include_str!("../schema/evidence/decision-acceptance.v1.schema.json");
 pub const DOCUMENTATION_SCHEMA: &str =
     include_str!("../schema/evidence/documentation-validation.v1.schema.json");
 
@@ -77,6 +79,12 @@ pub fn bootstrap(repo_root: &Path) -> Result<EvidenceBootstrapOutcome> {
         &mut preserved,
     )?;
     write_schema_if_absent(
+        &schemas.join("decision-acceptance.v1.schema.json"),
+        DECISION_ACCEPTANCE_SCHEMA,
+        &mut created,
+        &mut preserved,
+    )?;
+    write_schema_if_absent(
         &schemas.join("documentation-validation.v1.schema.json"),
         DOCUMENTATION_SCHEMA,
         &mut created,
@@ -137,6 +145,12 @@ fn default_manifest(repo_root: &Path) -> Result<EvidenceManifest> {
             "1",
             "schemas/shaping-validation.v1.schema.json",
             SHAPING_SCHEMA,
+        ),
+        (
+            "decision_acceptance",
+            "1",
+            "schemas/decision-acceptance.v1.schema.json",
+            DECISION_ACCEPTANCE_SCHEMA,
         ),
         (
             "documentation_validation",
