@@ -1,0 +1,39 @@
+mod args;
+mod docs;
+mod evidence;
+mod graph;
+mod knowledge;
+pub mod output;
+mod work;
+
+use clap::Parser;
+
+pub use args::Cli;
+pub use output::print_error;
+
+use crate::{JsonGraphStore, PulseError};
+
+pub fn parse() -> Cli {
+    Cli::parse()
+}
+
+pub fn run(cli: Cli) -> Result<(), PulseError> {
+    let repo_root = cli
+        .repo_root
+        .unwrap_or_else(|| std::env::current_dir().expect("current dir"));
+    #[cfg(debug_assertions)]
+    let store = match cli.test_failpoint {
+        Some(failpoint) => JsonGraphStore::with_failpoint(repo_root, failpoint.into()),
+        None => JsonGraphStore::new(repo_root),
+    };
+    #[cfg(not(debug_assertions))]
+    let store = JsonGraphStore::new(repo_root);
+
+    match cli.command {
+        args::Command::Work { command } => work::handle(&store, command),
+        args::Command::Docs { command } => docs::handle(&store, command),
+        args::Command::Graph { command } => graph::handle(&store, command),
+        args::Command::Evidence { command } => evidence::handle(&store, command),
+        args::Command::Knowledge { command } => knowledge::handle(&store, command),
+    }
+}

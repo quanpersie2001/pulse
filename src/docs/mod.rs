@@ -9,6 +9,7 @@ pub mod markdown;
 pub mod model;
 pub mod policy;
 pub mod projection;
+pub mod receipt_validation;
 pub mod registry;
 pub mod search;
 pub mod section;

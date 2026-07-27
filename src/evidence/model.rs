@@ -1,20 +1,15 @@
+//! Evidence receipt model.
+//!
+//! `ActorRef` and `ActorKind` are owned by the neutral identity module and
+//! re-exported here for compatibility with the historical
+//! `pulse::evidence::model::{ActorRef, ActorKind}` path used by receipts,
+//! tests and the CLI.
+
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-pub struct ActorRef {
-    pub kind: ActorKind,
-    pub id: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum ActorKind {
-    Human,
-    Agent,
-    System,
-}
+// Compatibility re-export: identity vocabulary is neutral, not evidence-owned.
+pub use crate::identity::actor::{ActorKind, ActorRef};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]

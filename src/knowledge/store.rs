@@ -6,8 +6,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use crate::canonical_json::{hash_bytes, to_canonical_bytes};
+use crate::event::new_event_id;
 use crate::event::{event_path, EventEnvelope};
-use crate::id::{new_event_id, parse_numeric};
+use crate::id::parse_numeric;
 use crate::knowledge::manifest::{bootstrap_unlocked, KnowledgeBootstrapOutcome};
 use crate::knowledge::model::*;
 use crate::knowledge::projection::{

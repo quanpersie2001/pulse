@@ -21,6 +21,8 @@ mod common_canon;
 #[path = "common/git.rs"]
 mod common_git;
 
+#[path = "graph/architecture_guards.rs"]
+mod architecture_guards;
 #[path = "graph/authority_policy.rs"]
 mod authority_policy;
 #[path = "graph/cli_lifecycle_contract.rs"]
@@ -35,6 +37,8 @@ mod frontier;
 mod lifecycle;
 #[path = "graph/node_schema.rs"]
 mod node_schema;
+#[path = "graph/public_api_paths.rs"]
+mod public_api_paths;
 #[path = "graph/readiness.rs"]
 mod readiness;
 #[path = "graph/readiness_cli_contract.rs"]

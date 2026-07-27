@@ -5,9 +5,16 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::canonical_json::to_canonical_bytes;
-use crate::id::new_event_id;
 use crate::storage;
 use crate::PulseResult;
+
+/// Generate a fresh event identifier (`evt_<ulid>`).
+///
+/// Event identity generation is owned by the event module. A compatibility
+/// re-export remains at `pulse::id::new_event_id` for historical callers.
+pub fn new_event_id() -> String {
+    format!("evt_{}", ulid::Ulid::new())
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]

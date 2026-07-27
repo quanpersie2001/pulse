@@ -1,5 +1,5 @@
 use crate::canonical_json::{hash_bytes, to_canonical_bytes};
-use crate::evidence::model::{ActorKind, ActorRef};
+use crate::identity::actor::{ActorKind, ActorRef};
 use crate::{PulseError, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;

@@ -1,6 +1,5 @@
 use crate::canonical_json::{self, hash_bytes};
 use crate::error::{PulseError, Result};
-use crate::id::new_transaction_id;
 use crate::storage::atomic;
 use base64::prelude::*;
 use chrono::{DateTime, Utc};
@@ -9,6 +8,15 @@ use std::fs;
 use std::path::{Path, PathBuf};
 #[cfg(debug_assertions)]
 use std::time::Duration;
+
+/// Generate a fresh transaction identifier (`txn_<ulid>`).
+///
+/// Transaction identity generation is owned by the storage transaction module.
+/// A compatibility re-export remains at `pulse::id::new_transaction_id` for
+/// historical callers.
+pub fn new_transaction_id() -> String {
+    format!("txn_{}", ulid::Ulid::new())
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TransactionFailpoint {

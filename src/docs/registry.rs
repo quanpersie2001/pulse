@@ -9,8 +9,8 @@ use crate::canonical_json::{hash_bytes, to_canonical_bytes};
 use crate::docs::manifest::{bootstrap_unlocked, load_existing_registry};
 use crate::docs::model::{DocsRegistryEnvelope, DocumentLifecycle, DocumentPatch, DocumentRecord};
 use crate::docs::validate::validate_registry;
+use crate::event::new_event_id;
 use crate::event::{event_path, EventEnvelope};
-use crate::id::new_event_id;
 use crate::storage::transaction::{
     commit_prepared_transaction, current_file_state, prepare_transaction,
     recover_prepared_transactions, FileState, TransactionFailpoint, TransactionIntent,

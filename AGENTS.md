@@ -270,6 +270,58 @@ src/                             Rust Pulse kernel/CLI implementation
 tests/                           integration and contract tests
 ```
 
+## Source Architecture
+
+The `src/` tree is organized by ownership and dependency direction. Pure/value
+layers sit below persistence and cross-domain composition. Put new code in the
+layer that matches its responsibility and do not reach up the dependency ladder.
+These seams are guarded by `tests/graph/architecture_guards.rs` and
+`tests/public_api_contract.rs`; those tests are the durable guard, this section
+is orientation.
+
+- `src/bin/pulse.rs` is a minimal adapter (parse, run, render error) that
+  delegates entirely to the `pulse::cli` facade. It wires no domains and must
+  not include production modules with `#[path]`.
+- `src/cli/` is thin transport/renderer grouped by command domain (`work`,
+  `docs`, `graph`, `evidence`, `knowledge`) plus `args` and `output`. It
+  translates CLI input/output to library calls and owns no domain semantics.
+- `src/kernel/` is the concrete cross-domain composition layer (no trait
+  abstractions): it assembles typed inputs from the graph store, documentation,
+  evidence, policy and source checks to build readiness, shaping, lifecycle-gate
+  and frontier snapshots. Cross-domain orchestration that combines domains lives
+  here; the graph store's own cross-domain surface stays narrow (evidence
+  receipt binding in supersession, authority-gated contract writes).
+- `src/graph/` is layered, bottom-up:
+  - `model/` — pure value types (node, edge, contract, lifecycle, manifest);
+    depends only on identity/event/canonical-json, never on store/readiness.
+  - `validation/` — contract and whole-graph validators; depends on model, not
+    on store.
+  - `read/` — pure snapshot-in/snapshot-out evaluators (readiness,
+    executability, frontier, rollup, traversal, shaping, projection); no
+    filesystem or store imports.
+  - `store/` — `JsonGraphStore` persistence and mutation (nodes, edges,
+    contracts, supersession, repository, bootstrap). Read-only entrypoints stay
+    thin and delegate to the pure evaluators in `read/`.
+  The historical single-file modules (`src/graph/<name>.rs`) survive only as
+  one-line compatibility re-exports; use the layered paths for new code.
+- `src/evidence/` owns immutable receipt envelope integrity, generic bindings,
+  recording and kind dispatch. `receipt/` is split into focused validators
+  (`envelope`, `bindings`, `supersession`, `shaping`, `decision`,
+  `documentation`, `store`, `helpers`). Documentation receipt *policy*
+  interpretation (registry lifecycle, review posture) is owned by
+  `src/docs/receipt_validation.rs` and consumed by evidence as a narrow
+  validator; evidence does not implement docs policy.
+- `src/identity/` owns the shared actor vocabulary (`ActorRef`, `ActorKind`)
+  used by evidence, event, policy and kernel. `evidence::model` re-exports it
+  for path compatibility.
+- `src/storage/` owns only generic primitives (atomic write, locking, path
+  validation, transactions). Workgraph bootstrap and embedded schema templates
+  are owned by `graph::store::bootstrap` and re-exported through `storage` for
+  compatibility; generic storage must not depend on the graph domain.
+- `src/source.rs` owns source-binding currentness and intentionally couples git
+  mechanics with status policy. A physical move to a `repository/` namespace
+  was reviewed and deferred; the public `pulse::source` path is the contract.
+
 ## Validation Commands For This Repo
 
 Before claiming implementation work is done, run:

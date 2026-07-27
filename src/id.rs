@@ -114,19 +114,8 @@ pub fn parse_numeric(id: &str, prefix: &str) -> Option<u64> {
     id.strip_prefix(&format!("{prefix}-"))?.parse().ok()
 }
 
-pub fn new_transaction_id() -> String {
-    format!("txn_{}", ulid::Ulid::new())
-}
-
-pub fn new_event_id() -> String {
-    format!("evt_{}", ulid::Ulid::new())
-}
-
-pub fn edge_id(edge_type: &str, from: &WorkId, to: &WorkId) -> String {
-    let slug = edge_type.replace('_', "-");
-    if edge_type == "related" && to < from {
-        format!("{slug}--{}--{}", to.as_str(), from.as_str())
-    } else {
-        format!("{slug}--{}--{}", from.as_str(), to.as_str())
-    }
-}
+// Compatibility re-exports: event/transaction identity generation now lives
+// with its owning module. These aliases preserve the historical
+// `pulse::id::{new_event_id, new_transaction_id}` path.
+pub use crate::event::new_event_id;
+pub use crate::storage::transaction::new_transaction_id;

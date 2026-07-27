@@ -76,6 +76,50 @@ fn kill_spawned_after_path(mut child: std::process::Child, repo: &TempDir, path:
     let _ = child.wait();
 }
 
+/// Wait until a knowledge entry reaches `expected_revision`.
+///
+/// `wait_for_path_exists` is the wrong signal for mutations that update an
+/// existing entry (e.g. `relation add` bumping a learning to revision 2): the
+/// entry file already exists at its prior revision, so a path-exists check
+/// returns immediately and the kill then races the in-progress write. Polling
+/// the persisted revision synchronizes on the real failpoint progress: the
+/// entry write completes immediately before the `after_multi_target_first`
+/// failpoint sleeps.
+fn wait_for_entry_revision(repo: &TempDir, id: &str, expected_revision: u64) {
+    let path = repo
+        .path()
+        .join(".pulse/knowledge/entries")
+        .join(format!("{id}.json"));
+    let start = Instant::now();
+    loop {
+        if let Ok(bytes) = fs::read(&path) {
+            if let Ok(value) = serde_json::from_slice::<Value>(&bytes) {
+                if value.get("revision").and_then(Value::as_u64) == Some(expected_revision) {
+                    return;
+                }
+            }
+        }
+        assert!(
+            start.elapsed() < Duration::from_secs(5),
+            "entry {id} revision {expected_revision} was not written before failpoint"
+        );
+        thread::sleep(Duration::from_millis(20));
+    }
+}
+
+fn kill_spawned_after_entry_revision(
+    mut child: std::process::Child,
+    repo: &TempDir,
+    id: &str,
+    expected_revision: u64,
+) {
+    wait_for_transaction_intent(repo);
+    wait_for_entry_revision(repo, id, expected_revision);
+    thread::sleep(Duration::from_millis(100));
+    child.kill().expect("kill child");
+    let _ = child.wait();
+}
+
 fn kill_spawned_after_event(
     mut child: std::process::Child,
     repo: &TempDir,
@@ -351,11 +395,7 @@ fn knowledge_relation_add_failpoints_recover_entry_relation_and_event_once() {
         .join(".pulse/knowledge/relations/promoted-to--LRN-001--document--DOC-KNOWLEDGE.json");
 
     let child = spawn_relation_add(&repo, "after_multi_target_first");
-    kill_spawned_after_path(
-        child,
-        &repo,
-        &repo.path().join(".pulse/knowledge/entries/LRN-001.json"),
-    );
+    kill_spawned_after_entry_revision(child, &repo, "LRN-001", 2);
     run_ok(&repo, &["graph", "recover", "--json"]);
     assert!(relation_path.exists());
     let shown = run_ok(&repo, &["knowledge", "show", "LRN-001", "--json"]);

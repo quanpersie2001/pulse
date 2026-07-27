@@ -1,3 +1,18 @@
+//! Source snapshot / binding-status ownership.
+//!
+//! This module answers "is a given source binding still current for this
+//! repository?" It deliberately couples git mechanics (`git`, `head_commit`,
+//! `resolve_full_commit`) with source-binding status policy (`current_status`,
+//! `SourceBindingStatus`) because the status decisions are computed directly
+//! from git queries and the two concerns share the same small surface.
+//!
+//! Ownership review (task #53): a physical move to a `repository/source_snapshot`
+//! namespace was considered and **deferred**. It would create a single-file
+//! top-level namespace for marginal clarity, and the mechanics/policy split is
+//! not safely separable here without duplicating git plumbing. The public
+//! `pulse::source::*` path remains the stable contract. Revisit when a second
+//! repository-snapshot concern joins this owner.
+
 use crate::{PulseError, Result};
 use std::path::Path;
 use std::process::Command;
