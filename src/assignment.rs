@@ -22,6 +22,7 @@ use serde_json::{Map, Value};
 
 use crate::canonical_json;
 use crate::work_packet::WorkPacketV1;
+use crate::PulseError;
 use crate::PulseResult;
 
 // ---------------------------------------------------------------------------
@@ -726,6 +727,158 @@ impl Default for AssignmentTransaction {
             event_path: String::new(),
             recovery_state: "complete".to_string(),
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Error code constants for capability matching
+// ---------------------------------------------------------------------------
+
+/// Capability inventory file is missing or unreadable.
+pub const ERR_CAP_INVENTORY_MISSING: &str = "assignment_capability_inventory_missing";
+
+/// Capability inventory has an invalid schema.
+pub const ERR_CAP_INVENTORY_INVALID: &str = "assignment_capability_inventory_invalid";
+
+/// Capability inventory principal does not match the claim assignee.
+pub const ERR_CAP_PRINCIPAL_MISMATCH: &str = "assignment_capability_principal_mismatch";
+
+/// One or more required capabilities are missing from the inventory.
+pub const ERR_CAP_MISSING: &str = "assignment_capability_missing";
+
+// ---------------------------------------------------------------------------
+// Workspace-induced capability requirement
+// ---------------------------------------------------------------------------
+
+/// Capability string for managing isolated worktrees.
+pub const CAP_WORKSPACE_WORKTREE: &str = "workspace.worktree";
+
+// ---------------------------------------------------------------------------
+// Capability matching
+// ---------------------------------------------------------------------------
+
+/// Build the final required-capability set from packet requirements and
+/// workspace-mode-induced requirements.
+///
+/// When `workspace_mode` is `"isolated_worktree"`, the capability
+/// `"workspace.worktree"` is implicitly required, even when the packet
+/// only allowed in-place.
+pub fn capability_required_set(required: &[String], workspace_mode: Option<&str>) -> Vec<String> {
+    let mut set: Vec<String> = required.to_vec();
+    if let Some(mode) = workspace_mode {
+        if mode == WORKSPACE_MODE_ISOLATED && !set.iter().any(|c| c == CAP_WORKSPACE_WORKTREE) {
+            set.push(CAP_WORKSPACE_WORKTREE.to_string());
+        }
+    }
+    set.sort();
+    set.dedup();
+    set
+}
+
+impl CapabilityInventoryV1 {
+    /// Parse and validate capability inventory from serialized JSON bytes.
+    ///
+    /// Returns:
+    /// - `Err(assignment_capability_inventory_invalid)` if the JSON does not
+    ///   match the `CapabilityInventoryV1` schema or if `schema_version` is
+    ///   not 1.
+    pub fn from_json_bytes(bytes: &[u8]) -> PulseResult<Self> {
+        let inv: Self = serde_json::from_slice(bytes).map_err(|e| {
+            PulseError::validation(
+                ERR_CAP_INVENTORY_INVALID,
+                format!("capability inventory JSON is invalid: {e}"),
+            )
+        })?;
+
+        if inv.schema_version != CAPABILITY_INVENTORY_SCHEMA_VERSION {
+            return Err(PulseError::validation(
+                ERR_CAP_INVENTORY_INVALID,
+                format!(
+                    "capability inventory schema_version {} != expected {}",
+                    inv.schema_version, CAPABILITY_INVENTORY_SCHEMA_VERSION
+                ),
+            ));
+        }
+
+        Ok(inv)
+    }
+
+    /// Validate that the inventory principal matches the expected assignee.
+    pub fn validate_principal(&self, expected: &str) -> PulseResult<()> {
+        if self.principal != expected {
+            return Err(PulseError::validation(
+                ERR_CAP_PRINCIPAL_MISMATCH,
+                format!(
+                    "capability inventory principal '{}' does not match assignee '{expected}'",
+                    self.principal
+                ),
+            ));
+        }
+        Ok(())
+    }
+
+    /// Match this capability inventory against the given required set and
+    /// optional workspace mode. Returns a complete `CapabilityMatchReport`.
+    ///
+    /// This method:
+    /// 1. Validates the principal matches `assignee`.
+    /// 2. Builds the final required set from packet requirements and
+    ///    workspace-induced requirements.
+    /// 3. Sorts/dedupes the inventory capabilities.
+    /// 4. Computes matched, missing, and extra sets.
+    /// 5. Computes the canonical inventory identity.
+    /// 6. Returns the report with status `matched` or `failed`.
+    pub fn match_required(
+        &self,
+        assignee: &str,
+        required: &[String],
+        workspace_mode: Option<&str>,
+    ) -> PulseResult<CapabilityMatchReport> {
+        self.validate_principal(assignee)?;
+
+        let final_required = capability_required_set(required, workspace_mode);
+        let inventory_id = self.compute_inventory_identity()?;
+
+        // Normalize inventory capabilities for deterministic matching.
+        let mut inventory_caps = self.capabilities.clone();
+        sort_strings(&mut inventory_caps);
+
+        let matched: Vec<String> = final_required
+            .iter()
+            .filter(|r| inventory_caps.iter().any(|c| c == *r))
+            .cloned()
+            .collect();
+
+        let missing: Vec<String> = final_required
+            .iter()
+            .filter(|r| !inventory_caps.iter().any(|c| c == *r))
+            .cloned()
+            .collect();
+
+        let extra: Vec<String> = inventory_caps
+            .iter()
+            .filter(|c| !final_required.iter().any(|r| r == *c))
+            .cloned()
+            .collect();
+
+        let status = if missing.is_empty() {
+            CAP_MATCH_MATCHED.to_string()
+        } else {
+            CAP_MATCH_FAILED.to_string()
+        };
+
+        let mut report = CapabilityMatchReport {
+            inventory_identity: inventory_id,
+            principal: assignee.to_string(),
+            status,
+            required: final_required.clone(),
+            matched,
+            missing,
+            extra,
+            reason_codes: vec![],
+        };
+        report.normalize();
+        Ok(report)
     }
 }
 
@@ -1832,5 +1985,404 @@ mod tests {
         assert_eq!(RUNNER_STATUS_NOT_STARTED, "not_started");
         assert_eq!(LIFECYCLE_READY_TO_ACTIVE, "ready_to_active");
         assert_eq!(LIFECYCLE_GATE_PROFILE, "phase2_prepared_assignment_v1");
+    }
+
+    // -----------------------------------------------------------------------
+    // Error code constants
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn capability_error_constants_match_spec() {
+        assert_eq!(
+            ERR_CAP_INVENTORY_MISSING,
+            "assignment_capability_inventory_missing"
+        );
+        assert_eq!(
+            ERR_CAP_INVENTORY_INVALID,
+            "assignment_capability_inventory_invalid"
+        );
+        assert_eq!(
+            ERR_CAP_PRINCIPAL_MISMATCH,
+            "assignment_capability_principal_mismatch"
+        );
+        assert_eq!(ERR_CAP_MISSING, "assignment_capability_missing");
+    }
+
+    #[test]
+    fn cap_workspace_worktree_constant() {
+        assert_eq!(CAP_WORKSPACE_WORKTREE, "workspace.worktree");
+    }
+
+    // -----------------------------------------------------------------------
+    // capability_required_set
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn capability_required_set_no_workspace_mode() {
+        let required = vec!["source.read".to_string(), "source.write".to_string()];
+        let result = capability_required_set(&required, None);
+        assert_eq!(result, vec!["source.read", "source.write"]);
+    }
+
+    #[test]
+    fn capability_required_set_in_place_no_worktree_induced() {
+        let required = vec!["source.read".to_string()];
+        let result = capability_required_set(&required, Some(WORKSPACE_MODE_IN_PLACE));
+        assert_eq!(result, vec!["source.read"]);
+    }
+
+    #[test]
+    fn capability_required_set_isolated_worktree_induced() {
+        let required = vec!["source.read".to_string()];
+        let result = capability_required_set(&required, Some(WORKSPACE_MODE_ISOLATED));
+        assert_eq!(result, vec!["source.read", "workspace.worktree"]);
+    }
+
+    #[test]
+    fn capability_required_set_isolated_does_not_dup_existing() {
+        let required = vec!["workspace.worktree".to_string(), "source.read".to_string()];
+        let result = capability_required_set(&required, Some(WORKSPACE_MODE_ISOLATED));
+        assert_eq!(result, vec!["source.read", "workspace.worktree"]);
+    }
+
+    #[test]
+    fn capability_required_set_sorts_and_dedupes() {
+        let required = vec!["b".to_string(), "a".to_string(), "b".to_string()];
+        let result = capability_required_set(&required, None);
+        assert_eq!(result, vec!["a", "b"]);
+    }
+
+    #[test]
+    fn capability_required_set_empty() {
+        let required: Vec<String> = vec![];
+        let result = capability_required_set(&required, None);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn capability_required_set_empty_isolated_has_worktree() {
+        let required: Vec<String> = vec![];
+        let result = capability_required_set(&required, Some(WORKSPACE_MODE_ISOLATED));
+        assert_eq!(result, vec!["workspace.worktree"]);
+    }
+
+    // -----------------------------------------------------------------------
+    // CapabilityInventoryV1::from_json_bytes
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn capability_inventory_parse_valid_json() {
+        let json = serde_json::json!({
+            "schema_version": 1,
+            "principal": "agent:codex-local",
+            "inventory_id": "test-id",
+            "capabilities": ["source.read", "source.write"]
+        });
+        let bytes = serde_json::to_vec(&json).expect("test fixture should be valid");
+        let inv =
+            CapabilityInventoryV1::from_json_bytes(&bytes).expect("valid inventory should parse");
+        assert_eq!(inv.principal, "agent:codex-local");
+        assert_eq!(inv.inventory_id, "test-id");
+        assert_eq!(inv.capabilities.len(), 2);
+    }
+
+    #[test]
+    fn capability_inventory_parse_rejects_wrong_schema_version() {
+        let json = serde_json::json!({
+            "schema_version": 999,
+            "principal": "agent:codex-local",
+            "inventory_id": "test-id",
+            "capabilities": []
+        });
+        let bytes = serde_json::to_vec(&json).expect("test fixture should be valid");
+        let err = CapabilityInventoryV1::from_json_bytes(&bytes)
+            .expect_err("wrong schema_version should fail");
+        assert_eq!(err.code(), ERR_CAP_INVENTORY_INVALID);
+    }
+
+    #[test]
+    fn capability_inventory_parse_rejects_invalid_json() {
+        let bytes = b"not valid json";
+        let err =
+            CapabilityInventoryV1::from_json_bytes(bytes).expect_err("invalid JSON should fail");
+        assert_eq!(err.code(), ERR_CAP_INVENTORY_INVALID);
+    }
+
+    #[test]
+    fn capability_inventory_parse_rejects_unknown_fields() {
+        let json = serde_json::json!({
+            "schema_version": 1,
+            "principal": "agent:codex-local",
+            "inventory_id": "test-id",
+            "capabilities": [],
+            "unknown_field": "should be rejected"
+        });
+        let bytes = serde_json::to_vec(&json).expect("test fixture should be valid");
+        let err =
+            CapabilityInventoryV1::from_json_bytes(&bytes).expect_err("unknown field should fail");
+        assert_eq!(err.code(), ERR_CAP_INVENTORY_INVALID);
+    }
+
+    // -----------------------------------------------------------------------
+    // CapabilityInventoryV1::validate_principal
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn validate_principal_accepts_match() {
+        let inv = CapabilityInventoryV1 {
+            schema_version: 1,
+            principal: "agent:test".to_string(),
+            inventory_id: "test-id".to_string(),
+            capabilities: vec![],
+        };
+        let result = inv.validate_principal("agent:test");
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn validate_principal_rejects_mismatch() {
+        let inv = CapabilityInventoryV1 {
+            schema_version: 1,
+            principal: "agent:foo".to_string(),
+            inventory_id: "test-id".to_string(),
+            capabilities: vec![],
+        };
+        let err = inv
+            .validate_principal("agent:bar")
+            .expect_err("principal mismatch should fail");
+        assert_eq!(err.code(), ERR_CAP_PRINCIPAL_MISMATCH);
+    }
+
+    // -----------------------------------------------------------------------
+    // CapabilityInventoryV1::match_required — success cases
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn match_required_exact_match() {
+        let inv = CapabilityInventoryV1 {
+            schema_version: 1,
+            principal: "agent:test".to_string(),
+            inventory_id: "test-id".to_string(),
+            capabilities: vec!["source.read".to_string(), "source.write".to_string()],
+        };
+        let required = vec!["source.read".to_string(), "source.write".to_string()];
+        let report = inv
+            .match_required("agent:test", &required, None)
+            .expect("exact match should succeed");
+        assert_eq!(report.status, CAP_MATCH_MATCHED);
+        assert!(report.missing.is_empty());
+        assert!(report.extra.is_empty());
+    }
+
+    #[test]
+    fn match_required_extra_capabilities_allowed() {
+        let inv = CapabilityInventoryV1 {
+            schema_version: 1,
+            principal: "agent:test".to_string(),
+            inventory_id: "test-id".to_string(),
+            capabilities: vec![
+                "source.read".to_string(),
+                "source.write".to_string(),
+                "test.run".to_string(),
+                "repository.inspect".to_string(),
+            ],
+        };
+        let required = vec!["source.read".to_string(), "source.write".to_string()];
+        let report = inv
+            .match_required("agent:test", &required, None)
+            .expect("extras allowed");
+        assert_eq!(report.status, CAP_MATCH_MATCHED);
+        assert!(report.missing.is_empty());
+        assert_eq!(report.extra.len(), 2);
+        assert!(report.extra.iter().any(|s| s == "test.run"));
+        assert!(report.extra.iter().any(|s| s == "repository.inspect"));
+    }
+
+    // -----------------------------------------------------------------------
+    // CapabilityInventoryV1::match_required — failure cases
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn match_required_principal_mismatch_rejected() {
+        let inv = CapabilityInventoryV1 {
+            schema_version: 1,
+            principal: "agent:foo".to_string(),
+            inventory_id: "test-id".to_string(),
+            capabilities: vec!["source.read".to_string()],
+        };
+        let required = vec!["source.read".to_string()];
+        let err = inv
+            .match_required("agent:bar", &required, None)
+            .expect_err("principal mismatch should fail");
+        assert_eq!(err.code(), ERR_CAP_PRINCIPAL_MISMATCH);
+    }
+
+    #[test]
+    fn match_required_missing_detected() {
+        let inv = CapabilityInventoryV1 {
+            schema_version: 1,
+            principal: "agent:test".to_string(),
+            inventory_id: "test-id".to_string(),
+            capabilities: vec!["source.read".to_string()],
+        };
+        let required = vec!["source.read".to_string(), "source.write".to_string()];
+        let report = inv
+            .match_required("agent:test", &required, None)
+            .expect("match returns report even on missing");
+        assert_eq!(report.status, CAP_MATCH_FAILED);
+        assert_eq!(report.missing, vec!["source.write"]);
+        assert_eq!(report.matched, vec!["source.read"]);
+        assert!(report.extra.is_empty());
+    }
+
+    #[test]
+    fn match_required_all_missing() {
+        let inv = CapabilityInventoryV1 {
+            schema_version: 1,
+            principal: "agent:test".to_string(),
+            inventory_id: "test-id".to_string(),
+            capabilities: vec!["test.run".to_string()],
+        };
+        let required = vec!["source.read".to_string(), "source.write".to_string()];
+        let report = inv
+            .match_required("agent:test", &required, None)
+            .expect("match returns report even on missing");
+        assert_eq!(report.status, CAP_MATCH_FAILED);
+        assert_eq!(report.matched.len(), 0);
+        assert_eq!(report.missing.len(), 2);
+        assert!(report.extra.iter().any(|s| s == "test.run"));
+    }
+
+    // -----------------------------------------------------------------------
+    // Workspace-induced requirement tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn match_required_isolated_worktree_induces_workspace_worktree() {
+        let inv = CapabilityInventoryV1 {
+            schema_version: 1,
+            principal: "agent:test".to_string(),
+            inventory_id: "test-id".to_string(),
+            capabilities: vec!["source.read".to_string(), "workspace.worktree".to_string()],
+        };
+        let required = vec!["source.read".to_string()];
+        let report = inv
+            .match_required("agent:test", &required, Some(WORKSPACE_MODE_ISOLATED))
+            .expect("workspace.worktree satisfied");
+        assert_eq!(report.status, CAP_MATCH_MATCHED);
+        assert!(report
+            .required
+            .contains(&CAP_WORKSPACE_WORKTREE.to_string()));
+        assert!(report.matched.contains(&CAP_WORKSPACE_WORKTREE.to_string()));
+    }
+
+    #[test]
+    fn match_required_isolated_worktree_missing_induced() {
+        let inv = CapabilityInventoryV1 {
+            schema_version: 1,
+            principal: "agent:test".to_string(),
+            inventory_id: "test-id".to_string(),
+            capabilities: vec!["source.read".to_string()],
+        };
+        let required = vec!["source.read".to_string()];
+        let report = inv
+            .match_required("agent:test", &required, Some(WORKSPACE_MODE_ISOLATED))
+            .expect("match returns report even on missing");
+        assert_eq!(report.status, CAP_MATCH_FAILED);
+        assert!(report.missing.contains(&CAP_WORKSPACE_WORKTREE.to_string()));
+        assert!(report.matched.contains(&"source.read".to_string()));
+    }
+
+    #[test]
+    fn match_required_in_place_does_not_induce_worktree() {
+        let inv = CapabilityInventoryV1 {
+            schema_version: 1,
+            principal: "agent:test".to_string(),
+            inventory_id: "test-id".to_string(),
+            capabilities: vec!["source.read".to_string()],
+        };
+        let required = vec!["source.read".to_string()];
+        let report = inv
+            .match_required("agent:test", &required, Some(WORKSPACE_MODE_IN_PLACE))
+            .expect("in_place should not induce workspace.worktree");
+        assert_eq!(report.status, CAP_MATCH_MATCHED);
+        assert!(!report
+            .required
+            .contains(&CAP_WORKSPACE_WORKTREE.to_string()));
+    }
+
+    // -----------------------------------------------------------------------
+    // Match report normalization
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn match_required_normalizes_report() {
+        let inv = CapabilityInventoryV1 {
+            schema_version: 1,
+            principal: "agent:test".to_string(),
+            inventory_id: "test-id".to_string(),
+            capabilities: vec!["c".to_string(), "b".to_string(), "a".to_string()],
+        };
+        let required = vec!["b".to_string(), "c".to_string(), "a".to_string()];
+        let report = inv
+            .match_required("agent:test", &required, None)
+            .expect("match should succeed");
+        assert_eq!(report.status, CAP_MATCH_MATCHED);
+        assert_eq!(report.required, vec!["a", "b", "c"]);
+        assert_eq!(report.matched, vec!["a", "b", "c"]);
+        assert!(report.extra.is_empty());
+    }
+
+    // -----------------------------------------------------------------------
+    // Inventory identity is part of report
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn match_required_includes_inventory_identity() {
+        let inv = CapabilityInventoryV1 {
+            schema_version: 1,
+            principal: "agent:test".to_string(),
+            inventory_id: "test-id".to_string(),
+            capabilities: vec!["source.read".to_string()],
+        };
+        let expected_id = inv
+            .compute_inventory_identity()
+            .expect("test fixture should be valid");
+        let required = vec!["source.read".to_string()];
+        let report = inv
+            .match_required("agent:test", &required, None)
+            .expect("match should succeed");
+        assert_eq!(report.inventory_identity, expected_id);
+    }
+
+    // -----------------------------------------------------------------------
+    // Sort/dedupe symmetry: same inventory in different orders
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn match_required_is_order_independent() {
+        let inv_a = CapabilityInventoryV1 {
+            schema_version: 1,
+            principal: "agent:test".to_string(),
+            inventory_id: "test-id".to_string(),
+            capabilities: vec!["source.read".to_string(), "source.write".to_string()],
+        };
+        let inv_b = CapabilityInventoryV1 {
+            schema_version: 1,
+            principal: "agent:test".to_string(),
+            inventory_id: "test-id".to_string(),
+            capabilities: vec!["source.write".to_string(), "source.read".to_string()],
+        };
+        let required = vec!["source.read".to_string(), "source.write".to_string()];
+        let report_a = inv_a
+            .match_required("agent:test", &required, None)
+            .expect("match should succeed");
+        let report_b = inv_b
+            .match_required("agent:test", &required, None)
+            .expect("match should succeed");
+        assert_eq!(report_a.matched, report_b.matched);
+        assert_eq!(report_a.missing, report_b.missing);
+        assert_eq!(report_a.extra, report_b.extra);
+        assert_eq!(report_a.required, report_b.required);
     }
 }
