@@ -7,7 +7,6 @@
   "additionalProperties": false,
   "required": [
     "schema_version",
-    "principal",
     "inventory_id",
     "capabilities"
   ],
@@ -25,8 +24,7 @@
       "type": "array",
       "items": {
         "type": "string"
-      },
-      "default": []
+      }
     }
   }
 }

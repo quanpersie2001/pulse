@@ -285,9 +285,13 @@ pub struct CapabilityMatchReport {
 #[serde(deny_unknown_fields)]
 pub struct CapabilityInventoryV1 {
     pub schema_version: u32,
+    /// Optional concrete assignee principal. When present, it must exactly
+    /// match the claim assignee; when omitted, the caller's assignee remains
+    /// the report principal and lease owner. An empty string is the internal
+    /// representation of an omitted principal after deserialization.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub principal: String,
     pub inventory_id: String,
-    #[serde(default)]
     pub capabilities: Vec<String>,
 }
 
@@ -778,34 +782,54 @@ pub fn capability_required_set(required: &[String], workspace_mode: Option<&str>
 impl CapabilityInventoryV1 {
     /// Parse and validate capability inventory from serialized JSON bytes.
     ///
+    /// This pure parser only validates bytes provided by a caller. Filesystem
+    /// absence or unreadability belongs to the claim/CLI boundary and should be
+    /// reported there with `assignment_capability_inventory_missing`.
+    ///
     /// Returns:
     /// - `Err(assignment_capability_inventory_invalid)` if the JSON does not
-    ///   match the `CapabilityInventoryV1` schema or if `schema_version` is
-    ///   not 1.
+    ///   match the public `CapabilityInventoryV1` schema or if
+    ///   `schema_version` is not 1.
     pub fn from_json_bytes(bytes: &[u8]) -> PulseResult<Self> {
-        let inv: Self = serde_json::from_slice(bytes).map_err(|e| {
+        let value: Value = serde_json::from_slice(bytes).map_err(|e| {
             PulseError::validation(
                 ERR_CAP_INVENTORY_INVALID,
                 format!("capability inventory JSON is invalid: {e}"),
             )
         })?;
 
-        if inv.schema_version != CAPABILITY_INVENTORY_SCHEMA_VERSION {
+        let schema_value: Value = serde_json::from_str(CAPABILITY_INVENTORY_SCHEMA)?;
+        let compiled = jsonschema::JSONSchema::compile(&schema_value).map_err(|e| {
+            PulseError::validation(
+                ERR_CAP_INVENTORY_INVALID,
+                format!("capability inventory schema is invalid: {e}"),
+            )
+        })?;
+        if let Err(errors) = compiled.validate(&value) {
+            let messages: Vec<String> = errors.map(|err| err.to_string()).collect();
             return Err(PulseError::validation(
                 ERR_CAP_INVENTORY_INVALID,
                 format!(
-                    "capability inventory schema_version {} != expected {}",
-                    inv.schema_version, CAPABILITY_INVENTORY_SCHEMA_VERSION
+                    "capability inventory does not match schema: {}",
+                    messages.join("; ")
                 ),
             ));
         }
 
+        let inv: Self = serde_json::from_value(value).map_err(|e| {
+            PulseError::validation(
+                ERR_CAP_INVENTORY_INVALID,
+                format!("capability inventory JSON is invalid: {e}"),
+            )
+        })?;
+
         Ok(inv)
     }
 
-    /// Validate that the inventory principal matches the expected assignee.
+    /// Validate that the inventory principal matches the expected assignee when
+    /// the inventory declares one. An omitted principal is accepted.
     pub fn validate_principal(&self, expected: &str) -> PulseResult<()> {
-        if self.principal != expected {
+        if !self.principal.is_empty() && self.principal != expected {
             return Err(PulseError::validation(
                 ERR_CAP_PRINCIPAL_MISMATCH,
                 format!(
@@ -861,10 +885,13 @@ impl CapabilityInventoryV1 {
             .cloned()
             .collect();
 
-        let status = if missing.is_empty() {
-            CAP_MATCH_MATCHED.to_string()
+        let (status, reason_codes) = if missing.is_empty() {
+            (CAP_MATCH_MATCHED.to_string(), vec![])
         } else {
-            CAP_MATCH_FAILED.to_string()
+            (
+                CAP_MATCH_FAILED.to_string(),
+                vec![ERR_CAP_MISSING.to_string()],
+            )
         };
 
         let mut report = CapabilityMatchReport {
@@ -875,7 +902,7 @@ impl CapabilityInventoryV1 {
             matched,
             missing,
             extra,
-            reason_codes: vec![],
+            reason_codes,
         };
         report.normalize();
         Ok(report)
@@ -1298,6 +1325,17 @@ mod tests {
             CAPABILITY_INVENTORY_SCHEMA,
             &serde_json::to_value(&inventory).expect("test fixture should be valid"),
         );
+        let inventory_without_principal = serde_json::json!({
+            "schema_version": CAPABILITY_INVENTORY_SCHEMA_VERSION,
+            "inventory_id": "local-codex-default",
+            "capabilities": ["source.read"]
+        });
+        assert_schema_accepts(CAPABILITY_INVENTORY_SCHEMA, &inventory_without_principal);
+        let inventory_without_capabilities = serde_json::json!({
+            "schema_version": CAPABILITY_INVENTORY_SCHEMA_VERSION,
+            "inventory_id": "local-codex-default"
+        });
+        assert_schema_rejects(CAPABILITY_INVENTORY_SCHEMA, &inventory_without_capabilities);
         assert_schema_accepts(
             CAPABILITY_MATCH_SCHEMA,
             &serde_json::to_value(&pa.capability_match).expect("test fixture should be valid"),
@@ -2087,6 +2125,45 @@ mod tests {
     }
 
     #[test]
+    fn capability_inventory_parse_accepts_omitted_principal() {
+        let json = serde_json::json!({
+            "schema_version": 1,
+            "inventory_id": "test-id",
+            "capabilities": ["source.read"]
+        });
+        let bytes = serde_json::to_vec(&json).expect("test fixture should be valid");
+        let inv =
+            CapabilityInventoryV1::from_json_bytes(&bytes).expect("omitted principal is allowed");
+        assert_eq!(inv.principal, "");
+        assert_eq!(inv.inventory_id, "test-id");
+    }
+
+    #[test]
+    fn capability_inventory_parse_rejects_missing_capabilities() {
+        let json = serde_json::json!({
+            "schema_version": 1,
+            "inventory_id": "test-id"
+        });
+        let bytes = serde_json::to_vec(&json).expect("test fixture should be valid");
+        let err = CapabilityInventoryV1::from_json_bytes(&bytes)
+            .expect_err("capabilities is required by the public schema");
+        assert_eq!(err.code(), ERR_CAP_INVENTORY_INVALID);
+    }
+
+    #[test]
+    fn capability_inventory_parse_rejects_non_string_capability() {
+        let json = serde_json::json!({
+            "schema_version": 1,
+            "inventory_id": "test-id",
+            "capabilities": ["source.read", 7]
+        });
+        let bytes = serde_json::to_vec(&json).expect("test fixture should be valid");
+        let err = CapabilityInventoryV1::from_json_bytes(&bytes)
+            .expect_err("capability values must be strings");
+        assert_eq!(err.code(), ERR_CAP_INVENTORY_INVALID);
+    }
+
+    #[test]
     fn capability_inventory_parse_rejects_wrong_schema_version() {
         let json = serde_json::json!({
             "schema_version": 999,
@@ -2136,6 +2213,18 @@ mod tests {
             capabilities: vec![],
         };
         let result = inv.validate_principal("agent:test");
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn validate_principal_accepts_omitted_principal() {
+        let inv = CapabilityInventoryV1 {
+            schema_version: 1,
+            principal: String::new(),
+            inventory_id: "test-id".to_string(),
+            capabilities: vec![],
+        };
+        let result = inv.validate_principal("agent:assignee");
         assert!(result.is_ok());
     }
 
@@ -2233,6 +2322,39 @@ mod tests {
         assert_eq!(report.missing, vec!["source.write"]);
         assert_eq!(report.matched, vec!["source.read"]);
         assert!(report.extra.is_empty());
+        assert_eq!(report.reason_codes, vec![ERR_CAP_MISSING]);
+    }
+
+    #[test]
+    fn match_required_missing_reason_code_is_deduped() {
+        let inv = CapabilityInventoryV1 {
+            schema_version: 1,
+            principal: "agent:test".to_string(),
+            inventory_id: "test-id".to_string(),
+            capabilities: vec![],
+        };
+        let required = vec!["source.read".to_string(), "source.write".to_string()];
+        let report = inv
+            .match_required("agent:test", &required, None)
+            .expect("match returns report even on missing");
+        assert_eq!(report.status, CAP_MATCH_FAILED);
+        assert_eq!(report.reason_codes, vec![ERR_CAP_MISSING]);
+    }
+
+    #[test]
+    fn match_required_omitted_principal_reports_assignee() {
+        let inv = CapabilityInventoryV1 {
+            schema_version: 1,
+            principal: String::new(),
+            inventory_id: "test-id".to_string(),
+            capabilities: vec!["source.read".to_string()],
+        };
+        let required = vec!["source.read".to_string()];
+        let report = inv
+            .match_required("agent:assignee", &required, None)
+            .expect("omitted inventory principal is allowed");
+        assert_eq!(report.status, CAP_MATCH_MATCHED);
+        assert_eq!(report.principal, "agent:assignee");
     }
 
     #[test]
@@ -2384,5 +2506,32 @@ mod tests {
         assert_eq!(report_a.missing, report_b.missing);
         assert_eq!(report_a.extra, report_b.extra);
         assert_eq!(report_a.required, report_b.required);
+        assert_eq!(report_a.inventory_identity, report_b.inventory_identity);
+    }
+
+    #[test]
+    fn match_required_is_duplicate_independent() {
+        let inv_a = CapabilityInventoryV1 {
+            schema_version: 1,
+            principal: "agent:test".to_string(),
+            inventory_id: "test-id".to_string(),
+            capabilities: vec!["source.read".to_string()],
+        };
+        let inv_b = CapabilityInventoryV1 {
+            schema_version: 1,
+            principal: "agent:test".to_string(),
+            inventory_id: "test-id".to_string(),
+            capabilities: vec!["source.read".to_string(), "source.read".to_string()],
+        };
+        let required = vec!["source.read".to_string(), "source.read".to_string()];
+        let report_a = inv_a
+            .match_required("agent:test", &required, None)
+            .expect("match should succeed");
+        let report_b = inv_b
+            .match_required("agent:test", &required, None)
+            .expect("match should succeed");
+        assert_eq!(report_a.required, vec!["source.read"]);
+        assert_eq!(report_a.matched, vec!["source.read"]);
+        assert_eq!(report_a, report_b);
     }
 }
