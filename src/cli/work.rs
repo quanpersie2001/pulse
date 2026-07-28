@@ -736,8 +736,15 @@ pub(crate) fn handle(store: &JsonGraphStore, command: WorkCommand) -> Result<(),
             workspace_mode,
             json,
         } => {
-            let cap_bytes = std::fs::read(&capabilities)
-                .map_err(|error| PulseError::io(capabilities.clone(), error))?;
+            let cap_bytes = std::fs::read(&capabilities).map_err(|error| {
+                PulseError::validation(
+                    crate::assignment::ERR_CAP_INVENTORY_MISSING,
+                    format!(
+                        "capability inventory {} is missing or unreadable: {error}",
+                        capabilities.display()
+                    ),
+                )
+            })?;
             let outcome = store.claim_work(crate::graph::store::ClaimArgs {
                 ticket_id,
                 actor,

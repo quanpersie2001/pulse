@@ -34,6 +34,12 @@ pub fn print_error(err: &PulseError) {
             "current_revision": current_revision,
             "message": err.to_string(),
         }),
+        PulseError::Validation { code, .. } if code.starts_with("assignment_") => json!({
+            "schema_version": 1,
+            "code": "assignment_claim_failed",
+            "cause_code": err.code(),
+            "message": err.to_string(),
+        }),
         _ => json!({
             "schema_version": 1,
             "code": err.code(),

@@ -190,6 +190,27 @@ impl MultiTargetTransactionIntent {
         event_id: impl Into<String>,
         operation: impl Into<String>,
         actor: impl Into<String>,
+        targets: Vec<TransactionTarget>,
+        event_path: PathBuf,
+        event_payload: serde_json::Value,
+    ) -> Result<Self> {
+        Self::prepared_with_transaction_id(
+            new_transaction_id(),
+            event_id,
+            operation,
+            actor,
+            targets,
+            event_path,
+            event_payload,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn prepared_with_transaction_id(
+        transaction_id: impl Into<String>,
+        event_id: impl Into<String>,
+        operation: impl Into<String>,
+        actor: impl Into<String>,
         mut targets: Vec<TransactionTarget>,
         event_path: PathBuf,
         event_payload: serde_json::Value,
@@ -239,7 +260,7 @@ impl MultiTargetTransactionIntent {
         let now = Utc::now();
         Ok(Self {
             schema_version: TRANSACTION_INTENT_SCHEMA_VERSION,
-            transaction_id: new_transaction_id(),
+            transaction_id: transaction_id.into(),
             event_id: event_id.into(),
             operation: operation.into(),
             actor: actor.into(),

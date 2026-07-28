@@ -325,7 +325,7 @@ fn claim_args(ticket_id: &str) -> ClaimArgs {
     }
 }
 
-fn bootstrap_repo(repo: &TestRepo, store: &JsonGraphStore) {
+fn bootstrap_repo(repo: &TestRepo, _store: &JsonGraphStore) {
     write_policy(repo.path(), &[]);
     repo.pulse_ok(&["graph", "bootstrap", "--json"]);
     pulse::evidence::manifest::load(repo.path()).unwrap();
@@ -433,6 +433,16 @@ fn claim_creates_runtime_records() {
     let loaded_pa = assignment_store::load_prepared(root, &pa.prepared_assignment_id).unwrap();
     assert_eq!(loaded_pa.code, "prepared_assignment");
     assert!(loaded_pa.dispatch.dispatch_authorized);
+    assert_eq!(loaded_pa.transaction, pa.transaction);
+    assert_eq!(
+        loaded_pa.prepared_assignment_fingerprint,
+        pa.prepared_assignment_fingerprint
+    );
+    assert_eq!(
+        loaded_pa.compute_fingerprint().unwrap(),
+        pa.prepared_assignment_fingerprint,
+        "committed prepared record bytes must be fingerprint-lossless with response"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -720,18 +730,24 @@ fn claim_creates_exactly_one_assignment_event() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn claim_clamps_ttl_to_valid_range() {
-    let repo = TestRepo::from_fixture("minimal-service");
-    let store = JsonGraphStore::new(repo.path());
-    bootstrap_repo(&repo, &store);
-    let ticket_id = setup_ready_ticket(repo.path(), &store);
+fn claim_rejects_ttl_outside_valid_range() {
+    for ttl_seconds in [5, 86_401] {
+        let repo = TestRepo::from_fixture("minimal-service");
+        let store = JsonGraphStore::new(repo.path());
+        bootstrap_repo(&repo, &store);
+        let ticket_id = setup_ready_ticket(repo.path(), &store);
 
-    let outcome = store
-        .claim_work(ClaimArgs {
-            ttl_seconds: 5,
-            ticket_id: ticket_id.clone(),
-            ..claim_args(&ticket_id)
-        })
-        .expect("TTL below min clamps");
-    assert!(outcome.prepared_assignment.lease.ttl_seconds >= 60);
+        let err = store
+            .claim_work(ClaimArgs {
+                ttl_seconds,
+                ticket_id: ticket_id.clone(),
+                ..claim_args(&ticket_id)
+            })
+            .expect_err("TTL outside bounds rejects");
+        assert_eq!(err.code(), "assignment_ttl_out_of_range");
+        assert!(
+            !repo.path().join(".pulse/runtime/assignment").exists(),
+            "TTL rejection must not create assignment runtime state"
+        );
+    }
 }

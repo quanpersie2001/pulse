@@ -15,6 +15,7 @@
 //! for the full design contract.
 
 use std::fs;
+use std::path::PathBuf;
 
 use chrono::{DateTime, Utc};
 use serde_json::json;
@@ -31,13 +32,13 @@ use crate::assignment::{
     WORKSPACE_STATE_BOUND,
 };
 use crate::canonical_json::{hash_bytes, to_canonical_bytes};
-use crate::event::{event_path, new_event_id, EventEnvelope};
+use crate::event::{new_event_id, EventEnvelope};
 use crate::graph::node::{Node, NodeStatus};
 use crate::graph::store::JsonGraphStore;
 use crate::kernel::assignment_store;
 use crate::kernel::lifecycle::PreparedAssignmentGateContext;
 use crate::storage::transaction::{
-    commit_prepared_multi_target_transaction, prepare_multi_target_transaction,
+    commit_prepared_multi_target_transaction, new_transaction_id, prepare_multi_target_transaction,
     recover_prepared_transactions, FileState, MultiTargetTransactionIntent, TransactionTarget,
 };
 use crate::storage::WriteGuard;
@@ -59,8 +60,8 @@ pub struct ClaimArgs {
     pub assignee: String,
     /// Pre-loaded bytes of the capability inventory JSON file.
     pub capability_inventory_bytes: Vec<u8>,
-    /// TTL for the lease in seconds. Defaults to `DEFAULT_TTL_SECONDS`,
-    /// clamped to [`MIN_TTL_SECONDS`, `MAX_TTL_SECONDS`].
+    /// TTL for the lease in seconds. Defaults to `DEFAULT_TTL_SECONDS`.
+    /// Values outside [`MIN_TTL_SECONDS`, `MAX_TTL_SECONDS`] are rejected.
     pub ttl_seconds: u64,
     /// Optional workspace mode override. `None` means `auto`:
     /// isolated when packet requires isolated, otherwise in-place.
@@ -98,8 +99,19 @@ impl JsonGraphStore {
         // creation (preserve/no-bootstrap).
         assignment_store::check_enrolled(&self.repo_root)?;
 
-        // Step 1: Validate TTL.
-        let ttl_seconds = args.ttl_seconds.clamp(MIN_TTL_SECONDS, MAX_TTL_SECONDS);
+        // Step 1: Validate TTL. The claim contract treats the published
+        // bounds as hard preconditions rather than silently changing the
+        // caller's requested lease duration.
+        if !(MIN_TTL_SECONDS..=MAX_TTL_SECONDS).contains(&args.ttl_seconds) {
+            return Err(PulseError::validation(
+                "assignment_ttl_out_of_range",
+                format!(
+                    "ttl_seconds {} is outside allowed range {}..={}",
+                    args.ttl_seconds, MIN_TTL_SECONDS, MAX_TTL_SECONDS
+                ),
+            ));
+        }
+        let ttl_seconds = args.ttl_seconds;
 
         // Step 1b: Validate workspace mode.
         if let Some(ref mode) = args.workspace_mode {
@@ -276,32 +288,94 @@ impl JsonGraphStore {
         }
 
         // ------------------------------------------------------------------
-        // 7. Resolve workspace mode and create workspace binding
+        // 7. Resolve workspace mode and bind/revalidate source workspace
         // ------------------------------------------------------------------
         let workspace_mode = self.resolve_workspace_mode_lookup(
             &packet.workspace.required_strategy,
             args.workspace_mode.as_deref(),
         )?;
 
-        // Generate IDs.
+        // Build source & repository info from packet.
+        let repository_id = packet.source.repository_id.clone();
+        let source_commit = packet.source.commit.clone();
+
+        // Generate stable IDs before binding so all runtime records, event and
+        // response share one identity set. Use sanitized workspace IDs for a
+        // safe repository-relative worktree path.
         let now: DateTime<Utc> = Utc::now();
         let lease_id = format!("lease_{}", ulid::Ulid::new());
-        let workspace_id = format!("wt_{}_{}", args.ticket_id, ulid::Ulid::new());
+        let workspace_id = crate::workspace::generate_workspace_id(&args.ticket_id);
         let prepared_assignment_id = format!("pa_{}", ulid::Ulid::new());
+        let transaction_id = new_transaction_id();
 
-        // Determine workspace path.
-        let workspace_path = match workspace_mode.as_str() {
-            WORKSPACE_MODE_IN_PLACE => ".".to_string(),
-            _ => format!(".pulse/runtime/workspaces/{workspace_id}"),
+        // Bind the workspace before writing any runtime records. In-place mode
+        // revalidates HEAD/cleanliness at the root; isolated mode creates and
+        // validates the linked worktree, with cleanup owned by workspace.rs.
+        let runtime_workspaces_root = self.repo_root.join(".pulse/runtime/workspaces");
+        let workspace_binding = match workspace_mode.as_str() {
+            WORKSPACE_MODE_IN_PLACE => {
+                let binding = crate::workspace::bind_in_place(
+                    &self.repo_root,
+                    &source_commit,
+                    &repository_id,
+                )?;
+                WorkspaceBindingSnapshot {
+                    path: PathBuf::from("."),
+                    repository_id: binding.repository_id,
+                    base_commit: binding.base_commit,
+                    head_commit: binding.head_commit,
+                    cleanliness: binding.cleanliness,
+                }
+            }
+            WORKSPACE_MODE_ISOLATED => {
+                let binding = crate::workspace::create_isolated_worktree(
+                    &self.repo_root,
+                    &runtime_workspaces_root,
+                    &workspace_id,
+                    &source_commit,
+                    &repository_id,
+                )?;
+                WorkspaceBindingSnapshot {
+                    path: binding.path,
+                    repository_id: binding.repository_id,
+                    base_commit: binding.base_commit,
+                    head_commit: binding.head_commit,
+                    cleanliness: binding.cleanliness,
+                }
+            }
+            other => {
+                return Err(PulseError::validation(
+                    "assignment_workspace_mode_unsupported",
+                    format!("unsupported workspace mode {other:?}"),
+                ));
+            }
         };
+        let workspace_path = self.workspace_record_path_string(&workspace_binding.path)?;
+
+        // Re-scan lease/source immediately before transaction planning so a
+        // stale preflight cannot authorize over a changed repository state.
+        if let Some(lease_id) =
+            assignment_store::find_live_lease_for_subject(&self.repo_root, &args.ticket_id)?
+        {
+            self.cleanup_bound_workspace_on_error(&workspace_mode, &workspace_binding.path)?;
+            return Err(PulseError::validation(
+                "assignment_live_lease_exists",
+                format!(
+                    "live exclusive lease {lease_id} exists for {}",
+                    args.ticket_id
+                ),
+            ));
+        }
+        if let Err(error) =
+            crate::workspace::bind_in_place(&self.repo_root, &source_commit, &repository_id)
+        {
+            self.cleanup_bound_workspace_on_error(&workspace_mode, &workspace_binding.path)?;
+            return Err(error);
+        }
 
         // Compute timestamps.
         let issued_at = now.to_rfc3339();
         let expires_at = (now + chrono::Duration::seconds(args.ttl_seconds as i64)).to_rfc3339();
-
-        // Build source & repository info from packet.
-        let repository_id = packet.source.repository_id.clone();
-        let source_commit = packet.source.commit.clone();
 
         // ------------------------------------------------------------------
         // 8. Create lease, workspace, prepared records in memory
@@ -332,48 +406,39 @@ impl JsonGraphStore {
             &node,
             &workspace_mode,
             &workspace_path,
-            &repository_id,
-            &source_commit,
+            &workspace_binding,
             &now,
         )?;
 
-        // Generate event_id early so the prepared record's lifecycle has a
-        // non-empty event_id for the gate fingerprint projection.
+        // Generate event/transaction IDs early so every record, event and
+        // response share one final identity/fingerprint set.
         let event_id = new_event_id();
-
-        let mut prepared_record = self.build_prepared_assignment_record(
-            &prepared_assignment_id,
-            &args.ticket_id,
-            &node,
-            &packet,
-            &lease_record,
-            &workspace_record,
-            &capability_match,
-            &packet.snapshot,
-            expected_revision,
-            &event_id,
-        )?;
-        // Compute fingerprint for the prepared record so the gate validator
-        // can verify its integrity before commit.
-        prepared_record.prepared_assignment_fingerprint = prepared_record.compute_fingerprint()?;
-
-        // ------------------------------------------------------------------
-        // 9. Evaluate prepared-assignment lifecycle gate (no commit)
-        // ------------------------------------------------------------------
-        let gate_ctx = PreparedAssignmentGateContext {
-            now,
-            prepared: &prepared_record,
-            lease: &lease_record,
-            workspace: &workspace_record,
+        let event_file_path = self
+            .repo_root
+            .join(".pulse/events")
+            .join(now.format("%Y-%m-%d").to_string())
+            .join(format!("{event_id}.json"));
+        let mut committed_targets = vec![
+            format!(".pulse/runtime/assignment/leases/{lease_id}.json"),
+            format!(".pulse/runtime/assignment/workspaces/{workspace_id}.json"),
+            format!(".pulse/runtime/assignment/prepared/{prepared_assignment_id}.json"),
+            self.rel_path(&node_path).to_string_lossy().to_string(),
+        ];
+        committed_targets.sort();
+        let event_path_rel = event_file_path
+            .strip_prefix(&self.repo_root)
+            .unwrap_or(&event_file_path)
+            .to_string_lossy()
+            .to_string();
+        let final_transaction = AssignmentTransaction {
+            transaction_id: transaction_id.clone(),
+            committed_targets,
+            event_path: event_path_rel,
+            recovery_state: "complete".to_string(),
         };
-        let gate_plan = self.evaluate_prepared_assignment_gate_for_active(
-            &args.ticket_id,
-            expected_revision,
-            gate_ctx,
-        )?;
 
         // ------------------------------------------------------------------
-        // 10. Build the PreparedAssignmentV1 response wrapper
+        // 9. Build the PreparedAssignmentV1 response wrapper
         // ------------------------------------------------------------------
 
         let lifecycle = AssignmentLifecycle {
@@ -385,11 +450,12 @@ impl JsonGraphStore {
             event_id: event_id.clone(),
         };
 
+        let graph_fingerprint_before = self.graph_fingerprint_current_unlocked()?;
         let lease_summary = build_lease_summary(&lease_record);
         let workspace_summary = build_workspace_summary(&workspace_record, &lease_id);
 
         let revalidated_snapshot = RevalidatedSnapshot {
-            graph_fingerprint: gate_plan.graph_fingerprint_before.clone(),
+            graph_fingerprint: graph_fingerprint_before.clone(),
             readiness_profile: packet.snapshot.readiness_profile.clone(),
             readiness_fingerprint: packet.snapshot.readiness_fingerprint.clone(),
             authority_policy_fingerprint: packet.snapshot.authority_policy_fingerprint.clone(),
@@ -399,8 +465,6 @@ impl JsonGraphStore {
             source_cleanliness: packet.source.cleanliness.clone(),
             repository_id: repository_id.clone(),
         };
-
-        let transaction_id = format!("txn_{}", ulid::Ulid::new());
 
         let mut prepared_v1 = PreparedAssignmentV1 {
             schema_version: ASSIGNMENT_SCHEMA_VERSION,
@@ -424,16 +488,43 @@ impl JsonGraphStore {
             capability_match: capability_match.clone(),
             lifecycle: lifecycle.clone(),
             dispatch: assignment::AssignmentDispatch::default(),
-            transaction: AssignmentTransaction {
-                transaction_id: transaction_id.clone(),
-                committed_targets: vec![],
-                event_path: String::new(),
-                recovery_state: "complete".to_string(),
-            },
+            transaction: final_transaction.clone(),
             prepared_assignment_fingerprint: String::new(),
             reason_codes: vec![],
         };
         prepared_v1.prepared_assignment_fingerprint = prepared_v1.compute_fingerprint()?;
+
+        let mut prepared_record = self.build_prepared_assignment_record(
+            &prepared_assignment_id,
+            &args.ticket_id,
+            &node,
+            &packet,
+            &lease_record,
+            &workspace_record,
+            &capability_match,
+            &packet.snapshot,
+            expected_revision,
+            &event_id,
+        )?;
+        prepared_record.transaction = final_transaction.clone();
+        prepared_record.prepared_assignment_fingerprint = prepared_record.compute_fingerprint()?;
+
+        // ------------------------------------------------------------------
+        // 10. Evaluate prepared-assignment lifecycle gate (no commit)
+        // ------------------------------------------------------------------
+        let gate_ctx = PreparedAssignmentGateContext {
+            now,
+            prepared: &prepared_record,
+            lease: &lease_record,
+            workspace: &workspace_record,
+        };
+        let gate_plan = self.evaluate_prepared_assignment_gate_for_active(
+            &args.ticket_id,
+            expected_revision,
+            gate_ctx,
+        )?;
+        prepared_v1.revalidated_snapshot.graph_fingerprint =
+            gate_plan.graph_fingerprint_before.clone();
 
         // ------------------------------------------------------------------
         // 11. Build event payload
@@ -466,7 +557,42 @@ impl JsonGraphStore {
             event_payload.clone(),
             now,
         );
-        let event_file_path = event_path(&self.repo_root, &event);
+
+        // Recompute fingerprints after the gate confirms the final graph
+        // fingerprint and before committing the prepared runtime bytes.
+        prepared_record.prepared_assignment_fingerprint = prepared_record.compute_fingerprint()?;
+        prepared_v1.prepared_assignment_fingerprint = prepared_v1.compute_fingerprint()?;
+        if prepared_record.prepared_assignment_fingerprint
+            != prepared_v1.prepared_assignment_fingerprint
+        {
+            self.cleanup_bound_workspace_on_error(&workspace_mode, &workspace_binding.path)?;
+            return Err(PulseError::validation(
+                "prepared_assignment_fingerprint_mismatch",
+                "persisted prepared record and response fingerprint differ",
+            ));
+        }
+
+        // Re-scan lease/source after all planning and before writing the
+        // transaction intent. This is redundant under the repository fence but
+        // documents/enforces the claim choreography boundary.
+        if let Some(lease_id) =
+            assignment_store::find_live_lease_for_subject(&self.repo_root, &args.ticket_id)?
+        {
+            self.cleanup_bound_workspace_on_error(&workspace_mode, &workspace_binding.path)?;
+            return Err(PulseError::validation(
+                "assignment_live_lease_exists",
+                format!(
+                    "live exclusive lease {lease_id} exists for {}",
+                    args.ticket_id
+                ),
+            ));
+        }
+        if let Err(error) =
+            crate::workspace::bind_in_place(&self.repo_root, &source_commit, &repository_id)
+        {
+            self.cleanup_bound_workspace_on_error(&workspace_mode, &workspace_binding.path)?;
+            return Err(error);
+        }
 
         // Canonical bytes for each target.
         let lease_bytes = to_canonical_bytes(&lease_record)?;
@@ -526,7 +652,8 @@ impl JsonGraphStore {
             ),
         ];
 
-        let intent = MultiTargetTransactionIntent::prepared(
+        let intent = MultiTargetTransactionIntent::prepared_with_transaction_id(
+            transaction_id,
             event_id,
             "work.assignment.prepared",
             &args.actor,
@@ -543,24 +670,24 @@ impl JsonGraphStore {
         commit_prepared_multi_target_transaction(&prepared_txn, self.failpoint)?;
 
         // ------------------------------------------------------------------
-        // 14. Build the final PreparedAssignmentV1 with transaction fields
+        // 14. Reload and validate committed runtime record before returning
         // ------------------------------------------------------------------
-        prepared_v1.transaction = AssignmentTransaction {
-            transaction_id: prepared_txn.intent.transaction_id.clone(),
-            committed_targets: vec![
-                format!(".pulse/runtime/assignment/leases/{lease_id}.json",),
-                format!(".pulse/runtime/assignment/workspaces/{workspace_id}.json",),
-                format!(".pulse/runtime/assignment/prepared/{prepared_assignment_id}.json",),
-                self.rel_path(&node_path).to_string_lossy().to_string(),
-            ],
-            event_path: event_file_path
-                .strip_prefix(&self.repo_root)
-                .unwrap_or(&event_file_path)
-                .to_string_lossy()
-                .to_string(),
-            recovery_state: "complete".to_string(),
-        };
-        prepared_v1.prepared_assignment_fingerprint = prepared_v1.compute_fingerprint()?;
+        let committed_record =
+            assignment_store::load_prepared(&self.repo_root, &prepared_assignment_id)?;
+        if committed_record != prepared_record {
+            return Err(PulseError::validation(
+                "prepared_assignment_committed_record_mismatch",
+                "committed prepared assignment record does not match planned bytes",
+            ));
+        }
+        if committed_record.prepared_assignment_fingerprint
+            != prepared_v1.prepared_assignment_fingerprint
+        {
+            return Err(PulseError::validation(
+                "prepared_assignment_fingerprint_mismatch",
+                "committed prepared assignment fingerprint does not match response",
+            ));
+        }
 
         Ok(ClaimWorkOutcome {
             prepared_assignment: prepared_v1,
@@ -599,6 +726,15 @@ fn resolve_workspace_mode(required_strategy: &str, requested: Option<&str>) -> P
             format!("unsupported workspace mode {other:?}"),
         )),
     }
+}
+
+#[derive(Debug, Clone)]
+struct WorkspaceBindingSnapshot {
+    path: PathBuf,
+    repository_id: String,
+    base_commit: String,
+    head_commit: String,
+    cleanliness: String,
 }
 
 // ---------------------------------------------------------------------------
@@ -667,8 +803,7 @@ impl JsonGraphStore {
         node: &Node,
         mode: &str,
         path: &str,
-        repository_id: &str,
-        base_commit: &str,
+        binding: &WorkspaceBindingSnapshot,
         now: &DateTime<Utc>,
     ) -> PulseResult<AssignmentWorkspaceRecordV1> {
         let record = AssignmentWorkspaceRecordV1 {
@@ -683,10 +818,10 @@ impl JsonGraphStore {
             },
             mode: mode.to_string(),
             path: path.to_string(),
-            repository_id: repository_id.to_string(),
-            base_commit: base_commit.to_string(),
-            head_commit_at_bind: base_commit.to_string(),
-            cleanliness_at_bind: "clean".to_string(),
+            repository_id: binding.repository_id.clone(),
+            base_commit: binding.base_commit.clone(),
+            head_commit_at_bind: binding.head_commit.clone(),
+            cleanliness_at_bind: binding.cleanliness.clone(),
             state: WORKSPACE_STATE_BOUND.to_string(),
             created_at: now.to_rfc3339(),
             released_at: None,
@@ -772,6 +907,41 @@ impl JsonGraphStore {
         requested: Option<&str>,
     ) -> PulseResult<String> {
         resolve_workspace_mode(required_strategy, requested)
+    }
+
+    fn workspace_record_path_string(&self, path: &std::path::Path) -> PulseResult<String> {
+        if path == std::path::Path::new(".") {
+            return Ok(".".to_string());
+        }
+        let relative = path.strip_prefix(&self.repo_root).map_err(|_| {
+            PulseError::validation(
+                "assignment_workspace_path_invalid",
+                format!(
+                    "workspace path {} is not under repository root {}",
+                    path.display(),
+                    self.repo_root.display()
+                ),
+            )
+        })?;
+        let relative = relative.to_string_lossy().to_string();
+        crate::storage::safe_repo_relative(&relative).map_err(|error| {
+            PulseError::validation(
+                "assignment_workspace_path_invalid",
+                format!("workspace path must be safe repository-relative: {error}"),
+            )
+        })?;
+        Ok(relative)
+    }
+
+    fn cleanup_bound_workspace_on_error(
+        &self,
+        mode: &str,
+        path: &std::path::Path,
+    ) -> PulseResult<()> {
+        if mode == WORKSPACE_MODE_ISOLATED && path.exists() {
+            crate::workspace::cleanup_worktree(&self.repo_root, path)?;
+        }
+        Ok(())
     }
 }
 
