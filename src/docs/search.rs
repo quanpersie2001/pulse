@@ -7,7 +7,7 @@ use crate::canonical_json::hash_bytes;
 use crate::docs::applicability::{applicable_docs, ApplicabilityOptions, FsContentResolver};
 use crate::docs::cache::{classify_against, CacheState};
 use crate::docs::index::{
-    build_index, cache_state_error_code, current_generation, index_status, IndexOptions,
+    build_search_cache, cache_state_error_code, current_generation, index_status, IndexOptions,
 };
 use crate::docs::lexical::{query as query_lexical, tokenize_query_text, SNIPPET_MAX_BYTES};
 use crate::docs::model::{DocumentAuthority, DocumentKind, WorkDocumentationContext};
@@ -139,7 +139,7 @@ pub fn search_docs(
         }
         _ => {
             crate::docs::index::ensure_auto_refresh_allowed(repo_root)?;
-            build_index(repo_root, refresh_options)?;
+            build_search_cache(repo_root, refresh_options)?;
             current_generation(repo_root)?.ok_or_else(|| {
                 PulseError::validation(
                     "docs_index_missing",
@@ -159,7 +159,7 @@ pub fn search_docs(
             ));
         }
         crate::docs::index::ensure_auto_refresh_allowed(repo_root)?;
-        build_index(repo_root, refresh_options)?;
+        build_search_cache(repo_root, refresh_options)?;
     }
     let generation = current_generation(repo_root)?.ok_or_else(|| {
         PulseError::validation(

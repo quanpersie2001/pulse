@@ -16,7 +16,7 @@ use std::collections::BTreeMap;
 use std::fs;
 
 use crate::docs::applicability::{ApplicableDocsReport, ApplicableDocument};
-use crate::docs::model::{DocumentAuthority, DocumentKind};
+use crate::docs::model::{DocumentAuthority, DocumentKind, WorkDocumentationContext};
 use crate::evidence::model::{BranchCriticality, BranchDisposition, ShapeMode};
 use crate::graph::contract::{
     ExpectedEvidence, ImplementationMode, PlanPolicy, QaImpactPosture, Risk, TicketRole,
@@ -104,26 +104,16 @@ impl JsonGraphStore {
         let shaping = extract_shaping(&node, &readiness.shaping, &projection)?;
         let graph = extract_graph(&readiness, &projection)?;
         let documentation_base = extract_documentation(&readiness.docs)?;
-        let workspace = extract_workspace(
-            &node,
-            &crate::work_packet::PacketSource {
-                repository_id: repository_id.clone(),
-                kind: "git_commit".to_string(),
-                commit: String::new(),
-                head_ref: None,
-                worktree_root_kind: String::new(),
-                cleanliness: String::new(),
-                operation_state: String::new(),
-                currentness: String::new(),
-            },
-            &repository_id,
-        );
+        let source = extract_source_snapshot(&self.repo_root, &repository_id)?;
+        let workspace = extract_workspace(&node, &source, &repository_id);
         let capabilities = extract_capabilities(&node);
         let scope = extract_scope(&node);
         let assurance = extract_assurance(&node);
 
         // Build deterministic suggestion query (P2S1-D14).
-        let suggestion_query = build_suggestion_query(&node, &shaping)?;
+        let docs_work_context = work_documentation_context(&node);
+        let suggestion_query =
+            build_suggestion_query(&node, &shaping, &context.decisions, &docs_work_context)?;
         let excluded_doc_ids: Vec<String> = documentation_base
             .applicability
             .excluded
@@ -135,12 +125,14 @@ impl JsonGraphStore {
         let pre_graph_fingerprint = projection.graph_fingerprint.clone();
         let pre_subject_revision = node.revision;
         let pre_subject_status = node.status;
-        let _pre_readiness_fingerprint = readiness_report.readiness_fingerprint.clone();
+        let pre_readiness_fingerprint = readiness_report.readiness_fingerprint.clone();
         let pre_authority_fingerprint = readiness.authority.fingerprint.clone();
         let pre_docs_registry_fingerprint = readiness.docs.registry.fingerprint.clone();
+        let pre_docs_content_fingerprints = docs_content_fingerprints(&documentation_base);
         let pre_subject_id = node.id.clone();
         let pre_suggestion_query = suggestion_query.clone();
         let pre_excluded_doc_ids = excluded_doc_ids.clone();
+        let pre_source = packet_source_snapshot_from_packet(&source);
 
         // Phase 1 complete: drop first fence.
         drop(guard);
@@ -157,10 +149,17 @@ impl JsonGraphStore {
         };
         // Build/search cache-only disposable docs index (never writes
         // projections). If the cache is already current this is a no-op.
-        crate::docs::index::build_search_cache(&self.repo_root, index_opts)?;
+        crate::docs::index::build_search_cache(&self.repo_root, index_opts)
+            .map_err(|error| map_docs_index_error(error, "docs search cache refresh failed"))?;
 
-        let source = extract_source_snapshot(&self.repo_root, &repository_id)?;
         let docs_cache_fp = crate::docs::index::current_cache_fingerprint(&self.repo_root)?;
+        let suggested_sections = search_suggestions(
+            &self.repo_root,
+            &pre_suggestion_query,
+            &pre_excluded_doc_ids,
+            &docs_work_context,
+        )?;
+        let selected_suggestion_fingerprints = suggestion_fingerprints(&suggested_sections);
 
         // ==================================================================
         // Phase 2 — Second fence: revalidate, search, assemble
@@ -201,46 +200,41 @@ impl JsonGraphStore {
                 "docs registry fingerprint changed during work packet build",
             ));
         }
+        let readiness_report2 =
+            evaluate_readiness(&readiness2.as_inputs(&node2), EvalProfile::Ready)?;
+        if readiness_report2.readiness_fingerprint != pre_readiness_fingerprint {
+            return Err(PulseError::validation(
+                "work_packet_snapshot_changed",
+                "readiness fingerprint changed during work packet build",
+            ));
+        }
+        if docs_content_fingerprints(&extract_documentation(&readiness2.docs)?)
+            != pre_docs_content_fingerprints
+        {
+            return Err(PulseError::validation(
+                "work_packet_snapshot_changed",
+                "applicable document content changed during work packet build",
+            ));
+        }
+        let current_docs_cache_fp = crate::docs::index::current_cache_fingerprint(&self.repo_root)?;
+        if current_docs_cache_fp != docs_cache_fp {
+            return Err(PulseError::validation(
+                "work_packet_snapshot_changed",
+                "docs search cache fingerprint changed during work packet build",
+            ));
+        }
+        if suggestion_fingerprints(&suggested_sections) != selected_suggestion_fingerprints {
+            return Err(PulseError::validation(
+                "work_packet_snapshot_changed",
+                "selected documentation suggestion identity changed during work packet build",
+            ));
+        }
 
         // Revalidate source (HEAD, cleanliness, operation state).
-        let pre_source = crate::source::PacketSourceSnapshot {
-            repository_id: source.repository_id.clone(),
-            kind: source.kind.clone(),
-            commit: source.commit.clone(),
-            head_ref: source.head_ref.clone(),
-            worktree_root_kind: match source.worktree_root_kind.as_str() {
-                "linked_worktree" => crate::source::WorktreeRootKind::LinkedWorktree,
-                _ => crate::source::WorktreeRootKind::PrimaryOrExistingWorktree,
-            },
-            cleanliness: match source.cleanliness.as_str() {
-                "dirty" => crate::source::SourceCleanliness::Dirty,
-                _ => crate::source::SourceCleanliness::Clean,
-            },
-            operation_state: match source.operation_state.as_str() {
-                "merge_in_progress" => crate::source::RepositoryOperationState::MergeInProgress,
-                "rebase_in_progress" => crate::source::RepositoryOperationState::RebaseInProgress,
-                "cherry_pick_in_progress" => {
-                    crate::source::RepositoryOperationState::CherryPickInProgress
-                }
-                "revert_in_progress" => crate::source::RepositoryOperationState::RevertInProgress,
-                "bisect_in_progress" => crate::source::RepositoryOperationState::BisectInProgress,
-                _ => crate::source::RepositoryOperationState::Normal,
-            },
-            currentness: source.currentness.clone(),
-        };
         crate::source::revalidate_packet_base(&self.repo_root, &pre_source)?;
 
         // Permission check: no retry on snapshot/source change.
         drop(guard2);
-
-        // ==================================================================
-        // Search suggestions and build documentation with search results
-        // ==================================================================
-        let suggested_sections = search_suggestions(
-            &self.repo_root,
-            &pre_suggestion_query,
-            &pre_excluded_doc_ids,
-        )?;
 
         let snapshot_done = complete_snapshot(snapshot_pre, &documentation_base, &source);
 
@@ -901,6 +895,12 @@ fn extract_graph(
 }
 
 fn extract_documentation(docs: &ApplicableDocsReport) -> PulseResult<PacketDocumentation> {
+    if docs.registry.fingerprint.is_empty() {
+        return Err(PulseError::validation(
+            "work_packet_docs_registry_missing",
+            "packet requires existing docs manifest/registry",
+        ));
+    }
     if docs.gate.status != "complete" {
         return Err(PulseError::validation(
             "work_packet_docs_context_incomplete",
@@ -919,30 +919,21 @@ fn extract_documentation(docs: &ApplicableDocsReport) -> PulseResult<PacketDocum
         .chain(docs.optional.iter())
         .map(|doc| (doc.id.as_str(), doc))
         .collect();
-    let write_candidates: Vec<PacketDocRef> = docs
-        .write_candidates
-        .iter()
-        .map(|wc| {
-            by_id
-                .get(wc.id.as_str())
-                .map(|doc| {
-                    let mut dto = packet_doc_ref(doc);
-                    dto.reasons = wc.reasons.clone();
-                    dto
-                })
-                .unwrap_or_else(|| PacketDocRef {
-                    id: wc.id.clone(),
-                    path: String::new(),
-                    kind: String::new(),
-                    authority: String::new(),
-                    owner: String::new(),
-                    summary: String::new(),
-                    revision: 0,
-                    content_hash: String::new(),
-                    reasons: wc.reasons.clone(),
-                })
-        })
-        .collect();
+    let mut write_candidates = Vec::new();
+    for wc in &docs.write_candidates {
+        let doc = by_id.get(wc.id.as_str()).ok_or_else(|| {
+            PulseError::validation(
+                "work_packet_docs_context_incomplete",
+                format!(
+                    "write candidate {} has no current applicable document metadata",
+                    wc.id
+                ),
+            )
+        })?;
+        let mut dto = packet_doc_ref(doc);
+        dto.reasons = wc.reasons.clone();
+        write_candidates.push(dto);
+    }
 
     let excluded: Vec<PacketExcludedDocRef> = docs
         .excluded
@@ -994,6 +985,85 @@ fn packet_doc_ref(document: &ApplicableDocument) -> PacketDocRef {
         revision: document.document_revision,
         content_hash: document.content_hash.clone(),
         reasons: document.reasons.clone(),
+    }
+}
+
+fn docs_content_fingerprints(documentation: &PacketDocumentation) -> BTreeMap<String, String> {
+    documentation
+        .applicability
+        .required
+        .iter()
+        .chain(documentation.applicability.optional.iter())
+        .chain(documentation.applicability.write_candidates.iter())
+        .map(|doc| (doc.id.clone(), doc.content_hash.clone()))
+        .collect()
+}
+
+fn suggestion_fingerprints(
+    suggestions: &[work_packet::PacketSuggestedSection],
+) -> Vec<(u64, String, String, String, u64, u64)> {
+    suggestions
+        .iter()
+        .map(|section| {
+            (
+                section.rank,
+                section.section_ref.clone(),
+                section.document_hash.clone(),
+                section.section_hash.clone(),
+                section.score_micros,
+                section.lexical_score_micros,
+            )
+        })
+        .collect()
+}
+
+fn packet_source_snapshot_from_packet(
+    source: &PacketSource,
+) -> crate::source::PacketSourceSnapshot {
+    crate::source::PacketSourceSnapshot {
+        repository_id: source.repository_id.clone(),
+        kind: source.kind.clone(),
+        commit: source.commit.clone(),
+        head_ref: source.head_ref.clone(),
+        worktree_root_kind: match source.worktree_root_kind.as_str() {
+            "linked_worktree" => crate::source::WorktreeRootKind::LinkedWorktree,
+            _ => crate::source::WorktreeRootKind::PrimaryOrExistingWorktree,
+        },
+        cleanliness: match source.cleanliness.as_str() {
+            "dirty" => crate::source::SourceCleanliness::Dirty,
+            _ => crate::source::SourceCleanliness::Clean,
+        },
+        operation_state: match source.operation_state.as_str() {
+            "merge_in_progress" => crate::source::RepositoryOperationState::MergeInProgress,
+            "rebase_in_progress" => crate::source::RepositoryOperationState::RebaseInProgress,
+            "cherry_pick_in_progress" => {
+                crate::source::RepositoryOperationState::CherryPickInProgress
+            }
+            "revert_in_progress" => crate::source::RepositoryOperationState::RevertInProgress,
+            "bisect_in_progress" => crate::source::RepositoryOperationState::BisectInProgress,
+            _ => crate::source::RepositoryOperationState::Normal,
+        },
+        currentness: source.currentness.clone(),
+    }
+}
+
+fn work_documentation_context(node: &Node) -> WorkDocumentationContext {
+    node.documentation
+        .as_ref()
+        .map(|documentation| {
+            WorkDocumentationContext::from((node.id.as_str(), node.revision, documentation))
+        })
+        .unwrap_or_else(|| WorkDocumentationContext::unknown(node.id.clone(), node.revision))
+}
+
+fn map_docs_index_error(error: PulseError, context: &str) -> PulseError {
+    match error.code() {
+        "work_packet_docs_score_invalid" | "work_packet_snapshot_changed" => error,
+        code if code.starts_with("docs_") => PulseError::validation(
+            "work_packet_docs_index_unavailable",
+            format!("{context}; cause_code={code}: {error}"),
+        ),
+        _ => error,
     }
 }
 
@@ -1498,6 +1568,8 @@ fn validated_hint_path(path: &str) -> Option<String> {
 pub fn build_suggestion_query(
     node: &Node,
     shaping: &PacketShaping,
+    decisions: &[work_packet::PacketDecisionRef],
+    docs_work: &WorkDocumentationContext,
 ) -> PulseResult<work_packet::PacketSuggestionQuery> {
     let mut fragments: Vec<String> = Vec::new();
 
@@ -1552,13 +1624,23 @@ pub fn build_suggestion_query(
         }
     }
 
-    // 7. Required Decision titles (sort by Decision ID)
-    if let Some(contract) = &node.implementation {
-        if !contract.required_decisions.is_empty() {
-            for req_dec in &contract.required_decisions {
-                // Title not available in required_decisions list, use ID as fallback
-                fragments.push(format!("decision:{}", req_dec.id));
-            }
+    // 6. Documentation routing domains, then labels (lexical sort).
+    for domain in &docs_work.domains {
+        fragments.push(domain.clone());
+    }
+    for label in &docs_work.labels {
+        fragments.push(label.clone());
+    }
+
+    // 7. Required Decision titles (sort by Decision ID).
+    let mut decision_titles: Vec<(&str, &str)> = decisions
+        .iter()
+        .map(|decision| (decision.id.as_str(), decision.title.as_str()))
+        .collect();
+    decision_titles.sort_by(|a, b| a.0.cmp(b.0));
+    for (_, title) in decision_titles {
+        if !title.is_empty() {
+            fragments.push(title.to_string());
         }
     }
 
@@ -1693,93 +1775,71 @@ fn search_suggestions(
     repo_root: &std::path::Path,
     query: &work_packet::PacketSuggestionQuery,
     excluded_doc_ids: &[String],
+    docs_work: &WorkDocumentationContext,
 ) -> PulseResult<Vec<work_packet::PacketSuggestedSection>> {
     if query.normalized_terms.is_empty() {
         return Ok(Vec::new());
     }
 
-    // Open the current generation for reading.
-    let generation = match crate::docs::index::current_generation(repo_root)? {
-        Some(gen) => gen,
-        None => return Ok(Vec::new()),
-    };
-
-    // Query lexical index with the suggestion terms.
-    let limit = work_packet::MAX_SUGGESTED_SECTIONS * 4; // Fetch more for filtering
-    let hits =
-        match crate::docs::lexical::query(&generation.tantivy_path, &query.normalized_terms, limit)
-        {
-            Ok(h) => h,
-            Err(_) => return Ok(Vec::new()),
-        };
+    let report = crate::docs::search_docs(
+        repo_root,
+        &query.text,
+        crate::docs::SearchOptions {
+            kind: None,
+            domain: None,
+            authority: None,
+            limit: Some(work_packet::MAX_SUGGESTED_SECTIONS),
+            no_refresh: false,
+            explain: true,
+            include_draft: false,
+            include_stale: false,
+            work: Some(docs_work.clone()),
+        },
+    )
+    .map_err(|error| map_docs_index_error(error, "docs suggestion search failed"))?;
 
     let excluded: std::collections::BTreeSet<&str> =
         excluded_doc_ids.iter().map(|id| id.as_str()).collect();
-
-    // Load the sections index file for snippet extraction.
     let mut results = Vec::new();
-    for hit in &hits {
-        if excluded.contains(hit.section.document_id.as_str()) {
+    for hit in report.results {
+        if excluded.contains(hit.document_id.as_str()) {
             continue;
         }
-
-        let score_micros = match score_to_micros(hit.score) {
-            Ok(s) => s,
-            Err(_) => continue,
-        };
-        let lexical_score_micros = match score_to_micros(hit.score) {
-            Ok(s) => s,
-            Err(_) => continue,
-        };
-
-        // Build snippet using the stored record.
-        let snippet = hit.section.summary.clone();
-        let truncated_snippet = if snippet.len() > work_packet::MAX_SNIPPET_BYTES_EACH {
-            let mut end = work_packet::MAX_SNIPPET_BYTES_EACH;
-            while !snippet.is_char_boundary(end) {
-                end -= 1;
-            }
-            snippet[..end].to_string()
-        } else {
-            snippet
-        };
-
+        let score_micros = score_to_micros(hit.score)?;
+        let lexical_score_micros = score_to_micros(hit.lexical_score)?;
         results.push(work_packet::PacketSuggestedSection {
-            rank: 0, // Will be set after sorting
+            rank: 0,
             score_micros,
             lexical_score_micros,
-            section_ref: hit.section.section_ref.clone(),
-            heading_path: hit.section.heading_path.join(" > "),
+            section_ref: hit.section_ref,
+            heading_path: hit.heading_path.join(" > "),
             line_range: work_packet::PacketLineRange {
-                start: hit.section.range.start_line as u64,
-                end: hit.section.range.end_line as u64,
+                start: hit.range.start_line as u64,
+                end: hit.range.end_line as u64,
             },
-            document_id: hit.section.document_id.clone(),
-            document_hash: hit.section.document_content_hash.clone(),
-            section_hash: hit.section.section_content_hash.clone(),
-            summary: hit.section.summary.clone(),
-            snippet: truncated_snippet,
-            authority: hit.section.authority.clone(),
-            owner: hit.section.owner.clone(),
-            kind: hit.section.kind.clone(),
-            matched_fields: hit.matched_fields.clone(),
-            applicability_reasons: vec![],
+            document_id: hit.document_id,
+            document_hash: hit.document_content_hash,
+            section_hash: hit.section_content_hash,
+            summary: hit.summary,
+            snippet: hit.snippet,
+            authority: hit.authority,
+            owner: hit.owner,
+            kind: hit.kind,
+            matched_fields: hit.matched_fields,
+            applicability_reasons: hit.applicability_reasons,
         });
     }
 
-    // Sort by score descending, then section_ref for determinism.
     results.sort_by(|a, b| {
-        b.lexical_score_micros
-            .cmp(&a.lexical_score_micros)
+        b.score_micros
+            .cmp(&a.score_micros)
+            .then_with(|| b.lexical_score_micros.cmp(&a.lexical_score_micros))
             .then_with(|| a.section_ref.cmp(&b.section_ref))
     });
     results.truncate(work_packet::MAX_SUGGESTED_SECTIONS);
-
-    // Assign ranks after final ordering.
     for (idx, result) in results.iter_mut().enumerate() {
         result.rank = (idx as u64) + 1;
     }
-
     Ok(results)
 }
 
@@ -1867,7 +1927,11 @@ mod tests {
                     required_documents: vec![],
                     deferred_to: vec![],
                 },
-                routing: node::DocumentationRouting::default(),
+                routing: node::DocumentationRouting {
+                    paths: vec![],
+                    domains: vec!["authentication".to_string()],
+                    labels: vec!["tokens".to_string()],
+                },
             }),
             role: Some(TicketRole::Implementation),
             risk: Some(Risk::Low),
@@ -2417,7 +2481,17 @@ mod tests {
             ..Default::default()
         };
 
-        let query = build_suggestion_query(&node, &shaping).unwrap();
+        let docs_work = work_documentation_context(&node);
+        let decisions = vec![work_packet::PacketDecisionRef {
+            id: "DEC-001".to_string(),
+            revision: 1,
+            contract_revision: 1,
+            status: "done".to_string(),
+            title: "Atomic rotation decision".to_string(),
+            acceptance_receipt: None,
+            content_refs: vec![],
+        }];
+        let query = build_suggestion_query(&node, &shaping, &decisions, &docs_work).unwrap();
         assert!(!query.text.is_empty(), "query must not be empty");
         assert!(!query.normalized_terms.is_empty(), "must have terms");
         assert!(
@@ -2433,6 +2507,18 @@ mod tests {
         assert!(
             query.text.contains("rotate") || query.text.contains("rotation"),
             "query should include objective"
+        );
+        assert!(
+            query.text.contains("authentication"),
+            "query should include documentation routing domains"
+        );
+        assert!(
+            query.text.contains("tokens"),
+            "query should include documentation routing labels"
+        );
+        assert!(
+            query.text.contains("atomic"),
+            "query should include required Decision titles"
         );
     }
 
@@ -2460,7 +2546,8 @@ mod tests {
             updated_at: chrono::Utc::now(),
         };
         let shaping = PacketShaping::default();
-        let result = build_suggestion_query(&node, &shaping);
+        let docs_work = work_documentation_context(&node);
+        let result = build_suggestion_query(&node, &shaping, &[], &docs_work);
         assert!(result.is_err());
         assert_eq!(result.unwrap_err().code(), "work_packet_docs_query_empty");
     }
@@ -2472,7 +2559,8 @@ mod tests {
             contract.objective = "b ".repeat(200);
         }
         let shaping = PacketShaping::default();
-        let query = build_suggestion_query(&node, &shaping).unwrap();
+        let docs_work = work_documentation_context(&node);
+        let query = build_suggestion_query(&node, &shaping, &[], &docs_work).unwrap();
         assert!(!query.text.is_empty());
         assert!(query.normalized_terms.len() <= 32);
         assert!(query.text.len() <= 256);
