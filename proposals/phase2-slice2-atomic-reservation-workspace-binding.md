@@ -1,15 +1,18 @@
 # Phase 2 — Slice 2: Atomic Reservation + Workspace Binding
 
-> Trạng thái: **accepted implementation proposal**. This locks the Slice 2
-> implementation contract, transaction/recovery choreography and acceptance
-> matrix for code work. It is **not implemented**; do not mark implementation
-> complete until source changes and verification land in later commits.
+> Trạng thái: **implemented and verified** for Phase 2 Slice 2. Implementation
+> landed across commits `0c9a888`, `57ec28f`, `f66d103`, `9abb940`, `dd704da`,
+> `e1f86e6`, `1dc2473`, `7108e9e`, `f8a747b`, `367dfed` and verification
+> hardening commit `e6c6402`; supporting fix/verification commits are listed in
+> the completion evidence below. This remains a pre-Core-v1 current baseline,
+> not a released compatibility contract.
 > Tiền đề:
 > [`phase2-slice1-work-packet-dispatch-foundation.md`](phase2-slice1-work-packet-dispatch-foundation.md)
 > is implemented and verified through commit `6d3076b`. Slice 1 owns the
-> read-only `WorkPacketV1` preview packet. This Slice 2 proposal must not mutate
-> `WorkPacketV1` semantics.
-> Sở hữu dự kiến: atomic assignment reservation, runtime lease record, workspace
+> read-only `WorkPacketV1` preview packet. This Slice 2 implementation does not
+> mutate `WorkPacketV1` semantics.
+> Sở hữu: implemented Slice 2 behavior for the second Phase 2 slice:
+> atomic assignment reservation, runtime lease record, workspace
 > binding record, concrete capability match, `PreparedAssignmentV1`, gated
 > `ready -> active`, release/recovery of prepared-but-not-runnable assignments,
 > and claim-state projection from runtime.
@@ -1634,11 +1637,19 @@ assignment path assertions.
 ### P2S2-I11 — Implementation completion documentation after code only
 
 After code is implemented and verified, update implementation completion
-evidence and roadmap completion status. The accepted proposal status above only
-locks this file as the implementation plan; it does not claim source
+evidence and roadmap completion status. This item is completed through the
+status header update, DoD check-off, completion evidence section and roadmap
+updates applied in this documentation commit. The accepted proposal status above
+only locks this file as the implementation plan; it does not claim source
 implementation or verification completion. Documentation updates must not create
 Pulse work-graph/docs-registry/evidence state in this development repository
 unless a maintainer separately approves self-hosting.
+
+Implementation and verification commits are listed in the completion evidence
+section above. This documentation commit itself is the I11 deliverable: it does
+not create Pulse work-graph/docs-registry/evidence state, and it accurately
+cites implementation/verifier commits and validation results while
+distinguishing Slice 2 completed from broader Phase 2 not complete.
 
 ---
 
@@ -1665,46 +1676,94 @@ verification or close gate exists yet.
 
 ## Definition of Done
 
-- [ ] `PreparedAssignmentV1`, assignment lease, workspace and capability match
+All DoD items are verified complete through the implementation commits listed
+in the completion evidence below.
+
+- [x] `PreparedAssignmentV1`, assignment lease, workspace and capability match
       DTOs/schemas exist with deny-unknown tests and canonical fingerprints.
-- [ ] `WorkPacketV1` preview semantics remain unchanged; tests assert nested
+- [x] `WorkPacketV1` preview semantics remain unchanged; tests assert nested
       packet remains non-authorized.
-- [ ] `pulse work claim <ticket-id> --assignee ... --capabilities ... --json`
+- [x] `pulse work claim <ticket-id> --assignee ... --capabilities ... --json`
       returns prepared assignment on happy path.
-- [ ] Claim revalidates graph/readiness/docs/policy/source/packet fingerprint
+- [x] Claim revalidates graph/readiness/docs/policy/source/packet fingerprint
       before committing lease.
-- [ ] Concrete capability inventory must fully match packet-required
+- [x] Concrete capability inventory must fully match packet-required
       capabilities.
-- [ ] Workspace mode respects Slice 1 risk/strategy mapping; no downgrade from
+- [x] Workspace mode respects Slice 1 risk/strategy mapping; no downgrade from
       isolated-required to in-place.
-- [ ] Isolated worktree binding creates a clean exact-base workspace and records
+- [x] Isolated worktree binding creates a clean exact-base workspace and records
       workspace identity.
-- [ ] In-place binding is recorded and never deletes repo root on release.
-- [ ] Exclusive live lease prevents duplicate claims; concurrent same-ticket
+- [x] In-place binding is recorded and never deletes repo root on release.
+- [x] Exclusive live lease prevents duplicate claims; concurrent same-ticket
       claim has exactly one winner.
-- [ ] Ticket transitions `ready -> active` only via prepared assignment gate.
-- [ ] Direct transition to `active` without assignment is rejected.
-- [ ] Lease/workspace/prepared records and Ticket transition commit/recover as
+- [x] Ticket transitions `ready -> active` only via prepared assignment gate.
+- [x] Direct transition to `active` without assignment is rejected.
+- [x] Lease/workspace/prepared records and Ticket transition commit/recover as
       one coherent transaction family.
-- [ ] Crash/failpoint recovery covers intent, runtime records, node update,
+- [x] Crash/failpoint recovery covers intent, runtime records, node update,
       event and workspace pending cleanup/adoption.
-- [ ] `work release` safely releases prepared/no-run assignments and can requeue
+- [x] `work release` safely releases prepared/no-run assignments and can requeue
       to `ready` with expected revision.
-- [ ] `work leases` and `work leases recover` expose runtime state without
+- [x] `work leases` and `work leases recover` expose runtime state without
       mutating graph except explicit recovery/release operations.
-- [ ] Execution frontier joins runtime claim state without persisting it in node
+- [x] Execution frontier joins runtime claim state without persisting it in node
       JSON.
-- [ ] Failed claims do not leave live leases; ambiguous workspaces are surfaced
+- [x] Failed claims do not leave live leases; ambiguous workspaces are surfaced
       as operator cleanup, not hidden.
-- [ ] Claim creates no runner/mailbox/handoff/verification/QA state.
-- [ ] Non-enrolled repo rejects before runtime bootstrap.
-- [ ] `cargo fmt --check` passes.
-- [ ] `cargo clippy --all-targets --quiet -- -D warnings` passes.
-- [ ] `cargo test --all-targets` passes under default threading.
-- [ ] `git diff --check` passes.
-- [ ] Implementation completion evidence and roadmap completion status are
-      updated only after verified implementation commits land; this accepted
-      proposal status alone is not implementation completion.
+- [x] Claim creates no runner/mailbox/handoff/verification/QA state.
+- [x] Non-enrolled repo rejects before runtime bootstrap.
+- [x] `cargo fmt --check` passes.
+- [x] `cargo clippy --all-targets --quiet -- -D warnings` passes.
+- [x] `cargo test --all-targets` passes under default threading.
+- [x] `git diff --check` passes.
+- [x] Implementation completion evidence and roadmap completion status are
+      updated only after verified implementation commits land.
+
+### Completion evidence
+
+Verified implementation commits (all between proposal acceptance `075b161` and
+final verification `e6c6402`):
+
+- `0c9a888` — clean: P2S2-I1 assignment value contracts, DTOs, schemas,
+  fingerprints and deny-unknown tests.
+- `770fc74` — commit: P2S2-I1 schema verification hardening.
+- `57ec28f` — commit: P2S2-I2 runtime assignment store, record IO and
+  recovery classification.
+- `37605db` — commit: P2S2-I2 store verification hardening.
+- `f66d103` — commit: P2S2-I3 domain-neutral multi-target + event transaction
+  support.
+- `119c328` — commit: P2S2-I3 transaction semantics hardening.
+- `9abb940` — commit: P2S2-I4 capability inventory matching.
+- `5620467` — commit: P2S2-I4 matching verification hardening.
+- `dd704da` — commit: P2S2-I5 workspace binding helpers (in-place and
+  isolated worktree).
+- `b3720ac` — fix: P2S2-I5 workspace binding safety.
+- `e1f86e6` — commit: P2S2-I6 fence-aware packet revalidation for claim.
+- `ff571d6` — fix: fenced packet docs search deadlock resolution.
+- `1dc2473` — commit: P2S2-I7 prepared-assignment lifecycle gate.
+- `aa60e44` — fix: P2S2-I7 gate hardening.
+- `7108e9e` — commit: P2S2-I8 claim pipeline orchestration and transaction
+  ordering.
+- `a3c80cb` — fix: atomic claim pipeline hardening.
+- `f8a747b` — commit: P2S2-I9 release/leases listing/recovery surfaces and
+  frontier claim-state enrichment.
+- `a2d6e10` — commit: P2S2-I9 release recovery frontier hardening.
+- `367dfed` — commit: P2S2-I10 concurrency, failpoint and side-effect
+  hardening.
+- `e6c6402` — commit: P2S2-I10 final hardening and concurrent verification.
+
+Final P2S2-I11 verification evidence before marking complete:
+
+- `cargo fmt --check` — pass.
+- `cargo clippy --all-targets --quiet -- -D warnings` — pass.
+- `cargo test --all-targets` under default threading — pass: 675 tests across
+  library, binary and integration crates.
+- `git diff --check` — pass.
+
+This completes only Phase 2 Slice 2: atomic reservation, workspace binding and
+`PreparedAssignmentV1`. Phase 2 as a whole is not complete: Pulse still has no
+runner, cancel/resume, handoff, verification or close gate. Those remain later
+Phase 2 slices beyond Slice 2.
 
 ---
 

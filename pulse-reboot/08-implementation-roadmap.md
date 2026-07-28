@@ -99,27 +99,34 @@ thành.
 
 ### Phase 2 - Single-agent run
 
-**Current implementation status:** Phase 2 Slice 1 preview `WorkPacketV1` has
-been implemented and verified in
-[`proposals/phase2-slice1-work-packet-dispatch-foundation.md`](../proposals/phase2-slice1-work-packet-dispatch-foundation.md).
-Verification evidence records `cargo fmt --check`,
-`cargo clippy --all-targets --quiet -- -D warnings`, `cargo test --all-targets`
-under default threading, and `git diff --check` passing, with final hardening at
-commit `6d3076b`. This completes only the preview packet foundation: exact clean
-source-base identity, bounded docs/graph context and pre-reservation dispatch
-requirements. Phase 2 as a whole is not complete: Pulse still has no lease
-acquisition, workspace allocation, `PreparedAssignmentV1`, gated
-`ready -> active`, runner/cancel/resume, handoff/verification or close gate.
-Those remain the next Phase 2 slices.
+**Current implementation status:** Phase 2 Slice 1 preview `WorkPacketV1` and
+Slice 2 atomic reservation + workspace binding are implemented and verified.
+
+Slice 1 (packet foundation): implemented in
+[`proposals/phase2-slice1-work-packet-dispatch-foundation.md`](../proposals/phase2-slice1-work-packet-dispatch-foundation.md),
+verified through commit `6d3076b` (458 tests).
+
+Slice 2 (atomic reservation + workspace binding): implemented in
+[`proposals/phase2-slice2-atomic-reservation-workspace-binding.md`](../proposals/phase2-slice2-atomic-reservation-workspace-binding.md),
+verified through commit `e6c6402` (675 tests).
+Implementation includes assignment value contracts, runtime lease/workspace/
+prepared-assignment store, multi-target transaction extensions, capability
+inventory matching, in-place and isolated worktree binding, fence-aware packet
+revalidation, `ready -> active` lifecycle gate, `work claim`/`work release`/
+`work leases`/`work leases recover` commands, concurrency hardening and
+claim-state enriched execution frontier.
+
+Phase 2 as a whole is not complete: Pulse still has no runner/cancel/resume,
+handoff/verification receipts, proof-driven close gate or documentation impact
+promotion. Those remain the next Phase 2 slices.
 
 - Codex adapter cho một run.
 - Minimal `pulse-shape` path để tạo/review shaping result trước dispatch; đủ cho R0/R1 và làm nền cho capability pack đầy đủ ở Phase 3.
 - Shaping reconciliation mutation path: persist resolution, update pointers, graduate precise fog, supersede invalid branches và recompute frontier/readiness bằng graph CAS.
 - `pulse work packet` và prompt builder dùng bounded execution packet gồm shaping result/branch dispositions/destination revision cùng required/optional/write-candidate docs, section refs và read budget.
-- Process runner, cancellation, logs.
-- Assignment lease đơn.
-- Handoff, documentation impact/promotion candidates, verification profile và close gate.
-- Worktree isolation cho risk vừa/cao.
+- Process runner, cancellation, logs và resume.
+- Handoff, verification profile, documentation impact/promotion candidates và close gate.
+- Worktree isolation cho risk vừa/cao (Slice 2 đã hỗ trợ cơ bản qua workspace binding).
 
 **Exit:** một Ticket đi từ `ready` đến `done/rework/blocked` bằng proof, resume được sau interruption.
 

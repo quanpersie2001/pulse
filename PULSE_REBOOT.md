@@ -113,9 +113,11 @@ Phase 1 local graph, documentation, evidence, knowledge-store và
 shaping/readiness foundations đã được implement qua Slice 1–7. Frontier hiện tại
 là **Phase 2 single-agent run**:
 
-1. thiết kế/implement assignment lease, workspace binding và
-   `PreparedAssignmentV1` trên nền preview `WorkPacketV1` đã verified tại
-   [`proposals/phase2-slice1-work-packet-dispatch-foundation.md`](proposals/phase2-slice1-work-packet-dispatch-foundation.md), để mở gated
+1. assignment lease, workspace binding và `PreparedAssignmentV1` đã được
+   implement tại
+   [`proposals/phase2-slice2-atomic-reservation-workspace-binding.md`](proposals/phase2-slice2-atomic-reservation-workspace-binding.md),
+   trên nền preview `WorkPacketV1` đã verified tại
+   [`proposals/phase2-slice1-work-packet-dispatch-foundation.md`](proposals/phase2-slice1-work-packet-dispatch-foundation.md), mở gated
    `ready -> active`;
 2. thêm runner, cancel/resume và source/workspace recovery;
 3. thêm typed handoff, verification và proof-driven close gate để một Ticket đi
