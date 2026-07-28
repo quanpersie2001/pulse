@@ -135,6 +135,34 @@ pub(crate) enum WorkCommand {
         #[arg(long)]
         json: bool,
     },
+    /// Atomically claim a ready implementation Ticket, acquire an exclusive
+    /// lease, bind a workspace, match capabilities and transition ready ->
+    /// active.
+    ///
+    /// Returns a PreparedAssignmentV1 wrapper with dispatch_authorized=true.
+    /// This does not start a runner, send prompts or create handoff state.
+    Claim {
+        /// Ticket ID (must be an implementation Ticket with lifecycle ready).
+        ticket_id: String,
+        /// Authorized principal performing the Pulse mutation.
+        #[arg(long)]
+        actor: String,
+        /// Local principal string that will own the lease.
+        #[arg(long)]
+        assignee: String,
+        /// Path to capability inventory JSON file.
+        #[arg(long)]
+        capabilities: PathBuf,
+        /// TTL for the lease in seconds (default 1800, min 60, max 86400).
+        #[arg(long)]
+        ttl_seconds: Option<u64>,
+        /// Workspace mode override: auto, in_place, or isolated_worktree.
+        #[arg(long)]
+        workspace_mode: Option<String>,
+        /// Output as JSON.
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -699,6 +727,37 @@ pub(crate) fn handle(store: &JsonGraphStore, command: WorkCommand) -> Result<(),
                 render(json, &out, format!("{} {}", out.code, owner_id))
             }
         },
+        WorkCommand::Claim {
+            ticket_id,
+            actor,
+            assignee,
+            capabilities,
+            ttl_seconds,
+            workspace_mode,
+            json,
+        } => {
+            let cap_bytes = std::fs::read(&capabilities)
+                .map_err(|error| PulseError::io(capabilities.clone(), error))?;
+            let outcome = store.claim_work(crate::graph::store::ClaimArgs {
+                ticket_id,
+                actor,
+                assignee,
+                capability_inventory_bytes: cap_bytes,
+                ttl_seconds: ttl_seconds.unwrap_or(crate::assignment::DEFAULT_TTL_SECONDS),
+                workspace_mode,
+            })?;
+            let human = format!(
+                "{} prepared for {}\nlease: {}\nworkspace: {} ({})\nsource: {}\ncapabilities: all required matched\nstatus: active\nprepared assignment: {}\ndispatch authorized: yes (runner not started)",
+                outcome.prepared_assignment.subject.id,
+                outcome.prepared_assignment.lease.assignee,
+                outcome.prepared_assignment.lease.lease_id,
+                outcome.prepared_assignment.workspace.workspace_id,
+                outcome.prepared_assignment.workspace.mode,
+                outcome.prepared_assignment.revalidated_snapshot.source_commit,
+                outcome.prepared_assignment.prepared_assignment_id,
+            );
+            render(json, &outcome.prepared_assignment, human)
+        }
         WorkCommand::Packet { id, json } => {
             let packet = store.work_packet(&id)?;
             packet.validate_schema_contract()?;

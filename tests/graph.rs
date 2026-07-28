@@ -18,6 +18,8 @@
 mod common_bin;
 #[path = "common/canon.rs"]
 mod common_canon;
+#[path = "common/fixture_repo.rs"]
+mod common_fixture_repo;
 #[path = "common/git.rs"]
 mod common_git;
 
@@ -25,6 +27,8 @@ mod common_git;
 mod architecture_guards;
 #[path = "graph/authority_policy.rs"]
 mod authority_policy;
+#[path = "graph/claim.rs"]
+mod claim;
 #[path = "graph/cli_lifecycle_contract.rs"]
 mod cli_lifecycle_contract;
 #[path = "graph/decision_acceptance.rs"]

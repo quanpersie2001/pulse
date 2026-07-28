@@ -39,6 +39,7 @@ use crate::storage::{self, WriteGuard};
 use crate::{PulseError, PulseResult};
 
 mod bootstrap;
+mod claim;
 mod contracts;
 mod edges;
 mod nodes;
@@ -49,6 +50,7 @@ pub use bootstrap::{
     bootstrap, default_manifest_value, BootstrapOutcome, EDGE_SCHEMA_JSON, MANIFEST_JSON,
     NODE_SCHEMA_JSON,
 };
+pub use claim::{ClaimArgs, ClaimWorkOutcome};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct CachedProjection {
