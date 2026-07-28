@@ -89,6 +89,21 @@ pub struct ClaimWorkOutcome {
 /// Allowed workspace mode values for claim.
 const VALID_WORKSPACE_MODES: &[&str] = &["auto", "in_place", "isolated_worktree"];
 
+fn map_claim_recovery_error(error: PulseError) -> PulseError {
+    match error {
+        PulseError::AmbiguousTransaction { .. } | PulseError::EventMismatch { .. } => {
+            PulseError::validation(
+                "assignment_recovery_failed",
+                format!(
+                    "prepared assignment transaction recovery failed; cause_code={}: {error}",
+                    error.code()
+                ),
+            )
+        }
+        other => other,
+    }
+}
+
 // ---------------------------------------------------------------------------
 // claim_work implementation
 // ---------------------------------------------------------------------------
@@ -195,7 +210,7 @@ impl JsonGraphStore {
         // ------------------------------------------------------------------
         // 1. Recovery
         // ------------------------------------------------------------------
-        recover_prepared_transactions(&self.repo_root)?;
+        recover_prepared_transactions(&self.repo_root).map_err(map_claim_recovery_error)?;
         self.require_existing_workgraph_unlocked()?;
 
         // ------------------------------------------------------------------

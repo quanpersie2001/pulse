@@ -1573,7 +1573,7 @@ fn claim_ambiguous_non_prefix_target_state_blocks_recovery() {
     let repo = TestRepo::from_fixture("minimal-service");
     let store = JsonGraphStore::new(repo.path());
     bootstrap_repo(&repo, &store);
-    let _ticket_id = setup_ready_ticket(repo.path(), &store);
+    let ticket_id = setup_ready_ticket(repo.path(), &store);
 
     // To get a non-prefix [After, Before, After] pattern after sort by
     // path, we use paths that sort as:
@@ -1684,6 +1684,17 @@ fn claim_ambiguous_non_prefix_target_state_blocks_recovery() {
         tx_dir.join("txn_AMBIG.json").exists(),
         "ambiguous transaction intent should remain for operator review"
     );
+
+    let claim_err = store
+        .claim_work(claim_args(&ticket_id))
+        .expect_err("claim should wrap ambiguous transaction recovery failure");
+    assert_eq!(claim_err.code(), "assignment_recovery_failed");
+    assert!(
+        claim_err
+            .to_string()
+            .contains("cause_code=ambiguous_transaction"),
+        "wrapped claim recovery error should expose ambiguous cause: {claim_err:?}"
+    );
 }
 
 #[test]
@@ -1693,7 +1704,7 @@ fn claim_event_mismatch_blocks_commit_and_reports_error() {
     let repo = TestRepo::from_fixture("minimal-service");
     let store = JsonGraphStore::new(repo.path());
     bootstrap_repo(&repo, &store);
-    let _ticket_id = setup_ready_ticket(repo.path(), &store);
+    let ticket_id = setup_ready_ticket(repo.path(), &store);
 
     // Write a different event payload at the intended event path.
     let event_dir = repo.path().join(".pulse/events/2030-01-01");
@@ -1798,6 +1809,15 @@ fn claim_event_mismatch_blocks_commit_and_reports_error() {
     assert!(
         tx_dir.join("txn_EVT_MISMATCH.json").exists(),
         "event mismatch transaction intent should remain for operator review"
+    );
+
+    let claim_err = store
+        .claim_work(claim_args(&ticket_id))
+        .expect_err("claim should wrap event mismatch recovery failure");
+    assert_eq!(claim_err.code(), "assignment_recovery_failed");
+    assert!(
+        claim_err.to_string().contains("cause_code=event_mismatch"),
+        "wrapped claim recovery error should expose event mismatch cause: {claim_err:?}"
     );
 }
 

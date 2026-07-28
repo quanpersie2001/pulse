@@ -1,5 +1,6 @@
 use std::fs;
 use std::path::Path;
+use std::process::Stdio;
 
 use chrono::Utc;
 use pulse::canonical_json::to_canonical_bytes;
@@ -263,6 +264,33 @@ fn setup_ready_ticket(repo: &Path, store: &JsonGraphStore) -> String {
     commit_all(repo);
 
     ticket_id
+}
+
+fn process_is_running(pid: u32) -> bool {
+    let status = Command::new("kill")
+        .args(["-0", &pid.to_string()])
+        .status()
+        .expect("probe child process");
+    status.success()
+}
+
+fn assert_assignment_event_count(repo: &TempDir, expected: usize) {
+    let events_dir = repo.path().join(".pulse/events");
+    let mut event_count = 0usize;
+    if events_dir.exists() {
+        for date in fs::read_dir(&events_dir).unwrap() {
+            for entry in fs::read_dir(date.unwrap().path()).unwrap() {
+                let content = fs::read_to_string(entry.unwrap().path()).unwrap();
+                if content.contains("work.assignment.prepared") {
+                    event_count += 1;
+                }
+            }
+        }
+    }
+    assert_eq!(
+        event_count, expected,
+        "expected exactly {expected} work.assignment.prepared events"
+    );
 }
 
 fn commit_all(repo: &Path) {
@@ -663,21 +691,21 @@ fn same_ticket_concurrent_claims_have_one_winner() {
 }
 
 #[test]
-fn different_ticket_claims_sequential_success_via_commit_reclaim() {
-    // Verify that claiming ticket A then committing then claiming ticket B
-    // works correctly. This tests cross-ticket safety: claiming one ticket
-    // does not corrupt state for another ticket's subsequent claim after a
-    // fresh commit.
+fn different_ticket_claims_concurrently_both_commit_without_reclaim() {
+    // Different ready Tickets must be claimable by two subprocesses under
+    // default test threading. The repository fence serializes the commits, but
+    // the second claim must not be rejected just because the first claim wrote
+    // Pulse metadata (.pulse/workgraph, .pulse/events, .pulse/evidence, etc.).
     let repo = tempfile::tempdir().unwrap();
     let store = JsonGraphStore::new(repo.path());
     let ticket_a = setup_ready_ticket(repo.path(), &store);
     let ticket_b = setup_ready_ticket(repo.path(), &store);
     let cap_file = write_capability_file(repo.path(), "agent:codex-local");
 
-    // Claim ticket A (must succeed).
-    let out = run_ok(
-        &repo,
-        &[
+    let first = Command::new(bin())
+        .arg("--repo-root")
+        .arg(repo.path())
+        .args([
             "work",
             "claim",
             &ticket_a,
@@ -688,18 +716,15 @@ fn different_ticket_claims_sequential_success_via_commit_reclaim() {
             "--capabilities",
             cap_file.to_str().unwrap(),
             "--json",
-        ],
-    );
-    assert_eq!(out["subject"]["status_after"], "active");
-    assert_eq!(out["subject"]["id"], ticket_a);
-
-    // Commit the tracked node change so git is clean again.
-    commit_all(repo.path());
-
-    // Now claim ticket B (must succeed).
-    let out_b = run_ok(
-        &repo,
-        &[
+        ])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn first different-ticket claim");
+    let second = Command::new(bin())
+        .arg("--repo-root")
+        .arg(repo.path())
+        .args([
             "work",
             "claim",
             &ticket_b,
@@ -710,8 +735,41 @@ fn different_ticket_claims_sequential_success_via_commit_reclaim() {
             "--capabilities",
             cap_file.to_str().unwrap(),
             "--json",
-        ],
+        ])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn second different-ticket claim");
+
+    let first_pid = first.id();
+    let second_pid = second.id();
+    assert_ne!(first_pid, second_pid);
+    let first_running_at_spawn = process_is_running(first_pid);
+    let second_running_at_spawn = process_is_running(second_pid);
+
+    let first_output = first.wait_with_output().unwrap();
+    let second_output = second.wait_with_output().unwrap();
+    assert!(
+        first_running_at_spawn && second_running_at_spawn,
+        "both claim subprocesses should be live immediately after spawn"
     );
+    assert!(
+        first_output.status.success(),
+        "first different-ticket claim failed: stdout={} stderr={}",
+        String::from_utf8_lossy(&first_output.stdout),
+        String::from_utf8_lossy(&first_output.stderr)
+    );
+    assert!(
+        second_output.status.success(),
+        "second different-ticket claim failed: stdout={} stderr={}",
+        String::from_utf8_lossy(&second_output.stdout),
+        String::from_utf8_lossy(&second_output.stderr)
+    );
+
+    let out_a: Value = serde_json::from_slice(&first_output.stdout).unwrap();
+    let out_b: Value = serde_json::from_slice(&second_output.stdout).unwrap();
+    assert_eq!(out_a["subject"]["id"], ticket_a);
+    assert_eq!(out_a["subject"]["status_after"], "active");
     assert_eq!(out_b["subject"]["id"], ticket_b);
     assert_eq!(out_b["subject"]["status_after"], "active");
 
@@ -721,32 +779,20 @@ fn different_ticket_claims_sequential_success_via_commit_reclaim() {
     let shown_b = run_ok(&repo, &["work", "show", &ticket_b, "--json"]);
     assert_eq!(shown_b["node"]["status"], "active");
 
-    // Verify two prepared events.
-    let events_dir = repo.path().join(".pulse/events");
-    let mut event_count = 0usize;
-    if events_dir.exists() {
-        for date in fs::read_dir(&events_dir).unwrap() {
-            for entry in fs::read_dir(date.unwrap().path()).unwrap() {
-                let content = fs::read_to_string(entry.unwrap().path()).unwrap();
-                if content.contains("work.assignment.prepared") {
-                    event_count += 1;
-                }
-            }
-        }
-    }
-    assert_eq!(
-        event_count, 2,
-        "expected exactly two work.assignment.prepared events"
-    );
+    assert_assignment_event_count(&repo, 2);
 
-    // Verify no duplicate runtime records.
     let leases_dir = repo.path().join(".pulse/runtime/assignment/leases");
-    let lease_count = if leases_dir.exists() {
-        fs::read_dir(&leases_dir).unwrap().count()
-    } else {
-        0
-    };
-    assert_eq!(lease_count, 2, "expected two lease records");
+    assert_eq!(
+        fs::read_dir(&leases_dir).unwrap().count(),
+        2,
+        "expected two lease records"
+    );
+    let prepared_dir = repo.path().join(".pulse/runtime/assignment/prepared");
+    assert_eq!(
+        fs::read_dir(&prepared_dir).unwrap().count(),
+        2,
+        "expected two prepared assignment records"
+    );
 }
 
 #[test]

@@ -303,18 +303,47 @@ pub fn revalidate_packet_base(repo_root: &Path, expected: &PacketSourceSnapshot)
     Ok(())
 }
 
-/// Check whether the worktree is clean (no tracked or untracked non-ignored
-/// changes).
+/// Check whether the source worktree is clean (no tracked or untracked
+/// non-ignored changes outside Pulse-owned metadata).
+///
+/// Pulse mutates its local graph/events/evidence metadata as repository state.
+/// Those files are not source inputs for work-packet base cleanliness; treating
+/// them as dirty would make one successful claim block an unrelated concurrent
+/// claim after the repository fence serializes their commits. Runtime/cache
+/// paths are still required to be ignored separately by
+/// `validate_packet_operational_paths`.
 pub fn check_cleanliness(repo_root: &Path) -> Result<SourceCleanliness> {
     let output = packet_git(
         repo_root,
         ["status", "--porcelain=v1", "--untracked-files=all"],
     )?;
-    if output.trim().is_empty() {
-        Ok(SourceCleanliness::Clean)
-    } else {
+    let has_source_dirty = output
+        .lines()
+        .filter_map(status_line_path)
+        .any(|path| !is_pulse_metadata_path(path));
+    if has_source_dirty {
         Ok(SourceCleanliness::Dirty)
+    } else {
+        Ok(SourceCleanliness::Clean)
     }
+}
+
+fn status_line_path(line: &str) -> Option<&str> {
+    if line.len() < 4 {
+        return None;
+    }
+    let path = &line[3..];
+    // Porcelain v1 rename/copy lines use `old -> new`; source cleanliness is
+    // concerned with the destination path now present in the worktree.
+    Some(path.rsplit(" -> ").next().unwrap_or(path).trim_matches('"'))
+}
+
+fn is_pulse_metadata_path(path: &str) -> bool {
+    path.starts_with(".pulse/workgraph/")
+        || path.starts_with(".pulse/events/")
+        || path.starts_with(".pulse/evidence/")
+        || path.starts_with(".pulse/docs/")
+        || path.starts_with(".pulse/knowledge/")
 }
 
 /// Resolve the HEAD symbolic ref, if any.
@@ -851,6 +880,45 @@ mod tests {
         init_repo(tmp.path());
         commit_file(tmp.path(), "README.md", b"hello");
         fs::write(tmp.path().join("README.md"), b"modified").unwrap();
+        assert_eq!(
+            check_cleanliness(tmp.path()).unwrap(),
+            SourceCleanliness::Dirty
+        );
+    }
+
+    #[test]
+    fn check_cleanliness_ignores_pulse_metadata_changes() {
+        let tmp = tempfile::tempdir().unwrap();
+        init_repo(tmp.path());
+        commit_file(tmp.path(), "README.md", b"hello");
+        fs::create_dir_all(tmp.path().join(".pulse/workgraph/nodes")).unwrap();
+        fs::write(tmp.path().join(".pulse/workgraph/nodes/TK-001.json"), b"{}").unwrap();
+        fs::create_dir_all(tmp.path().join(".pulse/events/2026-01-01")).unwrap();
+        fs::write(tmp.path().join(".pulse/events/2026-01-01/evt.json"), b"{}").unwrap();
+        fs::create_dir_all(tmp.path().join(".pulse/evidence/receipts")).unwrap();
+        fs::write(tmp.path().join(".pulse/evidence/receipts/r.json"), b"{}").unwrap();
+        fs::create_dir_all(tmp.path().join(".pulse/docs")).unwrap();
+        fs::write(tmp.path().join(".pulse/docs/registry.json"), b"{}").unwrap();
+        fs::create_dir_all(tmp.path().join(".pulse/knowledge/records")).unwrap();
+        fs::write(tmp.path().join(".pulse/knowledge/records/k.json"), b"{}").unwrap();
+        assert_eq!(
+            check_cleanliness(tmp.path()).unwrap(),
+            SourceCleanliness::Clean
+        );
+    }
+
+    #[test]
+    fn check_cleanliness_still_rejects_pulse_runtime_if_not_ignored() {
+        let tmp = tempfile::tempdir().unwrap();
+        init_repo(tmp.path());
+        commit_file(tmp.path(), "README.md", b"hello");
+        fs::create_dir_all(tmp.path().join(".pulse/runtime/assignment/leases")).unwrap();
+        fs::write(
+            tmp.path()
+                .join(".pulse/runtime/assignment/leases/lease_TEST.json"),
+            b"{}",
+        )
+        .unwrap();
         assert_eq!(
             check_cleanliness(tmp.path()).unwrap(),
             SourceCleanliness::Dirty
