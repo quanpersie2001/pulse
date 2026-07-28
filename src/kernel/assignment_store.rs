@@ -634,7 +634,7 @@ pub fn has_tombstone(repo_root: &Path, lease_id: &str) -> PulseResult<bool> {
 // ---------------------------------------------------------------------------
 
 /// Classification of a single runtime assignment record during recovery.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum LeaseClassification {
     /// Live lease that is current and not expired.
     Live,
@@ -649,7 +649,7 @@ pub enum LeaseClassification {
 }
 
 /// A summary entry in the read-only recovery report.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct RecoveryEntry {
     /// The lease ID.
     pub lease_id: String,
@@ -664,7 +664,7 @@ pub struct RecoveryEntry {
 }
 
 /// Read-only recovery state report for runtime assignments.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct AssignmentRecoveryReport {
     /// All lease records found in the runtime store.
     pub entries: Vec<RecoveryEntry>,

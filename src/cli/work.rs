@@ -163,6 +163,65 @@ pub(crate) enum WorkCommand {
         #[arg(long)]
         json: bool,
     },
+    /// Release a prepared/no-run assignment (P2S2-I9).
+    ///
+    /// Removes the live lease, writes a terminal tombstone, transitions the
+    /// Ticket from active back to ready, and marks the workspace released.
+    /// Requires `work.assignment.release` authority.
+    Release {
+        /// Ticket ID whose lease to release.
+        ticket_id: String,
+        /// Lease ID to release.
+        #[arg(long)]
+        lease: String,
+        /// Expected active revision of the Ticket node.
+        #[arg(long)]
+        expected_revision: u64,
+        /// Human-readable reason for release.
+        #[arg(long)]
+        reason: String,
+        /// Authorized principal performing the release.
+        #[arg(long)]
+        actor: String,
+        /// Output as JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// List runtime assignment leases (P2S2-I9, read-only).
+    ///
+    /// Default: read-only listing of runtime assignment leases joined
+    /// with graph node state.  Use `work leases recover` to safely
+    /// release expired prepared assignments.
+    ///
+    /// This is a pure read operation that never creates runtime directories
+    /// or acquires the repository lock.
+    Leases {
+        /// Optional ticket ID filter (list only).
+        #[arg(long)]
+        ticket: Option<String>,
+        /// Output as JSON (list only).
+        #[arg(long)]
+        json: bool,
+        #[command(subcommand)]
+        command: Option<LeasesCommand>,
+    },
+}
+
+#[derive(Subcommand)]
+pub(crate) enum LeasesCommand {
+    /// Safe recovery of expired/no-run runtime assignments.
+    ///
+    /// Expired prepared leases are requeued (active -> ready) when
+    /// safe, or preserved for operator review when workspace is dirty.
+    /// Ambiguous/invalid/orphan state is reported without mutation.
+    Recover {
+        /// Authorized principal performing recovery.
+        #[arg(long)]
+        actor: String,
+        /// Output as JSON.
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -765,6 +824,63 @@ pub(crate) fn handle(store: &JsonGraphStore, command: WorkCommand) -> Result<(),
             );
             render(json, &outcome.prepared_assignment, human)
         }
+        WorkCommand::Release {
+            ticket_id,
+            lease,
+            expected_revision,
+            reason,
+            actor,
+            json,
+        } => {
+            let outcome = store.release_work(crate::kernel::assignment::ReleaseArgs {
+                ticket_id,
+                lease_id: lease,
+                expected_revision,
+                reason,
+                actor,
+            })?;
+            let human = format!(
+                "released {} (lease {}, workspace {})\nnew revision: {}\nworkspace state: {}\ncleanup: {}",
+                outcome.ticket_id,
+                outcome.lease_id,
+                outcome.workspace_id,
+                outcome.new_revision,
+                outcome.workspace_final_state,
+                if outcome.workspace_cleaned_up {
+                    "worktree removed"
+                } else {
+                    "preserved"
+                },
+            );
+            render(json, &outcome, human)
+        }
+        WorkCommand::Leases {
+            ticket,
+            json,
+            command,
+        } => match command {
+            None => {
+                // Default: read-only listing.
+                let report = store.list_leases(ticket.as_deref())?;
+                let human = format!(
+                    "{} leases ({} live, {} tombstoned, {} expired)",
+                    report.count, report.live_count, report.tombstoned_count, report.expired_count
+                );
+                render(json, &report, human)
+            }
+            Some(LeasesCommand::Recover { actor, json }) => {
+                let outcome = store.recover_leases(&actor)?;
+                let human = format!(
+                    "lease recovery complete: {} expired, {} requeued, {} stale, {} ambiguous, {} invalid",
+                    outcome.expired_count,
+                    outcome.requeued_count,
+                    outcome.stale_count,
+                    outcome.ambiguous_count,
+                    outcome.invalid_count,
+                );
+                render(json, &outcome, human)
+            }
+        },
         WorkCommand::Packet { id, json } => {
             let packet = store.work_packet(&id)?;
             packet.validate_schema_contract()?;

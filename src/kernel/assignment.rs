@@ -23,13 +23,15 @@ use serde_json::json;
 use crate::assignment::{
     self, AssignmentLeaseAssignee, AssignmentLeaseRecordV1, AssignmentLeaseSource,
     AssignmentLeaseSubject, AssignmentLeaseSummary, AssignmentLifecycle, AssignmentSubjectSnapshot,
-    AssignmentTransaction, AssignmentWorkspaceRecordV1, AssignmentWorkspaceSummary,
-    CapabilityInventoryV1, CapabilityMatchReport, PreparedAssignmentRecordV1, PreparedAssignmentV1,
-    RevalidatedSnapshot, WorkspaceCleanupPolicy, WorkspaceSubjectRef, ASSIGNMENT_SCHEMA_VERSION,
-    LEASE_KIND_IMPLEMENTATION, LEASE_SCHEMA_VERSION, LEASE_STATE_PREPARED, LIFECYCLE_GATE_PROFILE,
-    LIFECYCLE_READY_TO_ACTIVE, MAX_TTL_SECONDS, MIN_TTL_SECONDS, PREPARED_ASSIGNMENT_PROFILE,
+    AssignmentTombstoneV1, AssignmentTransaction, AssignmentWorkspaceRecordV1,
+    AssignmentWorkspaceSummary, CapabilityInventoryV1, CapabilityMatchReport,
+    PreparedAssignmentRecordV1, PreparedAssignmentV1, RevalidatedSnapshot, WorkspaceCleanupPolicy,
+    WorkspaceSubjectRef, ASSIGNMENT_SCHEMA_VERSION, LEASE_KIND_IMPLEMENTATION,
+    LEASE_SCHEMA_VERSION, LEASE_STATE_PREPARED, LIFECYCLE_GATE_PROFILE, LIFECYCLE_READY_TO_ACTIVE,
+    MAX_TTL_SECONDS, MIN_TTL_SECONDS, PREPARED_ASSIGNMENT_PROFILE, TOMBSTONE_SCHEMA_VERSION,
+    TOMBSTONE_STATE_EXPIRED, TOMBSTONE_STATE_RELEASED, TOMBSTONE_STATE_STALE,
     WORKSPACE_MODE_IN_PLACE, WORKSPACE_MODE_ISOLATED, WORKSPACE_SCHEMA_VERSION,
-    WORKSPACE_STATE_BOUND,
+    WORKSPACE_STATE_BOUND, WORKSPACE_STATE_RELEASED, WORKSPACE_STATE_STALE,
 };
 use crate::canonical_json::{hash_bytes, to_canonical_bytes};
 use crate::event::{new_event_id, EventEnvelope};
@@ -989,4 +991,1012 @@ struct ClaimImplArgs {
     inventory: CapabilityInventoryV1,
     ttl_seconds: u64,
     workspace_mode: Option<String>,
+}
+
+// ===========================================================================
+// Release work (P2S2-I9)
+// ===========================================================================
+
+/// Arguments for `JsonGraphStore::release_work`.
+#[derive(Debug, Clone)]
+pub struct ReleaseArgs {
+    /// Ticket ID whose lease to release.
+    pub ticket_id: String,
+    /// The exact lease ID to release.
+    pub lease_id: String,
+    /// Expected active revision of the Ticket node (CAS guard).
+    pub expected_revision: u64,
+    /// Human-readable reason for releasing.
+    pub reason: String,
+    /// Authorized principal performing the release.
+    pub actor: String,
+}
+
+/// Outcome of a successful release operation.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+pub struct ReleaseWorkOutcome {
+    /// The ticket ID that was released.
+    pub ticket_id: String,
+    /// The released lease ID.
+    pub lease_id: String,
+    /// The workspace ID that was released.
+    pub workspace_id: String,
+    /// The prepared assignment ID associated with the release.
+    pub prepared_assignment_id: String,
+    /// Final node revision after active -> ready transition.
+    pub new_revision: u64,
+    /// Final workspace state after release.
+    pub workspace_final_state: String,
+    /// Whether the workspace was physically cleaned up after the transaction.
+    pub workspace_cleaned_up: bool,
+    /// The release event ID.
+    pub event_id: String,
+    /// Name of the transaction used to commit this release.
+    pub transaction_id: String,
+}
+
+impl JsonGraphStore {
+    /// Release a prepared/no-run assignment (P2S2-I9).
+    ///
+    /// One recoverable transaction:
+    /// 1. Remove live lease record
+    /// 2. Write terminal tombstone
+    /// 3. Update workspace record to released/stale
+    /// 4. Transition node active -> ready if exact claim revision
+    ///
+    /// After durable commit: attempt safe cleanup of isolated worktree
+    /// only when clean at base.
+    ///
+    /// Requires `work.assignment.release` authority grant.
+    /// Never deletes the in-place root. Preserves dirty/unknown workspaces.
+    pub fn release_work(&self, args: ReleaseArgs) -> PulseResult<ReleaseWorkOutcome> {
+        // Step 0: Validate enrollment before any lock or runtime directory creation.
+        assignment_store::check_enrolled(&self.repo_root)?;
+
+        // Step 1: Acquire repository WriteGuard.
+        let guard = WriteGuard::acquire(&self.repo_root)?;
+
+        // Step 2: Recover prepared transactions.
+        recover_prepared_transactions(&self.repo_root)?;
+
+        // Step 3: Authorize the release actor for work.assignment.release.
+        let policy_report = crate::policy::load_authority_policy(&self.repo_root)?;
+        let caller = crate::policy::parse_actor(&args.actor);
+        crate::policy::authorize(&policy_report, &caller, &["work.assignment.release"])?;
+
+        // Step 4: Load the lease record and validate.
+        let lease = assignment_store::load_lease(&self.repo_root, &args.lease_id).map_err(|e| {
+            if e.code() == "io_error" {
+                PulseError::validation(
+                    "assignment_lease_not_found",
+                    format!("lease not found: {}", args.lease_id),
+                )
+            } else {
+                e
+            }
+        })?;
+        if lease.subject.id != args.ticket_id {
+            return Err(PulseError::validation(
+                "assignment_lease_not_found",
+                format!(
+                    "lease {} belongs to subject {} not {}",
+                    args.lease_id, lease.subject.id, args.ticket_id
+                ),
+            ));
+        }
+        if lease.state != LEASE_STATE_PREPARED {
+            return Err(PulseError::validation(
+                "assignment_lease_not_releasable",
+                format!(
+                    "lease {} state is {}; only prepared leases are releasable",
+                    args.lease_id, lease.state
+                ),
+            ));
+        }
+        if !args.lease_id.starts_with("lease_") {
+            return Err(PulseError::validation(
+                "assignment_lease_not_found",
+                format!("invalid lease id format: {}", args.lease_id),
+            ));
+        }
+
+        // Step 5: Load workspace record.
+        let workspace_record =
+            assignment_store::load_workspace(&self.repo_root, &lease.workspace_id)?;
+
+        // Step 6: Load node and validate active status at expected revision.
+        let node_path = self.node_path(&args.ticket_id);
+        let before_bytes = fs::read(&node_path).map_err(|e| PulseError::io(&node_path, e))?;
+        let node: Node =
+            serde_json::from_slice(&before_bytes).map_err(|e| PulseError::json(&node_path, e))?;
+
+        if node.status != NodeStatus::Active {
+            return Err(PulseError::validation(
+                "assignment_release_revision_mismatch",
+                format!(
+                    "subject {} status is {:?}, not Active",
+                    node.id, node.status
+                ),
+            ));
+        }
+        if node.revision != args.expected_revision {
+            return Err(PulseError::CasConflict {
+                subject: args.ticket_id.clone(),
+                expected_revision: args.expected_revision,
+                current_revision: node.revision,
+            });
+        }
+
+        // Step 7: Determine final workspace state.
+        // In-place: never delete, just mark released.
+        // Isolated clean at base: mark released (cleanup after commit).
+        // Isolated dirty/unknown: mark stale_needs_operator, preserve path.
+        let is_in_place = workspace_record.mode == WORKSPACE_MODE_IN_PLACE;
+        let final_workspace_state = if is_in_place {
+            WORKSPACE_STATE_RELEASED
+        } else {
+            // Check if workspace is clean at base for safe cleanup after commit.
+            let ws_check_path = if workspace_record.path == "." {
+                self.repo_root.clone()
+            } else {
+                self.repo_root.join(&workspace_record.path)
+            };
+            let cleanliness = crate::source::check_cleanliness(&ws_check_path);
+            let is_clean = matches!(cleanliness, Ok(crate::source::SourceCleanliness::Clean));
+            if is_clean {
+                WORKSPACE_STATE_RELEASED
+            } else {
+                WORKSPACE_STATE_STALE
+            }
+        };
+
+        // Step 8: Build the tombstone record.
+        let now: DateTime<Utc> = Utc::now();
+        let tombstone = AssignmentTombstoneV1 {
+            schema_version: TOMBSTONE_SCHEMA_VERSION,
+            lease_id: args.lease_id.clone(),
+            subject_id: args.ticket_id.clone(),
+            state: if final_workspace_state == WORKSPACE_STATE_STALE {
+                TOMBSTONE_STATE_STALE
+            } else {
+                TOMBSTONE_STATE_RELEASED
+            }
+            .to_string(),
+            recorded_at: now.to_rfc3339(),
+            actor: args.actor.clone(),
+            reason: Some(args.reason.clone()),
+            reason_codes: vec![],
+        };
+
+        // Step 9: Build updated workspace record (released/stale).
+        let mut updated_workspace = workspace_record.clone();
+        updated_workspace.state = final_workspace_state.to_string();
+        updated_workspace.released_at = Some(now.to_rfc3339());
+        updated_workspace.cleanup.status = "released".to_string();
+
+        // Step 10: Build node after state (active -> ready).
+        // Ready status must not persist a status_reason per graph validation.
+        let mut updated_node = node.clone();
+        updated_node.status = NodeStatus::Ready;
+        updated_node.status_reason = None;
+        updated_node.revision += 1;
+        updated_node.updated_at = now;
+
+        // Step 11: Compute fingerprints and transaction IDs.
+        let event_id = new_event_id();
+        let transaction_id = new_transaction_id();
+        let lease_path = assignment_store::lease_path(&self.repo_root, &args.lease_id)?;
+        let tombstone_path = assignment_store::tombstone_path(&self.repo_root, &args.lease_id)?;
+        let workspace_file_path =
+            assignment_store::workspace_path(&self.repo_root, &workspace_record.workspace_id)?;
+
+        // Event file path.
+        let event_file_path = self
+            .repo_root
+            .join(".pulse/events")
+            .join(now.format("%Y-%m-%d").to_string())
+            .join(format!("{event_id}.json"));
+        // Build canonical after bytes.
+        let tombstone_bytes = to_canonical_bytes(&tombstone)?;
+        let workspace_bytes = to_canonical_bytes(&updated_workspace)?;
+        let node_after_bytes = to_canonical_bytes(&updated_node)?;
+
+        // Build event payload.
+        let event_payload = json!({
+            "from": "active",
+            "to": "ready",
+            "expected_revision": args.expected_revision,
+            "new_revision": updated_node.revision,
+            "lease_id": args.lease_id,
+            "workspace_id": workspace_record.workspace_id,
+            "prepared_assignment_id": lease.prepared_assignment_id,
+            "reason": args.reason,
+            "workspace_final_state": final_workspace_state,
+            "cleanup_policy": if is_in_place { "none" } else { "safe_remove_if_clean_at_base" },
+        });
+
+        let event = EventEnvelope::new(
+            event_id.clone(),
+            "work.assignment.released",
+            &args.actor,
+            &args.ticket_id,
+            event_payload.clone(),
+            now,
+        );
+
+        // Build file states for the transaction.
+        let lease_before = FileState::Present {
+            hash: hash_bytes(&to_canonical_bytes(&lease).expect("lease canonical")),
+            revision: 0,
+        };
+        let lease_after = FileState::Absent;
+
+        let tombstone_before = FileState::Absent;
+        let tombstone_after = FileState::Present {
+            hash: hash_bytes(&tombstone_bytes),
+            revision: 0,
+        };
+
+        let workspace_before = FileState::Present {
+            hash: hash_bytes(
+                &to_canonical_bytes(&workspace_record).expect("workspace canonical before"),
+            ),
+            revision: 0,
+        };
+        let workspace_after = FileState::Present {
+            hash: hash_bytes(&workspace_bytes),
+            revision: 1,
+        };
+
+        let node_before = FileState::Present {
+            hash: hash_bytes(&before_bytes),
+            revision: args.expected_revision,
+        };
+        let node_after = FileState::Present {
+            hash: hash_bytes(&node_after_bytes),
+            revision: args.expected_revision + 1,
+        };
+
+        let targets: Vec<TransactionTarget> = vec![
+            TransactionTarget::new(
+                lease_path,
+                lease_before,
+                lease_after,
+                &[], // empty bytes since target is Absent
+            ),
+            TransactionTarget::new(
+                tombstone_path,
+                tombstone_before,
+                tombstone_after,
+                &tombstone_bytes,
+            ),
+            TransactionTarget::new(
+                workspace_file_path,
+                workspace_before,
+                workspace_after,
+                &workspace_bytes,
+            ),
+            TransactionTarget::new(
+                node_path.clone(),
+                node_before,
+                node_after,
+                &node_after_bytes,
+            ),
+        ];
+
+        let intent = MultiTargetTransactionIntent::prepared_with_transaction_id(
+            transaction_id.clone(),
+            event_id.clone(),
+            "work.assignment.released",
+            &args.actor,
+            targets,
+            event_file_path.clone(),
+            serde_json::to_value(&event)?,
+        )?;
+
+        let prepared_txn = prepare_multi_target_transaction(&self.repo_root, intent)?;
+
+        // Step 12: Commit the multi-target transaction.
+        commit_prepared_multi_target_transaction(&prepared_txn, self.failpoint)?;
+
+        // Step 13: Post-commit workspace physical cleanup (only for safe isolated).
+        let workspace_cleaned_up =
+            if !is_in_place && final_workspace_state == WORKSPACE_STATE_RELEASED {
+                // Attempt safe cleanup of the isolated worktree after durable commit.
+                let ws_path = self.repo_root.join(&workspace_record.path);
+                if ws_path.exists() {
+                    crate::workspace::cleanup_worktree(&self.repo_root, &ws_path).is_ok()
+                } else {
+                    false
+                }
+            } else {
+                false
+            };
+
+        drop(guard);
+
+        Ok(ReleaseWorkOutcome {
+            ticket_id: args.ticket_id,
+            lease_id: args.lease_id,
+            workspace_id: workspace_record.workspace_id,
+            prepared_assignment_id: lease.prepared_assignment_id,
+            new_revision: updated_node.revision,
+            workspace_final_state: final_workspace_state.to_string(),
+            workspace_cleaned_up,
+            event_id,
+            transaction_id,
+        })
+    }
+}
+
+// ===========================================================================
+// Leases listing (P2S2-I9, read-only)
+// ===========================================================================
+
+/// A single lease entry in the leases report, joining runtime lease state
+/// with current graph node state.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct LeaseEntry {
+    pub lease_id: String,
+    pub subject_id: String,
+    pub assignee: String,
+    pub issued_by: String,
+    pub issued_at: String,
+    pub expires_at: String,
+    pub state: String,
+    pub workspace_id: String,
+    pub prepared_assignment_id: String,
+    pub node_status: String,
+    pub node_revision: u64,
+    pub classification: String,
+    pub is_tombstoned: bool,
+}
+
+/// Read-only leases report.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+pub struct LeasesReport {
+    pub schema_version: u32,
+    pub code: String,
+    pub count: usize,
+    pub live_count: usize,
+    pub tombstoned_count: usize,
+    pub expired_count: usize,
+    pub entries: Vec<LeaseEntry>,
+    pub orphan_workspace_ids: Vec<String>,
+}
+
+impl JsonGraphStore {
+    /// Read-only leases listing (P2S2-I9).
+    ///
+    /// Joins runtime lease records with current graph node state.
+    /// This is a pure read operation: it never creates runtime directories,
+    /// never acquires the repository lock, and never mutates state.
+    ///
+    /// When `ticket_id` is `Some`, only entries matching that subject are
+    /// returned.
+    pub fn list_leases(&self, ticket_id: Option<&str>) -> PulseResult<LeasesReport> {
+        assignment_store::check_enrolled(&self.repo_root)?;
+
+        // Guard: do not create runtime directories as a side effect of a
+        // read-only listing. If no runtime assignment directory exists,
+        // return an empty report.
+        let runtime_root = self
+            .repo_root
+            .join(crate::kernel::assignment_store::ASSIGNMENT_RUNTIME_ROOT);
+        if !runtime_root.exists() {
+            return Ok(LeasesReport {
+                schema_version: 1,
+                code: "leases_report".to_string(),
+                count: 0,
+                live_count: 0,
+                tombstoned_count: 0,
+                expired_count: 0,
+                entries: vec![],
+                orphan_workspace_ids: vec![],
+            });
+        }
+
+        // Use the read-only classification report from assignment_store.
+        let recovery_report =
+            assignment_store::classify_assignment_recovery_state(&self.repo_root)?;
+
+        let mut entries: Vec<LeaseEntry> = Vec::new();
+        let mut live_count = 0usize;
+        let mut tombstoned_count = 0usize;
+        let mut expired_count = 0usize;
+
+        for entry in &recovery_report.entries {
+            // Apply optional ticket_id filter.
+            if let Some(tid) = ticket_id {
+                if entry.subject_id != tid {
+                    continue;
+                }
+            }
+
+            let (assignee, issued_by, issued_at, expires_at, state, prepared_assignment_id) =
+                match assignment_store::load_lease(&self.repo_root, &entry.lease_id) {
+                    Ok(lease) => (
+                        lease.assignee.principal.clone(),
+                        lease.issued_by.clone(),
+                        lease.issued_at.clone(),
+                        lease.expires_at.clone(),
+                        lease.state.clone(),
+                        lease.prepared_assignment_id.clone(),
+                    ),
+                    Err(_) => (
+                        String::new(),
+                        String::new(),
+                        String::new(),
+                        String::new(),
+                        entry.state.clone(),
+                        String::new(),
+                    ),
+                };
+
+            // Load node status.
+            let (node_status, node_revision) = match self.read_node_status(&entry.subject_id) {
+                Ok((status, rev)) => (status, rev),
+                Err(_) => ("unknown".to_string(), 0),
+            };
+
+            let classification = match &entry.classification {
+                crate::kernel::assignment_store::LeaseClassification::Live => "live",
+                crate::kernel::assignment_store::LeaseClassification::Expired => "expired",
+                crate::kernel::assignment_store::LeaseClassification::Tombstoned => "tombstoned",
+                crate::kernel::assignment_store::LeaseClassification::Ambiguous(_) => "ambiguous",
+                crate::kernel::assignment_store::LeaseClassification::Invalid(_) => "invalid",
+            };
+
+            let is_tombstoned = matches!(
+                entry.classification,
+                crate::kernel::assignment_store::LeaseClassification::Tombstoned
+            );
+
+            match entry.classification {
+                crate::kernel::assignment_store::LeaseClassification::Live => live_count += 1,
+                crate::kernel::assignment_store::LeaseClassification::Expired => expired_count += 1,
+                crate::kernel::assignment_store::LeaseClassification::Tombstoned => {
+                    tombstoned_count += 1
+                }
+                _ => {}
+            }
+
+            entries.push(LeaseEntry {
+                lease_id: entry.lease_id.clone(),
+                subject_id: entry.subject_id.clone(),
+                assignee,
+                issued_by,
+                issued_at,
+                expires_at,
+                state,
+                workspace_id: entry.workspace_id.clone(),
+                prepared_assignment_id,
+                node_status,
+                node_revision,
+                classification: classification.to_string(),
+                is_tombstoned,
+            });
+        }
+
+        entries.sort_by(|a, b| a.lease_id.cmp(&b.lease_id));
+
+        // Collect orphan workspace IDs from the recovery report.
+        let orphan_workspace_ids = recovery_report.orphan_workspace_ids.clone();
+
+        Ok(LeasesReport {
+            schema_version: 1,
+            code: "leases_report".to_string(),
+            count: entries.len(),
+            live_count,
+            tombstoned_count,
+            expired_count,
+            entries,
+            orphan_workspace_ids,
+        })
+    }
+
+    /// Read node status string and revision, returning ("unknown", 0)
+    /// on any error instead of propagating so lease listing is best-effort.
+    fn read_node_status(&self, id: &str) -> PulseResult<(String, u64)> {
+        let path = self.node_path(id);
+        if !path.exists() {
+            return Ok(("not_found".to_string(), 0));
+        }
+        let bytes = fs::read(&path).map_err(|e| PulseError::io(&path, e))?;
+        let node: Node = serde_json::from_slice(&bytes).map_err(|e| PulseError::json(&path, e))?;
+        Ok((format!("{:?}", node.status), node.revision))
+    }
+}
+
+// ===========================================================================
+// Leases recover (P2S2-I9, safe mutation under fence)
+// ===========================================================================
+
+/// Outcome of a safe recovery operation.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+pub struct RecoveryOutcome {
+    pub schema_version: u32,
+    pub code: String,
+    pub actor: String,
+    pub expired_count: usize,
+    pub requeued_count: usize,
+    pub stale_count: usize,
+    pub ambiguous_count: usize,
+    pub invalid_count: usize,
+    pub errors: Vec<String>,
+    pub report: crate::kernel::assignment_store::AssignmentRecoveryReport,
+}
+
+impl JsonGraphStore {
+    /// Safe recovery of runtime assignments (P2S2-I9).
+    ///
+    /// Runs under the repository fence with authority check for
+    /// `work.assignment.release`. After transaction recovery:
+    ///
+    /// 1. Expired no-run assignments are safely released:
+    ///    - lease removed, tombstone written, workspace released,
+    ///    - node transitioned active -> ready if exact claim revision.
+    /// 2. Ambiguous/invalid/orphan state is reported without mutation.
+    /// 3. Workspaces with dirty/unknown state are preserved as stale.
+    ///
+    /// This implements only safe deterministic fixes. Ambiguous records,
+    /// orphan workspaces and invalid records are never silently repaired.
+    pub fn recover_leases(&self, actor: &str) -> PulseResult<RecoveryOutcome> {
+        assignment_store::check_enrolled(&self.repo_root)?;
+
+        let guard = WriteGuard::acquire(&self.repo_root)?;
+        recover_prepared_transactions(&self.repo_root)?;
+
+        // Authorize for work.assignment.release (same authority as release).
+        let policy_report = crate::policy::load_authority_policy(&self.repo_root)?;
+        let caller = crate::policy::parse_actor(actor);
+        crate::policy::authorize(&policy_report, &caller, &["work.assignment.release"])?;
+
+        // Run read-only classification.
+        let report = assignment_store::classify_assignment_recovery_state(&self.repo_root)?;
+
+        let mut expired_count = 0usize;
+        let mut requeued_count = 0usize;
+        let mut stale_count = 0usize;
+        let mut ambiguous_count = 0usize;
+        let mut invalid_count = 0usize;
+        let mut errors: Vec<String> = Vec::new();
+
+        // Iterate expired entries and attempt safe requeue.
+        for entry in &report.entries {
+            if !matches!(
+                entry.classification,
+                crate::kernel::assignment_store::LeaseClassification::Expired
+            ) {
+                match &entry.classification {
+                    crate::kernel::assignment_store::LeaseClassification::Ambiguous(_) => {
+                        ambiguous_count += 1
+                    }
+                    crate::kernel::assignment_store::LeaseClassification::Invalid(_) => {
+                        invalid_count += 1
+                    }
+                    _ => {}
+                }
+                continue;
+            }
+
+            expired_count += 1;
+
+            // Attempt safe expiry/requeue. If anything goes wrong here,
+            // report the error but continue with other entries.
+            let release_result = self.recover_single_expired_lease(actor, entry, &report);
+            match release_result {
+                Ok(released) => {
+                    if released {
+                        requeued_count += 1;
+                    } else {
+                        stale_count += 1;
+                    }
+                }
+                Err(error) => {
+                    errors.push(format!("lease {}: {}", entry.lease_id, error));
+                    stale_count += 1;
+                }
+            }
+        }
+
+        drop(guard);
+
+        Ok(RecoveryOutcome {
+            schema_version: 1,
+            code: "leases_recovered".to_string(),
+            actor: actor.to_string(),
+            expired_count,
+            requeued_count,
+            stale_count,
+            ambiguous_count,
+            invalid_count,
+            errors,
+            report,
+        })
+    }
+
+    /// Recover a single expired lease: tombstone + node transition if safe.
+    /// Returns `Ok(true)` if the lease was successfully released/requeued,
+    /// `Ok(false)` if the lease was released but workspace became stale,
+    /// `Err(...)` if recovery was not possible.
+    fn recover_single_expired_lease(
+        &self,
+        actor: &str,
+        entry: &crate::kernel::assignment_store::RecoveryEntry,
+        _report: &crate::kernel::assignment_store::AssignmentRecoveryReport,
+    ) -> PulseResult<bool> {
+        // Load the lease record.
+        let lease = match assignment_store::load_lease(&self.repo_root, &entry.lease_id) {
+            Ok(l) => l,
+            Err(e) => {
+                return Err(PulseError::validation(
+                    "assignment_recovery_failed",
+                    format!("cannot load expired lease {}: {e}", entry.lease_id),
+                ));
+            }
+        };
+
+        // Verify lease is prepared (no-run state).
+        if lease.state != LEASE_STATE_PREPARED {
+            return Err(PulseError::validation(
+                "assignment_lease_not_releasable",
+                format!(
+                    "expired lease {} has non-prepared state {}",
+                    entry.lease_id, lease.state
+                ),
+            ));
+        }
+
+        // Load workspace record.
+        let workspace_record =
+            match assignment_store::load_workspace(&self.repo_root, &lease.workspace_id) {
+                Ok(ws) => ws,
+                Err(e) => {
+                    return Err(PulseError::validation(
+                        "assignment_recovery_failed",
+                        format!(
+                            "cannot load workspace {} for expired lease {}: {e}",
+                            lease.workspace_id, entry.lease_id
+                        ),
+                    ));
+                }
+            };
+
+        // Check if workspace is dirty/unknown (preserve as stale).
+        let is_in_place = workspace_record.mode == WORKSPACE_MODE_IN_PLACE;
+        let workspace_path_str = &workspace_record.path;
+        let workspace_abs_path = if workspace_path_str == "." {
+            self.repo_root.clone()
+        } else {
+            self.repo_root.join(workspace_path_str)
+        };
+
+        let is_clean = if is_in_place {
+            // For in-place, check root cleanliness.
+            matches!(
+                crate::source::check_cleanliness(&self.repo_root),
+                Ok(crate::source::SourceCleanliness::Clean)
+            )
+        } else {
+            let ws_check = if workspace_path_str == "." {
+                self.repo_root.clone()
+            } else {
+                self.repo_root.join(workspace_path_str)
+            };
+            matches!(
+                crate::source::check_cleanliness(&ws_check),
+                Ok(crate::source::SourceCleanliness::Clean)
+            )
+        };
+
+        let final_workspace_state = if is_clean {
+            WORKSPACE_STATE_RELEASED
+        } else {
+            WORKSPACE_STATE_STALE
+        };
+
+        // Load node.
+        let node_path = self.node_path(&lease.subject.id);
+        let before_bytes = match fs::read(&node_path) {
+            Ok(b) => b,
+            Err(e) => {
+                return Err(PulseError::validation(
+                    "assignment_recovery_failed",
+                    format!(
+                        "cannot load node {} for expired lease {}: {e}",
+                        lease.subject.id, entry.lease_id
+                    ),
+                ));
+            }
+        };
+        let node: Node = match serde_json::from_slice(&before_bytes) {
+            Ok(n) => n,
+            Err(e) => {
+                return Err(PulseError::validation(
+                    "assignment_recovery_failed",
+                    format!("cannot parse node {}: {e}", lease.subject.id),
+                ));
+            }
+        };
+
+        // Only transition if node is still Active at the claim revision.
+        // If node has been modified since claim (different revision or
+        // different status), preserve as stale instead.
+        if node.status != NodeStatus::Active || node.revision != lease.subject.revision {
+            return Err(PulseError::validation(
+                "assignment_release_revision_mismatch",
+                format!(
+                    "node {} status {:?} revision {} does not match claim revision {}; cannot auto-requeue",
+                    node.id, node.status, node.revision, lease.subject.revision
+                ),
+            ));
+        }
+
+        let now: DateTime<Utc> = Utc::now();
+
+        // If workspace is stale, write tombstone as stale but don't transition node.
+        if final_workspace_state == WORKSPACE_STATE_STALE {
+            // Just write tombstone and mark workspace; don't touch node.
+            let tombstone = AssignmentTombstoneV1 {
+                schema_version: TOMBSTONE_SCHEMA_VERSION,
+                lease_id: entry.lease_id.clone(),
+                subject_id: lease.subject.id.clone(),
+                state: TOMBSTONE_STATE_STALE.to_string(),
+                recorded_at: now.to_rfc3339(),
+                actor: actor.to_string(),
+                reason: Some(
+                    "recovery: expired lease with dirty workspace, preserved for operator"
+                        .to_string(),
+                ),
+                reason_codes: vec![],
+            };
+
+            let tombstone_bytes = to_canonical_bytes(&tombstone)?;
+            // Write tombstone + update workspace + remove lease in one transaction.
+            self.commit_expired_stale_tombstone(
+                actor,
+                entry,
+                &lease,
+                &workspace_record,
+                &tombstone_bytes,
+                now,
+            )?;
+            return Ok(false);
+        }
+
+        // Full requeue: tombstone + release workspace + transition node.
+        let tombstone = AssignmentTombstoneV1 {
+            schema_version: TOMBSTONE_SCHEMA_VERSION,
+            lease_id: entry.lease_id.clone(),
+            subject_id: lease.subject.id.clone(),
+            state: TOMBSTONE_STATE_EXPIRED.to_string(),
+            recorded_at: now.to_rfc3339(),
+            actor: actor.to_string(),
+            reason: Some("recovery: expired lease requeued to ready".to_string()),
+            reason_codes: vec![],
+        };
+
+        let mut updated_workspace = workspace_record.clone();
+        updated_workspace.state = WORKSPACE_STATE_RELEASED.to_string();
+        updated_workspace.released_at = Some(now.to_rfc3339());
+
+        let mut updated_node = node.clone();
+        updated_node.status = NodeStatus::Ready;
+        // Ready status must not persist a status_reason per graph validation.
+        updated_node.status_reason = None;
+        updated_node.revision += 1;
+        updated_node.updated_at = now;
+
+        let event_id = new_event_id();
+        let transaction_id = new_transaction_id();
+
+        let lease_path = assignment_store::lease_path(&self.repo_root, &entry.lease_id)?;
+        let tombstone_path = assignment_store::tombstone_path(&self.repo_root, &entry.lease_id)?;
+        let workspace_file_path =
+            assignment_store::workspace_path(&self.repo_root, &workspace_record.workspace_id)?;
+
+        let event_file_path = self
+            .repo_root
+            .join(".pulse/events")
+            .join(now.format("%Y-%m-%d").to_string())
+            .join(format!("{event_id}.json"));
+
+        let tombstone_bytes = to_canonical_bytes(&tombstone)?;
+        let workspace_bytes = to_canonical_bytes(&updated_workspace)?;
+        let node_after_bytes = to_canonical_bytes(&updated_node)?;
+
+        let event_payload = json!({
+            "from": "active",
+            "to": "ready",
+            "expected_revision": lease.subject.revision,
+            "new_revision": lease.subject.revision + 1,
+            "lease_id": entry.lease_id,
+            "workspace_id": workspace_record.workspace_id,
+            "prepared_assignment_id": lease.prepared_assignment_id,
+            "reason": "recovery: expired lease requeued",
+            "workspace_final_state": WORKSPACE_STATE_RELEASED,
+            "recovery": true,
+        });
+
+        let event = EventEnvelope::new(
+            event_id.clone(),
+            "work.assignment.released",
+            actor,
+            &lease.subject.id,
+            event_payload,
+            now,
+        );
+
+        let targets: Vec<TransactionTarget> = vec![
+            TransactionTarget::new(
+                lease_path,
+                FileState::Present {
+                    hash: hash_bytes(&to_canonical_bytes(&lease).expect("canonical lease")),
+                    revision: 0,
+                },
+                FileState::Absent,
+                &[],
+            ),
+            TransactionTarget::new(
+                tombstone_path,
+                FileState::Absent,
+                FileState::Present {
+                    hash: hash_bytes(&tombstone_bytes),
+                    revision: 0,
+                },
+                &tombstone_bytes,
+            ),
+            TransactionTarget::new(
+                workspace_file_path,
+                FileState::Present {
+                    hash: hash_bytes(
+                        &to_canonical_bytes(&workspace_record).expect("canonical workspace before"),
+                    ),
+                    revision: 0,
+                },
+                FileState::Present {
+                    hash: hash_bytes(&workspace_bytes),
+                    revision: 1,
+                },
+                &workspace_bytes,
+            ),
+            TransactionTarget::new(
+                node_path,
+                FileState::Present {
+                    hash: hash_bytes(&before_bytes),
+                    revision: lease.subject.revision,
+                },
+                FileState::Present {
+                    hash: hash_bytes(&node_after_bytes),
+                    revision: lease.subject.revision + 1,
+                },
+                &node_after_bytes,
+            ),
+        ];
+
+        let intent = MultiTargetTransactionIntent::prepared_with_transaction_id(
+            transaction_id,
+            event_id,
+            "work.assignment.released",
+            actor,
+            targets,
+            event_file_path,
+            serde_json::to_value(&event)?,
+        )?;
+
+        let prepared_txn = prepare_multi_target_transaction(&self.repo_root, intent)?;
+        commit_prepared_multi_target_transaction(&prepared_txn, self.failpoint)?;
+
+        // Can attempt workspace cleanup after commit.
+        if !is_in_place && workspace_abs_path.exists() {
+            let _ = crate::workspace::cleanup_worktree(&self.repo_root, &workspace_abs_path);
+        }
+
+        Ok(true)
+    }
+
+    /// Commit a tombstone + workspace update for a stale-expired lease
+    /// (no node transition because workspace is dirty).
+    fn commit_expired_stale_tombstone(
+        &self,
+        actor: &str,
+        entry: &crate::kernel::assignment_store::RecoveryEntry,
+        lease: &crate::assignment::AssignmentLeaseRecordV1,
+        workspace_record: &crate::assignment::AssignmentWorkspaceRecordV1,
+        tombstone_bytes: &[u8],
+        now: DateTime<Utc>,
+    ) -> PulseResult<()> {
+        let mut updated_workspace = workspace_record.clone();
+        updated_workspace.state = WORKSPACE_STATE_STALE.to_string();
+        updated_workspace.released_at = Some(now.to_rfc3339());
+
+        let event_id = new_event_id();
+        let transaction_id = new_transaction_id();
+
+        let lease_path = assignment_store::lease_path(&self.repo_root, &entry.lease_id)?;
+        let tombstone_path = assignment_store::tombstone_path(&self.repo_root, &entry.lease_id)?;
+        let workspace_file_path =
+            assignment_store::workspace_path(&self.repo_root, &workspace_record.workspace_id)?;
+
+        let event_file_path = self
+            .repo_root
+            .join(".pulse/events")
+            .join(now.format("%Y-%m-%d").to_string())
+            .join(format!("{event_id}.json"));
+
+        let workspace_bytes = to_canonical_bytes(&updated_workspace)?;
+
+        let event_payload = json!({
+            "from": "active",
+            "to": "active",
+            "expected_revision": lease.subject.revision,
+            "lease_id": entry.lease_id,
+            "workspace_id": workspace_record.workspace_id,
+            "prepared_assignment_id": lease.prepared_assignment_id,
+            "reason": "recovery: expired lease with dirty workspace preserved for operator",
+            "workspace_final_state": WORKSPACE_STATE_STALE,
+            "recovery": true,
+            "node_unchanged": true,
+        });
+
+        let event = EventEnvelope::new(
+            event_id.clone(),
+            "work.assignment.released",
+            actor,
+            &lease.subject.id,
+            event_payload,
+            now,
+        );
+
+        let targets: Vec<TransactionTarget> = vec![
+            TransactionTarget::new(
+                lease_path,
+                FileState::Present {
+                    hash: hash_bytes(&to_canonical_bytes(lease).expect("canonical lease")),
+                    revision: 0,
+                },
+                FileState::Absent,
+                &[],
+            ),
+            TransactionTarget::new(
+                tombstone_path,
+                FileState::Absent,
+                FileState::Present {
+                    hash: hash_bytes(tombstone_bytes),
+                    revision: 0,
+                },
+                tombstone_bytes,
+            ),
+            TransactionTarget::new(
+                workspace_file_path,
+                FileState::Present {
+                    hash: hash_bytes(
+                        &to_canonical_bytes(workspace_record).expect("canonical workspace before"),
+                    ),
+                    revision: 0,
+                },
+                FileState::Present {
+                    hash: hash_bytes(&workspace_bytes),
+                    revision: 1,
+                },
+                &workspace_bytes,
+            ),
+        ];
+
+        let intent = MultiTargetTransactionIntent::prepared_with_transaction_id(
+            transaction_id,
+            event_id,
+            "work.assignment.released",
+            actor,
+            targets,
+            event_file_path,
+            serde_json::to_value(&event)?,
+        )?;
+
+        let prepared_txn = prepare_multi_target_transaction(&self.repo_root, intent)?;
+        commit_prepared_multi_target_transaction(&prepared_txn, self.failpoint)?;
+        Ok(())
+    }
 }
