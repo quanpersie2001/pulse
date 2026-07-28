@@ -185,13 +185,13 @@ impl JsonGraphStore {
         // Phase 1 — under the caller-held fence, extract everything.
         let phase1 = self.packet_phase1_under_fence(id, &repository_id)?;
 
-        // Check whether the docs cache is already current (read-only check,
-        // no lock acquisition). If not fresh, tell the caller to
-        // release/reacquire and retry.
-        let cache_fp = crate::docs::index::current_cache_fingerprint(&self.repo_root)?;
-        let docs_cache_needs_refresh = cache_fp.is_none();
+        // Check whether the docs cache is current against the live registry and
+        // document content using a read-only path. If not fresh, tell the
+        // caller to release/reacquire and retry instead of entering docs search
+        // under the held non-reentrant repository fence.
+        let cache_fp = current_docs_cache_fingerprint_under_fence(&self.repo_root)?;
 
-        if docs_cache_needs_refresh {
+        if cache_fp.is_none() {
             return Err(PulseError::validation(
                 "work_packet_docs_cache_needs_refresh",
                 "docs cache is stale under held fence; caller must release fence, \
@@ -206,6 +206,7 @@ impl JsonGraphStore {
             &phase1.pre_suggestion_query,
             &phase1.pre_excluded_doc_ids,
             &phase1.docs_work_context,
+            true,
         )?;
         let pre_suggestion_fingerprints = suggestion_fingerprints(&suggested_sections);
 
@@ -1200,6 +1201,7 @@ fn packet_refresh_and_search(
         &phase1.pre_suggestion_query,
         &phase1.pre_excluded_doc_ids,
         &phase1.docs_work_context,
+        false,
     )?;
     Ok((suggested_sections, docs_cache_fp))
 }
@@ -1241,6 +1243,18 @@ fn work_documentation_context(node: &Node) -> WorkDocumentationContext {
             WorkDocumentationContext::from((node.id.as_str(), node.revision, documentation))
         })
         .unwrap_or_else(|| WorkDocumentationContext::unknown(node.id.clone(), node.revision))
+}
+
+fn current_docs_cache_fingerprint_under_fence(repo_root: &Path) -> PulseResult<Option<String>> {
+    let status = crate::docs::index::index_status_with_options(
+        repo_root,
+        crate::docs::policy::RetrievalEligibilityOptions::default(),
+    )?;
+    if status.index.state == "current" {
+        Ok(status.index.fingerprint)
+    } else {
+        Ok(None)
+    }
 }
 
 fn map_docs_index_error(error: PulseError, context: &str) -> PulseError {
@@ -2145,6 +2159,7 @@ fn search_suggestions(
     query: &work_packet::PacketSuggestionQuery,
     excluded_doc_ids: &[String],
     docs_work: &WorkDocumentationContext,
+    under_repository_fence: bool,
 ) -> PulseResult<Vec<work_packet::PacketSuggestedSection>> {
     if query.normalized_terms.is_empty() {
         return Ok(Vec::new());
@@ -2163,6 +2178,7 @@ fn search_suggestions(
             include_draft: false,
             include_stale: false,
             work: Some(docs_work.clone()),
+            under_repository_fence,
         },
     )
     .map_err(|error| map_docs_index_error(error, "docs suggestion search failed"))?;
@@ -2275,9 +2291,10 @@ mod tests {
     use crate::graph::readiness::{GateFamilyReport, GateStatus};
     use crate::graph::{contract, node};
     use crate::identity::ActorKind;
-    use crate::policy::AuthorityPolicyReport;
+    use crate::policy::{AuthorityPolicy, AuthorityPolicyReport, AuthorityPrincipal};
     use chrono::Utc;
     use std::path::PathBuf;
+    use std::time::Duration;
 
     fn base_node(id: &str, kind: WorkKind, title: &str) -> Node {
         Node {
@@ -2346,6 +2363,161 @@ mod tests {
             created_at: Utc::now(),
             updated_at: Utc::now(),
         }
+    }
+
+    fn install_valid_brief(root: &std::path::Path, node: &mut Node) {
+        let brief_rel = format!("{}/brief.md", node.content_dir);
+        let brief_path = root.join(&brief_rel);
+        std::fs::create_dir_all(brief_path.parent().unwrap()).unwrap();
+        std::fs::write(&brief_path, b"# Brief\nImplement packet fence handling.\n").unwrap();
+        let brief_hash = crate::canonical_json::hash_bytes(&std::fs::read(&brief_path).unwrap());
+        let contract = node.implementation.as_mut().unwrap();
+        contract.brief = Some(contract::ContentRef {
+            path: brief_rel,
+            content_hash: brief_hash,
+        });
+        contract.required_changes = vec![contract::ContractItem {
+            id: "CHG-1".to_string(),
+            summary: "Update fence-aware packet search.".to_string(),
+        }];
+        contract.invariants = vec![contract::ContractItem {
+            id: "INV-1".to_string(),
+            summary: "Do not reacquire the repository fence.".to_string(),
+        }];
+        contract.acceptance = vec![contract::ContractItem {
+            id: "AC-1".to_string(),
+            summary: "Under-fence packet reports stale cache before search.".to_string(),
+        }];
+    }
+
+    fn write_valid_policy(root: &std::path::Path) {
+        let policy = AuthorityPolicy {
+            schema_version: 1,
+            revision: 1,
+            principals: vec![AuthorityPrincipal {
+                kind: ActorKind::Human,
+                id: "tester".to_string(),
+                grants: vec![
+                    "shape.apply".to_string(),
+                    "shape.approve.R1".to_string(),
+                    "work.transition.ready".to_string(),
+                ],
+            }],
+        };
+        let path = root.join(".pulse/policy/authority.json");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(
+            &path,
+            crate::canonical_json::to_canonical_bytes(&policy).unwrap(),
+        )
+        .unwrap();
+    }
+
+    fn install_valid_shaping_receipt(root: &std::path::Path, node: &mut Node) {
+        let payload = ShapingValidationPayload {
+            owning_work: ShapingWorkBinding {
+                id: node.id.clone(),
+                revision_observed: node.revision,
+                contract_revision: node.contract_revision,
+            },
+            ..shaping_payload(vec![], vec![])
+        };
+        let node_path = root.join(format!(".pulse/workgraph/nodes/{}.json", node.id));
+        std::fs::create_dir_all(node_path.parent().unwrap()).unwrap();
+        std::fs::write(
+            &node_path,
+            crate::canonical_json::to_canonical_bytes(node).unwrap(),
+        )
+        .unwrap();
+
+        let brief = node
+            .implementation
+            .as_ref()
+            .and_then(|contract| contract.brief.as_ref())
+            .expect("test node must have a bound brief");
+        let receipt = crate::evidence::model::ReceiptEnvelope {
+            schema_version: 1,
+            receipt_version: 1,
+            id: "rcpt_01J00000000000000000000025".to_string(),
+            kind: crate::evidence::model::ReceiptKind::ShapingValidation,
+            result: crate::evidence::model::ReceiptResult::Passed,
+            actor: crate::evidence::model::ActorRef {
+                kind: ActorKind::Human,
+                id: "tester".to_string(),
+            },
+            recorded_at: Utc::now(),
+            subject: crate::evidence::model::SubjectRef {
+                kind: "work".to_string(),
+                id: node.id.clone(),
+            },
+            bindings: crate::evidence::model::ReceiptBindings {
+                work: vec![crate::evidence::model::WorkBinding {
+                    id: node.id.clone(),
+                    revision: node.revision,
+                }],
+                source: None,
+                content: vec![crate::evidence::model::ContentBinding {
+                    path: brief.path.clone(),
+                    sha256: brief.content_hash.clone(),
+                }],
+                artifacts: vec![],
+                graph_fingerprint_observed: None,
+            },
+            payload: crate::evidence::model::ReceiptPayload::ShapingValidation(payload),
+        };
+        let receipt_path = root.join("shaping.json");
+        std::fs::write(
+            &receipt_path,
+            crate::canonical_json::to_canonical_bytes(&receipt).unwrap(),
+        )
+        .unwrap();
+        let outcome = crate::evidence::record_receipt(root, None, &receipt_path).unwrap();
+        node.shaping = Some(contract::ShapingPointer {
+            receipt: contract::ReceiptRef {
+                id: outcome.receipt.id,
+                hash: outcome.receipt_hash,
+            },
+            map: None,
+            applied_at: Utc::now(),
+            applied_by: "human:tester".to_string(),
+        });
+    }
+
+    fn register_test_doc(root: &std::path::Path, id: &str, path: &str, summary: &str) {
+        let registry_path = root.join(".pulse/docs/registry.json");
+        let mut registry: crate::docs::model::DocsRegistry =
+            crate::storage::read_json(&registry_path).unwrap();
+        registry.documents.push(crate::docs::model::DocumentRecord {
+            id: id.to_string(),
+            revision: 1,
+            path: path.to_string(),
+            kind: crate::docs::model::DocumentKind::Domain,
+            authority: crate::docs::model::DocumentAuthority::Approved,
+            lifecycle: crate::docs::model::DocumentLifecycle::Current,
+            owner: "team:docs-team".to_string(),
+            summary: summary.to_string(),
+            aliases: vec!["packet".to_string()],
+            scope: crate::docs::model::DocumentScope {
+                paths: vec!["src/kernel/packet.rs".to_string()],
+                domains: vec!["authentication".to_string()],
+                work_labels: vec!["tokens".to_string()],
+            },
+            review_policy: crate::docs::model::ReviewPolicy::None,
+            verification_profile: "docs".to_string(),
+            generated: None,
+            superseded_by: None,
+            retrieval: Some(crate::docs::model::DocumentRetrieval {
+                index: true,
+                include_body: true,
+                materialize_index: false,
+            }),
+        });
+        registry.normalize();
+        std::fs::write(
+            &registry_path,
+            crate::canonical_json::to_canonical_bytes(&registry).unwrap(),
+        )
+        .unwrap();
     }
 
     fn edge(edge_type: EdgeType, from: &str, to: &str) -> Edge {
@@ -3495,6 +3667,253 @@ mod tests {
             state.context.parents.is_empty()
                 || state.context.parents.iter().any(|p| p.id == "ST-001")
         );
+    }
+
+    #[test]
+    fn work_packet_under_fence_does_not_reacquire_repository_lock() {
+        let repo = tempfile::tempdir().unwrap();
+        let root = repo.path();
+        let locks = root.join(".pulse/runtime/locks");
+        std::fs::create_dir_all(&locks).unwrap();
+
+        let _guard = crate::storage::WriteGuard::acquire(root).unwrap();
+        let store = JsonGraphStore::new(root);
+        let result = store.work_packet_under_fence("TK-001");
+
+        assert!(result.is_err());
+        assert_ne!(result.unwrap_err().code(), "lock_timeout");
+    }
+
+    #[test]
+    fn work_packet_under_fence_reports_stale_docs_cache_before_search() {
+        let repo = tempfile::tempdir().unwrap();
+        let root = repo.path();
+        let store = JsonGraphStore::new(root);
+        store.bootstrap().unwrap();
+        crate::evidence::manifest::load(root).unwrap();
+        crate::docs::manifest::bootstrap(root).unwrap();
+
+        let mut node = base_node("TK-001", WorkKind::Ticket, "Ticket");
+        install_valid_brief(root, &mut node);
+        write_valid_policy(root);
+        install_valid_shaping_receipt(root, &mut node);
+        let path = store.node_path("TK-001");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(
+            &path,
+            crate::canonical_json::to_canonical_bytes(&node).unwrap(),
+        )
+        .unwrap();
+        std::fs::create_dir_all(root.join(&node.content_dir)).unwrap();
+        std::fs::write(root.join(".gitignore"), b".pulse/runtime/\n.pulse/cache/\n").unwrap();
+        assert!(std::process::Command::new("git")
+            .current_dir(root)
+            .args(["init", "-q"])
+            .status()
+            .unwrap()
+            .success());
+        assert!(std::process::Command::new("git")
+            .current_dir(root)
+            .args(["add", "."])
+            .status()
+            .unwrap()
+            .success());
+        assert!(std::process::Command::new("git")
+            .current_dir(root)
+            .args([
+                "-c",
+                "user.name=Pulse Test",
+                "-c",
+                "user.email=pulse@example.test",
+                "commit",
+                "-q",
+                "-m",
+                "setup",
+            ])
+            .status()
+            .unwrap()
+            .success());
+
+        let _guard = crate::storage::WriteGuard::acquire(root).unwrap();
+        let result = store.work_packet_under_fence("TK-001");
+
+        assert!(result.is_err());
+        let error = result.unwrap_err();
+        assert_eq!(
+            error.code(),
+            "work_packet_docs_cache_needs_refresh",
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn work_packet_under_fence_detects_stale_docs_cache_before_search() {
+        let repo = tempfile::tempdir().unwrap();
+        let root = repo.path();
+        let store = JsonGraphStore::new(root);
+        store.bootstrap().unwrap();
+        crate::evidence::manifest::load(root).unwrap();
+        crate::docs::manifest::bootstrap(root).unwrap();
+
+        let mut node = base_node("TK-001", WorkKind::Ticket, "Ticket");
+        install_valid_brief(root, &mut node);
+        write_valid_policy(root);
+        install_valid_shaping_receipt(root, &mut node);
+        let doc_rel = "docs/packet.md";
+        let doc_path = root.join(doc_rel);
+        std::fs::create_dir_all(doc_path.parent().unwrap()).unwrap();
+        std::fs::write(&doc_path, b"# Packet\nCurrent packet docs.\n").unwrap();
+        register_test_doc(root, "DOC-PACKET", doc_rel, "packet docs");
+        let path = store.node_path("TK-001");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(
+            &path,
+            crate::canonical_json::to_canonical_bytes(&node).unwrap(),
+        )
+        .unwrap();
+        std::fs::create_dir_all(root.join(&node.content_dir)).unwrap();
+        std::fs::write(root.join(".gitignore"), b".pulse/runtime/\n.pulse/cache/\n").unwrap();
+        assert!(std::process::Command::new("git")
+            .current_dir(root)
+            .args(["init", "-q"])
+            .status()
+            .unwrap()
+            .success());
+        assert!(std::process::Command::new("git")
+            .current_dir(root)
+            .args(["add", "."])
+            .status()
+            .unwrap()
+            .success());
+        assert!(std::process::Command::new("git")
+            .current_dir(root)
+            .args([
+                "-c",
+                "user.name=Pulse Test",
+                "-c",
+                "user.email=pulse@example.test",
+                "commit",
+                "-q",
+                "-m",
+                "setup",
+            ])
+            .status()
+            .unwrap()
+            .success());
+        crate::docs::index::build_search_cache(
+            root,
+            crate::docs::index::IndexOptions {
+                changed: false,
+                rebuild: false,
+                check: false,
+                include_draft: false,
+                include_stale: false,
+            },
+        )
+        .unwrap();
+        std::fs::write(&doc_path, b"# Packet\nStale packet docs.\n").unwrap();
+        assert!(std::process::Command::new("git")
+            .current_dir(root)
+            .args(["add", doc_rel])
+            .status()
+            .unwrap()
+            .success());
+        assert!(std::process::Command::new("git")
+            .current_dir(root)
+            .args([
+                "-c",
+                "user.name=Pulse Test",
+                "-c",
+                "user.email=pulse@example.test",
+                "commit",
+                "-q",
+                "-m",
+                "stale docs",
+            ])
+            .status()
+            .unwrap()
+            .success());
+
+        let _guard = crate::storage::WriteGuard::acquire(root).unwrap();
+        let result = store.work_packet_under_fence("TK-001");
+
+        assert!(result.is_err());
+        let error = result.unwrap_err();
+        assert_eq!(
+            error.code(),
+            "work_packet_docs_cache_needs_refresh",
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn fenced_suggestion_search_does_not_self_deadlock() {
+        let repo = tempfile::tempdir().unwrap();
+        let root = repo.path();
+        let locks = root.join(".pulse/runtime/locks");
+        std::fs::create_dir_all(&locks).unwrap();
+
+        let registry = crate::docs::model::DocsRegistryEnvelope::empty("repo_test".to_string());
+        std::fs::create_dir_all(root.join(".pulse/docs")).unwrap();
+        std::fs::write(
+            root.join(".pulse/docs/registry.json"),
+            crate::canonical_json::to_canonical_bytes(&registry).unwrap(),
+        )
+        .unwrap();
+
+        let bogus_generation =
+            "gen_sha256_0000000000000000000000000000000000000000000000000000000000000000";
+        std::fs::create_dir_all(root.join(".pulse/cache/docs-search/generations")).unwrap();
+        std::fs::write(
+            root.join(".pulse/cache/docs-search/CURRENT"),
+            bogus_generation,
+        )
+        .unwrap();
+
+        let _guard = crate::storage::WriteGuard::acquire(root).unwrap();
+        let result = search_suggestions(
+            root,
+            &work_packet::PacketSuggestionQuery {
+                text: "packet".to_string(),
+                normalized_terms: vec!["packet".to_string()],
+            },
+            &[],
+            &WorkDocumentationContext {
+                work_id: "TK-001".to_string(),
+                revision: 1,
+                posture: DocumentationPosture::None,
+                required_documents: vec![],
+                paths: vec![],
+                domains: vec![],
+                labels: vec![],
+            },
+            true,
+        );
+
+        assert!(result.is_err());
+        assert_ne!(result.unwrap_err().code(), "lock_timeout");
+    }
+
+    #[test]
+    fn public_work_packet_releases_first_fence_before_docs_refresh() {
+        let repo = tempfile::tempdir().unwrap();
+        let root = repo.path();
+        let locks = root.join(".pulse/runtime/locks");
+        std::fs::create_dir_all(&locks).unwrap();
+
+        let guard = crate::storage::WriteGuard::acquire(root).unwrap();
+        let store = JsonGraphStore::with_work_packet_after_first_fence_failpoint(root);
+        let handle = std::thread::spawn(move || store.work_packet("TK-001"));
+
+        std::thread::sleep(Duration::from_millis(50));
+        drop(guard);
+        let result = match handle.join() {
+            Ok(result) => result,
+            Err(panic) => std::panic::resume_unwind(panic),
+        };
+
+        assert!(result.is_err());
+        assert_ne!(result.unwrap_err().code(), "lock_timeout");
     }
 
     #[allow(dead_code)]

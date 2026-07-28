@@ -26,6 +26,13 @@ pub struct SearchOptions {
     pub include_draft: bool,
     pub include_stale: bool,
     pub work: Option<WorkDocumentationContext>,
+    /// Internal callers that already hold the repository write fence cannot use
+    /// the default search path because registry/applicability helpers acquire
+    /// that same non-reentrant fence. When true, search uses read-only registry
+    /// loads, refuses auto-refresh, and assumes the caller has already made the
+    /// cache current and will revalidate the graph/docs snapshot before using
+    /// the results.
+    pub under_repository_fence: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -114,7 +121,8 @@ pub fn search_docs(
         include_draft: options.include_draft,
         include_stale: options.include_stale,
     };
-    let status = if options.include_draft || options.include_stale {
+    let status = if options.under_repository_fence || options.include_draft || options.include_stale
+    {
         crate::docs::index::index_status_with_options(repo_root, build_options)?
     } else {
         index_status(repo_root)?
@@ -128,11 +136,11 @@ pub fn search_docs(
     };
     let generation = match current_generation(repo_root) {
         Ok(Some(generation)) if status.index.state == "current" => generation,
-        _ if options.no_refresh => {
+        _ if options.no_refresh || options.under_repository_fence => {
             return Err(PulseError::validation(
                 cache_state_error_code(&status.index.state),
                 format!(
-                    "docs-search index is {} and --no-refresh was requested",
+                    "docs-search index is {} and refresh is disabled",
                     status.index.state
                 ),
             ));
@@ -152,7 +160,7 @@ pub fn search_docs(
     // Reclassify against current status after any refresh.
     let state = classify_against(repo_root, &generation.state.fingerprint)?.0;
     if state != CacheState::Current {
-        if options.no_refresh {
+        if options.no_refresh || options.under_repository_fence {
             return Err(PulseError::validation(
                 cache_state_error_code(state.as_str()),
                 format!("docs-search index is {}", state.as_str()),
@@ -167,7 +175,11 @@ pub fn search_docs(
             "docs-search generation missing after refresh",
         )
     })?;
-    let registry = load_registry(repo_root)?;
+    let registry = if options.under_repository_fence {
+        crate::storage::read_json(&crate::docs::registry::registry_path(repo_root))?
+    } else {
+        load_registry(repo_root)?
+    };
     let default_limit = registry.retrieval_config().default_search_limit as usize;
     let limit = options.limit.unwrap_or(default_limit).clamp(1, 50);
     let applicability = applicability_by_document(repo_root, &options)?;
@@ -268,7 +280,11 @@ fn applicability_by_document(
     let Some(work) = &options.work else {
         return Ok(BTreeMap::new());
     };
-    let registry = load_registry(repo_root)?;
+    let registry = if options.under_repository_fence {
+        crate::storage::read_json(&crate::docs::registry::registry_path(repo_root))?
+    } else {
+        load_registry(repo_root)?
+    };
     let resolver = FsContentResolver::new(repo_root);
     let report = applicable_docs(
         work,

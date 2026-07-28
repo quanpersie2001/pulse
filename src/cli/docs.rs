@@ -483,6 +483,7 @@ pub(crate) fn handle(store: &JsonGraphStore, command: DocsCommand) -> Result<(),
                     include_draft,
                     include_stale,
                     work,
+                    under_repository_fence: false,
                 },
             )?;
             render(json, &out, format!("{} docs hits", out.results.len()))
