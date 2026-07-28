@@ -516,3 +516,193 @@ fn killed_receipt_record_after_file_recovers_event_once() {
         1
     );
 }
+
+/// Helper: artifact dir for known digest.
+fn artifact_digest_dir(repo: &TempDir, digest: &str) -> std::path::PathBuf {
+    let hex = digest.strip_prefix("sha256:").unwrap();
+    repo.path()
+        .join(".pulse/evidence/artifacts/sha256")
+        .join(&hex[0..2])
+        .join(hex)
+}
+
+#[test]
+fn killed_artifact_put_after_intent_recovers_content_metadata_and_event_once() {
+    let repo = tempfile::tempdir().unwrap();
+    run_ok(&repo, &["evidence", "bootstrap", "--json"]);
+    let input = repo.path().join("artifact-notes.txt");
+    fs::write(&input, b"artifact intent failpoint recovery").unwrap();
+    let digest = hash_bytes(&fs::read(&input).unwrap());
+    let artifact_dir = artifact_digest_dir(&repo, &digest);
+
+    let mut child = Command::new(bin())
+        .arg("--repo-root")
+        .arg(repo.path())
+        .arg("--test-failpoint")
+        .arg("after_intent")
+        .args([
+            "evidence",
+            "artifact",
+            "put",
+            input.to_str().unwrap(),
+            "--kind",
+            "review_notes",
+            "--media-type",
+            "text/plain",
+            "--json",
+        ])
+        .env("PULSE_FAILPOINT_SLEEP_MS", "30000")
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn artifact with after_intent failpoint");
+    // Wait for intent to be persisted, then kill before any targets.
+    wait_for_transaction_intent(&repo);
+    // Brief sleep to ensure we're inside the failpoint sleep, not before it.
+    thread::sleep(Duration::from_millis(200));
+    child.kill().expect("kill child");
+    let _ = child.wait();
+
+    // After intent only: no content, no metadata, no event.
+    assert!(!artifact_dir.join("content").exists());
+    assert!(!artifact_dir.join("metadata.json").exists());
+    assert_eq!(
+        event_count_by_type_and_subject(&repo, "evidence.artifact.recorded", &digest),
+        0
+    );
+
+    // Recovery should roll back (remove intent, no side effects).
+    run_ok(&repo, &["graph", "recover", "--json"]);
+    assert!(!artifact_dir.join("content").exists());
+    assert!(!artifact_dir.join("metadata.json").exists());
+
+    // Re-run succeeds as if nothing happened.
+    let output = run(
+        &repo,
+        &[
+            "evidence",
+            "artifact",
+            "put",
+            input.to_str().unwrap(),
+            "--kind",
+            "review_notes",
+            "--media-type",
+            "text/plain",
+            "--json",
+        ],
+    );
+    assert!(
+        output.status.success(),
+        "re-run after intent failpoint: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(artifact_dir.join("content").exists());
+    assert!(artifact_dir.join("metadata.json").exists());
+    assert_eq!(
+        event_count_by_type_and_subject(&repo, "evidence.artifact.recorded", &digest),
+        1
+    );
+}
+
+#[test]
+fn killed_artifact_put_after_all_targets_recovers_event_once() {
+    let repo = tempfile::tempdir().unwrap();
+    run_ok(&repo, &["evidence", "bootstrap", "--json"]);
+    let input = repo.path().join("artifact-notes.txt");
+    fs::write(&input, b"artifact all targets failpoint recovery").unwrap();
+    let digest = hash_bytes(&fs::read(&input).unwrap());
+    let artifact_dir = artifact_digest_dir(&repo, &digest);
+    let before_events = event_count(&repo);
+
+    let mut child = Command::new(bin())
+        .arg("--repo-root")
+        .arg(repo.path())
+        .arg("--test-failpoint")
+        .arg("after_multi_target_all")
+        .args([
+            "evidence",
+            "artifact",
+            "put",
+            input.to_str().unwrap(),
+            "--kind",
+            "review_notes",
+            "--media-type",
+            "text/plain",
+            "--json",
+        ])
+        .env("PULSE_FAILPOINT_SLEEP_MS", "30000")
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn artifact with after_multi_target_all failpoint");
+
+    // Wait until both targets (content + metadata) are written, then kill.
+    wait_for_transaction_intent(&repo);
+    wait_for_path_exists(&artifact_dir.join("content"));
+    wait_for_path_exists(&artifact_dir.join("metadata.json"));
+    // Ensure filesystem is settled before killing.
+    thread::sleep(Duration::from_millis(500));
+    child.kill().expect("kill child");
+    let _ = child.wait();
+
+    // Both targets exist, event not yet written.
+    assert!(artifact_dir.join("content").exists());
+    assert!(artifact_dir.join("metadata.json").exists());
+    assert_eq!(event_count(&repo), before_events);
+
+    // Recovery completes the event, cleans up intent.
+    run_ok(&repo, &["graph", "recover", "--json"]);
+    assert!(artifact_dir.join("content").exists());
+    assert!(artifact_dir.join("metadata.json").exists());
+    assert_eq!(event_count(&repo), before_events + 1);
+
+    // Idempotent second recovery is a no-op (CleanComplete).
+    run_ok(&repo, &["graph", "recover", "--json"]);
+    assert_eq!(event_count(&repo), before_events + 1);
+}
+
+#[test]
+fn killed_artifact_put_after_event_intent_cleaned_without_duplicate_event() {
+    let repo = tempfile::tempdir().unwrap();
+    run_ok(&repo, &["evidence", "bootstrap", "--json"]);
+    let input = repo.path().join("artifact-notes.txt");
+    fs::write(&input, b"artifact after-event failpoint recovery").unwrap();
+    let digest = hash_bytes(&fs::read(&input).unwrap());
+    let artifact_dir = artifact_digest_dir(&repo, &digest);
+    let before_events = event_count(&repo);
+
+    let mut child = Command::new(bin())
+        .arg("--repo-root")
+        .arg(repo.path())
+        .arg("--test-failpoint")
+        .arg("after_event")
+        .args([
+            "evidence",
+            "artifact",
+            "put",
+            input.to_str().unwrap(),
+            "--kind",
+            "review_notes",
+            "--media-type",
+            "text/plain",
+            "--json",
+        ])
+        .env("PULSE_FAILPOINT_SLEEP_MS", "30000")
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn artifact with after_event failpoint");
+
+    // Wait until the event is written (after_event fires after write).
+    wait_for_transaction_intent(&repo);
+    wait_for_event_count(&repo, before_events + 1);
+    child.kill().expect("kill child");
+    let _ = child.wait();
+
+    // Targets and event exist.
+    assert!(artifact_dir.join("content").exists());
+    assert!(artifact_dir.join("metadata.json").exists());
+    assert_eq!(event_count(&repo), before_events + 1);
+
+    // Recovery cleans up intent, no duplicate event.
+    run_ok(&repo, &["graph", "recover", "--json"]);
+    run_ok(&repo, &["graph", "recover", "--json"]);
+    assert_eq!(event_count(&repo), before_events + 1);
+}

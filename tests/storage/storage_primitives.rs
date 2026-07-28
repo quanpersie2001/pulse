@@ -3,8 +3,9 @@ use pulse::error::PulseError;
 use pulse::storage::atomic::atomic_replace;
 use pulse::storage::paths::{configured_content_root, resolve_content_path, resolve_repo_relative};
 use pulse::storage::transaction::{
-    persist_intent, recover_prepared_transactions, write_event_create_new, FileState,
-    RecoveryAction, TransactionIntent,
+    persist_intent, persist_multi_target_intent, recover_prepared_transactions,
+    write_event_create_new, write_event_create_new_multi, FileState, MultiTargetTransactionIntent,
+    RecoveryAction, TransactionIntent, TransactionTarget,
 };
 use pulse::storage::{bootstrap, MANIFEST_JSON};
 use serde_json::json;
@@ -305,4 +306,651 @@ fn transaction_recovery_cleans_after_event_before_intent_cleanup() {
     );
     assert!(!intent_path.exists());
     assert!(intent.event_path.exists());
+}
+
+#[test]
+fn multi_target_recovery_rolls_back_when_all_targets_before_and_event_absent() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path();
+    bootstrap(repo).unwrap();
+
+    // Two create-new targets: lease + workspace (runtime-record-like)
+    let lease_path = repo.join(".pulse/runtime/assignment/leases/lease_01JTEST.json");
+    let ws_path = repo.join(".pulse/runtime/assignment/workspaces/wt_01JTEST.json");
+
+    let lease_bytes =
+        to_canonical_bytes(&json!({"id": "lease_01JTEST", "state": "prepared"})).unwrap();
+    let ws_bytes = to_canonical_bytes(&json!({"id": "wt_01JTEST", "state": "bound"})).unwrap();
+
+    let targets = vec![
+        TransactionTarget::new(
+            lease_path.clone(),
+            FileState::Absent,
+            FileState::Present {
+                hash: hash_bytes(&lease_bytes),
+                revision: 1,
+            },
+            &lease_bytes,
+        ),
+        TransactionTarget::new(
+            ws_path.clone(),
+            FileState::Absent,
+            FileState::Present {
+                hash: hash_bytes(&ws_bytes),
+                revision: 1,
+            },
+            &ws_bytes,
+        ),
+    ];
+    let event_path = repo.join(".pulse/events/2026-01-01/mt_rollback.json");
+    let intent = MultiTargetTransactionIntent::prepared(
+        "evt_mt_rollback",
+        "assignment.claim",
+        "test",
+        targets,
+        event_path.clone(),
+        json!({"event": "claim", "id": "TK-001"}),
+    )
+    .unwrap();
+    let intent_path = persist_multi_target_intent(repo, &intent).unwrap();
+
+    // Both targets absent (Before), event absent: rollback.
+    let actions = recover_prepared_transactions(repo).unwrap();
+    assert_eq!(
+        actions,
+        vec![RecoveryAction::RolledBack {
+            intent_path: intent_path.clone()
+        }]
+    );
+    assert!(!intent_path.exists());
+    assert!(!lease_path.exists());
+    assert!(!ws_path.exists());
+    assert!(!event_path.exists());
+}
+
+#[test]
+fn multi_target_recovery_completes_first_target_written_rest_absent() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path();
+    bootstrap(repo).unwrap();
+
+    // Two create-new targets sorted by path.
+    let target_a = repo.join(".pulse/runtime/a_record.json");
+    let target_b = repo.join(".pulse/runtime/b_record.json");
+
+    let bytes_a = to_canonical_bytes(&json!({"id": "a", "val": 1})).unwrap();
+    let bytes_b = to_canonical_bytes(&json!({"id": "b", "val": 2})).unwrap();
+
+    // Write first target (already at After state), leave second absent.
+    fs::create_dir_all(target_a.parent().unwrap()).unwrap();
+    fs::write(&target_a, &bytes_a).unwrap();
+
+    let targets = vec![
+        TransactionTarget::new(
+            target_a.clone(),
+            FileState::Absent,
+            FileState::Present {
+                hash: hash_bytes(&bytes_a),
+                revision: 1,
+            },
+            &bytes_a,
+        ),
+        TransactionTarget::new(
+            target_b.clone(),
+            FileState::Absent,
+            FileState::Present {
+                hash: hash_bytes(&bytes_b),
+                revision: 1,
+            },
+            &bytes_b,
+        ),
+    ];
+    let event_path = repo.join(".pulse/events/2026-01-01/mt_partial_first.json");
+    let intent = MultiTargetTransactionIntent::prepared(
+        "evt_mt_partial_first",
+        "test.multi",
+        "test",
+        targets,
+        event_path.clone(),
+        json!({"event": "partial_first"}),
+    )
+    .unwrap();
+    let intent_path = persist_multi_target_intent(repo, &intent).unwrap();
+
+    // First target is After, second is Before, event absent: complete remaining.
+    let actions = recover_prepared_transactions(repo).unwrap();
+    assert_eq!(actions.len(), 1);
+    match &actions[0] {
+        RecoveryAction::EventCompleted {
+            intent_path: i,
+            event_path: e,
+        } => {
+            assert_eq!(*i, intent_path);
+            assert_eq!(*e, event_path);
+        }
+        other => panic!("expected EventCompleted, got {:?}", other),
+    }
+    assert!(!intent_path.exists());
+    assert!(target_a.exists());
+    assert!(target_b.exists());
+    assert_eq!(fs::read(&target_b).unwrap(), bytes_b);
+    assert!(event_path.exists());
+}
+
+#[test]
+fn multi_target_recovery_completes_last_target_written_event_absent() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path();
+    bootstrap(repo).unwrap();
+
+    let target_a = repo.join(".pulse/runtime/a_record.json");
+    let target_b = repo.join(".pulse/runtime/b_record.json");
+
+    let bytes_a = to_canonical_bytes(&json!({"id": "a", "val": 1})).unwrap();
+    let bytes_b = to_canonical_bytes(&json!({"id": "b", "val": 2})).unwrap();
+
+    // Both targets already at After state.
+    fs::create_dir_all(target_a.parent().unwrap()).unwrap();
+    fs::write(&target_a, &bytes_a).unwrap();
+    fs::write(&target_b, &bytes_b).unwrap();
+
+    let targets = vec![
+        TransactionTarget::new(
+            target_a.clone(),
+            FileState::Absent,
+            FileState::Present {
+                hash: hash_bytes(&bytes_a),
+                revision: 1,
+            },
+            &bytes_a,
+        ),
+        TransactionTarget::new(
+            target_b.clone(),
+            FileState::Absent,
+            FileState::Present {
+                hash: hash_bytes(&bytes_b),
+                revision: 1,
+            },
+            &bytes_b,
+        ),
+    ];
+    let event_path = repo.join(".pulse/events/2026-01-01/mt_last_written.json");
+    let intent = MultiTargetTransactionIntent::prepared(
+        "evt_mt_last_written",
+        "test.multi",
+        "test",
+        targets,
+        event_path.clone(),
+        json!({"event": "last_written"}),
+    )
+    .unwrap();
+    let intent_path = persist_multi_target_intent(repo, &intent).unwrap();
+
+    // Both targets After, event absent: write event and cleanup.
+    let actions = recover_prepared_transactions(repo).unwrap();
+    assert_eq!(
+        actions,
+        vec![RecoveryAction::EventCompleted {
+            intent_path: intent_path.clone(),
+            event_path: event_path.clone()
+        }]
+    );
+    assert!(!intent_path.exists());
+    assert!(event_path.exists());
+}
+
+#[test]
+fn multi_target_recovery_cleans_when_all_targets_and_event_present() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path();
+    bootstrap(repo).unwrap();
+
+    let target_a = repo.join(".pulse/runtime/a_record.json");
+    let target_b = repo.join(".pulse/runtime/b_record.json");
+
+    let bytes_a = to_canonical_bytes(&json!({"id": "a", "val": 1})).unwrap();
+    let bytes_b = to_canonical_bytes(&json!({"id": "b", "val": 2})).unwrap();
+
+    // Both targets at After state.
+    fs::create_dir_all(target_a.parent().unwrap()).unwrap();
+    fs::write(&target_a, &bytes_a).unwrap();
+    fs::write(&target_b, &bytes_b).unwrap();
+
+    let targets = vec![
+        TransactionTarget::new(
+            target_a.clone(),
+            FileState::Absent,
+            FileState::Present {
+                hash: hash_bytes(&bytes_a),
+                revision: 1,
+            },
+            &bytes_a,
+        ),
+        TransactionTarget::new(
+            target_b.clone(),
+            FileState::Absent,
+            FileState::Present {
+                hash: hash_bytes(&bytes_b),
+                revision: 1,
+            },
+            &bytes_b,
+        ),
+    ];
+    let event_path = repo.join(".pulse/events/2026-01-01/mt_clean.json");
+    let intent = MultiTargetTransactionIntent::prepared(
+        "evt_mt_clean",
+        "test.multi",
+        "test",
+        targets,
+        event_path.clone(),
+        json!({"event": "clean"}),
+    )
+    .unwrap();
+    let intent_path = persist_multi_target_intent(repo, &intent).unwrap();
+    write_event_create_new_multi(&intent).unwrap();
+
+    // Both targets After, event Matching: clean up intent.
+    let actions = recover_prepared_transactions(repo).unwrap();
+    assert_eq!(
+        actions,
+        vec![RecoveryAction::CleanedComplete {
+            intent_path: intent_path.clone()
+        }]
+    );
+    assert!(!intent_path.exists());
+    assert!(event_path.exists());
+}
+
+#[test]
+fn multi_target_recovery_with_remove_target_rolls_back_when_file_still_present() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path();
+    bootstrap(repo).unwrap();
+
+    // Simulate a release: remove lease + create tombstone.
+    let lease_path = repo.join(".pulse/runtime/assignment/leases/lease_01JTEST.json");
+    let tombstone_path = repo.join(".pulse/runtime/assignment/tombstones/lease_01JTEST.json");
+
+    let lease_bytes =
+        to_canonical_bytes(&json!({"id": "lease_01JTEST", "state": "prepared"})).unwrap();
+    let tombstone_bytes =
+        to_canonical_bytes(&json!({"id": "lease_01JTEST", "state": "released"})).unwrap();
+
+    // Lease file present (Before state).
+    fs::create_dir_all(lease_path.parent().unwrap()).unwrap();
+    fs::write(&lease_path, &lease_bytes).unwrap();
+
+    // Targets sorted by path: lease (remove), tombstone (create).
+    // Since leases/ < tombstones/ lexicographically, lease comes first.
+    let targets = vec![
+        TransactionTarget::new(
+            lease_path.clone(),
+            FileState::Present {
+                hash: hash_bytes(&lease_bytes),
+                revision: 1,
+            },
+            FileState::Absent,
+            &[],
+        ),
+        TransactionTarget::new(
+            tombstone_path.clone(),
+            FileState::Absent,
+            FileState::Present {
+                hash: hash_bytes(&tombstone_bytes),
+                revision: 1,
+            },
+            &tombstone_bytes,
+        ),
+    ];
+    let event_path = repo.join(".pulse/events/2026-01-01/mt_remove_rollback.json");
+    let intent = MultiTargetTransactionIntent::prepared(
+        "evt_mt_remove_rollback",
+        "assignment.release",
+        "test",
+        targets,
+        event_path,
+        json!({"event": "release"}),
+    )
+    .unwrap();
+    let intent_path = persist_multi_target_intent(repo, &intent).unwrap();
+
+    // Both targets in Before state (lease still exists, tombstone absent), event absent: rollback.
+    let actions = recover_prepared_transactions(repo).unwrap();
+    assert_eq!(
+        actions,
+        vec![RecoveryAction::RolledBack {
+            intent_path: intent_path.clone()
+        }]
+    );
+    assert!(!intent_path.exists());
+    // Lease file must still exist (rollback preserves before state).
+    assert!(lease_path.exists());
+    assert_eq!(fs::read(&lease_path).unwrap(), lease_bytes);
+    // Tombstone must not have been created.
+    assert!(!tombstone_path.exists());
+}
+
+#[test]
+fn multi_target_recovery_with_remove_target_completes_when_file_removed() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path();
+    bootstrap(repo).unwrap();
+
+    let lease_path = repo.join(".pulse/runtime/assignment/leases/lease_01JTEST.json");
+    let tombstone_path = repo.join(".pulse/runtime/assignment/tombstones/lease_01JTEST.json");
+
+    let lease_bytes =
+        to_canonical_bytes(&json!({"id": "lease_01JTEST", "state": "prepared"})).unwrap();
+    let tombstone_bytes =
+        to_canonical_bytes(&json!({"id": "lease_01JTEST", "state": "released"})).unwrap();
+
+    // Lease file removed (After state for remove target).
+    // Tombstone absent (Before state).
+    // (lease_path deliberately not created)
+
+    let targets = vec![
+        TransactionTarget::new(
+            lease_path.clone(),
+            FileState::Present {
+                hash: hash_bytes(&lease_bytes),
+                revision: 1,
+            },
+            FileState::Absent,
+            &[],
+        ),
+        TransactionTarget::new(
+            tombstone_path.clone(),
+            FileState::Absent,
+            FileState::Present {
+                hash: hash_bytes(&tombstone_bytes),
+                revision: 1,
+            },
+            &tombstone_bytes,
+        ),
+    ];
+    let event_path = repo.join(".pulse/events/2026-01-01/mt_remove_complete.json");
+    let intent = MultiTargetTransactionIntent::prepared(
+        "evt_mt_remove_complete",
+        "assignment.release",
+        "test",
+        targets,
+        event_path.clone(),
+        json!({"event": "release"}),
+    )
+    .unwrap();
+    let intent_path = persist_multi_target_intent(repo, &intent).unwrap();
+
+    // First target (remove) is After, second (create) is Before, event absent: complete.
+    let actions = recover_prepared_transactions(repo).unwrap();
+    assert_eq!(actions.len(), 1);
+    match &actions[0] {
+        RecoveryAction::EventCompleted {
+            intent_path: i,
+            event_path: e,
+        } => {
+            assert_eq!(*i, intent_path);
+            assert_eq!(*e, event_path);
+        }
+        other => panic!("expected EventCompleted, got {:?}", other),
+    }
+    assert!(!intent_path.exists());
+    assert!(!lease_path.exists());
+    assert!(tombstone_path.exists());
+    assert_eq!(fs::read(&tombstone_path).unwrap(), tombstone_bytes);
+    assert!(event_path.exists());
+}
+
+#[test]
+fn multi_target_recovery_with_remove_target_cleans_when_all_done() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path();
+    bootstrap(repo).unwrap();
+
+    let lease_path = repo.join(".pulse/runtime/assignment/leases/lease_01JTEST.json");
+    let tombstone_path = repo.join(".pulse/runtime/assignment/tombstones/lease_01JTEST.json");
+
+    let lease_bytes =
+        to_canonical_bytes(&json!({"id": "lease_01JTEST", "state": "prepared"})).unwrap();
+    let tombstone_bytes =
+        to_canonical_bytes(&json!({"id": "lease_01JTEST", "state": "released"})).unwrap();
+
+    // Lease file removed (After), tombstone created (After).
+    // (lease_path not created, tombstone created)
+    fs::create_dir_all(tombstone_path.parent().unwrap()).unwrap();
+    fs::write(&tombstone_path, &tombstone_bytes).unwrap();
+
+    let targets = vec![
+        TransactionTarget::new(
+            lease_path.clone(),
+            FileState::Present {
+                hash: hash_bytes(&lease_bytes),
+                revision: 1,
+            },
+            FileState::Absent,
+            &[],
+        ),
+        TransactionTarget::new(
+            tombstone_path.clone(),
+            FileState::Absent,
+            FileState::Present {
+                hash: hash_bytes(&tombstone_bytes),
+                revision: 1,
+            },
+            &tombstone_bytes,
+        ),
+    ];
+    let event_path = repo.join(".pulse/events/2026-01-01/mt_remove_clean.json");
+    let intent = MultiTargetTransactionIntent::prepared(
+        "evt_mt_remove_clean",
+        "assignment.release",
+        "test",
+        targets,
+        event_path.clone(),
+        json!({"event": "release"}),
+    )
+    .unwrap();
+    let intent_path = persist_multi_target_intent(repo, &intent).unwrap();
+    write_event_create_new_multi(&intent).unwrap();
+
+    // Both targets After, event Matching: clean up intent.
+    let actions = recover_prepared_transactions(repo).unwrap();
+    assert_eq!(
+        actions,
+        vec![RecoveryAction::CleanedComplete {
+            intent_path: intent_path.clone()
+        }]
+    );
+    assert!(!intent_path.exists());
+    assert!(!lease_path.exists());
+    assert!(tombstone_path.exists());
+    assert!(event_path.exists());
+}
+
+#[test]
+fn multi_target_recovery_mixed_create_and_replace_rolls_back() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path();
+    bootstrap(repo).unwrap();
+
+    // Runtime record (create-new) + node (atomic-replace).
+    let runtime = repo.join(".pulse/runtime/records/rr.json");
+    let node = repo.join(".pulse/workgraph/nodes/TK-002.json");
+
+    let runtime_bytes = to_canonical_bytes(&json!({"id": "rr", "val": 1})).unwrap();
+    let node_before = to_canonical_bytes(&json!({"id": "TK-002", "revision": 1})).unwrap();
+    let node_after = to_canonical_bytes(&json!({"id": "TK-002", "revision": 2})).unwrap();
+
+    // Node exists at before revision.
+    fs::create_dir_all(node.parent().unwrap()).unwrap();
+    fs::write(&node, &node_before).unwrap();
+
+    // Targets sorted by path: node comes before runtime.
+    let targets = vec![
+        TransactionTarget::new(
+            runtime.clone(),
+            FileState::Absent,
+            FileState::Present {
+                hash: hash_bytes(&runtime_bytes),
+                revision: 1,
+            },
+            &runtime_bytes,
+        ),
+        TransactionTarget::new(
+            node.clone(),
+            FileState::Present {
+                hash: hash_bytes(&node_before),
+                revision: 1,
+            },
+            FileState::Present {
+                hash: hash_bytes(&node_after),
+                revision: 2,
+            },
+            &node_after,
+        ),
+    ];
+    let event_path = repo.join(".pulse/events/2026-01-01/mt_mixed_rollback.json");
+    let intent = MultiTargetTransactionIntent::prepared(
+        "evt_mt_mixed_rollback",
+        "test.mixed",
+        "test",
+        targets,
+        event_path,
+        json!({"event": "mixed_rollback"}),
+    )
+    .unwrap();
+    let intent_path = persist_multi_target_intent(repo, &intent).unwrap();
+
+    // Both targets Before, event absent: rollback.
+    let actions = recover_prepared_transactions(repo).unwrap();
+    assert_eq!(
+        actions,
+        vec![RecoveryAction::RolledBack {
+            intent_path: intent_path.clone()
+        }]
+    );
+    assert!(!intent_path.exists());
+    assert!(!runtime.exists());
+    assert_eq!(fs::read(&node).unwrap(), node_before);
+}
+
+#[test]
+fn multi_target_recovery_hard_fails_ambiguous_state() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path();
+    bootstrap(repo).unwrap();
+
+    let target_a = repo.join(".pulse/runtime/a_record.json");
+    let target_b = repo.join(".pulse/runtime/b_record.json");
+
+    let bytes_a = to_canonical_bytes(&json!({"id": "a"})).unwrap();
+    let bytes_b = to_canonical_bytes(&json!({"id": "b"})).unwrap();
+
+    // Write unexpected content to target_a so it's neither Before nor After.
+    fs::create_dir_all(target_a.parent().unwrap()).unwrap();
+    fs::write(
+        &target_a,
+        to_canonical_bytes(&json!({"id": "a", "unexpected": true})).unwrap(),
+    )
+    .unwrap();
+
+    let targets = vec![
+        TransactionTarget::new(
+            target_a,
+            FileState::Absent,
+            FileState::Present {
+                hash: hash_bytes(&bytes_a),
+                revision: 1,
+            },
+            &bytes_a,
+        ),
+        TransactionTarget::new(
+            target_b,
+            FileState::Absent,
+            FileState::Present {
+                hash: hash_bytes(&bytes_b),
+                revision: 1,
+            },
+            &bytes_b,
+        ),
+    ];
+    let event_path = repo.join(".pulse/events/2026-01-01/mt_ambiguous.json");
+    let intent = MultiTargetTransactionIntent::prepared(
+        "evt_mt_ambiguous",
+        "test.multi",
+        "test",
+        targets,
+        event_path,
+        json!({"event": "ambiguous"}),
+    )
+    .unwrap();
+    persist_multi_target_intent(repo, &intent).unwrap();
+
+    // Target a has unexpected content: neither Before nor After → ambiguous.
+    let error = recover_prepared_transactions(repo).unwrap_err();
+    assert!(matches!(error, PulseError::AmbiguousTransaction { .. }));
+}
+
+#[test]
+fn multi_target_recovery_hard_fails_event_mismatch() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path();
+    bootstrap(repo).unwrap();
+
+    let target_a = repo.join(".pulse/runtime/a_record.json");
+    let bytes_a = to_canonical_bytes(&json!({"id": "a"})).unwrap();
+
+    fs::create_dir_all(target_a.parent().unwrap()).unwrap();
+    fs::write(&target_a, &bytes_a).unwrap();
+
+    let targets = vec![TransactionTarget::new(
+        target_a,
+        FileState::Absent,
+        FileState::Present {
+            hash: hash_bytes(&bytes_a),
+            revision: 1,
+        },
+        &bytes_a,
+    )];
+    let event_path = repo.join(".pulse/events/2026-01-01/mt_event_mismatch.json");
+    let intent = MultiTargetTransactionIntent::prepared(
+        "evt_mt_event_mismatch",
+        "test.multi",
+        "test",
+        targets,
+        event_path.clone(),
+        json!({"event": "mismatch"}),
+    )
+    .unwrap();
+    persist_multi_target_intent(repo, &intent).unwrap();
+
+    // Pre-write a different event file.
+    fs::create_dir_all(event_path.parent().unwrap()).unwrap();
+    fs::write(
+        &event_path,
+        to_canonical_bytes(&json!({"event": "different"})).unwrap(),
+    )
+    .unwrap();
+
+    // Event hash doesn't match → EventMismatch.
+    let error = recover_prepared_transactions(repo).unwrap_err();
+    assert!(matches!(error, PulseError::EventMismatch { .. }));
+    assert!(event_path.exists());
+}
+
+#[test]
+fn multi_target_recovery_rejects_empty_targets() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path();
+    bootstrap(repo).unwrap();
+
+    let err = MultiTargetTransactionIntent::prepared(
+        "evt_empty",
+        "test.empty",
+        "test",
+        vec![],
+        repo.join(".pulse/events/empty.json"),
+        json!({"event": "empty"}),
+    )
+    .unwrap_err();
+    assert!(matches!(err, PulseError::InvalidTransaction { .. }));
 }

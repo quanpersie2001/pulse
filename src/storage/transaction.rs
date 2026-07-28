@@ -196,14 +196,20 @@ impl MultiTargetTransactionIntent {
         }
         targets.sort_by(|left, right| left.path.cmp(&right.path));
         for target in &targets {
-            let bytes = target.after_bytes()?;
-            if !observed_hash_matches(Some(&hash_bytes(&bytes)), &target.after) {
-                return Err(PulseError::InvalidTransaction {
-                    message: format!(
-                        "after payload hash does not match planned state for {}",
-                        target.path.display()
-                    ),
-                });
+            if target.after == FileState::Absent {
+                // Remove target: no after-payload to validate. The after
+                // payload is absent by definition; the on-disk state is
+                // checked at commit/recovery time via before-hash matching.
+            } else {
+                let bytes = target.after_bytes()?;
+                if !observed_hash_matches(Some(&hash_bytes(&bytes)), &target.after) {
+                    return Err(PulseError::InvalidTransaction {
+                        message: format!(
+                            "after payload hash does not match planned state for {}",
+                            target.path.display()
+                        ),
+                    });
+                }
             }
         }
         let event_hash = canonical_json::hash_value(&event_payload)?;
@@ -578,11 +584,16 @@ fn write_target_respecting_before(
     bytes: &[u8],
 ) -> Result<()> {
     let observed = observed_target_state(path, before, after)?;
-    match (before, observed) {
-        (FileState::Absent, ObservedTarget::Before) => crate::storage::create_new(path, bytes),
-        (_, ObservedTarget::Before) => atomic::atomic_replace(path, bytes).map(|_| ()),
-        (_, ObservedTarget::After) => Ok(()),
-        (_, ObservedTarget::Other) => Err(PulseError::AmbiguousTransaction {
+    match (before, &observed, after) {
+        (FileState::Absent, ObservedTarget::Before, _) => crate::storage::create_new(path, bytes),
+        (_, ObservedTarget::Before, after) if *after == FileState::Absent => {
+            // Remove target: the transaction plans to delete this file.
+            fs::remove_file(path).map_err(|error| PulseError::io(path, error))?;
+            Ok(())
+        }
+        (_, ObservedTarget::Before, _) => atomic::atomic_replace(path, bytes).map(|_| ()),
+        (_, ObservedTarget::After, _) => Ok(()),
+        (_, ObservedTarget::Other, _) => Err(PulseError::AmbiguousTransaction {
             transaction_id: "commit_precondition".to_string(),
             message: format!(
                 "target {} no longer matches prepared before state",
