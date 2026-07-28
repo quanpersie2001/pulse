@@ -918,7 +918,7 @@ fn is_expired(timestamp: &str) -> bool {
             now > dt
         }
         Err(_) => {
-            // Unparseable timestamp: treat as expired.
+            // Unparsable timestamp: treat as expired.
             true
         }
     }
@@ -945,21 +945,32 @@ mod tests {
     // Helpers
     // -----------------------------------------------------------------------
 
-    fn enrolled_repo() -> TempDir {
-        let dir = tempfile::tempdir().expect("create temp dir");
+    fn enrolled_repo() -> PulseResult<TempDir> {
+        let dir = tempfile::tempdir().map_err(|error| PulseError::io("<tempdir>", error))?;
         // Create minimal enrollment markers.
         let manifest = dir.path().join(".pulse/workgraph/manifest.json");
-        fs::create_dir_all(manifest.parent().unwrap()).expect("create workgraph dir");
+        let manifest_parent = manifest.parent().ok_or_else(|| {
+            PulseError::validation("test_setup_invalid", "manifest path has no parent")
+        })?;
+        fs::create_dir_all(manifest_parent)
+            .map_err(|error| PulseError::io(manifest_parent, error))?;
         fs::write(
             &manifest,
             r#"{"schema_version":1,"code":"pulse-main","content_root":"../../works","id_pattern":"^(EP|ST|TK|DEC)-[0-9]{3,}$","node_schema":".pulse/workgraph/schemas/node.schema.json","edge_schema":".pulse/workgraph/schemas/edge.schema.json","created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-01T00:00:00Z"}"#,
         )
-        .expect("write manifest");
+        .map_err(|error| PulseError::io(&manifest, error))?;
 
         let node_schema = dir.path().join(".pulse/workgraph/schemas/node.schema.json");
-        fs::create_dir_all(node_schema.parent().unwrap()).expect("create schemas dir");
-        fs::write(&node_schema, "{}").expect("write node schema");
-        dir
+        let schema_parent = node_schema.parent().ok_or_else(|| {
+            PulseError::validation("test_setup_invalid", "node schema path has no parent")
+        })?;
+        fs::create_dir_all(schema_parent).map_err(|error| PulseError::io(schema_parent, error))?;
+        fs::write(&node_schema, "{}").map_err(|error| PulseError::io(&node_schema, error))?;
+        Ok(dir)
+    }
+
+    fn enrolled_repo_or_panic() -> TempDir {
+        enrolled_repo().unwrap_or_else(|error| panic!("create enrolled repo: {error}"))
     }
 
     fn non_enrolled_repo() -> TempDir {
@@ -1053,7 +1064,7 @@ mod tests {
 
     #[test]
     fn check_enrolled_succeeds_for_enrolled_repo() {
-        let repo = enrolled_repo();
+        let repo = enrolled_repo_or_panic();
         check_enrolled(repo.path()).expect("enrolled repo should pass");
     }
 
@@ -1099,7 +1110,7 @@ mod tests {
 
     #[test]
     fn write_and_list_lease_records() {
-        let repo = enrolled_repo();
+        let repo = enrolled_repo_or_panic();
         let lease = dummy_lease("lease_01JTEST", "TK-001");
         write_lease(repo.path(), &lease).expect("write lease record");
 
@@ -1109,17 +1120,20 @@ mod tests {
         let loaded = load_lease(repo.path(), "lease_01JTEST").expect("load lease");
         assert_eq!(loaded, lease);
 
-        let bytes = fs::read_to_string(lease_path(repo.path(), "lease_01JTEST").unwrap())
-            .expect("read canonical lease bytes");
-        let expected =
-            String::from_utf8(crate::canonical_json::to_canonical_bytes(&lease).unwrap())
-                .expect("canonical JSON is UTF-8");
+        let lease_record_path = lease_path(repo.path(), "lease_01JTEST")
+            .unwrap_or_else(|error| panic!("lease path should be valid: {error}"));
+        let bytes = fs::read_to_string(lease_record_path).expect("read canonical lease bytes");
+        let expected = String::from_utf8(
+            crate::canonical_json::to_canonical_bytes(&lease)
+                .unwrap_or_else(|error| panic!("serialize lease canonically: {error}")),
+        )
+        .expect("canonical JSON is UTF-8");
         assert_eq!(bytes, expected);
     }
 
     #[test]
     fn write_rejects_path_traversal_ids_before_directory_creation() {
-        let repo = enrolled_repo();
+        let repo = enrolled_repo_or_panic();
         let lease = dummy_lease("lease_../escape", "TK-001");
         let err = write_lease(repo.path(), &lease).expect_err("unsafe id should fail");
         assert_eq!(err.code(), "invalid_assignment_record_id");
@@ -1131,7 +1145,7 @@ mod tests {
 
     #[test]
     fn load_remove_and_tombstone_reject_path_traversal_ids() {
-        let repo = enrolled_repo();
+        let repo = enrolled_repo_or_panic();
         let err = load_lease(repo.path(), "../escape").unwrap_err();
         assert_eq!(err.code(), "invalid_assignment_record_id");
         let err = remove_lease(repo.path(), "lease_/escape").unwrap_err();
@@ -1142,7 +1156,7 @@ mod tests {
 
     #[test]
     fn write_and_list_workspace_records() {
-        let repo = enrolled_repo();
+        let repo = enrolled_repo_or_panic();
         let ws = dummy_workspace("wt_TK-001_01JTEST", "lease_01JTEST");
         write_workspace(repo.path(), &ws).expect("write workspace record");
 
@@ -1155,7 +1169,7 @@ mod tests {
 
     #[test]
     fn write_workspace_rejects_unsafe_workspace_path_before_directory_creation() {
-        let repo = enrolled_repo();
+        let repo = enrolled_repo_or_panic();
         let mut ws = dummy_workspace("wt_UNSAFE", "lease_01JTEST");
         ws.path = "../outside".to_string();
         let err = write_workspace(repo.path(), &ws).expect_err("unsafe workspace path should fail");
@@ -1168,7 +1182,7 @@ mod tests {
 
     #[test]
     fn write_and_list_tombstones() {
-        let repo = enrolled_repo();
+        let repo = enrolled_repo_or_panic();
         let tombstone = dummy_tombstone("lease_01JTEST", "TK-001", "released");
         write_tombstone(repo.path(), &tombstone).expect("write tombstone");
 
@@ -1181,7 +1195,7 @@ mod tests {
 
     #[test]
     fn write_and_list_prepared_records() {
-        let repo = enrolled_repo();
+        let repo = enrolled_repo_or_panic();
         // Build a minimal prepared-assignment record.
         let pa = dummy_prepared_record("pa_01JTEST");
         write_prepared(repo.path(), &pa).expect("write prepared record");
@@ -1290,7 +1304,7 @@ mod tests {
 
     #[test]
     fn remove_lease_works() {
-        let repo = enrolled_repo();
+        let repo = enrolled_repo_or_panic();
         let lease = dummy_lease("lease_01JREMOVE", "TK-002");
         write_lease(repo.path(), &lease).expect("write lease");
         assert_eq!(list_lease_ids(repo.path()).unwrap().len(), 1);
@@ -1301,7 +1315,7 @@ mod tests {
 
     #[test]
     fn remove_lease_not_found() {
-        let repo = enrolled_repo();
+        let repo = enrolled_repo_or_panic();
         let err = remove_lease(repo.path(), "lease_NONEXISTENT").expect_err("should fail");
         assert!(matches!(err, PulseError::NotFound { .. }));
     }
@@ -1312,7 +1326,7 @@ mod tests {
 
     #[test]
     fn live_lease_found_for_subject() {
-        let repo = enrolled_repo();
+        let repo = enrolled_repo_or_panic();
         let lease = dummy_lease("lease_01JLIVE", "TK-LIVE");
         write_lease(repo.path(), &lease).expect("write lease");
 
@@ -1322,7 +1336,7 @@ mod tests {
 
     #[test]
     fn no_live_lease_when_tombstoned() {
-        let repo = enrolled_repo();
+        let repo = enrolled_repo_or_panic();
         let lease = dummy_lease("lease_01JTOMB", "TK-TOMB");
         write_lease(repo.path(), &lease).expect("write lease");
         let tombstone = dummy_tombstone("lease_01JTOMB", "TK-TOMB", "released");
@@ -1334,7 +1348,7 @@ mod tests {
 
     #[test]
     fn no_live_lease_when_expired() {
-        let repo = enrolled_repo();
+        let repo = enrolled_repo_or_panic();
         let mut lease = dummy_lease("lease_01JEXP", "TK-EXP");
         lease.expires_at = "2020-01-01T00:00:00Z".to_string(); // past expiry.
         write_lease(repo.path(), &lease).expect("write lease");
@@ -1345,7 +1359,7 @@ mod tests {
 
     #[test]
     fn no_live_lease_when_wrong_state() {
-        let repo = enrolled_repo();
+        let repo = enrolled_repo_or_panic();
         let mut lease = dummy_lease("lease_01JSTATE", "TK-STATE");
         lease.state = "expired".to_string();
         write_lease(repo.path(), &lease).expect("write lease");
@@ -1356,7 +1370,7 @@ mod tests {
 
     #[test]
     fn no_live_lease_for_non_matching_subject() {
-        let repo = enrolled_repo();
+        let repo = enrolled_repo_or_panic();
         let lease = dummy_lease("lease_01JOTHER", "TK-OTHER");
         write_lease(repo.path(), &lease).expect("write lease");
 
@@ -1367,7 +1381,7 @@ mod tests {
 
     #[test]
     fn no_live_lease_when_no_leases_exist() {
-        let repo = enrolled_repo();
+        let repo = enrolled_repo_or_panic();
         let found = find_live_lease_for_subject(repo.path(), "TK-EMPTY").expect("find live lease");
         assert_eq!(found, None);
     }
@@ -1378,13 +1392,13 @@ mod tests {
 
     #[test]
     fn has_tombstone_returns_false_when_none() {
-        let repo = enrolled_repo();
+        let repo = enrolled_repo_or_panic();
         assert!(!has_tombstone(repo.path(), "lease_NONE").expect("has tombstone"));
     }
 
     #[test]
     fn has_tombstone_returns_true_when_tombstone_exists() {
-        let repo = enrolled_repo();
+        let repo = enrolled_repo_or_panic();
         let tombstone = dummy_tombstone("lease_HAS_TMB", "TK-001", "released");
         write_tombstone(repo.path(), &tombstone).expect("write tombstone");
         assert!(has_tombstone(repo.path(), "lease_HAS_TMB").expect("has tombstone"));
@@ -1396,7 +1410,7 @@ mod tests {
 
     #[test]
     fn recovery_report_empty_when_no_runtime_state() {
-        let repo = enrolled_repo();
+        let repo = enrolled_repo_or_panic();
         let report =
             classify_assignment_recovery_state(repo.path()).expect("classify recovery state");
         assert_eq!(report.entries.len(), 0);
@@ -1410,7 +1424,7 @@ mod tests {
 
     #[test]
     fn recovery_report_classifies_live_leases() {
-        let repo = enrolled_repo();
+        let repo = enrolled_repo_or_panic();
         let lease = dummy_lease("lease_01JCLS", "TK-CLS");
         write_lease(repo.path(), &lease).expect("write lease");
 
@@ -1423,7 +1437,7 @@ mod tests {
 
     #[test]
     fn recovery_report_classifies_expired_leases() {
-        let repo = enrolled_repo();
+        let repo = enrolled_repo_or_panic();
         let mut lease = dummy_lease("lease_01JXPR", "TK-XPR");
         lease.expires_at = "2020-01-01T00:00:00Z".to_string();
         write_lease(repo.path(), &lease).expect("write lease");
@@ -1439,7 +1453,7 @@ mod tests {
 
     #[test]
     fn recovery_report_classifies_tombstoned_leases() {
-        let repo = enrolled_repo();
+        let repo = enrolled_repo_or_panic();
         let tombstone = dummy_tombstone("lease_01JTMB", "TK-TMB", "released");
         write_tombstone(repo.path(), &tombstone).expect("write tombstone");
 
@@ -1454,7 +1468,7 @@ mod tests {
 
     #[test]
     fn recovery_report_classifies_live_plus_tombstone_as_ambiguous() {
-        let repo = enrolled_repo();
+        let repo = enrolled_repo_or_panic();
         let lease = dummy_lease("lease_01JAMB", "TK-AMB");
         write_lease(repo.path(), &lease).expect("write lease");
         let tombstone = dummy_tombstone("lease_01JAMB", "TK-AMB", "released");
@@ -1472,7 +1486,7 @@ mod tests {
 
     #[test]
     fn recovery_report_classifies_invalid_runtime_records() {
-        let repo = enrolled_repo();
+        let repo = enrolled_repo_or_panic();
         let dir = leases_dir(repo.path());
         fs::create_dir_all(&dir).expect("create lease dir");
         fs::write(dir.join("lease_BAD.json"), b"{not json").expect("write corrupt lease");
@@ -1488,7 +1502,7 @@ mod tests {
 
     #[test]
     fn recovery_report_finds_orphan_workspaces() {
-        let repo = enrolled_repo();
+        let repo = enrolled_repo_or_panic();
         // Write a workspace referencing a lease that doesn't exist.
         let ws = dummy_workspace("wt_ORPHAN", "lease_NOBODY");
         write_workspace(repo.path(), &ws).expect("write workspace");
@@ -1500,7 +1514,7 @@ mod tests {
 
     #[test]
     fn recovery_report_live_and_tombstoned_mixed() {
-        let repo = enrolled_repo();
+        let repo = enrolled_repo_or_panic();
 
         // Live lease.
         let live = dummy_lease("lease_01JLIVE2", "TK-LIVE2");

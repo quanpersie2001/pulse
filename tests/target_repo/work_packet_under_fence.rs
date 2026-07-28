@@ -25,7 +25,7 @@ fn ctx() -> OperationContext {
 // -----------------------------------------------------------------------
 
 #[test]
-fn public_work_packet_builds_after_refactoring() {
+fn public_work_packet_builds_after_refactoring() -> TestResult {
     // Use the existing setup from the target_repo test fixture. We rely on
     // `work_packet_target_repo` tests to validate the full setup/contract;
     // here we just verify the public API still works after the I6 phase
@@ -34,10 +34,10 @@ fn public_work_packet_builds_after_refactoring() {
 
     // Run a full CLI setup via the existing test pattern: bootstrap, create
     // ticket, set contract, set qa, set docs impact, transition to ready.
-    let ticket_id = test_setup_ready_ticket(&repo);
+    let ticket_id = test_setup_ready_ticket(&repo)?;
 
     let store = JsonGraphStore::new(repo.path());
-    let packet = store.work_packet(&ticket_id).expect("work packet builds");
+    let packet = store.work_packet(&ticket_id)?;
 
     // Verify preview semantics (P2S2-D1)
     assert_eq!(packet.code, "reservation_candidate");
@@ -55,23 +55,25 @@ fn public_work_packet_builds_after_refactoring() {
     assert_eq!(packet.subject.id, ticket_id);
     assert_eq!(packet.subject.role, "implementation");
     assert_eq!(packet.subject.status, "ready");
+    Ok(())
 }
 
 #[test]
-fn two_packets_from_same_state_produce_identical_canonical_bytes() {
+fn two_packets_from_same_state_produce_identical_canonical_bytes() -> TestResult {
     let repo = TestRepo::from_fixture("minimal-service");
-    let ticket_id = test_setup_ready_ticket(&repo);
+    let ticket_id = test_setup_ready_ticket(&repo)?;
 
     let store = JsonGraphStore::new(repo.path());
-    let p1 = store.work_packet(&ticket_id).expect("first packet");
-    let p2 = store.work_packet(&ticket_id).expect("second packet");
+    let p1 = store.work_packet(&ticket_id)?;
+    let p2 = store.work_packet(&ticket_id)?;
 
-    let canonical1 = to_canonical_bytes(&p1).unwrap();
-    let canonical2 = to_canonical_bytes(&p2).unwrap();
+    let canonical1 = to_canonical_bytes(&p1)?;
+    let canonical2 = to_canonical_bytes(&p2)?;
     assert_eq!(
         canonical1, canonical2,
         "two work_packet calls must produce identical canonical bytes"
     );
+    Ok(())
 }
 
 // -----------------------------------------------------------------------
@@ -92,8 +94,15 @@ use pulse::graph::store::{ContractSetRequest, DocumentationImpactUpdate, QaImpac
 use pulse::identity::ActorKind;
 use pulse::policy::{AuthorityPolicy, AuthorityPrincipal};
 use std::fs;
+use std::path::Path;
 
-fn test_setup_ready_ticket(repo: &TestRepo) -> String {
+type TestResult<T = ()> = Result<T, Box<dyn std::error::Error>>;
+
+fn test_error(message: impl Into<String>) -> std::io::Error {
+    std::io::Error::other(message.into())
+}
+
+fn test_setup_ready_ticket(repo: &TestRepo) -> TestResult<String> {
     let root = repo.path();
     let store = JsonGraphStore::new(root);
 
@@ -108,15 +117,15 @@ fn test_setup_ready_ticket(repo: &TestRepo) -> String {
             "work.transition.ready",
             "work.node.create",
         ],
-    );
+    )?;
 
     // Bootstrap graph
     let bootstrap = repo.pulse_ok(&["graph", "bootstrap", "--json"]);
     assert_eq!(bootstrap["code"], "bootstrapped");
 
     // Bootstrap evidence + docs manifests
-    pulse::evidence::manifest::load(root).unwrap();
-    pulse::docs::manifest::bootstrap(root).unwrap();
+    pulse::evidence::manifest::load(root)?;
+    pulse::docs::manifest::bootstrap(root)?;
 
     // Create Ticket via CLI
     let created = repo.pulse_ok(&[
@@ -134,19 +143,25 @@ fn test_setup_ready_ticket(repo: &TestRepo) -> String {
         "R1",
         "--json",
     ]);
-    let ticket_id = created["value"]["id"].as_str().unwrap().to_string();
+    let ticket_id = created["value"]["id"]
+        .as_str()
+        .ok_or_else(|| test_error("created ticket id missing"))?
+        .to_string();
 
-    let node = store.show_node(&ticket_id).expect("ticket should exist");
+    let node = store.show_node(&ticket_id)?;
 
     let brief_rel = format!("{}/ticket.md", node.content_dir);
     let brief_path = root.join(&brief_rel);
-    fs::create_dir_all(brief_path.parent().unwrap()).unwrap();
+    fs::create_dir_all(
+        brief_path
+            .parent()
+            .ok_or_else(|| test_error("brief path has no parent"))?,
+    )?;
     fs::write(
         &brief_path,
         b"# Ticket\nImplement fence-aware packet builder.",
-    )
-    .unwrap();
-    let brief_hash = hash_bytes(&fs::read(&brief_path).unwrap());
+    )?;
+    let brief_hash = hash_bytes(&fs::read(&brief_path)?);
 
     // Set implementation contract
     let contract = ImplementationContract {
@@ -187,56 +202,50 @@ fn test_setup_ready_ticket(repo: &TestRepo) -> String {
         expected_evidence: vec![],
         expected_handoff: vec![],
     };
-    store
-        .set_contract_with_context(
-            &ticket_id,
-            node.revision,
-            ContractSetRequest {
-                role: TicketRole::Implementation,
-                implementation: Some(contract),
-                decision_work: None,
-            },
-            ctx(),
-        )
-        .unwrap();
+    store.set_contract_with_context(
+        &ticket_id,
+        node.revision,
+        ContractSetRequest {
+            role: TicketRole::Implementation,
+            implementation: Some(contract),
+            decision_work: None,
+        },
+        ctx(),
+    )?;
 
     // Set QA impact
-    let node = store.show_node(&ticket_id).unwrap();
-    store
-        .set_qa_impact_with_context(
-            &ticket_id,
-            node.revision,
-            QaImpactUpdate {
-                posture: QaImpactPosture::None,
-                rationale: Some("No behavior change.".to_string()),
-                behavioral_owner: None,
-                affected_case_ids: vec![],
-            },
-            ctx(),
-        )
-        .unwrap();
+    let node = store.show_node(&ticket_id)?;
+    store.set_qa_impact_with_context(
+        &ticket_id,
+        node.revision,
+        QaImpactUpdate {
+            posture: QaImpactPosture::None,
+            rationale: Some("No behavior change.".to_string()),
+            behavioral_owner: None,
+            affected_case_ids: vec![],
+        },
+        ctx(),
+    )?;
 
     // Set docs impact
-    let node = store.show_node(&ticket_id).unwrap();
-    store
-        .update_documentation_impact(
-            &ticket_id,
-            node.revision,
-            DocumentationImpactUpdate {
-                posture: DocumentationImpactPosture::None,
-                rationale: Some("No docs change.".to_string()),
-                required_documents: vec![],
-                deferred_to: vec![],
-                paths: vec![],
-                domains: vec!["development".to_string()],
-                labels: vec!["packet".to_string()],
-            },
-            "human:tester".to_string(),
-        )
-        .unwrap();
+    let node = store.show_node(&ticket_id)?;
+    store.update_documentation_impact(
+        &ticket_id,
+        node.revision,
+        DocumentationImpactUpdate {
+            posture: DocumentationImpactPosture::None,
+            rationale: Some("No docs change.".to_string()),
+            required_documents: vec![],
+            deferred_to: vec![],
+            paths: vec![],
+            domains: vec!["development".to_string()],
+            labels: vec!["packet".to_string()],
+        },
+        "human:tester".to_string(),
+    )?;
 
     // Record shaping receipt
-    let node = store.show_node(&ticket_id).unwrap();
+    let node = store.show_node(&ticket_id)?;
     let receipt = ReceiptEnvelope {
         schema_version: 1,
         receipt_version: 1,
@@ -298,32 +307,37 @@ fn test_setup_ready_ticket(repo: &TestRepo) -> String {
         }),
     };
     let receipt_file = root.join("shaping.json");
-    fs::write(&receipt_file, to_canonical_bytes(&receipt).unwrap()).unwrap();
-    record_receipt(root, None, &receipt_file).unwrap();
+    fs::write(&receipt_file, to_canonical_bytes(&receipt)?)?;
+    record_receipt(root, None, &receipt_file)?;
 
     // Apply shaping and transition to Shaped
-    let node = store.show_node(&ticket_id).unwrap();
-    store
-        .apply_shaping_with_context(&ticket_id, node.revision, &receipt.id, None, ctx())
-        .unwrap();
+    let node = store.show_node(&ticket_id)?;
+    store.apply_shaping_with_context(&ticket_id, node.revision, &receipt.id, None, ctx())?;
 
-    let node = store.show_node(&ticket_id).unwrap();
-    store
-        .transition_node_with_context(&ticket_id, NodeStatus::Shaped, node.revision, None, ctx())
-        .unwrap();
+    let node = store.show_node(&ticket_id)?;
+    store.transition_node_with_context(
+        &ticket_id,
+        NodeStatus::Shaped,
+        node.revision,
+        None,
+        ctx(),
+    )?;
 
     // Transition to Ready
-    let node = store.show_node(&ticket_id).unwrap();
-    store
-        .transition_node_with_context(&ticket_id, NodeStatus::Ready, node.revision, None, ctx())
-        .unwrap();
+    let node = store.show_node(&ticket_id)?;
+    store.transition_node_with_context(
+        &ticket_id,
+        NodeStatus::Ready,
+        node.revision,
+        None,
+        ctx(),
+    )?;
 
     // Commit so the worktree is clean for the packet source check.
     let add = std::process::Command::new("git")
         .current_dir(root)
         .args(["add", "."])
-        .output()
-        .expect("git add");
+        .output()?;
     assert!(add.status.success(), "git add failed");
     let commit = std::process::Command::new("git")
         .current_dir(root)
@@ -340,18 +354,17 @@ fn test_setup_ready_ticket(repo: &TestRepo) -> String {
             "-m",
             "setup ready ticket for I6",
         ])
-        .output()
-        .expect("git commit");
+        .output()?;
     assert!(
         commit.status.success(),
         "git commit failed: {}",
         String::from_utf8_lossy(&commit.stderr)
     );
 
-    ticket_id
+    Ok(ticket_id)
 }
 
-fn write_policy(root: &std::path::Path, grants: &[&str]) {
+fn write_policy(root: &Path, grants: &[&str]) -> TestResult {
     let mut sorted = grants.iter().map(|g| g.to_string()).collect::<Vec<_>>();
     sorted.sort();
     sorted.dedup();
@@ -365,6 +378,11 @@ fn write_policy(root: &std::path::Path, grants: &[&str]) {
         }],
     };
     let policy_path = root.join(".pulse/policy/authority.json");
-    fs::create_dir_all(policy_path.parent().unwrap()).unwrap();
-    fs::write(&policy_path, to_canonical_bytes(&policy).unwrap()).unwrap();
+    fs::create_dir_all(
+        policy_path
+            .parent()
+            .ok_or_else(|| test_error("policy path has no parent"))?,
+    )?;
+    fs::write(&policy_path, to_canonical_bytes(&policy)?)?;
+    Ok(())
 }

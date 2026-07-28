@@ -87,7 +87,7 @@ Human -> Orchestration Agent -> independent Agent tasks/threads
 ## Bản đồ đọc
 
 | Khi cần hiểu | Tài liệu sở hữu chi tiết |
-|---|---|
+| --- | --- |
 | Vì sao reboot, học gì từ OpenAI và các reference | [`01-foundations.md`](pulse-reboot/01-foundations.md) |
 | Epic, Story, Ticket, Decision được lưu và chạy thế nào | [`02-work-graph.md`](pulse-reboot/02-work-graph.md) |
 | QA, Playwright/browser agent và bằng chứng đóng Story | [`03-story-qa.md`](pulse-reboot/03-story-qa.md) |

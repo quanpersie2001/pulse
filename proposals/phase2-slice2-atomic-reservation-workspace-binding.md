@@ -2,9 +2,10 @@
 
 > Trạng thái: **implemented and verified** for Phase 2 Slice 2. Implementation
 > landed across commits `0c9a888`, `57ec28f`, `f66d103`, `9abb940`, `dd704da`,
-> `e1f86e6`, `1dc2473`, `7108e9e`, `f8a747b`, `367dfed` and verification
-> hardening commit `e6c6402`; supporting fix/verification commits are listed in
-> the completion evidence below. This remains a pre-Core-v1 current baseline,
+> `e1f86e6`, `1dc2473`, `7108e9e`, `f8a747b`, `367dfed`, verification
+> hardening commit `e6c6402`, I11 documentation commit `d21282c`, and the
+> subsequent final verifier/fixer commit; supporting fix/verification commits
+> are listed in the completion evidence below. This remains a pre-Core-v1 current baseline,
 > not a released compatibility contract.
 > Tiền đề:
 > [`phase2-slice1-work-packet-dispatch-foundation.md`](phase2-slice1-work-packet-dispatch-foundation.md)
@@ -1722,7 +1723,7 @@ in the completion evidence below.
 ### Completion evidence
 
 Verified implementation commits (all between proposal acceptance `075b161` and
-final verification `e6c6402`):
+implementation hardening verification `e6c6402`):
 
 - `0c9a888` — clean: P2S2-I1 assignment value contracts, DTOs, schemas,
   fingerprints and deny-unknown tests.
@@ -1751,14 +1752,35 @@ final verification `e6c6402`):
 - `367dfed` — commit: P2S2-I10 concurrency, failpoint and side-effect
   hardening.
 - `e6c6402` — commit: P2S2-I10 final hardening and concurrent verification.
+- `d21282c` — commit: P2S2-I11 implementation completion documentation.
+- Final verifier/fixer commit after `d21282c` — corrected verifier-found
+  markdown/diagnostic issues, reran whole-slice validation, and left the
+  repository tree clean except for the intentional committed changes.
 
 Final P2S2-I11 verification evidence before marking complete:
 
+- Documentation claims audited against actual `075b161..d21282c` history.
+- Key boundary/code checks audited from source/tests: `WorkPacketV1` preview
+  remains non-authorized, `work claim`/`release`/`leases`/`leases recover`
+  surfaces exist, non-enrolled repositories reject before runtime bootstrap,
+  assignment schemas deny unknown fields, direct public `ready -> active`
+  rejects with `prepared_assignment_required`, pure graph frontier remains
+  separate from runtime claim-state enrichment, and Slice 2 creates no runner,
+  mailbox, handoff, verification or QA execution state.
 - `cargo fmt --check` — pass.
 - `cargo clippy --all-targets --quiet -- -D warnings` — pass.
 - `cargo test --all-targets` under default threading — pass: 675 tests across
   library, binary and integration crates.
+- `cargo test --test process` focused concurrency/recovery repeat — pass: 22
+  tests.
 - `git diff --check` — pass.
+- LSP diagnostics — pass with no primary diagnostics.
+- pi-lens targeted final scan — no blocking diagnostics on changed files;
+  remaining findings are pre-existing test panic-style/duplication warnings in
+  test code.
+- Fixture/runtime boundary check — no tracked target fixture changes and no
+  self-hosting workgraph/evidence/docs-registry/runtime mutations in this
+  development repository.
 
 This completes only Phase 2 Slice 2: atomic reservation, workspace binding and
 `PreparedAssignmentV1`. Phase 2 as a whole is not complete: Pulse still has no
