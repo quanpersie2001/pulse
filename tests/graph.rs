@@ -49,6 +49,8 @@ mod shaping_cli_contract;
 mod shaping_contract;
 #[path = "graph/shaping_mutation.rs"]
 mod shaping_mutation;
+#[path = "graph/work_packet_cli_contract.rs"]
+mod work_packet_cli_contract;
 #[path = "graph/workgraph.rs"]
 mod workgraph;
 #[path = "graph/workgraph_read_models.rs"]

@@ -124,6 +124,17 @@ pub(crate) enum WorkCommand {
         #[command(subcommand)]
         command: ShapingCommand,
     },
+    /// Build a preview work packet for a ready implementation Ticket.
+    ///
+    /// Output is a bounded, deterministic context snapshot. The packet does
+    /// not acquire a lease, create a workspace or change lifecycle.
+    Packet {
+        /// Ticket ID (must be an implementation Ticket with lifecycle ready).
+        id: String,
+        /// Output as JSON.
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -688,7 +699,29 @@ pub(crate) fn handle(store: &JsonGraphStore, command: WorkCommand) -> Result<(),
                 render(json, &out, format!("{} {}", out.code, owner_id))
             }
         },
+        WorkCommand::Packet { id, json } => {
+            let packet = store.work_packet(&id)?;
+            let human = packet_human(&packet);
+            render(json, &packet, human)
+        }
     }
+}
+
+fn packet_human(packet: &crate::work_packet::WorkPacketV1) -> String {
+    format!(
+        "{} packet: {}\nsource: {} ({})\nreadiness: {} ({})\nworkspace: {}\nrequired docs: {}\nsuggested sections: {}\nrequired capabilities: {}\ndispatch authorized: no (lease/workspace/capability assignment not evaluated)\npacket fingerprint: {}",
+        packet.subject.id,
+        packet.code,
+        packet.source.commit,
+        packet.source.cleanliness,
+        packet.snapshot.readiness_status,
+        packet.snapshot.readiness_fingerprint,
+        packet.workspace.required_strategy,
+        packet.documentation.applicability.required.len(),
+        packet.documentation.suggested_sections.len(),
+        packet.capabilities.required.join(", "),
+        packet.packet_fingerprint,
+    )
 }
 
 fn readiness_policy_human(report: &policy::AuthorityPolicyReport) -> String {

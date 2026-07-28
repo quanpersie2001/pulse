@@ -1,7 +1,4 @@
-#[path = "../common/mod.rs"]
-mod common;
-
-use common::fixture_repo::{
+use crate::common::fixture_repo::{
     assert_safe_target, development_repo_root, fixture_path, snapshot_tree, TestRepo,
 };
 use std::fs;
