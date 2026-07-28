@@ -25,6 +25,7 @@ use pulse::id::WorkKind;
 use pulse::policy::{AuthorityPolicy, AuthorityPrincipal};
 use pulse::JsonGraphStore;
 use serde_json::Value;
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
@@ -431,6 +432,35 @@ fn packet_ok(repo: &TestRepo, ticket_id: &str) -> Value {
     repo.pulse_ok(&["work", "packet", ticket_id, "--json"])
 }
 
+fn tracked_snapshot(root: &Path) -> BTreeMap<String, Vec<u8>> {
+    fn walk(root: &Path, dir: &Path, out: &mut BTreeMap<String, Vec<u8>>) {
+        for entry in fs::read_dir(dir).unwrap() {
+            let entry = entry.unwrap();
+            let path = entry.path();
+            let rel = path.strip_prefix(root).unwrap();
+            if rel.components().next().and_then(|c| c.as_os_str().to_str()) == Some(".git") {
+                continue;
+            }
+            if entry.file_type().unwrap().is_dir() {
+                walk(root, &path, out);
+            } else {
+                out.insert(
+                    rel.to_string_lossy().replace('\\', "/"),
+                    fs::read(&path).unwrap(),
+                );
+            }
+        }
+    }
+
+    let mut snapshot = BTreeMap::new();
+    walk(root, root, &mut snapshot);
+    snapshot
+}
+
+fn is_allowed_packet_side_effect(path: &str) -> bool {
+    path.starts_with(".pulse/cache/") || path.starts_with(".pulse/runtime/locks/")
+}
+
 #[test]
 fn graph_mutation_during_docs_search_returns_snapshot_changed_and_retry_succeeds() {
     let repo = TestRepo::from_fixture("minimal-service");
@@ -565,9 +595,9 @@ fn source_status_matrix_dirty_untracked_ignored_detached_and_operation_state() {
 }
 
 #[test]
-fn same_inputs_and_cache_rebuild_produce_same_fingerprint_and_fixed_size() {
+fn same_inputs_cache_rebuild_and_required_doc_hash_have_exact_fingerprint_behavior() {
     let repo = TestRepo::from_fixture("minimal-service");
-    let ticket_id = setup_ready_ticket(&repo);
+    let ticket_id = setup_ready_ticket_with_required_docs(&repo, true);
     let first = packet_ok(&repo, &ticket_id);
     let first_fp = first["packet_fingerprint"].as_str().unwrap().to_string();
     let first_size = first["budget"]["actual_canonical_json_bytes"]
@@ -598,6 +628,99 @@ fn same_inputs_and_cache_rebuild_produce_same_fingerprint_and_fixed_size() {
         }
     }
     assert_no_float(&second);
+
+    fs::write(
+        repo.path().join("docs/product/authentication.md"),
+        b"# Authentication\n\nRequired document hash changed.\n",
+    )
+    .unwrap();
+    commit_all(repo.path(), "change required doc hash");
+    let changed = packet_ok(&repo, &ticket_id);
+    assert_ne!(
+        changed["packet_fingerprint"].as_str().unwrap(),
+        first_fp,
+        "required document content hash must participate in packet fingerprint"
+    );
+}
+
+#[test]
+fn selected_suggestion_hash_rank_and_score_changes_affect_fingerprint() {
+    let repo = TestRepo::from_fixture("minimal-service");
+    let ticket_id = setup_ready_ticket_with_required_docs(&repo, true);
+    let first = packet_ok(&repo, &ticket_id);
+    let first_fp = first["packet_fingerprint"].as_str().unwrap().to_string();
+    let first_suggestions = first["documentation"]["suggested_sections"]
+        .as_array()
+        .unwrap();
+    assert!(
+        !first_suggestions.is_empty(),
+        "fixture must produce at least one selected suggestion"
+    );
+    let first_refs: Vec<String> = first_suggestions
+        .iter()
+        .map(|section| section["section_ref"].as_str().unwrap().to_string())
+        .collect();
+    let first_scores: Vec<u64> = first_suggestions
+        .iter()
+        .map(|section| section["score_micros"].as_u64().unwrap())
+        .collect();
+
+    fs::write(
+        repo.path().join("docs/product/authentication.md"),
+        b"# Refresh-token failure contract\n\nRefresh token rotation atomic acceptance TokenExpired InvalidToken.\n\n## Outcomes\n\nTokenExpired InvalidToken refresh token rotation acceptance.\n",
+    )
+    .unwrap();
+    commit_all(repo.path(), "change selected suggestion content");
+    let changed = packet_ok(&repo, &ticket_id);
+    assert_ne!(
+        changed["packet_fingerprint"].as_str().unwrap(),
+        first_fp,
+        "selected suggestion identity/hash/rank/score must participate in fingerprint"
+    );
+    let changed_suggestions = changed["documentation"]["suggested_sections"]
+        .as_array()
+        .unwrap();
+    let changed_refs: Vec<String> = changed_suggestions
+        .iter()
+        .map(|section| section["section_ref"].as_str().unwrap().to_string())
+        .collect();
+    let changed_scores: Vec<u64> = changed_suggestions
+        .iter()
+        .map(|section| section["score_micros"].as_u64().unwrap())
+        .collect();
+    assert!(
+        changed_refs != first_refs || changed_scores != first_scores,
+        "test mutation must alter selected suggestion ordering or quantized score"
+    );
+}
+
+#[test]
+fn packet_side_effects_are_limited_to_cache_and_lock_paths() {
+    let repo = TestRepo::from_fixture("minimal-service");
+    let ticket_id = setup_ready_ticket(&repo);
+    let before = tracked_snapshot(repo.path());
+
+    packet_ok(&repo, &ticket_id);
+
+    let after = tracked_snapshot(repo.path());
+    for path in before.keys().chain(after.keys()) {
+        if is_allowed_packet_side_effect(path) {
+            continue;
+        }
+        assert_eq!(
+            before.get(path),
+            after.get(path),
+            "packet query changed forbidden path {path}"
+        );
+    }
+    assert!(
+        after.keys().any(|path| path.starts_with(".pulse/cache/")),
+        "packet query should only materialize disposable cache state"
+    );
+    assert!(
+        repo.git_is_clean(),
+        "allowed side effects must be git-ignored"
+    );
 }
 
 #[test]
