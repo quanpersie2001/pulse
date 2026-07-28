@@ -54,6 +54,49 @@ use crate::work_packet::{
 use crate::{PulseError, PulseResult};
 
 // ---------------------------------------------------------------------------
+// PacketPhase1State — intermediate state shared across fence phases
+// ---------------------------------------------------------------------------
+
+/// Intermediate snapshot extracted under the first repository fence.
+///
+/// Carries all preconditions that must be revalidated under the second
+/// fence, plus the extracted-but-not-yet-assembled packet sections that
+/// are invariant across the docs-cache refresh between fences.
+///
+/// See [`JsonGraphStore::work_packet`] and the two-fence algorithm
+/// described in P2S1-D9.
+pub(crate) struct PacketPhase1State {
+    // -- Preconditions for phase 2 revalidation --
+    pub pre_graph_fingerprint: String,
+    pub pre_subject_id: String,
+    pub pre_subject_revision: u64,
+    pub pre_subject_status: NodeStatus,
+    pub pre_readiness_fingerprint: String,
+    pub pre_authority_fingerprint: Option<String>,
+    pub pre_docs_registry_fingerprint: String,
+    pub pre_docs_content_fingerprints: BTreeMap<String, String>,
+    pub pre_source: crate::source::PacketSourceSnapshot,
+    pub pre_suggestion_query: crate::work_packet::PacketSuggestionQuery,
+    pub pre_excluded_doc_ids: Vec<String>,
+
+    // -- Reusable extracted data (invariant across fence drop) --
+    pub subject: SubjectSnapshot,
+    pub snapshot_pre: crate::work_packet::SnapshotReport,
+    pub contract: crate::work_packet::PacketImplementationContractV1,
+    pub context: crate::work_packet::PacketContext,
+    pub shaping: PacketShaping,
+    pub graph: PacketGraph,
+    pub documentation_base: PacketDocumentation,
+    pub source: PacketSource,
+    pub workspace: PacketWorkspace,
+    pub capabilities: PacketCapabilities,
+    pub scope: PacketScope,
+    pub assurance: PacketAssurance,
+    pub readiness_report: ReadinessReport,
+    pub docs_work_context: WorkDocumentationContext,
+}
+
+// ---------------------------------------------------------------------------
 // Public entrypoint
 // ---------------------------------------------------------------------------
 
@@ -85,8 +128,114 @@ impl JsonGraphStore {
         self.require_existing_workgraph_unlocked()?;
         validate_packet_operational_paths(&self.repo_root)?;
 
-        let guard = acquire_packet_fence(&self.repo_root)?;
+        let _guard = acquire_packet_fence(&self.repo_root)?;
+        let phase1 = self.packet_phase1_under_fence(id, &repository_id)?;
+
+        // Phase 1 complete: drop first fence.
+        drop(_guard);
+        self.work_packet_test_barrier_after_first_fence()?;
+
+        // ==================================================================
+        // Between fences — cache-only docs index refresh
+        // ==================================================================
+        let (suggested_sections, docs_cache_fp) =
+            packet_refresh_and_search(&self.repo_root, &phase1)?;
+        let pre_suggestion_fingerprints = suggestion_fingerprints(&suggested_sections);
+
+        // ==================================================================
+        // Phase 2 — Second fence: revalidate, search, assemble
+        // ==================================================================
+        let _guard2 = acquire_packet_fence(&self.repo_root)?;
+        let packet = self.packet_phase2_under_fence(
+            phase1,
+            suggested_sections,
+            docs_cache_fp,
+            pre_suggestion_fingerprints,
+        )?;
+        drop(_guard2);
+        Ok(packet)
+    }
+
+    #[allow(dead_code)]
+    /// Build a work packet assuming the repository fence is already held by
+    /// the caller (P2S2-I6).
+    ///
+    /// This is the fence-aware entry point for the claim pipeline so it can
+    /// revalidate packet preconditions without WriteGuard self-deadlock.
+    ///
+    /// Algorithm (single-fence for claim):
+    ///   1. Pre-check (repository identity, workgraph, operational paths).
+    ///   2. Phase 1 under the caller-held fence.
+    ///   3. If the docs cache is NOT current, tell the caller to
+    ///      release/reacquire and retry.
+    ///   4. If the docs cache IS current, skip the refresh and complete
+    ///      under the same fence.
+    ///
+    /// The caller is responsible for:
+    ///   - holding WriteGuard before calling;
+    ///   - having run `recover_prepared_transactions` already;
+    ///   - releasing/reacquiring if this returns
+    ///     `work_packet_docs_cache_needs_refresh`.
+    pub(crate) fn work_packet_under_fence(&self, id: &str) -> PulseResult<WorkPacketV1> {
+        let evidence = check_repository_identity(&self.repo_root)?;
+        let repository_id = evidence.repository_id.clone();
         self.require_existing_workgraph_unlocked()?;
+        validate_packet_operational_paths(&self.repo_root)?;
+
+        // Phase 1 — under the caller-held fence, extract everything.
+        let phase1 = self.packet_phase1_under_fence(id, &repository_id)?;
+
+        // Check whether the docs cache is already current (read-only check,
+        // no lock acquisition). If not fresh, tell the caller to
+        // release/reacquire and retry.
+        let cache_fp = crate::docs::index::current_cache_fingerprint(&self.repo_root)?;
+        let docs_cache_needs_refresh = cache_fp.is_none();
+
+        if docs_cache_needs_refresh {
+            return Err(PulseError::validation(
+                "work_packet_docs_cache_needs_refresh",
+                "docs cache is stale under held fence; caller must release fence, \
+                 run build_search_cache, reacquire fence, and call again",
+            ));
+        }
+
+        // Cache is current: search suggestions (no fence needed — cache is
+        // read-after-write consistent without the repository lock).
+        let suggested_sections = search_suggestions(
+            &self.repo_root,
+            &phase1.pre_suggestion_query,
+            &phase1.pre_excluded_doc_ids,
+            &phase1.docs_work_context,
+        )?;
+        let pre_suggestion_fingerprints = suggestion_fingerprints(&suggested_sections);
+
+        // Phase 2 — same fence, just revalidate and complete.
+        self.packet_phase2_under_fence(
+            phase1,
+            suggested_sections,
+            cache_fp,
+            pre_suggestion_fingerprints,
+        )
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Phase 1 + Phase 2 helpers (fence-aware, P2S2-I6)
+// ---------------------------------------------------------------------------
+
+impl JsonGraphStore {
+    // -----------------------------------------------------------------------
+    // Phase 1 — extract everything that doesn't need docs cache
+    // -----------------------------------------------------------------------
+    //
+    // PRECONDITION: caller holds the repository fence AND has run
+    // `recover_prepared_transactions`.
+
+    fn packet_phase1_under_fence(
+        &self,
+        id: &str,
+        repository_id: &str,
+    ) -> PulseResult<PacketPhase1State> {
         recover_prepared_transactions(&self.repo_root)?;
         let projection = self.export_unlocked()?;
 
@@ -97,7 +246,13 @@ impl JsonGraphStore {
         let inputs = readiness.as_inputs(&node);
         let readiness_report = evaluate_readiness(&inputs, EvalProfile::Ready)?;
         if readiness_report.code != "ready" {
-            return self.readiness_error(&readiness_report);
+            return Err(PulseError::validation(
+                "work_packet_readiness_failed",
+                format!(
+                    "readiness check did not pass (code={})",
+                    readiness_report.code
+                ),
+            ));
         }
 
         // Extract sections that do NOT depend on docs search or source.
@@ -108,8 +263,8 @@ impl JsonGraphStore {
         let shaping = extract_shaping(&node, &readiness.shaping, &projection)?;
         let graph = extract_graph(&readiness, &projection)?;
         let documentation_base = extract_documentation(&readiness.docs)?;
-        let source = extract_source_snapshot(&self.repo_root, &repository_id)?;
-        let workspace = extract_workspace(&node, &source, &repository_id);
+        let source = extract_source_snapshot(&self.repo_root, repository_id)?;
+        let workspace = extract_workspace(&node, &source, repository_id);
         let capabilities = extract_capabilities(&node);
         let scope = extract_scope(&node);
         let assurance = extract_assurance(&node);
@@ -138,45 +293,56 @@ impl JsonGraphStore {
         let pre_excluded_doc_ids = excluded_doc_ids.clone();
         let pre_source = packet_source_snapshot_from_packet(&source);
 
-        // Phase 1 complete: drop first fence.
-        drop(guard);
-        self.work_packet_test_barrier_after_first_fence()?;
+        Ok(PacketPhase1State {
+            pre_graph_fingerprint,
+            pre_subject_id,
+            pre_subject_revision,
+            pre_subject_status,
+            pre_readiness_fingerprint,
+            pre_authority_fingerprint,
+            pre_docs_registry_fingerprint,
+            pre_docs_content_fingerprints,
+            pre_source,
+            pre_suggestion_query,
+            pre_excluded_doc_ids,
+            subject,
+            snapshot_pre,
+            contract,
+            context,
+            shaping,
+            graph,
+            documentation_base,
+            source,
+            workspace,
+            capabilities,
+            scope,
+            assurance,
+            readiness_report,
+            docs_work_context,
+        })
+    }
 
-        // ==================================================================
-        // Between fences — cache-only docs index refresh
-        // ==================================================================
-        let index_opts = crate::docs::index::IndexOptions {
-            changed: false,
-            rebuild: false,
-            check: false,
-            include_draft: false,
-            include_stale: false,
-        };
-        // Build/search cache-only disposable docs index (never writes
-        // projections). If the cache is already current this is a no-op.
-        crate::docs::index::build_search_cache(&self.repo_root, index_opts)
-            .map_err(|error| map_docs_index_error(error, "docs search cache refresh failed"))?;
+    // -----------------------------------------------------------------------
+    // Phase 2 — revalidate preconditions and complete the packet
+    // -----------------------------------------------------------------------
+    //
+    // PRECONDITION: caller holds the repository fence AND has run
+    // `recover_prepared_transactions`.
 
-        let docs_cache_fp = crate::docs::index::current_cache_fingerprint(&self.repo_root)?;
-        let suggested_sections = search_suggestions(
-            &self.repo_root,
-            &pre_suggestion_query,
-            &pre_excluded_doc_ids,
-            &docs_work_context,
-        )?;
-        let selected_suggestion_fingerprints = suggestion_fingerprints(&suggested_sections);
-
-        // ==================================================================
-        // Phase 2 — Second fence: revalidate, search, assemble
-        // ==================================================================
-        let guard2 = acquire_packet_fence(&self.repo_root)?;
+    fn packet_phase2_under_fence(
+        &self,
+        phase1: PacketPhase1State,
+        suggested_sections: Vec<crate::work_packet::PacketSuggestedSection>,
+        docs_cache_fp: Option<String>,
+        pre_suggestion_fingerprints: Vec<(u64, String, String, String, u64, u64)>,
+    ) -> PulseResult<WorkPacketV1> {
         self.require_existing_workgraph_unlocked()?;
         validate_packet_operational_paths(&self.repo_root)?;
         recover_prepared_transactions(&self.repo_root)?;
-        let projection2 = self.export_unlocked()?;
+        let projection = self.export_unlocked()?;
 
         // Revalidate graph fingerprint.
-        if projection2.graph_fingerprint != pre_graph_fingerprint {
+        if projection.graph_fingerprint != phase1.pre_graph_fingerprint {
             return Err(PulseError::validation(
                 "work_packet_snapshot_changed",
                 "graph fingerprint changed during work packet build",
@@ -184,8 +350,9 @@ impl JsonGraphStore {
         }
 
         // Revalidate subject.
-        let node2 = self.load_subject(&pre_subject_id, &projection2)?;
-        if node2.revision != pre_subject_revision || node2.status != pre_subject_status {
+        let node = self.load_subject(&phase1.pre_subject_id, &projection)?;
+        if node.revision != phase1.pre_subject_revision || node.status != phase1.pre_subject_status
+        {
             return Err(PulseError::validation(
                 "work_packet_snapshot_changed",
                 "subject revision or status changed during work packet build",
@@ -193,29 +360,28 @@ impl JsonGraphStore {
         }
 
         // Revalidate authority and docs registry fingerprints.
-        let readiness2 = self.build_readiness_snapshot_from_projection(&node2, &projection2)?;
-        if readiness2.authority.fingerprint != pre_authority_fingerprint {
+        let readiness = self.build_readiness_snapshot_from_projection(&node, &projection)?;
+        if readiness.authority.fingerprint != phase1.pre_authority_fingerprint {
             return Err(PulseError::validation(
                 "work_packet_snapshot_changed",
                 "authority policy fingerprint changed during work packet build",
             ));
         }
-        if readiness2.docs.registry.fingerprint != pre_docs_registry_fingerprint {
+        if readiness.docs.registry.fingerprint != phase1.pre_docs_registry_fingerprint {
             return Err(PulseError::validation(
                 "work_packet_snapshot_changed",
                 "docs registry fingerprint changed during work packet build",
             ));
         }
-        let readiness_report2 =
-            evaluate_readiness(&readiness2.as_inputs(&node2), EvalProfile::Ready)?;
-        if readiness_report2.readiness_fingerprint != pre_readiness_fingerprint {
+        let readiness_report = evaluate_readiness(&readiness.as_inputs(&node), EvalProfile::Ready)?;
+        if readiness_report.readiness_fingerprint != phase1.pre_readiness_fingerprint {
             return Err(PulseError::validation(
                 "work_packet_snapshot_changed",
                 "readiness fingerprint changed during work packet build",
             ));
         }
-        if docs_content_fingerprints(&extract_documentation(&readiness2.docs)?)
-            != pre_docs_content_fingerprints
+        if docs_content_fingerprints(&extract_documentation(&readiness.docs)?)
+            != phase1.pre_docs_content_fingerprints
         {
             return Err(PulseError::validation(
                 "work_packet_snapshot_changed",
@@ -229,7 +395,7 @@ impl JsonGraphStore {
                 "docs search cache fingerprint changed during work packet build",
             ));
         }
-        if suggestion_fingerprints(&suggested_sections) != selected_suggestion_fingerprints {
+        if suggestion_fingerprints(&suggested_sections) != pre_suggestion_fingerprints {
             return Err(PulseError::validation(
                 "work_packet_snapshot_changed",
                 "selected documentation suggestion identity changed during work packet build",
@@ -237,7 +403,7 @@ impl JsonGraphStore {
         }
 
         // Revalidate source (HEAD, cleanliness, operation state).
-        crate::source::revalidate_packet_base(&self.repo_root, &pre_source)?;
+        crate::source::revalidate_packet_base(&self.repo_root, &phase1.pre_source)?;
 
         // Permission check: no retry on snapshot/source change. Keep the
         // second repository fence held through final packet assembly,
@@ -245,16 +411,15 @@ impl JsonGraphStore {
         // the returned bytes are produced under the revalidated snapshot.
 
         // Build fully integrated documentation section before completing the
-        // snapshot, so the snapshot/revalidation precondition binds the same
-        // docs-index fingerprint exposed in the packet documentation block.
+        // snapshot.
         let docs_index_fingerprint = docs_cache_fp
             .clone()
-            .unwrap_or_else(|| readiness2.docs.registry.fingerprint.clone());
+            .unwrap_or_else(|| readiness.docs.registry.fingerprint.clone());
         let documentation = PacketDocumentation {
-            applicability: documentation_base.applicability,
-            suggestion_query: pre_suggestion_query,
+            applicability: phase1.documentation_base.applicability,
+            suggestion_query: phase1.pre_suggestion_query,
             suggested_sections,
-            read_budget: documentation_base.read_budget,
+            read_budget: phase1.documentation_base.read_budget,
             index: work_packet::PacketDocsIndex {
                 state: if docs_cache_fp.is_some() {
                     "current".to_string()
@@ -266,20 +431,20 @@ impl JsonGraphStore {
             },
         };
 
-        let snapshot_done = complete_snapshot(snapshot_pre, &documentation, &source);
-        let dispatch = build_dispatch(&readiness_report, &snapshot_done, &source)?;
+        let snapshot_done = complete_snapshot(phase1.snapshot_pre, &documentation, &phase1.source);
+        let dispatch = build_dispatch(&phase1.readiness_report, &snapshot_done, &phase1.source)?;
 
         // ---- Assemble ----
         let mut packet = WorkPacketV1 {
             schema_version: work_packet::PACKET_SCHEMA_VERSION,
             profile: work_packet::PACKET_PROFILE.to_string(),
             code: "reservation_candidate".to_string(),
-            subject,
+            subject: phase1.subject,
             snapshot: snapshot_done,
-            contract,
-            context,
-            shaping,
-            graph,
+            contract: phase1.contract,
+            context: phase1.context,
+            shaping: phase1.shaping,
+            graph: phase1.graph,
             documentation,
             knowledge: PacketKnowledge {
                 status: "not_installed".to_string(),
@@ -290,11 +455,11 @@ impl JsonGraphStore {
                 suggested: vec![],
                 excluded: vec![],
             },
-            source,
-            workspace,
-            capabilities,
-            scope,
-            assurance,
+            source: phase1.source,
+            workspace: phase1.workspace,
+            capabilities: phase1.capabilities,
+            scope: phase1.scope,
+            assurance: phase1.assurance,
             dispatch,
             budget: PacketBudget::default(),
             packet_fingerprint: String::new(),
@@ -302,7 +467,6 @@ impl JsonGraphStore {
         };
         packet.normalize();
         packet.finalize_size()?;
-        drop(guard2);
         Ok(packet)
     }
 }
@@ -367,28 +531,6 @@ impl JsonGraphStore {
             ));
         }
         Ok(())
-    }
-
-    fn readiness_error(&self, report: &ReadinessReport) -> PulseResult<WorkPacketV1> {
-        let code = match report.status {
-            ReadinessStatus::Stale => "work_packet_readiness_stale",
-            _ => {
-                let qa_blocked = report.gate_families.iter().any(|g| {
-                    g.family == "qa_baseline_and_cases"
-                        && matches!(
-                            g.status,
-                            crate::graph::readiness::GateStatus::Failed
-                                | crate::graph::readiness::GateStatus::Unavailable
-                        )
-                });
-                if qa_blocked {
-                    "work_packet_qa_resolver_unavailable"
-                } else {
-                    "work_packet_readiness_failed"
-                }
-            }
-        };
-        Err(PulseError::validation(code, "readiness check did not pass"))
     }
 }
 
@@ -1028,6 +1170,38 @@ fn suggestion_fingerprints(
             )
         })
         .collect()
+}
+
+/// Refresh the cache-only docs index and search suggestions between fences.
+///
+/// Returns (suggested_sections, docs_cache_fingerprint).
+fn packet_refresh_and_search(
+    repo_root: &Path,
+    phase1: &PacketPhase1State,
+) -> PulseResult<(
+    Vec<crate::work_packet::PacketSuggestedSection>,
+    Option<String>,
+)> {
+    let index_opts = crate::docs::index::IndexOptions {
+        changed: false,
+        rebuild: false,
+        check: false,
+        include_draft: false,
+        include_stale: false,
+    };
+    // Build/search cache-only disposable docs index (never writes
+    // projections). If the cache is already current this is a no-op.
+    crate::docs::index::build_search_cache(repo_root, index_opts)
+        .map_err(|error| map_docs_index_error(error, "docs search cache refresh failed"))?;
+
+    let docs_cache_fp = crate::docs::index::current_cache_fingerprint(repo_root)?;
+    let suggested_sections = search_suggestions(
+        repo_root,
+        &phase1.pre_suggestion_query,
+        &phase1.pre_excluded_doc_ids,
+        &phase1.docs_work_context,
+    )?;
+    Ok((suggested_sections, docs_cache_fp))
 }
 
 fn packet_source_snapshot_from_packet(
@@ -3215,5 +3389,191 @@ mod tests {
             "non-ready report must fail non-zero, not return partial packets: {}",
             err
         );
+    }
+
+    // ===================================================================
+    // P2S2-I6: Fence-aware packet revalidation
+    // ===================================================================
+
+    #[test]
+    fn packet_phase1_state_holds_preconditions_and_extracted_data() {
+        let node = base_node("TK-001", WorkKind::Ticket, "Ticket");
+        let parent = base_node("ST-001", WorkKind::Story, "Story");
+        let proj = projection(
+            vec![node.clone(), parent],
+            vec![edge(EdgeType::Parent, "TK-001", "ST-001")],
+        );
+        let snapshot = readiness_snapshot(&proj, "TK-001");
+        let report = evaluate_readiness(&snapshot.as_inputs(&node), EvalProfile::Ready).unwrap();
+
+        let subject = extract_subject(&node);
+        let snapshot_pre = extract_snapshot(&snapshot, &proj, &report);
+        let contract = extract_contract_dto(&node).unwrap();
+        let context = extract_context(&node, &proj, &snapshot);
+        let shaping = extract_shaping(&node, &snapshot.shaping, &proj).unwrap();
+        let graph = extract_graph(&snapshot, &proj).unwrap();
+        let documentation_base = extract_documentation(&snapshot.docs).unwrap();
+        let docs_work = work_documentation_context(&node);
+        let suggestion_query =
+            build_suggestion_query(&node, &shaping, &context.decisions, &docs_work).unwrap();
+        let excluded_doc_ids: Vec<String> = documentation_base
+            .applicability
+            .excluded
+            .iter()
+            .map(|e| e.id.clone())
+            .collect();
+
+        // Construct a PacketPhase1State using the extracted data.
+        // This simulates what packet_phase1_under_fence builds.
+        let state = PacketPhase1State {
+            pre_graph_fingerprint: proj.graph_fingerprint.clone(),
+            pre_subject_id: node.id.clone(),
+            pre_subject_revision: node.revision,
+            pre_subject_status: node.status,
+            pre_readiness_fingerprint: report.readiness_fingerprint.clone(),
+            pre_authority_fingerprint: snapshot.authority.fingerprint.clone(),
+            pre_docs_registry_fingerprint: snapshot.docs.registry.fingerprint.clone(),
+            pre_docs_content_fingerprints: docs_content_fingerprints(&documentation_base),
+            pre_source: crate::source::PacketSourceSnapshot {
+                repository_id: "repo_test".to_string(),
+                kind: "git_commit".to_string(),
+                commit: "0000000000000000000000000000000000000000".to_string(),
+                head_ref: Some("refs/heads/main".to_string()),
+                worktree_root_kind: crate::source::WorktreeRootKind::PrimaryOrExistingWorktree,
+                cleanliness: crate::source::SourceCleanliness::Clean,
+                operation_state: crate::source::RepositoryOperationState::Normal,
+                currentness: "current".to_string(),
+            },
+            pre_suggestion_query: suggestion_query,
+            pre_excluded_doc_ids: excluded_doc_ids,
+            subject,
+            snapshot_pre,
+            contract,
+            context,
+            shaping,
+            graph,
+            documentation_base,
+            source: PacketSource {
+                repository_id: "repo_test".to_string(),
+                kind: "git_commit".to_string(),
+                commit: "0000000000000000000000000000000000000000".to_string(),
+                head_ref: Some("refs/heads/main".to_string()),
+                worktree_root_kind: "primary_or_existing_worktree".to_string(),
+                cleanliness: "clean".to_string(),
+                operation_state: "normal".to_string(),
+                currentness: "current".to_string(),
+            },
+            workspace: extract_workspace(
+                &node,
+                &PacketSource {
+                    repository_id: "repo_test".to_string(),
+                    kind: "git_commit".to_string(),
+                    commit: "0000000000000000000000000000000000000000".to_string(),
+                    head_ref: Some("refs/heads/main".to_string()),
+                    worktree_root_kind: "primary_or_existing_worktree".to_string(),
+                    cleanliness: "clean".to_string(),
+                    operation_state: "normal".to_string(),
+                    currentness: "current".to_string(),
+                },
+                "repo_test",
+            ),
+            capabilities: extract_capabilities(&node),
+            scope: extract_scope(&node),
+            assurance: extract_assurance(&node),
+            readiness_report: report,
+            docs_work_context: docs_work,
+        };
+
+        // Verify preconditions are set correctly
+        assert_eq!(state.pre_graph_fingerprint, proj.graph_fingerprint);
+        assert_eq!(state.pre_subject_id, "TK-001");
+        assert_eq!(state.subject.id, "TK-001");
+        assert_eq!(state.subject.role, "implementation");
+        // Verify some extracted content
+        assert!(state.contract.objective.contains("Objective"));
+        assert!(
+            state.context.parents.is_empty()
+                || state.context.parents.iter().any(|p| p.id == "ST-001")
+        );
+    }
+
+    #[allow(dead_code)]
+    /// Helper to create a minimal PacketPhase1State for precondition tests.
+    fn create_dummy_phase1_state(
+        node: &Node,
+        proj: &GraphProjection,
+        report: &ReadinessReport,
+        snapshot: &ReadinessSnapshot,
+        docs_work: &WorkDocumentationContext,
+    ) -> PacketPhase1State {
+        let docs_base = extract_documentation(&snapshot.docs).unwrap();
+        let shaping = extract_shaping(node, &snapshot.shaping, proj).unwrap();
+        let context = extract_context(node, proj, snapshot);
+        let suggestion_query =
+            build_suggestion_query(node, &shaping, &context.decisions, docs_work).unwrap();
+        let excluded: Vec<String> = docs_base
+            .applicability
+            .excluded
+            .iter()
+            .map(|e| e.id.clone())
+            .collect();
+        PacketPhase1State {
+            pre_graph_fingerprint: proj.graph_fingerprint.clone(),
+            pre_subject_id: node.id.clone(),
+            pre_subject_revision: node.revision,
+            pre_subject_status: node.status,
+            pre_readiness_fingerprint: report.readiness_fingerprint.clone(),
+            pre_authority_fingerprint: snapshot.authority.fingerprint.clone(),
+            pre_docs_registry_fingerprint: snapshot.docs.registry.fingerprint.clone(),
+            pre_docs_content_fingerprints: docs_content_fingerprints(&docs_base),
+            pre_source: crate::source::PacketSourceSnapshot {
+                repository_id: "repo_test".to_string(),
+                kind: "git_commit".to_string(),
+                commit: "0000000000000000000000000000000000000000".to_string(),
+                head_ref: None,
+                worktree_root_kind: crate::source::WorktreeRootKind::PrimaryOrExistingWorktree,
+                cleanliness: crate::source::SourceCleanliness::Clean,
+                operation_state: crate::source::RepositoryOperationState::Normal,
+                currentness: "current".to_string(),
+            },
+            pre_suggestion_query: suggestion_query,
+            pre_excluded_doc_ids: excluded,
+            subject: extract_subject(node),
+            snapshot_pre: extract_snapshot(snapshot, proj, report),
+            contract: extract_contract_dto(node).unwrap(),
+            context,
+            shaping,
+            graph: extract_graph(snapshot, proj).unwrap(),
+            documentation_base: docs_base,
+            source: PacketSource {
+                repository_id: "repo_test".to_string(),
+                kind: "git_commit".to_string(),
+                commit: "0000000000000000000000000000000000000000".to_string(),
+                head_ref: None,
+                worktree_root_kind: "primary_or_existing_worktree".to_string(),
+                cleanliness: "clean".to_string(),
+                operation_state: "normal".to_string(),
+                currentness: "current".to_string(),
+            },
+            workspace: extract_workspace(
+                node,
+                &PacketSource {
+                    repository_id: "repo_test".to_string(),
+                    kind: "git_commit".to_string(),
+                    commit: "0000000000000000000000000000000000000000".to_string(),
+                    head_ref: None,
+                    worktree_root_kind: "primary_or_existing_worktree".to_string(),
+                    cleanliness: "clean".to_string(),
+                    operation_state: "normal".to_string(),
+                    currentness: "current".to_string(),
+                },
+                "repo_test",
+            ),
+            capabilities: extract_capabilities(node),
+            scope: extract_scope(node),
+            assurance: extract_assurance(node),
+            readiness_report: report.clone(),
+            docs_work_context: docs_work.clone(),
+        }
     }
 }

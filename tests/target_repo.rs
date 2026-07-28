@@ -16,3 +16,5 @@ mod target_repo_fixture;
 mod work_packet_i7;
 #[path = "target_repo/work_packet_target_repo.rs"]
 mod work_packet_target_repo;
+#[path = "target_repo/work_packet_under_fence.rs"]
+mod work_packet_under_fence;
