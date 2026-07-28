@@ -288,6 +288,7 @@
         "repository_id",
         "kind",
         "commit",
+        "head_ref",
         "worktree_root_kind",
         "cleanliness",
         "operation_state",

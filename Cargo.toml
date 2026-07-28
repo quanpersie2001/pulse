@@ -29,6 +29,7 @@ serde_json = { version = "1", features = ["preserve_order"] }
 sha2 = "0.10"
 thiserror = "1"
 tantivy = "0.22.1"
+jsonschema = { version = "0.17", features = ["draft202012"] }
 ulid = "1"
 uuid = { version = "1", features = ["v4", "serde"] }
 

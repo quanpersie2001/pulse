@@ -12,7 +12,6 @@
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
-use std::collections::BTreeSet;
 
 use crate::canonical_json;
 use crate::PulseResult;
@@ -1119,201 +1118,29 @@ fn is_packet_fingerprint_precondition(value: &Value) -> bool {
         == Some("packet_fingerprint")
 }
 
-fn validate_embedded_schema_value(
-    schema: &Value,
-    value: &Value,
-    path: &str,
-    root_schema: &Value,
-) -> PulseResult<()> {
-    if let Some(reference) = schema.get("$ref").and_then(Value::as_str) {
-        let resolved = resolve_schema_ref(root_schema, reference)?;
-        return validate_embedded_schema_value(resolved, value, path, root_schema);
-    }
-    if let Some(any_of) = schema.get("anyOf").and_then(Value::as_array) {
-        if any_of.iter().any(|candidate| {
-            validate_embedded_schema_value(candidate, value, path, root_schema).is_ok()
-        }) {
-            return Ok(());
-        }
-        return schema_error(path, "value does not match any allowed schema");
-    }
-    match schema.get("const") {
-        Some(expected) if value != expected => {
-            return schema_error(path, format!("expected const {expected}"));
-        }
-        _ => {}
-    }
-
-    if let Some(types) = schema.get("type") {
-        validate_schema_type(types, value, path)?;
-    }
-    if let Some(enum_values) = schema.get("enum").and_then(Value::as_array) {
-        if !enum_values.iter().any(|expected| expected == value) {
-            return schema_error(path, "value is not in enum");
-        }
-    }
-    if let Some(pattern) = schema.get("pattern").and_then(Value::as_str) {
-        validate_known_pattern(pattern, value, path)?;
-    }
-    if let Some(minimum) = schema.get("minimum").and_then(Value::as_i64) {
-        if value.as_i64().is_some_and(|actual| actual < minimum) {
-            return schema_error(path, format!("value is less than minimum {minimum}"));
-        }
-    }
-    if let Some(max_items) = schema.get("maxItems").and_then(Value::as_u64) {
-        if value
-            .as_array()
-            .is_some_and(|items| items.len() as u64 > max_items)
-        {
-            return schema_error(path, format!("array exceeds maxItems {max_items}"));
-        }
-    }
-
-    if schema.get("type").and_then(Value::as_str) == Some("object") {
-        validate_schema_object(schema, value, path, root_schema)?;
-    }
-    if schema.get("type").and_then(Value::as_str) == Some("array") {
-        validate_schema_array(schema, value, path, root_schema)?;
-    }
-    Ok(())
-}
-
-fn resolve_schema_ref<'a>(root_schema: &'a Value, reference: &str) -> PulseResult<&'a Value> {
-    let Some(pointer) = reference.strip_prefix('#') else {
-        return schema_error("$schema", format!("unsupported schema ref {reference}"));
-    };
-    root_schema.pointer(pointer).ok_or_else(|| {
-        crate::PulseError::validation(
+fn validate_json_schema_contract(value: &Value) -> PulseResult<()> {
+    let schema: Value = serde_json::from_str(WORK_PACKET_SCHEMA)?;
+    let compiled = jsonschema::JSONSchema::options()
+        .with_draft(jsonschema::Draft::Draft202012)
+        .compile(&schema)
+        .map_err(|error| {
+            crate::PulseError::validation(
+                "work_packet_schema_invalid",
+                format!("embedded work packet schema is invalid: {error}"),
+            )
+        })?;
+    if let Err(errors) = compiled.validate(value) {
+        let messages = errors
+            .take(8)
+            .map(|error| format!("{}: {}", error.instance_path, error))
+            .collect::<Vec<_>>()
+            .join("; ");
+        return Err(crate::PulseError::validation(
             "work_packet_schema_invalid",
-            format!("$schema: unresolved schema ref {reference}"),
-        )
-    })
-}
-
-fn validate_schema_type(types: &Value, value: &Value, path: &str) -> PulseResult<()> {
-    let matches_type = match types {
-        Value::String(kind) => value_matches_schema_type(value, kind),
-        Value::Array(kinds) => kinds
-            .iter()
-            .filter_map(Value::as_str)
-            .any(|kind| value_matches_schema_type(value, kind)),
-        _ => true,
-    };
-    if matches_type {
-        Ok(())
-    } else {
-        schema_error(path, format!("value does not match schema type {types}"))
-    }
-}
-
-fn value_matches_schema_type(value: &Value, kind: &str) -> bool {
-    match kind {
-        "object" => value.is_object(),
-        "array" => value.is_array(),
-        "string" => value.is_string(),
-        "integer" => value.as_i64().is_some() || value.as_u64().is_some(),
-        "boolean" => value.is_boolean(),
-        "null" => value.is_null(),
-        _ => true,
-    }
-}
-
-fn validate_schema_object(
-    schema: &Value,
-    value: &Value,
-    path: &str,
-    root_schema: &Value,
-) -> PulseResult<()> {
-    let Some(object) = value.as_object() else {
-        return Ok(());
-    };
-    let required = schema
-        .get("required")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter_map(Value::as_str)
-        .collect::<BTreeSet<_>>();
-    for field in &required {
-        if !object.contains_key(*field) {
-            return schema_error(path, format!("missing required property {field}"));
-        }
-    }
-    let properties = schema.get("properties").and_then(Value::as_object);
-    if schema.get("additionalProperties") == Some(&Value::Bool(false)) {
-        for key in object.keys() {
-            let known_property = properties
-                .map(|props| props.contains_key(key))
-                .unwrap_or(false);
-            if !known_property {
-                return schema_error(path, format!("unexpected property {key}"));
-            }
-        }
-    }
-    if let Some(properties) = properties {
-        for (key, child_schema) in properties {
-            if let Some(child_value) = object.get(key) {
-                validate_embedded_schema_value(
-                    child_schema,
-                    child_value,
-                    &format!("{path}.{key}"),
-                    root_schema,
-                )?;
-            }
-        }
+            format!("work packet JSON failed schema validation: {messages}"),
+        ));
     }
     Ok(())
-}
-
-fn validate_schema_array(
-    schema: &Value,
-    value: &Value,
-    path: &str,
-    root_schema: &Value,
-) -> PulseResult<()> {
-    let Some(items) = value.as_array() else {
-        return Ok(());
-    };
-    if let Some(item_schema) = schema.get("items") {
-        for (index, item) in items.iter().enumerate() {
-            validate_embedded_schema_value(
-                item_schema,
-                item,
-                &format!("{path}[{index}]"),
-                root_schema,
-            )?;
-        }
-    }
-    Ok(())
-}
-
-fn validate_known_pattern(pattern: &str, value: &Value, path: &str) -> PulseResult<()> {
-    let Some(text) = value.as_str() else {
-        return Ok(());
-    };
-    let valid = match pattern {
-        "^sha256:[A-Fa-f0-9]{64}$" => valid_hash(text),
-        "^[A-Fa-f0-9]{40}$" => text.len() == 40 && text.chars().all(|c| c.is_ascii_hexdigit()),
-        _ => true,
-    };
-    if valid {
-        Ok(())
-    } else {
-        schema_error(path, format!("value does not match pattern {pattern}"))
-    }
-}
-
-fn valid_hash(text: &str) -> bool {
-    text.len() == 71
-        && text.starts_with("sha256:")
-        && text[7..].chars().all(|c| c.is_ascii_hexdigit())
-}
-
-fn schema_error<T>(path: &str, message: impl Into<String>) -> PulseResult<T> {
-    Err(crate::PulseError::validation(
-        "work_packet_schema_invalid",
-        format!("{path}: {}", message.into()),
-    ))
 }
 
 // ---------------------------------------------------------------------------
@@ -1357,8 +1184,7 @@ impl WorkPacketV1 {
 
     pub fn validate_schema_contract(&self) -> PulseResult<()> {
         let value = serde_json::to_value(self)?;
-        let schema: Value = serde_json::from_str(WORK_PACKET_SCHEMA)?;
-        validate_embedded_schema_value(&schema, &value, "$", &schema)
+        validate_json_schema_contract(&value)
     }
 
     fn enforce_budget(&self, actual: u64) -> PulseResult<()> {
@@ -2246,6 +2072,36 @@ mod tests {
                 "contract.required must contain {field}"
             );
         }
+    }
+
+    #[test]
+    fn schema_validation_uses_json_schema_semantics() {
+        let mut packet = minimal_packet(
+            "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        );
+        packet.finalize_size().unwrap();
+        packet.validate_schema_contract().unwrap();
+
+        let mut value = serde_json::to_value(&packet).unwrap();
+        value["dispatch"]["reservation_candidate"] = Value::Bool(false);
+        assert!(
+            validate_json_schema_contract(&value).is_err(),
+            "JSON Schema const must reject non-candidate preview packet"
+        );
+
+        let mut value = serde_json::to_value(&packet).unwrap();
+        value["source"].as_object_mut().unwrap().remove("head_ref");
+        assert!(
+            validate_json_schema_contract(&value).is_err(),
+            "JSON Schema required must reject missing nullable source.head_ref"
+        );
+
+        let mut value = serde_json::to_value(&packet).unwrap();
+        value["subject"]["revision"] = serde_json::json!(-1);
+        assert!(
+            validate_json_schema_contract(&value).is_err(),
+            "JSON Schema minimum must reject negative revisions"
+        );
     }
 
     // -----------------------------------------------------------------------

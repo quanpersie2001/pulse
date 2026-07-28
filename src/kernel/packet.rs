@@ -1111,10 +1111,24 @@ fn validate_packet_operational_paths(repo_root: &Path) -> PulseResult<()> {
 }
 
 fn validate_packet_operational_path(repo_root: &Path, relative: &str) -> PulseResult<()> {
-    let path = repo_root.join(relative);
-    if path.exists() {
-        return Ok(());
+    let tracked = Command::new("git")
+        .current_dir(repo_root)
+        .args(["ls-files", "--error-unmatch", "--", relative])
+        .output()
+        .map_err(|error| PulseError::io(repo_root, error))?;
+    if tracked.status.success() {
+        return Err(packet_operational_path_not_ignored(relative));
     }
+    if tracked.status.code() != Some(1) {
+        return Err(PulseError::validation(
+            "work_packet_source_unavailable",
+            format!(
+                "git ls-files failed for {relative}: {}",
+                String::from_utf8_lossy(&tracked.stderr).trim()
+            ),
+        ));
+    }
+
     let output = Command::new("git")
         .current_dir(repo_root)
         .args(["check-ignore", "-q", "--", relative])
@@ -1123,21 +1137,52 @@ fn validate_packet_operational_path(repo_root: &Path, relative: &str) -> PulseRe
     if output.status.success() {
         return Ok(());
     }
-    if output.status.code() == Some(1) {
+    if output.status.code() != Some(1) {
         return Err(PulseError::validation(
-            "work_packet_operational_path_not_ignored",
+            "work_packet_source_unavailable",
             format!(
-                "packet operational path {relative} would dirty the source tree; ignore .pulse/runtime/ and .pulse/cache/ before running work packet"
+                "git check-ignore failed for {relative}: {}",
+                String::from_utf8_lossy(&output.stderr).trim()
             ),
         ));
     }
-    Err(PulseError::validation(
-        "work_packet_source_unavailable",
+
+    if repo_root.join(relative).exists() {
+        let status = Command::new("git")
+            .current_dir(repo_root)
+            .args([
+                "status",
+                "--porcelain=v1",
+                "--untracked-files=all",
+                "--",
+                relative,
+            ])
+            .output()
+            .map_err(|error| PulseError::io(repo_root, error))?;
+        if !status.status.success() {
+            return Err(PulseError::validation(
+                "work_packet_source_unavailable",
+                format!(
+                    "git status failed for {relative}: {}",
+                    String::from_utf8_lossy(&status.stderr).trim()
+                ),
+            ));
+        }
+        if String::from_utf8_lossy(&status.stdout).trim().is_empty() {
+            return Ok(());
+        }
+    }
+
+    Err(packet_operational_path_not_ignored(relative))
+}
+
+fn packet_operational_path_not_ignored(relative: &str) -> PulseError {
+    PulseError::validation(
+        "work_packet_operational_path_not_ignored",
         format!(
-            "git check-ignore failed for {relative}: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
+            "packet operational path {relative} would dirty the source tree; ignore .pulse/runtime/ and .pulse/cache/ before running work packet"
         ),
-    ))
+    )
 }
 
 impl JsonGraphStore {

@@ -458,6 +458,34 @@ fn tracked_snapshot(root: &Path) -> BTreeMap<String, Vec<u8>> {
     snapshot
 }
 
+fn git_status(root: &Path, path: &str) -> String {
+    git(
+        root,
+        &[
+            "status",
+            "--porcelain=v1",
+            "--untracked-files=all",
+            "--",
+            path,
+        ],
+    )
+}
+
+fn assert_packet_rejects_without_side_effects(repo: &TestRepo, ticket_id: &str) {
+    let before = tracked_snapshot(repo.path());
+    let output = repo.pulse(&["work", "packet", ticket_id, "--json"]);
+    assert!(!output.status.success());
+    let err: Value = serde_json::from_slice(&output.stderr).unwrap();
+    assert_eq!(err["code"], "work_packet_operational_path_not_ignored");
+
+    let after = tracked_snapshot(repo.path());
+    assert_eq!(
+        before, after,
+        "failed packet must not create cache or lock files"
+    );
+    assert!(repo.git_is_clean(), "failed packet must leave source clean");
+}
+
 fn is_allowed_packet_side_effect(path: &str) -> bool {
     path.starts_with(".pulse/cache/") || path.starts_with(".pulse/runtime/locks/")
 }
@@ -725,24 +753,102 @@ fn packet_side_effects_are_limited_to_ignored_cache_and_lock_paths() {
 }
 
 #[test]
-fn packet_rejects_non_ignored_operational_paths_before_dirtying_clean_repo() {
+fn packet_rejects_non_ignored_absent_operational_paths_before_dirtying_clean_repo() {
     let repo = TestRepo::from_fixture("minimal-service");
     let ticket_id = setup_ready_ticket(&repo);
     fs::write(repo.path().join(".gitignore"), b"node_modules/\n").unwrap();
     commit_all(repo.path(), "stop ignoring pulse operational paths");
-    let before = tracked_snapshot(repo.path());
 
+    assert_packet_rejects_without_side_effects(&repo, &ticket_id);
+}
+
+#[test]
+fn packet_rejects_tracked_operational_paths_even_when_status_is_clean() {
+    let repo = TestRepo::from_fixture("minimal-service");
+    let ticket_id = setup_ready_ticket(&repo);
+    fs::create_dir_all(repo.path().join(".pulse/cache/docs-search")).unwrap();
+    fs::create_dir_all(repo.path().join(".pulse/runtime/locks")).unwrap();
+    fs::write(
+        repo.path().join(".pulse/cache/docs-search/CURRENT"),
+        b"gen_tracked\n",
+    )
+    .unwrap();
+    fs::write(repo.path().join(".pulse/runtime/locks/workgraph.lock"), b"").unwrap();
+    fs::write(
+        repo.path().join(".pulse/runtime/locks/docs-search.lock"),
+        b"",
+    )
+    .unwrap();
+    git(
+        repo.path(),
+        &[
+            "add",
+            "-f",
+            ".pulse/cache/docs-search/CURRENT",
+            ".pulse/runtime/locks/workgraph.lock",
+            ".pulse/runtime/locks/docs-search.lock",
+        ],
+    );
+    commit_all(repo.path(), "track operational paths");
+    assert!(repo.git_is_clean());
+
+    assert_packet_rejects_without_side_effects(&repo, &ticket_id);
+}
+
+#[test]
+fn packet_accepts_nested_gitignore_for_operational_paths() {
+    let repo = TestRepo::from_fixture("minimal-service");
+    let ticket_id = setup_ready_ticket(&repo);
+    fs::write(repo.path().join(".gitignore"), b"node_modules/\n").unwrap();
+    fs::write(repo.path().join(".pulse/.gitignore"), b"runtime/\ncache/\n").unwrap();
+    commit_all(
+        repo.path(),
+        "ignore operational paths from nested gitignore",
+    );
+
+    let packet = packet_ok(&repo, &ticket_id);
+    assert_eq!(packet["code"], "reservation_candidate");
+    assert!(repo.git_is_clean());
+}
+
+#[test]
+fn packet_rejects_existing_non_ignored_operational_paths_before_dirtying_clean_repo() {
+    let repo = TestRepo::from_fixture("minimal-service");
+    let ticket_id = setup_ready_ticket(&repo);
+    fs::write(repo.path().join(".gitignore"), b"node_modules/\n").unwrap();
+    fs::create_dir_all(repo.path().join(".pulse/cache/docs-search")).unwrap();
+    fs::write(
+        repo.path().join(".pulse/cache/docs-search/CURRENT"),
+        b"gen_untracked\n",
+    )
+    .unwrap();
+    assert!(git_status(repo.path(), ".pulse/cache/docs-search/CURRENT").starts_with("??"));
+    fs::write(
+        repo.path().join(".gitignore"),
+        b".pulse/cache/docs-search/CURRENT\nnode_modules/\n",
+    )
+    .unwrap();
+    commit_all(
+        repo.path(),
+        "commit source clean before operational path rejection",
+    );
+    fs::write(repo.path().join(".gitignore"), b"node_modules/\n").unwrap();
+    fs::remove_file(repo.path().join(".pulse/cache/docs-search/CURRENT")).unwrap();
+    commit_all(repo.path(), "stop ignoring existing cache path");
+    fs::create_dir_all(repo.path().join(".pulse/cache/docs-search")).unwrap();
+    fs::write(
+        repo.path().join(".pulse/cache/docs-search/CURRENT"),
+        b"gen_untracked\n",
+    )
+    .unwrap();
+    assert!(git_status(repo.path(), ".pulse/cache/docs-search/CURRENT").starts_with("??"));
+
+    let before = tracked_snapshot(repo.path());
     let output = repo.pulse(&["work", "packet", &ticket_id, "--json"]);
     assert!(!output.status.success());
     let err: Value = serde_json::from_slice(&output.stderr).unwrap();
     assert_eq!(err["code"], "work_packet_operational_path_not_ignored");
-
-    let after = tracked_snapshot(repo.path());
-    assert_eq!(
-        before, after,
-        "failed packet must not create cache or lock files"
-    );
-    assert!(repo.git_is_clean(), "failed packet must leave source clean");
+    assert_eq!(before, tracked_snapshot(repo.path()));
 }
 
 #[test]
