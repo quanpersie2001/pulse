@@ -136,6 +136,7 @@ impl JsonGraphStore {
 
         // Phase 1 complete: drop first fence.
         drop(guard);
+        work_packet_test_barrier_after_first_fence()?;
 
         // ==================================================================
         // Between fences — cache-only docs index refresh
@@ -1069,6 +1070,47 @@ fn map_docs_index_error(error: PulseError, context: &str) -> PulseError {
         ),
         _ => error,
     }
+}
+
+fn work_packet_test_barrier_after_first_fence() -> PulseResult<()> {
+    #[cfg(debug_assertions)]
+    {
+        use std::io::Write;
+        use std::time::{Duration, Instant};
+
+        let Some(signal_path) = std::env::var_os("PULSE_WORK_PACKET_AFTER_FIRST_FENCE_SIGNAL")
+        else {
+            return Ok(());
+        };
+        let signal_path = std::path::PathBuf::from(signal_path);
+        if let Some(parent) = signal_path.parent() {
+            fs::create_dir_all(parent).map_err(|error| PulseError::io(parent, error))?;
+        }
+        let mut file =
+            fs::File::create(&signal_path).map_err(|error| PulseError::io(&signal_path, error))?;
+        file.write_all(b"after_first_fence\n")
+            .map_err(|error| PulseError::io(&signal_path, error))?;
+        file.sync_all()
+            .map_err(|error| PulseError::io(&signal_path, error))?;
+
+        if let Some(wait_path) = std::env::var_os("PULSE_WORK_PACKET_AFTER_FIRST_FENCE_WAIT") {
+            let wait_path = std::path::PathBuf::from(wait_path);
+            let start = Instant::now();
+            while !wait_path.exists() {
+                if start.elapsed() > Duration::from_secs(10) {
+                    return Err(PulseError::validation(
+                        "work_packet_snapshot_changed",
+                        format!(
+                            "timed out waiting for test barrier release at {}",
+                            wait_path.display()
+                        ),
+                    ));
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        }
+    }
+    Ok(())
 }
 
 fn extract_source_snapshot(

@@ -10,5 +10,7 @@ mod common;
 
 #[path = "target_repo/target_repo_fixture.rs"]
 mod target_repo_fixture;
+#[path = "target_repo/work_packet_i7.rs"]
+mod work_packet_i7;
 #[path = "target_repo/work_packet_target_repo.rs"]
 mod work_packet_target_repo;
