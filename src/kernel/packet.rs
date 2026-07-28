@@ -98,7 +98,7 @@ impl JsonGraphStore {
 
         // Extract sections that do NOT depend on docs search or source.
         let subject = extract_subject(&node);
-        let snapshot_pre = extract_snapshot(&readiness, &projection);
+        let snapshot_pre = extract_snapshot(&readiness, &projection, &readiness_report);
         let contract = extract_contract_dto(&node)?;
         let context = extract_context(&node, &projection, &readiness);
         let shaping = extract_shaping(&node, &readiness.shaping, &projection)?;
@@ -236,9 +236,12 @@ impl JsonGraphStore {
         // Permission check: no retry on snapshot/source change.
         drop(guard2);
 
-        let snapshot_done = complete_snapshot(snapshot_pre, &documentation_base, &source);
-
-        // Build fully integrated documentation section.
+        // Build fully integrated documentation section before completing the
+        // snapshot, so the snapshot/revalidation precondition binds the same
+        // docs-index fingerprint exposed in the packet documentation block.
+        let docs_index_fingerprint = docs_cache_fp
+            .clone()
+            .unwrap_or_else(|| readiness2.docs.registry.fingerprint.clone());
         let documentation = PacketDocumentation {
             applicability: documentation_base.applicability,
             suggestion_query: pre_suggestion_query,
@@ -250,13 +253,13 @@ impl JsonGraphStore {
                 } else {
                     "not_installed".to_string()
                 },
-                fingerprint: docs_cache_fp
-                    .unwrap_or_else(|| readiness2.docs.registry.fingerprint.clone()),
+                fingerprint: docs_index_fingerprint,
                 mode: "lexical".to_string(),
             },
         };
 
-        let dispatch = build_dispatch(&readiness_report, &snapshot_done, &source);
+        let snapshot_done = complete_snapshot(snapshot_pre, &documentation, &source);
+        let dispatch = build_dispatch(&readiness_report, &snapshot_done, &source)?;
 
         // ---- Assemble ----
         let mut packet = WorkPacketV1 {
@@ -402,12 +405,13 @@ fn extract_subject(node: &Node) -> SubjectSnapshot {
 fn extract_snapshot(
     readiness: &ReadinessSnapshot,
     projection: &GraphProjection,
+    report: &ReadinessReport,
 ) -> work_packet::SnapshotReport {
     work_packet::SnapshotReport {
         graph_fingerprint: projection.graph_fingerprint.clone(),
-        readiness_profile: crate::graph::readiness::READINESS_PROFILE.to_string(),
-        readiness_fingerprint: readiness.structural.graph_fingerprint.clone(),
-        readiness_status: "ready".to_string(),
+        readiness_profile: report.profile.clone(),
+        readiness_fingerprint: report.readiness_fingerprint.clone(),
+        readiness_status: report.status_as_word().to_string(),
         authority_policy_revision: readiness.authority.policy_revision.unwrap_or(0),
         authority_policy_fingerprint: readiness.authority.fingerprint.clone().unwrap_or_default(),
         docs_registry_revision: readiness.docs.registry.revision,
@@ -1321,7 +1325,17 @@ fn build_dispatch(
     report: &ReadinessReport,
     snapshot: &work_packet::SnapshotReport,
     source: &PacketSource,
-) -> PacketDispatch {
+) -> PulseResult<PacketDispatch> {
+    if report.code != "ready"
+        || report.status != ReadinessStatus::Ready
+        || !report.transition_eligible
+    {
+        return Err(PulseError::validation(
+            "work_packet_readiness_failed",
+            "work packet preview requires current transition-eligible readiness; failed pre-reservation gates do not produce partial packets",
+        ));
+    }
+
     let mut dispatch = PacketDispatch {
         revalidation_preconditions: vec![
             PacketRevalidationPrecondition {
@@ -1374,11 +1388,7 @@ fn build_dispatch(
     for gate in &mut dispatch.gate_families {
         match gate.family.as_str() {
             "readiness" => {
-                gate.status = if report.transition_eligible {
-                    "passed".to_string()
-                } else {
-                    "failed".to_string()
-                };
+                gate.status = "passed".to_string();
             }
             "packet_completeness" => {
                 gate.status = "passed".to_string();
@@ -1393,7 +1403,7 @@ fn build_dispatch(
             _ => {}
         }
     }
-    dispatch
+    Ok(dispatch)
 }
 
 // ---------------------------------------------------------------------------
@@ -2167,9 +2177,14 @@ mod tests {
             vec![edge(EdgeType::Parent, "TK-001", "ST-001")],
         );
         let snapshot = readiness_snapshot(&projection, "TK-001");
-        let extracted = extract_snapshot(&snapshot, &projection);
+        let report = evaluate_readiness(&snapshot.as_inputs(&node), EvalProfile::Ready).unwrap();
+        let extracted = extract_snapshot(&snapshot, &projection, &report);
         assert_eq!(extracted.graph_fingerprint, projection.graph_fingerprint);
         assert_eq!(snapshot.graph_fingerprint, projection.graph_fingerprint);
+        assert_eq!(
+            extracted.readiness_fingerprint,
+            report.readiness_fingerprint
+        );
     }
 
     #[test]
@@ -2714,7 +2729,7 @@ mod tests {
             operation_state: "normal".to_string(),
             currentness: "current".to_string(),
         };
-        let dispatch = build_dispatch(&report, &snapshot, &source);
+        let dispatch = build_dispatch(&report, &snapshot, &source).unwrap();
         assert!(dispatch.reservation_candidate);
         assert!(!dispatch.dispatch_authorized);
         assert_eq!(dispatch.authorization_status, "not_reserved");
@@ -2869,7 +2884,7 @@ mod tests {
             operation_state: "normal".to_string(),
             currentness: "current".to_string(),
         };
-        let dispatch = build_dispatch(&report, &snapshot, &source);
+        let dispatch = build_dispatch(&report, &snapshot, &source).unwrap();
 
         // Only the four pre-reservation gate families that Slice 1 owns
         // should appear as "passed".  Every other gate must stay at its
@@ -2995,7 +3010,7 @@ mod tests {
         };
 
         // Case 1: transition_eligible=true (normal happy path)
-        let dispatch = build_dispatch(&base_report, &snapshot, &source);
+        let dispatch = build_dispatch(&base_report, &snapshot, &source).unwrap();
         assert!(
             !dispatch.dispatch_authorized,
             "dispatch_authorized must be false when transition_eligible=true"
@@ -3008,24 +3023,28 @@ mod tests {
         // Case 2: transition_eligible=false (e.g. stale readiness)
         let stale_report = ReadinessReport {
             transition_eligible: false,
-            ..base_report
+            ..base_report.clone()
         };
-        let dispatch2 = build_dispatch(&stale_report, &snapshot, &source);
+        let err = build_dispatch(&stale_report, &snapshot, &source).unwrap_err();
         assert!(
-            !dispatch2.dispatch_authorized,
-            "dispatch_authorized must be false when transition_eligible=false"
-        );
-        assert_eq!(
-            dispatch2.authorization_status, "not_reserved",
-            "authorization_status must be not_reserved when transition_eligible=false"
+            format!("{}", err).contains("pre-reservation gates"),
+            "failed pre-reservation gates must fail non-zero, not return partial packets: {}",
+            err
         );
 
-        // readiness gate shows 'failed' but dispatch_authorized stays false
-        let readiness_gate = dispatch2
-            .gate_families
-            .iter()
-            .find(|g| g.family == "readiness")
-            .unwrap();
-        assert_eq!(readiness_gate.status, "failed");
+        // Case 3: a non-ready report code/status is also an error, never a
+        // reservation_candidate=false packet with failed gates.
+        let failed_report = ReadinessReport {
+            code: "not_ready".to_string(),
+            status: ReadinessStatus::NotReady,
+            transition_eligible: false,
+            ..base_report
+        };
+        let err = build_dispatch(&failed_report, &snapshot, &source).unwrap_err();
+        assert!(
+            format!("{}", err).contains("pre-reservation gates"),
+            "non-ready report must fail non-zero, not return partial packets: {}",
+            err
+        );
     }
 }

@@ -1016,8 +1016,9 @@ impl WorkPacketV1 {
     /// The fingerprint projection excludes:
     ///   - `packet_fingerprint` (self-reference)
     ///   - `budget.actual_canonical_json_bytes` (self-reference)
-    ///   - `dispatch.revalidation_preconditions` (the packet_fingerprint
-    ///     precondition)
+    ///   - any `dispatch.revalidation_preconditions[]` entry whose `field` is
+    ///     `packet_fingerprint` (defensive self-reference exclusion; packet
+    ///     builders must not emit that precondition)
     ///
     /// The projection includes every other field: subject revision, snapshot
     /// fingerprints, contract content, shaping/decision identities, graph
@@ -1982,6 +1983,15 @@ mod tests {
             .find(|g| g.family == "lease")
             .unwrap();
         assert_eq!(lease.reason_codes, vec!["lease_resolver_not_installed"]);
+    }
+
+    #[test]
+    fn schema_constrains_preview_dispatch_constants() {
+        let schema: Value = serde_json::from_str(WORK_PACKET_SCHEMA).unwrap();
+        let dispatch = &schema["properties"]["dispatch"]["properties"];
+        assert_eq!(dispatch["reservation_candidate"]["const"], true);
+        assert_eq!(dispatch["dispatch_authorized"]["const"], false);
+        assert_eq!(dispatch["authorization_status"]["const"], "not_reserved");
     }
 
     // -----------------------------------------------------------------------

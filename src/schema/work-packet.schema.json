@@ -385,9 +385,9 @@
       "additionalProperties": false,
       "required": ["reservation_candidate", "dispatch_authorized", "authorization_status", "gate_families", "revalidation_preconditions"],
       "properties": {
-        "reservation_candidate": { "type": "boolean" },
-        "dispatch_authorized": { "type": "boolean" },
-        "authorization_status": { "type": "string" },
+        "reservation_candidate": { "const": true },
+        "dispatch_authorized": { "const": false },
+        "authorization_status": { "const": "not_reserved" },
         "gate_families": { "type": "array", "items": { "$ref": "#/$defs/gate_family" }, "default": [] },
         "revalidation_preconditions": { "type": "array", "items": { "$ref": "#/$defs/revalidation_precondition" }, "default": [] }
       }
