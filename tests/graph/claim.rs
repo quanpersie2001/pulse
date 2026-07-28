@@ -959,6 +959,338 @@ fn leases_listing_preserves_no_bootstrap() {
     );
 }
 
+#[test]
+fn recover_expired_in_place_marks_stale_and_blocks_duplicate_claim() {
+    let repo = TestRepo::from_fixture("minimal-service");
+    let store = JsonGraphStore::new(repo.path());
+    bootstrap_repo_with_release(&repo, &store);
+    let ticket_id = setup_ready_ticket(repo.path(), &store);
+
+    let outcome = store.claim_work(claim_args(&ticket_id)).expect("claim");
+    let pa = outcome.prepared_assignment;
+    let mut lease = assignment_store::load_lease(repo.path(), &pa.lease.lease_id).unwrap();
+    lease.expires_at = (Utc::now() - chrono::Duration::seconds(30)).to_rfc3339();
+    fs::write(
+        assignment_store::lease_path(repo.path(), &lease.lease_id).unwrap(),
+        to_canonical_bytes(&lease).unwrap(),
+    )
+    .unwrap();
+
+    let recovery = store.recover_leases("human:tester").expect("recover");
+    assert_eq!(recovery.expired_count, 1);
+    assert_eq!(recovery.requeued_count, 0);
+    assert_eq!(recovery.stale_count, 1);
+
+    let node = store.show_node(&ticket_id).unwrap();
+    assert_eq!(node.status, NodeStatus::Active);
+    assert_eq!(node.revision, lease.subject.revision + 1);
+    assert!(!assignment_store::lease_path(repo.path(), &lease.lease_id)
+        .unwrap()
+        .exists());
+    let tombstone = assignment_store::load_tombstone(repo.path(), &lease.lease_id).unwrap();
+    assert_eq!(tombstone.state, "stale_needs_operator");
+    let workspace =
+        assignment_store::load_workspace(repo.path(), &pa.workspace.workspace_id).unwrap();
+    assert_eq!(workspace.state, "stale_needs_operator");
+
+    let duplicate = store
+        .claim_work(claim_args(&ticket_id))
+        .expect_err("active/stale blocks claim");
+    assert_eq!(duplicate.code(), "work_packet_status_not_ready");
+
+    let second = store
+        .recover_leases("human:tester")
+        .expect("recover idempotently");
+    assert_eq!(second.expired_count, 0);
+    assert_eq!(second.requeued_count, 0);
+    assert_eq!(second.stale_count, 0);
+    assert_eq!(second.report.tombstoned_count, 1);
+}
+
+#[test]
+fn recover_expired_clean_isolated_requeues_and_cleans_workspace() {
+    let repo = TestRepo::from_fixture("minimal-service");
+    let root = repo.path().canonicalize().unwrap();
+    let store = JsonGraphStore::new(&root);
+    bootstrap_repo_with_release(&repo, &store);
+    let ticket_id = setup_ready_ticket(&root, &store);
+
+    let outcome = store
+        .claim_work(ClaimArgs {
+            workspace_mode: Some("isolated_worktree".to_string()),
+            ..claim_args(&ticket_id)
+        })
+        .expect("claim isolated");
+    let pa = outcome.prepared_assignment;
+    let workspace_path = root.join(&pa.workspace.path);
+    assert!(workspace_path.exists());
+
+    let mut lease = assignment_store::load_lease(repo.path(), &pa.lease.lease_id).unwrap();
+    lease.expires_at = (Utc::now() - chrono::Duration::seconds(30)).to_rfc3339();
+    fs::write(
+        assignment_store::lease_path(repo.path(), &lease.lease_id).unwrap(),
+        to_canonical_bytes(&lease).unwrap(),
+    )
+    .unwrap();
+
+    let recovery = store.recover_leases("human:tester").expect("recover");
+    assert_eq!(recovery.expired_count, 1);
+    assert_eq!(recovery.requeued_count, 1);
+    assert_eq!(recovery.stale_count, 0);
+
+    let node = store.show_node(&ticket_id).unwrap();
+    assert_eq!(node.status, NodeStatus::Ready);
+    assert_eq!(node.revision, lease.subject.revision + 2);
+    let tombstone = assignment_store::load_tombstone(repo.path(), &lease.lease_id).unwrap();
+    assert_eq!(tombstone.state, "expired");
+    let workspace =
+        assignment_store::load_workspace(repo.path(), &pa.workspace.workspace_id).unwrap();
+    assert_eq!(workspace.state, "released");
+    assert!(
+        !workspace_path.exists(),
+        "clean isolated workspace should be removed post-commit"
+    );
+}
+
+#[test]
+fn recover_expired_dirty_isolated_marks_stale_and_preserves_workspace() {
+    let repo = TestRepo::from_fixture("minimal-service");
+    let root = repo.path().canonicalize().unwrap();
+    let store = JsonGraphStore::new(&root);
+    bootstrap_repo_with_release(&repo, &store);
+    let ticket_id = setup_ready_ticket(&root, &store);
+
+    let outcome = store
+        .claim_work(ClaimArgs {
+            workspace_mode: Some("isolated_worktree".to_string()),
+            ..claim_args(&ticket_id)
+        })
+        .expect("claim isolated");
+    let pa = outcome.prepared_assignment;
+    let workspace_path = root.join(&pa.workspace.path);
+    fs::write(workspace_path.join("dirty.txt"), b"preserve me").unwrap();
+
+    let mut lease = assignment_store::load_lease(repo.path(), &pa.lease.lease_id).unwrap();
+    lease.expires_at = (Utc::now() - chrono::Duration::seconds(30)).to_rfc3339();
+    fs::write(
+        assignment_store::lease_path(repo.path(), &lease.lease_id).unwrap(),
+        to_canonical_bytes(&lease).unwrap(),
+    )
+    .unwrap();
+
+    let recovery = store.recover_leases("human:tester").expect("recover");
+    assert_eq!(recovery.expired_count, 1);
+    assert_eq!(recovery.requeued_count, 0);
+    assert_eq!(recovery.stale_count, 1);
+
+    let node = store.show_node(&ticket_id).unwrap();
+    assert_eq!(node.status, NodeStatus::Active);
+    let tombstone = assignment_store::load_tombstone(repo.path(), &lease.lease_id).unwrap();
+    assert_eq!(tombstone.state, "stale_needs_operator");
+    assert!(workspace_path.join("dirty.txt").exists());
+    let workspace =
+        assignment_store::load_workspace(repo.path(), &pa.workspace.workspace_id).unwrap();
+    assert_eq!(workspace.state, "stale_needs_operator");
+}
+
+#[test]
+fn recover_reports_ambiguous_without_mutation() {
+    let repo = TestRepo::from_fixture("minimal-service");
+    let store = JsonGraphStore::new(repo.path());
+    bootstrap_repo_with_release(&repo, &store);
+    let ticket_id = setup_ready_ticket(repo.path(), &store);
+
+    let outcome = store.claim_work(claim_args(&ticket_id)).expect("claim");
+    let pa = outcome.prepared_assignment;
+    let tombstone = pulse::assignment::AssignmentTombstoneV1 {
+        schema_version: pulse::assignment::TOMBSTONE_SCHEMA_VERSION,
+        lease_id: pa.lease.lease_id.clone(),
+        subject_id: ticket_id.clone(),
+        state: "released".to_string(),
+        recorded_at: Utc::now().to_rfc3339(),
+        actor: "human:tester".to_string(),
+        reason: Some("synthetic ambiguous test".to_string()),
+        reason_codes: vec![],
+    };
+    assignment_store::write_tombstone(repo.path(), &tombstone).unwrap();
+
+    let before_node = store.show_node(&ticket_id).unwrap();
+    let recovery = store.recover_leases("human:tester").expect("recover");
+    assert_eq!(recovery.ambiguous_count, 1);
+    assert_eq!(recovery.expired_count, 0);
+    assert!(
+        assignment_store::lease_path(repo.path(), &pa.lease.lease_id)
+            .unwrap()
+            .exists()
+    );
+    let after_node = store.show_node(&ticket_id).unwrap();
+    assert_eq!(after_node.revision, before_node.revision);
+    assert_eq!(after_node.status, before_node.status);
+}
+
+#[test]
+fn release_rejects_runner_started_prepared_assignment() {
+    let repo = TestRepo::from_fixture("minimal-service");
+    let store = JsonGraphStore::new(repo.path());
+    bootstrap_repo_with_release(&repo, &store);
+    let ticket_id = setup_ready_ticket(repo.path(), &store);
+
+    let outcome = store.claim_work(claim_args(&ticket_id)).expect("claim");
+    let pa = outcome.prepared_assignment;
+    let prepared_path =
+        assignment_store::prepared_assignment_path(repo.path(), &pa.prepared_assignment_id)
+            .unwrap();
+    let mut value: serde_json::Value =
+        serde_json::from_slice(&fs::read(&prepared_path).unwrap()).unwrap();
+    value["dispatch"]["runner_status"] = serde_json::Value::String("started".to_string());
+    fs::write(&prepared_path, to_canonical_bytes(&value).unwrap()).unwrap();
+
+    let node = store.show_node(&ticket_id).unwrap();
+    let err = store
+        .release_work(pulse::kernel::assignment::ReleaseArgs {
+            ticket_id,
+            lease_id: pa.lease.lease_id,
+            expected_revision: node.revision,
+            reason: "must reject runner state".to_string(),
+            actor: "human:tester".to_string(),
+        })
+        .expect_err("release outside no-run scope");
+    assert_eq!(err.code(), "assignment_lease_not_releasable");
+}
+
+#[test]
+fn release_without_authority_rejects() {
+    let repo = TestRepo::from_fixture("minimal-service");
+    let store = JsonGraphStore::new(repo.path());
+    bootstrap_repo(&repo, &store);
+    let ticket_id = setup_ready_ticket(repo.path(), &store);
+
+    let outcome = store.claim_work(claim_args(&ticket_id)).expect("claim");
+    let pa = outcome.prepared_assignment;
+    let node = store.show_node(&ticket_id).unwrap();
+    let err = store
+        .release_work(pulse::kernel::assignment::ReleaseArgs {
+            ticket_id,
+            lease_id: pa.lease.lease_id,
+            expected_revision: node.revision,
+            reason: "no grant".to_string(),
+            actor: "human:tester".to_string(),
+        })
+        .expect_err("release authority required");
+    assert_eq!(err.code(), "readiness_authority_denied");
+}
+
+#[test]
+fn leases_listing_reports_corrupt_record_with_null_fields() {
+    let repo = TestRepo::from_fixture("minimal-service");
+    let store = JsonGraphStore::new(repo.path());
+    bootstrap_repo(&repo, &store);
+    let leases_dir = repo.path().join(".pulse/runtime/assignment/leases");
+    fs::create_dir_all(&leases_dir).unwrap();
+    fs::write(leases_dir.join("lease_CORRUPT.json"), b"{ not json").unwrap();
+
+    let report = store.list_leases(None).expect("list corrupt");
+    assert_eq!(report.count, 1);
+    assert_eq!(report.entries[0].classification, "invalid");
+    assert_eq!(report.entries[0].assignee, None);
+    assert_eq!(report.entries[0].workspace_id, None);
+
+    let json = repo.pulse_ok(&["work", "leases", "--json"]);
+    assert!(json["entries"][0]["assignee"].is_null());
+    assert!(json["entries"][0]["workspace_id"].is_null());
+}
+
+#[test]
+fn cli_leases_default_and_recover_grammar() {
+    let repo = TestRepo::from_fixture("minimal-service");
+    let store = JsonGraphStore::new(repo.path());
+    bootstrap_repo_with_release(&repo, &store);
+    let ticket_id = setup_ready_ticket(repo.path(), &store);
+    store.claim_work(claim_args(&ticket_id)).expect("claim");
+
+    let list_json = repo.pulse_ok(&["work", "leases", "--ticket", &ticket_id, "--json"]);
+    assert_eq!(list_json["count"], 1);
+
+    let recover_json = repo.pulse_ok(&[
+        "work",
+        "leases",
+        "recover",
+        "--actor",
+        "human:tester",
+        "--json",
+    ]);
+    assert_eq!(recover_json["code"], "leases_recovered");
+}
+
+#[test]
+fn frontier_reports_active_without_record_as_ambiguous_with_null_fields() {
+    use pulse::graph::frontier::FrontierKind;
+
+    let repo = TestRepo::from_fixture("minimal-service");
+    let store = JsonGraphStore::new(repo.path());
+    bootstrap_repo(&repo, &store);
+    let ticket_id = setup_ready_ticket(repo.path(), &store);
+    let pa = store
+        .claim_work(claim_args(&ticket_id))
+        .unwrap()
+        .prepared_assignment;
+    fs::remove_file(assignment_store::lease_path(repo.path(), &pa.lease.lease_id).unwrap())
+        .unwrap();
+
+    let enriched = store
+        .frontier_with_claim_state(FrontierKind::Execution, None, None, false)
+        .expect("enriched frontier");
+    let assignment = enriched
+        .active_assignments
+        .iter()
+        .find(|entry| entry.ticket_id == ticket_id)
+        .unwrap();
+    assert_eq!(
+        assignment.claim_state,
+        pulse::kernel::frontier::FrontierClaimState::Ambiguous
+    );
+    assert_eq!(assignment.lease_id, None);
+    assert_eq!(assignment.assignee, None);
+}
+
+#[test]
+fn frontier_reports_expired_active_assignment_as_stale() {
+    use pulse::graph::frontier::FrontierKind;
+
+    let repo = TestRepo::from_fixture("minimal-service");
+    let store = JsonGraphStore::new(repo.path());
+    bootstrap_repo(&repo, &store);
+    let ticket_id = setup_ready_ticket(repo.path(), &store);
+    let pa = store
+        .claim_work(claim_args(&ticket_id))
+        .unwrap()
+        .prepared_assignment;
+    let mut lease = assignment_store::load_lease(repo.path(), &pa.lease.lease_id).unwrap();
+    lease.expires_at = (Utc::now() - chrono::Duration::seconds(30)).to_rfc3339();
+    fs::write(
+        assignment_store::lease_path(repo.path(), &lease.lease_id).unwrap(),
+        to_canonical_bytes(&lease).unwrap(),
+    )
+    .unwrap();
+
+    let enriched = store
+        .frontier_with_claim_state(FrontierKind::Execution, None, None, false)
+        .expect("enriched frontier");
+    let assignment = enriched
+        .active_assignments
+        .iter()
+        .find(|entry| entry.ticket_id == ticket_id)
+        .unwrap();
+    assert_eq!(
+        assignment.claim_state,
+        pulse::kernel::frontier::FrontierClaimState::Stale
+    );
+    assert_eq!(
+        assignment.lease_id.as_deref(),
+        Some(pa.lease.lease_id.as_str())
+    );
+}
+
 // ===========================================================================
 // Frontier claim-state enrichment (P2S2-I9)
 // ===========================================================================

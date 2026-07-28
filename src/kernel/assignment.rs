@@ -28,10 +28,11 @@ use crate::assignment::{
     PreparedAssignmentRecordV1, PreparedAssignmentV1, RevalidatedSnapshot, WorkspaceCleanupPolicy,
     WorkspaceSubjectRef, ASSIGNMENT_SCHEMA_VERSION, LEASE_KIND_IMPLEMENTATION,
     LEASE_SCHEMA_VERSION, LEASE_STATE_PREPARED, LIFECYCLE_GATE_PROFILE, LIFECYCLE_READY_TO_ACTIVE,
-    MAX_TTL_SECONDS, MIN_TTL_SECONDS, PREPARED_ASSIGNMENT_PROFILE, TOMBSTONE_SCHEMA_VERSION,
-    TOMBSTONE_STATE_EXPIRED, TOMBSTONE_STATE_RELEASED, TOMBSTONE_STATE_STALE,
-    WORKSPACE_MODE_IN_PLACE, WORKSPACE_MODE_ISOLATED, WORKSPACE_SCHEMA_VERSION,
-    WORKSPACE_STATE_BOUND, WORKSPACE_STATE_RELEASED, WORKSPACE_STATE_STALE,
+    MAX_TTL_SECONDS, MIN_TTL_SECONDS, PREPARED_ASSIGNMENT_PROFILE, RUNNER_STATUS_NOT_STARTED,
+    TOMBSTONE_SCHEMA_VERSION, TOMBSTONE_STATE_EXPIRED, TOMBSTONE_STATE_RELEASED,
+    TOMBSTONE_STATE_STALE, WORKSPACE_MODE_IN_PLACE, WORKSPACE_MODE_ISOLATED,
+    WORKSPACE_SCHEMA_VERSION, WORKSPACE_STATE_BOUND, WORKSPACE_STATE_RELEASED,
+    WORKSPACE_STATE_STALE,
 };
 use crate::canonical_json::{hash_bytes, to_canonical_bytes};
 use crate::event::{new_event_id, EventEnvelope};
@@ -1100,9 +1101,60 @@ impl JsonGraphStore {
             ));
         }
 
-        // Step 5: Load workspace record.
+        // Step 5: Load the prepared assignment and workspace records.
+        let prepared_assignment =
+            assignment_store::load_prepared(&self.repo_root, &lease.prepared_assignment_id)?;
+        if prepared_assignment.dispatch.runner_status != RUNNER_STATUS_NOT_STARTED {
+            return Err(PulseError::validation(
+                "assignment_lease_not_releasable",
+                format!(
+                    "prepared assignment {} runner_status is {}; release only supports no-run assignments",
+                    prepared_assignment.prepared_assignment_id, prepared_assignment.dispatch.runner_status
+                ),
+            ));
+        }
+        if prepared_assignment.subject.id != args.ticket_id
+            || prepared_assignment.subject.revision_before != lease.subject.revision
+            || prepared_assignment.subject.revision_after != lease.subject.revision + 1
+        {
+            return Err(PulseError::validation(
+                "assignment_lease_not_releasable",
+                format!(
+                    "prepared assignment {} does not match lease subject {}@{}",
+                    prepared_assignment.prepared_assignment_id,
+                    lease.subject.id,
+                    lease.subject.revision
+                ),
+            ));
+        }
+
         let workspace_record =
             assignment_store::load_workspace(&self.repo_root, &lease.workspace_id)?;
+        if workspace_record.lease_id != lease.lease_id
+            || workspace_record.prepared_assignment_id != lease.prepared_assignment_id
+            || workspace_record.subject.id != lease.subject.id
+            || workspace_record.subject.revision != lease.subject.revision
+        {
+            return Err(PulseError::validation(
+                "assignment_lease_not_releasable",
+                format!(
+                    "workspace {} does not match lease {} subject {}@{}",
+                    workspace_record.workspace_id,
+                    lease.lease_id,
+                    lease.subject.id,
+                    lease.subject.revision
+                ),
+            ));
+        }
+        if workspace_record.state != WORKSPACE_STATE_BOUND {
+            return Err(PulseError::validation(
+                "assignment_lease_not_releasable",
+                format!(
+                    "workspace {} state is {}; release only supports bound prepared assignments",
+                    workspace_record.workspace_id, workspace_record.state
+                ),
+            ));
+        }
 
         // Step 6: Load node and validate active status at expected revision.
         let node_path = self.node_path(&args.ticket_id);
@@ -1340,13 +1392,13 @@ impl JsonGraphStore {
 pub struct LeaseEntry {
     pub lease_id: String,
     pub subject_id: String,
-    pub assignee: String,
-    pub issued_by: String,
-    pub issued_at: String,
-    pub expires_at: String,
+    pub assignee: Option<String>,
+    pub issued_by: Option<String>,
+    pub issued_at: Option<String>,
+    pub expires_at: Option<String>,
     pub state: String,
-    pub workspace_id: String,
-    pub prepared_assignment_id: String,
+    pub workspace_id: Option<String>,
+    pub prepared_assignment_id: Option<String>,
     pub node_status: String,
     pub node_revision: u64,
     pub classification: String,
@@ -1417,21 +1469,14 @@ impl JsonGraphStore {
             let (assignee, issued_by, issued_at, expires_at, state, prepared_assignment_id) =
                 match assignment_store::load_lease(&self.repo_root, &entry.lease_id) {
                     Ok(lease) => (
-                        lease.assignee.principal.clone(),
-                        lease.issued_by.clone(),
-                        lease.issued_at.clone(),
-                        lease.expires_at.clone(),
+                        Some(lease.assignee.principal.clone()),
+                        Some(lease.issued_by.clone()),
+                        Some(lease.issued_at.clone()),
+                        Some(lease.expires_at.clone()),
                         lease.state.clone(),
-                        lease.prepared_assignment_id.clone(),
+                        Some(lease.prepared_assignment_id.clone()),
                     ),
-                    Err(_) => (
-                        String::new(),
-                        String::new(),
-                        String::new(),
-                        String::new(),
-                        entry.state.clone(),
-                        String::new(),
-                    ),
+                    Err(_) => (None, None, None, None, entry.state.clone(), None),
                 };
 
             // Load node status.
@@ -1470,7 +1515,11 @@ impl JsonGraphStore {
                 issued_at,
                 expires_at,
                 state,
-                workspace_id: entry.workspace_id.clone(),
+                workspace_id: if entry.workspace_id.is_empty() {
+                    None
+                } else {
+                    Some(entry.workspace_id.clone())
+                },
                 prepared_assignment_id,
                 node_status,
                 node_revision,
@@ -1638,13 +1687,48 @@ impl JsonGraphStore {
             }
         };
 
-        // Verify lease is prepared (no-run state).
+        // Verify lease is prepared and still describes the classified subject.
         if lease.state != LEASE_STATE_PREPARED {
             return Err(PulseError::validation(
                 "assignment_lease_not_releasable",
                 format!(
                     "expired lease {} has non-prepared state {}",
                     entry.lease_id, lease.state
+                ),
+            ));
+        }
+        if lease.subject.id != entry.subject_id || lease.workspace_id != entry.workspace_id {
+            return Err(PulseError::validation(
+                "assignment_recovery_failed",
+                format!(
+                    "expired lease {} changed since classification; refusing stale recovery",
+                    entry.lease_id
+                ),
+            ));
+        }
+
+        let prepared_assignment =
+            assignment_store::load_prepared(&self.repo_root, &lease.prepared_assignment_id)?;
+        if prepared_assignment.dispatch.runner_status != RUNNER_STATUS_NOT_STARTED {
+            return Err(PulseError::validation(
+                "assignment_lease_not_releasable",
+                format!(
+                    "prepared assignment {} runner_status is {}; recovery only supports no-run assignments",
+                    prepared_assignment.prepared_assignment_id, prepared_assignment.dispatch.runner_status
+                ),
+            ));
+        }
+        if prepared_assignment.subject.id != lease.subject.id
+            || prepared_assignment.subject.revision_before != lease.subject.revision
+            || prepared_assignment.subject.revision_after != lease.subject.revision + 1
+        {
+            return Err(PulseError::validation(
+                "assignment_lease_not_releasable",
+                format!(
+                    "prepared assignment {} does not match lease subject {}@{}",
+                    prepared_assignment.prepared_assignment_id,
+                    lease.subject.id,
+                    lease.subject.revision
                 ),
             ));
         }
@@ -1664,6 +1748,29 @@ impl JsonGraphStore {
                 }
             };
 
+        if workspace_record.lease_id != lease.lease_id
+            || workspace_record.prepared_assignment_id != lease.prepared_assignment_id
+            || workspace_record.subject.id != lease.subject.id
+            || workspace_record.subject.revision != lease.subject.revision
+        {
+            return Err(PulseError::validation(
+                "assignment_recovery_failed",
+                format!(
+                    "workspace {} does not match expired lease {}",
+                    workspace_record.workspace_id, lease.lease_id
+                ),
+            ));
+        }
+        if workspace_record.state != WORKSPACE_STATE_BOUND {
+            return Err(PulseError::validation(
+                "assignment_lease_not_releasable",
+                format!(
+                    "workspace {} state is {}; recovery only supports bound prepared assignments",
+                    workspace_record.workspace_id, workspace_record.state
+                ),
+            ));
+        }
+
         // Check if workspace is dirty/unknown (preserve as stale).
         let is_in_place = workspace_record.mode == WORKSPACE_MODE_IN_PLACE;
         let workspace_path_str = &workspace_record.path;
@@ -1674,11 +1781,10 @@ impl JsonGraphStore {
         };
 
         let is_clean = if is_in_place {
-            // For in-place, check root cleanliness.
-            matches!(
-                crate::source::check_cleanliness(&self.repo_root),
-                Ok(crate::source::SourceCleanliness::Clean)
-            )
+            // Never auto-requeue an expired in-place assignment: the primary
+            // repository root may contain operator/agent state not proven to
+            // belong solely to this assignment. Preserve it for review.
+            false
         } else {
             let ws_check = if workspace_path_str == "." {
                 self.repo_root.clone()
@@ -1721,15 +1827,16 @@ impl JsonGraphStore {
             }
         };
 
-        // Only transition if node is still Active at the claim revision.
-        // If node has been modified since claim (different revision or
-        // different status), preserve as stale instead.
-        if node.status != NodeStatus::Active || node.revision != lease.subject.revision {
+        // Only transition if node is still Active at the revision produced by
+        // the original claim. If node has been modified since claim (different
+        // revision or status), preserve as stale instead.
+        let claimed_active_revision = lease.subject.revision + 1;
+        if node.status != NodeStatus::Active || node.revision != claimed_active_revision {
             return Err(PulseError::validation(
                 "assignment_release_revision_mismatch",
                 format!(
-                    "node {} status {:?} revision {} does not match claim revision {}; cannot auto-requeue",
-                    node.id, node.status, node.revision, lease.subject.revision
+                    "node {} status {:?} revision {} does not match claimed active revision {}; cannot auto-requeue",
+                    node.id, node.status, node.revision, claimed_active_revision
                 ),
             ));
         }
@@ -1810,8 +1917,8 @@ impl JsonGraphStore {
         let event_payload = json!({
             "from": "active",
             "to": "ready",
-            "expected_revision": lease.subject.revision,
-            "new_revision": lease.subject.revision + 1,
+            "expected_revision": claimed_active_revision,
+            "new_revision": claimed_active_revision + 1,
             "lease_id": entry.lease_id,
             "workspace_id": workspace_record.workspace_id,
             "prepared_assignment_id": lease.prepared_assignment_id,
@@ -1866,11 +1973,11 @@ impl JsonGraphStore {
                 node_path,
                 FileState::Present {
                     hash: hash_bytes(&before_bytes),
-                    revision: lease.subject.revision,
+                    revision: claimed_active_revision,
                 },
                 FileState::Present {
                     hash: hash_bytes(&node_after_bytes),
-                    revision: lease.subject.revision + 1,
+                    revision: claimed_active_revision + 1,
                 },
                 &node_after_bytes,
             ),
