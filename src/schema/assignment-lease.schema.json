@@ -1,0 +1,83 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://pulse.reboot/schemas/assignment-lease.schema.json",
+  "title": "AssignmentLeaseRecordV1",
+  "description": "Runtime lease record for a prepared assignment. Local coordination state, not canonical graph node data.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "lease_id",
+    "kind",
+    "subject",
+    "assignee",
+    "issued_by",
+    "issued_at",
+    "expires_at",
+    "ttl_seconds",
+    "state",
+    "packet_fingerprint",
+    "readiness_fingerprint",
+    "workspace_id",
+    "prepared_assignment_id",
+    "capability_inventory_identity",
+    "source"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "lease_id": {
+      "type": "string",
+      "pattern": "^lease_[A-Za-z0-9]+$"
+    },
+    "kind": {
+      "type": "string"
+    },
+    "subject": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "id",
+        "revision",
+        "contract_revision",
+        "status_at_claim"
+      ],
+      "properties": {
+        "kind": { "type": "string" },
+        "id": { "type": "string" },
+        "revision": { "type": "integer", "minimum": 0 },
+        "contract_revision": { "type": "integer", "minimum": 0 },
+        "status_at_claim": { "type": "string" }
+      }
+    },
+    "assignee": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["principal"],
+      "properties": {
+        "principal": { "type": "string" }
+      }
+    },
+    "issued_by": { "type": "string" },
+    "issued_at": { "type": "string", "format": "date-time" },
+    "expires_at": { "type": "string", "format": "date-time" },
+    "ttl_seconds": { "type": "integer", "minimum": 60, "maximum": 86400 },
+    "state": { "type": "string" },
+    "packet_fingerprint": { "type": "string", "pattern": "^sha256:[A-Fa-f0-9]{64}$" },
+    "readiness_fingerprint": { "type": "string", "pattern": "^sha256:[A-Fa-f0-9]{64}$" },
+    "workspace_id": { "type": "string", "pattern": "^wt_[A-Za-z0-9_-]+$" },
+    "prepared_assignment_id": { "type": "string", "pattern": "^pa_[A-Za-z0-9]+$" },
+    "capability_inventory_identity": { "type": "string", "pattern": "^sha256:[A-Fa-f0-9]{64}$" },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["repository_id", "base_commit"],
+      "properties": {
+        "repository_id": { "type": "string" },
+        "base_commit": { "type": "string", "pattern": "^[A-Fa-f0-9]{40}$" }
+      }
+    }
+  }
+}

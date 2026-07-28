@@ -5,6 +5,18 @@
 //! deliberately lightweight: compile and a few stable constants/constructors,
 //! not exhaustive API snapshots.
 
+use pulse::assignment::{
+    AssignmentDispatch, AssignmentGateFamily, AssignmentLeaseRecordV1, AssignmentLeaseSummary,
+    AssignmentLifecycle, AssignmentSubjectSnapshot, AssignmentTransaction,
+    AssignmentWorkspaceRecordV1, AssignmentWorkspaceSummary, CapabilityInventoryV1,
+    CapabilityMatchReport, PreparedAssignmentRecordV1, PreparedAssignmentV1, RevalidatedSnapshot,
+    ASSIGNMENT_SCHEMA_VERSION, CAPABILITY_INVENTORY_SCHEMA_VERSION, CAP_MATCH_MATCHED,
+    DEFAULT_TTL_SECONDS, DISPATCH_AUTHORIZED_STATUS, LEASE_KIND_IMPLEMENTATION,
+    LEASE_SCHEMA_VERSION, LEASE_STATE_PREPARED, LIFECYCLE_GATE_PROFILE, LIFECYCLE_READY_TO_ACTIVE,
+    MAX_TTL_SECONDS, MIN_TTL_SECONDS, PREPARED_ASSIGNMENT_PROFILE, RUNNER_STATUS_NOT_STARTED,
+    WORKSPACE_MODE_IN_PLACE, WORKSPACE_MODE_ISOLATED, WORKSPACE_SCHEMA_VERSION,
+    WORKSPACE_STATE_BOUND,
+};
 use pulse::docs::{
     ApplicabilityOptions, DocsRegistry, DocumentAuthority, DocumentKind, DocumentLifecycle,
     DocumentRecord, DocumentScope, GetOptions, IndexOptions, RetrievalConfig, ReviewPolicy,
@@ -31,6 +43,7 @@ use pulse::work_packet::{
     PacketWorkspace, WorkPacketV1, BUDGET_PROFILE, MAX_CANONICAL_JSON_BYTES, PACKET_PROFILE,
     WORK_PACKET_SCHEMA,
 };
+use pulse::workspace::{BindingStatus, WorkspaceMode, WorkspaceStrategy};
 use pulse::{JsonGraphStore, PulseError, PulseResult, Result};
 
 #[test]
@@ -273,4 +286,219 @@ fn work_packet_public_paths_compile() {
     assert!(dispatch.reservation_candidate);
     assert!(!dispatch.dispatch_authorized);
     assert_eq!(dispatch.authorization_status, "not_reserved");
+}
+
+#[test]
+fn assignment_public_paths_compile() {
+    // Verify `pulse::assignment` public types and constants are reachable
+    // from integration tests (external crate consumers).
+
+    // Constants.
+    assert_eq!(ASSIGNMENT_SCHEMA_VERSION, 1);
+    assert_eq!(PREPARED_ASSIGNMENT_PROFILE, "phase2_prepared_assignment_v1");
+    assert_eq!(LEASE_SCHEMA_VERSION, 1);
+    assert_eq!(LEASE_KIND_IMPLEMENTATION, "implementation_assignment");
+    assert_eq!(WORKSPACE_SCHEMA_VERSION, 1);
+    assert_eq!(CAPABILITY_INVENTORY_SCHEMA_VERSION, 1);
+    assert_eq!(DEFAULT_TTL_SECONDS, 1800);
+    assert_eq!(MIN_TTL_SECONDS, 60);
+    assert_eq!(MAX_TTL_SECONDS, 86_400);
+    assert_eq!(LEASE_STATE_PREPARED, "prepared");
+    assert_eq!(CAP_MATCH_MATCHED, "matched");
+    assert_eq!(DISPATCH_AUTHORIZED_STATUS, "prepared_assignment");
+    assert_eq!(RUNNER_STATUS_NOT_STARTED, "not_started");
+    assert_eq!(LIFECYCLE_READY_TO_ACTIVE, "ready_to_active");
+    assert_eq!(LIFECYCLE_GATE_PROFILE, "phase2_prepared_assignment_v1");
+    assert_eq!(WORKSPACE_MODE_IN_PLACE, "in_place");
+    assert_eq!(WORKSPACE_MODE_ISOLATED, "isolated_worktree");
+    assert_eq!(WORKSPACE_STATE_BOUND, "bound");
+
+    // DTO construction.
+    let _subject = AssignmentSubjectSnapshot {
+        id: "TK-001".to_string(),
+        kind: "ticket".to_string(),
+        revision_before: 1,
+        revision_after: 2,
+        contract_revision: 1,
+        status_before: "ready".to_string(),
+        status_after: "active".to_string(),
+    };
+    assert_eq!(_subject.id, "TK-001");
+
+    let _snapshot = RevalidatedSnapshot {
+        graph_fingerprint:
+            "sha256:0000000000000000000000000000000000000000000000000000000000000000".to_string(),
+        readiness_profile: "phase1_contract_readiness_v1".to_string(),
+        readiness_fingerprint:
+            "sha256:1111111111111111111111111111111111111111111111111111111111111111".to_string(),
+        authority_policy_fingerprint:
+            "sha256:2222222222222222222222222222222222222222222222222222222222222222".to_string(),
+        docs_registry_fingerprint:
+            "sha256:3333333333333333333333333333333333333333333333333333333333333333".to_string(),
+        docs_index_fingerprint:
+            "sha256:4444444444444444444444444444444444444444444444444444444444444444".to_string(),
+        source_commit: "0123456789abcdef0123456789abcdef01234567".to_string(),
+        source_cleanliness: "clean".to_string(),
+        repository_id: "repo_test".to_string(),
+    };
+
+    let _lease_summary = AssignmentLeaseSummary {
+        lease_id: "lease_01Jtest".to_string(),
+        state: LEASE_STATE_PREPARED.to_string(),
+        assignee: "agent:codex-local".to_string(),
+        issued_by: "human:test".to_string(),
+        issued_at: "2026-07-28T10:00:00Z".to_string(),
+        expires_at: "2026-07-28T10:30:00Z".to_string(),
+        ttl_seconds: DEFAULT_TTL_SECONDS,
+        exclusive: true,
+    };
+    assert_eq!(_lease_summary.ttl_seconds, 1800);
+
+    let _workspace_summary = AssignmentWorkspaceSummary {
+        workspace_id: "wt_test".to_string(),
+        binding_status: WORKSPACE_STATE_BOUND.to_string(),
+        mode: WORKSPACE_MODE_ISOLATED.to_string(),
+        path: ".pulse/runtime/workspaces/wt_test".to_string(),
+        repository_id: "repo_test".to_string(),
+        base_commit: "0123456789abcdef0123456789abcdef01234567".to_string(),
+        cleanliness: "clean".to_string(),
+        owner_lease_id: "lease_01Jtest".to_string(),
+    };
+
+    let _cap_match = CapabilityMatchReport {
+        inventory_identity:
+            "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
+        principal: "agent:codex-local".to_string(),
+        status: CAP_MATCH_MATCHED.to_string(),
+        required: vec!["source.read".to_string()],
+        matched: vec!["source.read".to_string()],
+        missing: vec![],
+        extra: vec!["test.run".to_string()],
+        reason_codes: vec![],
+    };
+
+    let _lifecycle = AssignmentLifecycle {
+        transition: LIFECYCLE_READY_TO_ACTIVE.to_string(),
+        gate_profile: LIFECYCLE_GATE_PROFILE.to_string(),
+        gate_status: "passed".to_string(),
+        expected_revision: 1,
+        new_revision: 2,
+        event_id: "evt_01Jtest".to_string(),
+    };
+
+    let _dispatch = AssignmentDispatch {
+        dispatch_authorized: true,
+        authorization_status: DISPATCH_AUTHORIZED_STATUS.to_string(),
+        runner_status: RUNNER_STATUS_NOT_STARTED.to_string(),
+        gate_families: vec![AssignmentGateFamily {
+            family: "lease".to_string(),
+            status: "passed".to_string(),
+            reason_codes: vec![],
+        }],
+    };
+    assert!(_dispatch.dispatch_authorized);
+
+    let _transaction = AssignmentTransaction::default();
+    assert_eq!(_transaction.recovery_state, "complete");
+
+    let _inventory = CapabilityInventoryV1 {
+        schema_version: CAPABILITY_INVENTORY_SCHEMA_VERSION,
+        principal: "agent:codex-local".to_string(),
+        inventory_id: "local-default".to_string(),
+        capabilities: vec!["source.read".to_string(), "source.write".to_string()],
+    };
+    assert_eq!(_inventory.schema_version, 1);
+
+    let _lease_record = AssignmentLeaseRecordV1 {
+        schema_version: LEASE_SCHEMA_VERSION,
+        lease_id: "lease_01Jtest".to_string(),
+        kind: LEASE_KIND_IMPLEMENTATION.to_string(),
+        subject: pulse::assignment::AssignmentLeaseSubject {
+            kind: "ticket".to_string(),
+            id: "TK-001".to_string(),
+            revision: 8,
+            contract_revision: 4,
+            status_at_claim: "ready".to_string(),
+        },
+        assignee: pulse::assignment::AssignmentLeaseAssignee {
+            principal: "agent:codex-local".to_string(),
+        },
+        issued_by: "human:test".to_string(),
+        issued_at: "2026-07-28T10:00:00Z".to_string(),
+        expires_at: "2026-07-28T10:30:00Z".to_string(),
+        ttl_seconds: DEFAULT_TTL_SECONDS,
+        state: LEASE_STATE_PREPARED.to_string(),
+        packet_fingerprint:
+            "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".to_string(),
+        readiness_fingerprint:
+            "sha256:1111111111111111111111111111111111111111111111111111111111111111".to_string(),
+        workspace_id: "wt_test".to_string(),
+        prepared_assignment_id: "pa_test".to_string(),
+        capability_inventory_identity:
+            "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
+        source: pulse::assignment::AssignmentLeaseSource {
+            repository_id: "repo_test".to_string(),
+            base_commit: "0123456789abcdef0123456789abcdef01234567".to_string(),
+        },
+    };
+
+    let _workspace_record = AssignmentWorkspaceRecordV1 {
+        schema_version: WORKSPACE_SCHEMA_VERSION,
+        workspace_id: "wt_test".to_string(),
+        lease_id: "lease_01Jtest".to_string(),
+        prepared_assignment_id: "pa_test".to_string(),
+        subject: pulse::assignment::WorkspaceSubjectRef {
+            kind: "ticket".to_string(),
+            id: "TK-001".to_string(),
+            revision: 8,
+        },
+        mode: WORKSPACE_MODE_ISOLATED.to_string(),
+        path: ".pulse/runtime/workspaces/wt_test".to_string(),
+        repository_id: "repo_test".to_string(),
+        base_commit: "0123456789abcdef0123456789abcdef01234567".to_string(),
+        head_commit_at_bind: "0123456789abcdef0123456789abcdef01234567".to_string(),
+        cleanliness_at_bind: "clean".to_string(),
+        state: WORKSPACE_STATE_BOUND.to_string(),
+        created_at: "2026-07-28T10:00:00Z".to_string(),
+        released_at: None,
+        cleanup: pulse::assignment::WorkspaceCleanupPolicy {
+            policy: "safe_remove_if_clean_at_base".to_string(),
+            status: "not_requested".to_string(),
+        },
+    };
+
+    let _prepared_record = PreparedAssignmentRecordV1 {
+        schema_version: ASSIGNMENT_SCHEMA_VERSION,
+        profile: PREPARED_ASSIGNMENT_PROFILE.to_string(),
+        code: "prepared_assignment".to_string(),
+        prepared_assignment_id: "pa_test".to_string(),
+        subject: _subject.clone(),
+        packet_fingerprint:
+            "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".to_string(),
+        revalidated_snapshot: _snapshot.clone(),
+        lease: _lease_summary.clone(),
+        workspace: _workspace_summary.clone(),
+        capability_match: _cap_match.clone(),
+        lifecycle: _lifecycle.clone(),
+        dispatch: _dispatch.clone(),
+        transaction: _transaction.clone(),
+        prepared_assignment_fingerprint: String::new(),
+        reason_codes: vec![],
+    };
+
+    // Type-acceptance checks.
+    fn _accepts_prepared(_: PreparedAssignmentV1) {}
+    fn _accepts_lease_record(_: AssignmentLeaseRecordV1) {}
+    fn _accepts_workspace_record(_: AssignmentWorkspaceRecordV1) {}
+    fn _accepts_cap_inventory(_: CapabilityInventoryV1) {}
+    fn _accepts_cap_match(_: CapabilityMatchReport) {}
+
+    // Workspace mode checks.
+    assert_eq!(WorkspaceMode::InPlace.as_str(), "in_place");
+    assert_eq!(
+        WorkspaceMode::IsolatedWorktree.as_str(),
+        "isolated_worktree"
+    );
+    assert!(!WorkspaceStrategy::IsolatedWorktreeRequired.allows_in_place());
+    assert_eq!(BindingStatus::Bound.as_str(), "bound");
 }

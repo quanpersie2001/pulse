@@ -1,0 +1,55 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://pulse.reboot/schemas/capability-match.schema.json",
+  "title": "CapabilityMatchReport",
+  "description": "Report produced by matching a concrete capability inventory against required capabilities.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "inventory_identity",
+    "principal",
+    "status",
+    "required",
+    "matched",
+    "missing",
+    "extra",
+    "reason_codes"
+  ],
+  "properties": {
+    "inventory_identity": {
+      "type": "string",
+      "pattern": "^sha256:[A-Fa-f0-9]{64}$"
+    },
+    "principal": {
+      "type": "string"
+    },
+    "status": {
+      "type": "string"
+    },
+    "required": {
+      "type": "array",
+      "items": { "type": "string" },
+      "default": []
+    },
+    "matched": {
+      "type": "array",
+      "items": { "type": "string" },
+      "default": []
+    },
+    "missing": {
+      "type": "array",
+      "items": { "type": "string" },
+      "default": []
+    },
+    "extra": {
+      "type": "array",
+      "items": { "type": "string" },
+      "default": []
+    },
+    "reason_codes": {
+      "type": "array",
+      "items": { "type": "string" },
+      "default": []
+    }
+  }
+}

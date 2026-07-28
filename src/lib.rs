@@ -1,3 +1,4 @@
+pub mod assignment;
 pub mod canonical_json;
 pub mod cli;
 pub mod docs;
@@ -13,6 +14,7 @@ pub mod policy;
 pub mod source;
 pub mod storage;
 pub mod work_packet;
+pub mod workspace;
 
 pub use error::{PulseError, PulseResult, Result};
 pub use graph::store::JsonGraphStore;
