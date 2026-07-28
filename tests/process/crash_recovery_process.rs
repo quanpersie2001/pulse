@@ -706,3 +706,691 @@ fn killed_artifact_put_after_event_intent_cleaned_without_duplicate_event() {
     run_ok(&repo, &["graph", "recover", "--json"]);
     assert_eq!(event_count(&repo), before_events + 1);
 }
+
+// =========================================================================
+// Claim failpoint crash tests (P2S2-I10)
+// =========================================================================
+
+use chrono::Utc;
+use pulse::canonical_json::to_canonical_bytes;
+use pulse::graph::contract::{
+    ContentRef, ContractItem, ContractScope, EffortMetadata, ImplementationContract,
+    ImplementationMode, ImplementationSemanticImpact, PlanPolicy, PublicCreateClassification,
+    QaImpactPosture, SurfaceRef,
+};
+use pulse::graph::node::{DocumentationImpactPosture, NodeStatus};
+use pulse::graph::store::{
+    ContractSetRequest, DocumentationImpactUpdate, OperationContext, QaImpactUpdate,
+};
+use pulse::id::WorkKind;
+use pulse::JsonGraphStore;
+
+fn claim_ctx() -> OperationContext {
+    OperationContext {
+        actor: "human:tester".to_string(),
+        now: Utc::now(),
+    }
+}
+
+fn claim_valid_inventory_bytes(principal: &str) -> Vec<u8> {
+    serde_json::json!({
+        "schema_version": 1,
+        "principal": principal,
+        "inventory_id": "test-inventory",
+        "capabilities": [
+            "repository.inspect",
+            "source.read",
+            "source.write",
+            "test.run",
+            "workspace.worktree"
+        ]
+    })
+    .to_string()
+    .into_bytes()
+}
+
+fn claim_write_capability_file(root: &Path, principal: &str) -> std::path::PathBuf {
+    let dir = root.join(".pulse/runtime/claim-test");
+    fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("capabilities.json");
+    fs::write(&path, claim_valid_inventory_bytes(principal)).unwrap();
+    path
+}
+
+fn build_claim_shaping_receipt(
+    id: &str,
+    revision: u64,
+    contract_revision: u64,
+    content_dir: &str,
+    content_hash: &str,
+) -> pulse::evidence::model::ReceiptEnvelope {
+    use pulse::evidence::model::*;
+    ReceiptEnvelope {
+        schema_version: 1,
+        receipt_version: 1,
+        id: format!("rcpt_{:0<26}", &id[3..]),
+        kind: ReceiptKind::ShapingValidation,
+        result: ReceiptResult::Passed,
+        actor: ActorRef {
+            kind: pulse::identity::actor::ActorKind::Human,
+            id: "tester".to_string(),
+        },
+        recorded_at: chrono::Utc::now(),
+        subject: SubjectRef {
+            kind: "work".to_string(),
+            id: id.to_string(),
+        },
+        bindings: ReceiptBindings {
+            work: vec![WorkBinding {
+                id: id.to_string(),
+                revision,
+            }],
+            source: None,
+            content: vec![pulse::evidence::model::ContentBinding {
+                path: format!("{content_dir}/ticket.md"),
+                sha256: content_hash.to_string(),
+            }],
+            artifacts: vec![],
+            graph_fingerprint_observed: None,
+        },
+        payload: ReceiptPayload::ShapingValidation(ShapingValidationPayload {
+            payload_version: 1,
+            owning_work: ShapingWorkBinding {
+                id: id.to_string(),
+                revision_observed: revision,
+                contract_revision,
+            },
+            materialization: "R1".to_string(),
+            shape_mode: ShapeMode::FocusedBranches,
+            source_posture: SourcePosture::NotRequiredContentBound,
+            destination: Some(ShapingDestination {
+                summary: "Test shaping".to_string(),
+                scope_boundary: vec!["test".to_string()],
+                exit_conditions: vec!["condition met".to_string()],
+            }),
+            map: None,
+            affected_work: vec![],
+            branches: vec![],
+            fog: vec![],
+            out_of_scope: vec![],
+            resolution_pointers: vec![],
+            approval: ShapingApproval {
+                approved_by: ActorRef {
+                    kind: pulse::identity::actor::ActorKind::Human,
+                    id: "tester".to_string(),
+                },
+                reference: "test".to_string(),
+            },
+            reconciliation: None,
+            remaining_uncertainty: vec![],
+        }),
+    }
+}
+
+fn setup_ready_ticket(repo: &Path, store: &JsonGraphStore) -> String {
+    let mut policy = pulse::policy::AuthorityPolicy {
+        schema_version: 1,
+        revision: 1,
+        principals: vec![
+            pulse::policy::AuthorityPrincipal {
+                kind: pulse::identity::actor::ActorKind::Agent,
+                id: "tester".to_string(),
+                grants: vec![
+                    "shape.apply".to_string(),
+                    "shape.approve.R1".to_string(),
+                    "qa.none.approve".to_string(),
+                    "work.transition.shaped".to_string(),
+                    "work.transition.ready".to_string(),
+                    "work.assignment.prepare".to_string(),
+                    "work.node.create".to_string(),
+                ],
+            },
+            pulse::policy::AuthorityPrincipal {
+                kind: pulse::identity::actor::ActorKind::Human,
+                id: "tester".to_string(),
+                grants: vec![
+                    "shape.apply".to_string(),
+                    "shape.approve.R1".to_string(),
+                    "qa.none.approve".to_string(),
+                    "work.transition.shaped".to_string(),
+                    "work.transition.ready".to_string(),
+                    "work.assignment.prepare".to_string(),
+                    "work.node.create".to_string(),
+                ],
+            },
+        ],
+    };
+    policy.normalize();
+    let policy_path = repo.join(".pulse/policy/authority.json");
+    fs::create_dir_all(policy_path.parent().unwrap()).unwrap();
+    fs::write(&policy_path, to_canonical_bytes(&policy).unwrap()).unwrap();
+
+    store.bootstrap().unwrap();
+    pulse::evidence::manifest::load(repo).unwrap();
+    pulse::docs::manifest::bootstrap(repo).unwrap();
+
+    let node = store
+        .create_node_public_with_context(
+            WorkKind::Ticket,
+            "Crash claim ticket".to_string(),
+            PublicCreateClassification {
+                role: Some(pulse::graph::contract::TicketRole::Implementation),
+                risk: Some(pulse::graph::contract::Risk::Low),
+                materialization: Some(pulse::graph::contract::Materialization::R1),
+            },
+            claim_ctx(),
+        )
+        .unwrap()
+        .value;
+    let ticket_id = node.id.clone();
+
+    let brief_rel = format!("{}/ticket.md", node.content_dir);
+    let brief_path = repo.join(&brief_rel);
+    fs::create_dir_all(brief_path.parent().unwrap()).unwrap();
+    fs::write(&brief_path, b"# Crash claim test").unwrap();
+    let brief_hash = pulse::canonical_json::hash_bytes(&fs::read(&brief_path).unwrap());
+
+    store
+        .set_contract_with_context(
+            &ticket_id,
+            node.revision,
+            ContractSetRequest {
+                role: pulse::graph::contract::TicketRole::Implementation,
+                implementation: Some(ImplementationContract {
+                    mode: ImplementationMode::Guided,
+                    work_surface: pulse::graph::contract::WorkSurface::Code,
+                    plan_policy: PlanPolicy::None,
+                    semantic_impact: ImplementationSemanticImpact::NoBehaviorOrPublicRiskChange,
+                    effort: EffortMetadata::default(),
+                    verification_profile: "service-change".to_string(),
+                    brief: Some(ContentRef {
+                        path: brief_rel,
+                        content_hash: brief_hash.clone(),
+                    }),
+                    objective: "Test claim objective.".to_string(),
+                    current_behavior: "Current behavior.".to_string(),
+                    target_behavior: "Target behavior.".to_string(),
+                    code_anchors: vec![SurfaceRef::path("src/main.rs")],
+                    documentation_anchors: vec![],
+                    configuration_anchors: vec![],
+                    data_anchors: vec![],
+                    research_refs: vec![],
+                    required_changes: vec![ContractItem {
+                        id: "CHG-1".to_string(),
+                        summary: "Make test claimable.".to_string(),
+                    }],
+                    invariants: vec![ContractItem {
+                        id: "INV-1".to_string(),
+                        summary: "Invariant holds.".to_string(),
+                    }],
+                    acceptance: vec![ContractItem {
+                        id: "AC-1".to_string(),
+                        summary: "Claim works.".to_string(),
+                    }],
+                    scope: ContractScope::default(),
+                    implementation_freedom: vec![],
+                    required_decisions: vec![],
+                    shared_approach_refs: vec![],
+                    expected_evidence: vec![],
+                    expected_handoff: vec![],
+                }),
+                decision_work: None,
+            },
+            claim_ctx(),
+        )
+        .unwrap();
+
+    let node = store.show_node(&ticket_id).unwrap();
+    store
+        .set_qa_impact_with_context(
+            &ticket_id,
+            node.revision,
+            QaImpactUpdate {
+                posture: QaImpactPosture::None,
+                rationale: Some("No QA.".to_string()),
+                behavioral_owner: None,
+                affected_case_ids: vec![],
+            },
+            claim_ctx(),
+        )
+        .unwrap();
+
+    let node = store.show_node(&ticket_id).unwrap();
+    store
+        .update_documentation_impact(
+            &ticket_id,
+            node.revision,
+            DocumentationImpactUpdate {
+                posture: DocumentationImpactPosture::None,
+                rationale: Some("No docs impact.".to_string()),
+                required_documents: vec![],
+                deferred_to: vec![],
+                paths: vec![],
+                domains: vec!["development".to_string()],
+                labels: vec!["claim".to_string()],
+            },
+            "human:tester".to_string(),
+        )
+        .unwrap();
+
+    let node = store.show_node(&ticket_id).unwrap();
+    let receipt = build_claim_shaping_receipt(
+        &ticket_id,
+        node.revision,
+        node.contract_revision,
+        &node.content_dir,
+        &brief_hash,
+    );
+    let receipt_file = repo.join("shaping_claim.json");
+    fs::write(&receipt_file, to_canonical_bytes(&receipt).unwrap()).unwrap();
+    pulse::evidence::receipt::record_receipt(repo, None, &receipt_file).unwrap();
+
+    let node = store.show_node(&ticket_id).unwrap();
+    store
+        .apply_shaping_with_context(&ticket_id, node.revision, &receipt.id, None, claim_ctx())
+        .unwrap();
+
+    let node = store.show_node(&ticket_id).unwrap();
+    store
+        .transition_node_with_context(
+            &ticket_id,
+            NodeStatus::Shaped,
+            node.revision,
+            None,
+            claim_ctx(),
+        )
+        .unwrap();
+
+    let node = store.show_node(&ticket_id).unwrap();
+    store
+        .transition_node_with_context(
+            &ticket_id,
+            NodeStatus::Ready,
+            node.revision,
+            None,
+            claim_ctx(),
+        )
+        .unwrap();
+
+    // Write .gitignore and commit for clean baseline.
+    let gitignore_path = repo.join(".gitignore");
+    if !gitignore_path.exists() {
+        fs::write(&gitignore_path, b".pulse/runtime/\n.pulse/cache/\n").unwrap();
+    }
+    let _ = std::process::Command::new("git")
+        .args(["init"])
+        .current_dir(repo)
+        .output();
+    let _ = std::process::Command::new("git")
+        .args(["config", "user.email", "test@example.com"])
+        .current_dir(repo)
+        .output();
+    let _ = std::process::Command::new("git")
+        .args(["config", "user.name", "Test User"])
+        .current_dir(repo)
+        .output();
+    let _ = std::process::Command::new("git")
+        .args(["add", "."])
+        .current_dir(repo)
+        .output();
+    let _ = std::process::Command::new("git")
+        .args(["commit", "--allow-empty", "-m", "snapshot"])
+        .current_dir(repo)
+        .output();
+
+    ticket_id
+}
+
+/// Helper: read the transaction intent JSON to get target paths and IDs.
+fn read_claim_intent_paths(
+    repo: &TempDir,
+) -> Option<(Vec<std::path::PathBuf>, std::path::PathBuf)> {
+    let tx_dir = repo.path().join(".pulse/runtime/transactions");
+    if !tx_dir.exists() {
+        return None;
+    }
+    for entry in fs::read_dir(&tx_dir).ok()?.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|s| s.to_str()) != Some("json") {
+            continue;
+        }
+        if let Ok(bytes) = fs::read(&path) {
+            if let Ok(value) = serde_json::from_slice::<Value>(&bytes) {
+                if value.get("operation").and_then(Value::as_str)
+                    == Some("work.assignment.prepared")
+                {
+                    let targets: Vec<std::path::PathBuf> = value["targets"]
+                        .as_array()
+                        .unwrap_or(&vec![])
+                        .iter()
+                        .map(|t| repo.path().join(t["path"].as_str().unwrap_or("")))
+                        .collect();
+                    let event_path = value["event_path"]
+                        .as_str()
+                        .map(|p| repo.path().join(p))
+                        .unwrap_or_default();
+                    return Some((targets, event_path));
+                }
+            }
+        }
+    }
+    None
+}
+
+fn wait_for_target_files(repo: &TempDir, expected_count: usize) {
+    let start = Instant::now();
+    loop {
+        if let Some((targets, _)) = read_claim_intent_paths(repo) {
+            let existing = targets.iter().filter(|p| p.exists()).count();
+            if existing >= expected_count {
+                return;
+            }
+        }
+        assert!(
+            start.elapsed() < Duration::from_secs(5),
+            "timed out waiting for {expected_count} claim target files"
+        );
+        thread::sleep(Duration::from_millis(20));
+    }
+}
+
+#[test]
+fn killed_claim_after_intent_records_rollback_and_no_side_effects() {
+    let repo = tempfile::tempdir().unwrap();
+    let store = JsonGraphStore::new(repo.path());
+    let ticket_id = setup_ready_ticket(repo.path(), &store);
+    let cap_file = claim_write_capability_file(repo.path(), "agent:codex-local");
+    let before_events = event_count(&repo);
+
+    let mut child = Command::new(bin())
+        .arg("--repo-root")
+        .arg(repo.path())
+        .arg("--test-failpoint")
+        .arg("after_intent")
+        .args([
+            "work",
+            "claim",
+            &ticket_id,
+            "--actor",
+            "agent:tester",
+            "--assignee",
+            "agent:codex-local",
+            "--capabilities",
+            cap_file.to_str().unwrap(),
+            "--json",
+        ])
+        .env("PULSE_FAILPOINT_SLEEP_MS", "30000")
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn claim after_intent failpoint");
+
+    // Wait for intent to be persisted, then kill before any targets.
+    wait_for_transaction_intent(&repo);
+    thread::sleep(Duration::from_millis(200));
+    child.kill().expect("kill child");
+    let _ = child.wait();
+
+    // No targets should exist.
+    assert!(
+        !repo.path().join(".pulse/runtime/assignment").exists(),
+        "no assignment runtime files expected after intent-only crash"
+    );
+    // Node should still be Ready.
+    let shown = run_ok(&repo, &["work", "show", &ticket_id, "--json"]);
+    assert_eq!(shown["node"]["status"], "ready");
+    assert_eq!(before_events, event_count(&repo));
+
+    // Recovery should clean up the intent.
+    run_ok(&repo, &["graph", "recover", "--json"]);
+
+    // Re-running the claim should succeed.
+    let cap_file2 = claim_write_capability_file(repo.path(), "agent:codex-local");
+    let redo = run(
+        &repo,
+        &[
+            "work",
+            "claim",
+            &ticket_id,
+            "--actor",
+            "agent:tester",
+            "--assignee",
+            "agent:codex-local",
+            "--capabilities",
+            cap_file2.to_str().unwrap(),
+            "--json",
+        ],
+    );
+    assert!(
+        redo.status.success(),
+        "claim should succeed after intent-only crash recovery: {}",
+        String::from_utf8_lossy(&redo.stderr)
+    );
+}
+
+#[test]
+fn killed_claim_after_multi_target_first_recovery_completes_event() {
+    let repo = tempfile::tempdir().unwrap();
+    let store = JsonGraphStore::new(repo.path());
+    let ticket_id = setup_ready_ticket(repo.path(), &store);
+    let cap_file = claim_write_capability_file(repo.path(), "agent:codex-local");
+    let before_events = event_count(&repo);
+
+    let mut child = Command::new(bin())
+        .arg("--repo-root")
+        .arg(repo.path())
+        .arg("--test-failpoint")
+        .arg("after_multi_target_first")
+        .args([
+            "work",
+            "claim",
+            &ticket_id,
+            "--actor",
+            "agent:tester",
+            "--assignee",
+            "agent:codex-local",
+            "--capabilities",
+            cap_file.to_str().unwrap(),
+            "--json",
+        ])
+        .env("PULSE_FAILPOINT_SLEEP_MS", "30000")
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn claim after_multi_target_first failpoint");
+
+    // Wait for transaction intent and for at least the first target (lease).
+    wait_for_transaction_intent(&repo);
+    wait_for_target_files(&repo, 1);
+    thread::sleep(Duration::from_millis(200));
+    child.kill().expect("kill child");
+    let _ = child.wait();
+
+    // Recovery should complete remaining targets + event.
+    run_ok(&repo, &["graph", "recover", "--json"]);
+
+    // Verify node transitioned to Active.
+    let shown = run_ok(&repo, &["work", "show", &ticket_id, "--json"]);
+    assert_eq!(shown["node"]["status"], "active");
+    assert_eq!(before_events + 1, event_count(&repo));
+
+    // Verify runtime records exist.
+    let leases_dir = repo.path().join(".pulse/runtime/assignment/leases");
+    assert!(leases_dir.exists() && fs::read_dir(&leases_dir).unwrap().count() >= 1);
+}
+
+#[test]
+fn killed_claim_after_multi_target_all_recovery_writes_event() {
+    let repo = tempfile::tempdir().unwrap();
+    let store = JsonGraphStore::new(repo.path());
+    let ticket_id = setup_ready_ticket(repo.path(), &store);
+    let cap_file = claim_write_capability_file(repo.path(), "agent:codex-local");
+    let before_events = event_count(&repo);
+
+    let mut child = Command::new(bin())
+        .arg("--repo-root")
+        .arg(repo.path())
+        .arg("--test-failpoint")
+        .arg("after_multi_target_all")
+        .args([
+            "work",
+            "claim",
+            &ticket_id,
+            "--actor",
+            "agent:tester",
+            "--assignee",
+            "agent:codex-local",
+            "--capabilities",
+            cap_file.to_str().unwrap(),
+            "--json",
+        ])
+        .env("PULSE_FAILPOINT_SLEEP_MS", "30000")
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn claim after_multi_target_all failpoint");
+
+    // Wait for all 4 targets to be written.
+    wait_for_transaction_intent(&repo);
+    wait_for_target_files(&repo, 4);
+    thread::sleep(Duration::from_millis(200));
+    child.kill().expect("kill child");
+    let _ = child.wait();
+
+    // No event yet.
+    assert_eq!(before_events, event_count(&repo));
+
+    // Recovery should write the event and clean up.
+    run_ok(&repo, &["graph", "recover", "--json"]);
+    assert_eq!(before_events + 1, event_count(&repo));
+
+    // Node should be Active.
+    let shown = run_ok(&repo, &["work", "show", &ticket_id, "--json"]);
+    assert_eq!(shown["node"]["status"], "active");
+
+    // Second recovery is idempotent.
+    run_ok(&repo, &["graph", "recover", "--json"]);
+    assert_eq!(before_events + 1, event_count(&repo));
+}
+
+#[test]
+fn killed_claim_after_event_cleans_intent_no_duplicate_event() {
+    let repo = tempfile::tempdir().unwrap();
+    let store = JsonGraphStore::new(repo.path());
+    let ticket_id = setup_ready_ticket(repo.path(), &store);
+    let cap_file = claim_write_capability_file(repo.path(), "agent:codex-local");
+    let before_events = event_count(&repo);
+
+    let mut child = Command::new(bin())
+        .arg("--repo-root")
+        .arg(repo.path())
+        .arg("--test-failpoint")
+        .arg("after_event")
+        .args([
+            "work",
+            "claim",
+            &ticket_id,
+            "--actor",
+            "agent:tester",
+            "--assignee",
+            "agent:codex-local",
+            "--capabilities",
+            cap_file.to_str().unwrap(),
+            "--json",
+        ])
+        .env("PULSE_FAILPOINT_SLEEP_MS", "30000")
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn claim after_event failpoint");
+
+    // Wait until the prepared event is written.
+    wait_for_transaction_intent(&repo);
+    wait_for_event_count(&repo, before_events + 1);
+    child.kill().expect("kill child");
+    let _ = child.wait();
+
+    // Event exists, node should be Active (event written before cleanup).
+    assert_eq!(before_events + 1, event_count(&repo));
+    let shown = run_ok(&repo, &["work", "show", &ticket_id, "--json"]);
+    assert_eq!(shown["node"]["status"], "active");
+
+    // Recovery cleans up intent, no duplicate event.
+    run_ok(&repo, &["graph", "recover", "--json"]);
+    run_ok(&repo, &["graph", "recover", "--json"]);
+    assert_eq!(before_events + 1, event_count(&repo));
+}
+
+#[test]
+fn killed_claim_after_intent_re_run_succeeds_without_duplicate_records() {
+    // Verify that after an after_intent crash + recovery, a re-run of the
+    // claim produces exactly one lease, one prepared, one event.
+    let repo = tempfile::tempdir().unwrap();
+    let store = JsonGraphStore::new(repo.path());
+    let ticket_id = setup_ready_ticket(repo.path(), &store);
+    let cap_file = claim_write_capability_file(repo.path(), "agent:codex-local");
+
+    // First attempt: crash at after_intent.
+    let mut child = Command::new(bin())
+        .arg("--repo-root")
+        .arg(repo.path())
+        .arg("--test-failpoint")
+        .arg("after_intent")
+        .args([
+            "work",
+            "claim",
+            &ticket_id,
+            "--actor",
+            "agent:tester",
+            "--assignee",
+            "agent:codex-local",
+            "--capabilities",
+            cap_file.to_str().unwrap(),
+            "--json",
+        ])
+        .env("PULSE_FAILPOINT_SLEEP_MS", "30000")
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn claim after_intent");
+    wait_for_transaction_intent(&repo);
+    thread::sleep(Duration::from_millis(200));
+    child.kill().expect("kill child");
+    let _ = child.wait();
+
+    // Recover.
+    run_ok(&repo, &["graph", "recover", "--json"]);
+
+    // Re-run claim (should succeed).
+    let cap_file2 = claim_write_capability_file(repo.path(), "agent:codex-local");
+    let out = run_ok(
+        &repo,
+        &[
+            "work",
+            "claim",
+            &ticket_id,
+            "--actor",
+            "agent:tester",
+            "--assignee",
+            "agent:codex-local",
+            "--capabilities",
+            cap_file2.to_str().unwrap(),
+            "--json",
+        ],
+    );
+    assert_eq!(out["subject"]["status_after"], "active");
+
+    // Verify exactly one lease, one prepared, one event.
+    let leases_dir = repo.path().join(".pulse/runtime/assignment/leases");
+    assert_eq!(fs::read_dir(&leases_dir).unwrap().count(), 1);
+    let prepared_dir = repo.path().join(".pulse/runtime/assignment/prepared");
+    assert_eq!(fs::read_dir(&prepared_dir).unwrap().count(), 1);
+    let mut event_count_val = 0usize;
+    let events_dir = repo.path().join(".pulse/events");
+    if events_dir.exists() {
+        for date in fs::read_dir(&events_dir).unwrap() {
+            for entry in fs::read_dir(date.unwrap().path()).unwrap() {
+                let content = fs::read_to_string(entry.unwrap().path()).unwrap();
+                if content.contains("work.assignment.prepared") {
+                    event_count_val += 1;
+                }
+            }
+        }
+    }
+    assert_eq!(event_count_val, 1);
+}
