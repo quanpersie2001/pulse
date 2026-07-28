@@ -82,7 +82,7 @@ impl JsonGraphStore {
         let repository_id = evidence.repository_id.clone();
 
         let guard = WriteGuard::acquire(&self.repo_root)?;
-        self.bootstrap_unlocked()?;
+        self.require_existing_workgraph_unlocked()?;
         recover_prepared_transactions(&self.repo_root)?;
         let projection = self.export_unlocked()?;
 
@@ -165,7 +165,7 @@ impl JsonGraphStore {
         // Phase 2 — Second fence: revalidate, search, assemble
         // ==================================================================
         let guard2 = WriteGuard::acquire(&self.repo_root)?;
-        self.bootstrap_unlocked()?;
+        self.require_existing_workgraph_unlocked()?;
         recover_prepared_transactions(&self.repo_root)?;
         let projection2 = self.export_unlocked()?;
 

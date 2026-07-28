@@ -638,6 +638,64 @@ fn work_packet_error_envelope_is_stable() {
     assert!(!output.status.success());
     let err: Value = serde_json::from_slice(&output.stderr).unwrap();
     assert_eq!(err["schema_version"], 1);
-    assert!(err["code"].as_str().is_some());
+    assert_eq!(err["code"], "work_packet_subject_not_found");
     assert!(err["message"].as_str().is_some());
+}
+
+#[test]
+fn work_packet_rejects_unsupported_flags() {
+    let repo = tempfile::tempdir().unwrap();
+    let store = setup_repo(&repo);
+    let id = ready_ticket(&repo, &store);
+
+    for flag in [
+        "--force",
+        "--allow-dirty",
+        "--include-not-ready",
+        "--full-docs",
+        "--claim",
+    ] {
+        let output = run(&repo, &["work", "packet", &id, flag, "--json"]);
+        assert!(!output.status.success(), "{flag} must be unsupported");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains("unexpected argument") || stderr.contains("unrecognized"),
+            "{flag} should be rejected by CLI parser, got {stderr}"
+        );
+    }
+}
+
+#[test]
+fn work_packet_maps_missing_docs_registry_before_graph_bootstrap() {
+    let repo = tempfile::tempdir().unwrap();
+    init_git_repo(&repo);
+    pulse::evidence::manifest::load(repo.path()).unwrap();
+    commit_all(&repo);
+
+    let output = run(&repo, &["work", "packet", "TK-001", "--json"]);
+    assert!(!output.status.success());
+    let err: Value = serde_json::from_slice(&output.stderr).unwrap();
+    assert_eq!(err["code"], "work_packet_docs_registry_missing");
+    assert!(
+        !repo.path().join(".pulse/workgraph").exists(),
+        "packet must not bootstrap workgraph after docs-registry rejection"
+    );
+}
+
+#[test]
+fn work_packet_rejects_missing_workgraph_without_bootstrap() {
+    let repo = tempfile::tempdir().unwrap();
+    init_git_repo(&repo);
+    pulse::evidence::manifest::load(repo.path()).unwrap();
+    pulse::docs::manifest::bootstrap(repo.path()).unwrap();
+    commit_all(&repo);
+
+    let output = run(&repo, &["work", "packet", "TK-001", "--json"]);
+    assert!(!output.status.success());
+    let err: Value = serde_json::from_slice(&output.stderr).unwrap();
+    assert_eq!(err["code"], "work_packet_graph_invalid");
+    assert!(
+        !repo.path().join(".pulse/workgraph").exists(),
+        "packet must not bootstrap missing workgraph"
+    );
 }

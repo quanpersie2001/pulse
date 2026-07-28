@@ -45,6 +45,30 @@ impl JsonGraphStore {
         Ok(())
     }
 
+    pub(crate) fn require_existing_workgraph_unlocked(&self) -> PulseResult<()> {
+        match self.classify_workgraph_bootstrap_state()? {
+            WorkgraphBootstrapState::ExistingCurrent => Ok(()),
+            WorkgraphBootstrapState::Empty | WorkgraphBootstrapState::SafePartialCurrent => {
+                Err(PulseError::validation(
+                    "work_packet_graph_invalid",
+                    "packet requires an existing workgraph; refusing to bootstrap during read-only packet build",
+                ))
+            }
+            WorkgraphBootstrapState::MissingNodeSchemaWithState => Err(PulseError::validation(
+                "work_packet_graph_invalid",
+                "cause_code=node_schema_missing_refused: node schema is missing while existing workgraph state is present",
+            )),
+            WorkgraphBootstrapState::NodeSchemaDrift { hash } => Err(PulseError::validation(
+                "work_packet_graph_invalid",
+                format!("cause_code=node_schema_drift_refused: refusing node schema drift {hash}"),
+            )),
+            WorkgraphBootstrapState::UnexpectedPartialState => Err(PulseError::validation(
+                "work_packet_graph_invalid",
+                "cause_code=workgraph_partial_state_refused: workgraph contains unsupported partial state",
+            )),
+        }
+    }
+
     /// Create the complete current baseline. The node schema is written first so
     /// a fresh initialization interrupted after durable marker writes remains a
     /// recognizable current partial layout.
