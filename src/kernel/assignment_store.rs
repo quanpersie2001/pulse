@@ -39,11 +39,16 @@
 //! See `proposals/phase2-slice2-atomic-reservation-workspace-binding.md`.
 
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use crate::assignment::{
     AssignmentLeaseRecordV1, AssignmentTombstoneV1, AssignmentWorkspaceRecordV1,
-    PreparedAssignmentRecordV1,
+    PreparedAssignmentRecordV1, LEASE_KIND_IMPLEMENTATION, LEASE_SCHEMA_VERSION,
+    LEASE_STATE_EXPIRED, LEASE_STATE_PREPARED, LEASE_STATE_RELEASED, LEASE_STATE_STALE,
+    PREPARED_ASSIGNMENT_PROFILE, TOMBSTONE_SCHEMA_VERSION, TOMBSTONE_STATE_EXPIRED,
+    TOMBSTONE_STATE_RELEASED, TOMBSTONE_STATE_STALE, WORKSPACE_MODE_IN_PLACE,
+    WORKSPACE_MODE_ISOLATED, WORKSPACE_SCHEMA_VERSION, WORKSPACE_STATE_BOUND,
+    WORKSPACE_STATE_RELEASED, WORKSPACE_STATE_STALE,
 };
 use crate::storage;
 use crate::PulseError;
@@ -136,24 +141,206 @@ pub fn tombstones_dir(repo_root: &Path) -> PathBuf {
     assignment_root(repo_root).join(TOMBSTONES_DIR)
 }
 
+fn validate_record_id(kind: &str, id: &str, expected_prefix: &str) -> PulseResult<()> {
+    if id.is_empty()
+        || !id.starts_with(expected_prefix)
+        || id.len() == expected_prefix.len()
+        || id.contains('/')
+        || id.contains('\\')
+        || id.contains('.')
+        || Path::new(id)
+            .components()
+            .any(|component| !matches!(component, Component::Normal(_)))
+        || !id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'-')
+    {
+        return Err(PulseError::validation(
+            "invalid_assignment_record_id",
+            format!(
+                "{kind} id {id:?} is not filesystem-safe or does not start with {expected_prefix:?}"
+            ),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_lease_id(lease_id: &str) -> PulseResult<()> {
+    validate_record_id("lease", lease_id, "lease_")
+}
+
+fn validate_workspace_id(workspace_id: &str) -> PulseResult<()> {
+    validate_record_id("workspace", workspace_id, "wt_")
+}
+
+fn validate_prepared_assignment_id(pa_id: &str) -> PulseResult<()> {
+    validate_record_id("prepared assignment", pa_id, "pa_")
+}
+
+fn allowed_value(kind: &str, field: &str, value: &str, allowed: &[&str]) -> PulseResult<()> {
+    if allowed.contains(&value) {
+        Ok(())
+    } else {
+        Err(PulseError::validation(
+            "invalid_assignment_record",
+            format!("{kind}.{field} has unsupported value {value:?}"),
+        ))
+    }
+}
+
+fn require_version(kind: &str, actual: u32, expected: u32) -> PulseResult<()> {
+    if actual == expected {
+        Ok(())
+    } else {
+        Err(PulseError::validation(
+            "invalid_assignment_record",
+            format!("{kind}.schema_version {actual} is unsupported; expected {expected}"),
+        ))
+    }
+}
+
+fn require_rfc3339(kind: &str, field: &str, value: &str) -> PulseResult<()> {
+    chrono::DateTime::parse_from_rfc3339(value)
+        .map(|_| ())
+        .map_err(|error| {
+            PulseError::validation(
+                "invalid_assignment_record",
+                format!("{kind}.{field} is not RFC 3339: {error}"),
+            )
+        })
+}
+
+fn require_safe_relative_path(kind: &str, field: &str, value: &str) -> PulseResult<()> {
+    if value == "." {
+        return Ok(());
+    }
+    crate::storage::safe_repo_relative(value)
+        .map(|_| ())
+        .map_err(|error| {
+            PulseError::validation(
+                "invalid_assignment_record",
+                format!("{kind}.{field} must be safe repository-relative path: {error}"),
+            )
+        })
+}
+
+fn validate_lease_record(record: &AssignmentLeaseRecordV1) -> PulseResult<()> {
+    require_version("lease", record.schema_version, LEASE_SCHEMA_VERSION)?;
+    validate_lease_id(&record.lease_id)?;
+    validate_workspace_id(&record.workspace_id)?;
+    validate_prepared_assignment_id(&record.prepared_assignment_id)?;
+    allowed_value("lease", "kind", &record.kind, &[LEASE_KIND_IMPLEMENTATION])?;
+    allowed_value(
+        "lease",
+        "state",
+        &record.state,
+        &[
+            LEASE_STATE_PREPARED,
+            LEASE_STATE_RELEASED,
+            LEASE_STATE_EXPIRED,
+            LEASE_STATE_STALE,
+        ],
+    )?;
+    require_rfc3339("lease", "issued_at", &record.issued_at)?;
+    require_rfc3339("lease", "expires_at", &record.expires_at)?;
+    Ok(())
+}
+
+fn validate_workspace_record(record: &AssignmentWorkspaceRecordV1) -> PulseResult<()> {
+    require_version("workspace", record.schema_version, WORKSPACE_SCHEMA_VERSION)?;
+    validate_workspace_id(&record.workspace_id)?;
+    validate_lease_id(&record.lease_id)?;
+    validate_prepared_assignment_id(&record.prepared_assignment_id)?;
+    allowed_value(
+        "workspace",
+        "mode",
+        &record.mode,
+        &[WORKSPACE_MODE_IN_PLACE, WORKSPACE_MODE_ISOLATED],
+    )?;
+    allowed_value(
+        "workspace",
+        "state",
+        &record.state,
+        &[
+            WORKSPACE_STATE_BOUND,
+            WORKSPACE_STATE_RELEASED,
+            WORKSPACE_STATE_STALE,
+        ],
+    )?;
+    require_safe_relative_path("workspace", "path", &record.path)?;
+    require_rfc3339("workspace", "created_at", &record.created_at)?;
+    if let Some(released_at) = &record.released_at {
+        require_rfc3339("workspace", "released_at", released_at)?;
+    }
+    Ok(())
+}
+
+fn validate_prepared_record(record: &PreparedAssignmentRecordV1) -> PulseResult<()> {
+    require_version(
+        "prepared_assignment",
+        record.schema_version,
+        crate::assignment::ASSIGNMENT_SCHEMA_VERSION,
+    )?;
+    validate_prepared_assignment_id(&record.prepared_assignment_id)?;
+    if record.profile != PREPARED_ASSIGNMENT_PROFILE {
+        return Err(PulseError::validation(
+            "invalid_assignment_record",
+            format!(
+                "prepared_assignment.profile has unsupported value {:?}",
+                record.profile
+            ),
+        ));
+    }
+    validate_lease_id(&record.lease.lease_id)?;
+    validate_workspace_id(&record.workspace.workspace_id)?;
+    require_safe_relative_path(
+        "prepared_assignment",
+        "workspace.path",
+        &record.workspace.path,
+    )?;
+    Ok(())
+}
+
+fn validate_tombstone_record(record: &AssignmentTombstoneV1) -> PulseResult<()> {
+    require_version("tombstone", record.schema_version, TOMBSTONE_SCHEMA_VERSION)?;
+    validate_lease_id(&record.lease_id)?;
+    allowed_value(
+        "tombstone",
+        "state",
+        &record.state,
+        &[
+            TOMBSTONE_STATE_RELEASED,
+            TOMBSTONE_STATE_EXPIRED,
+            TOMBSTONE_STATE_STALE,
+        ],
+    )?;
+    require_rfc3339("tombstone", "recorded_at", &record.recorded_at)?;
+    Ok(())
+}
+
+fn record_path(dir: PathBuf, kind: &str, id: &str, expected_prefix: &str) -> PulseResult<PathBuf> {
+    validate_record_id(kind, id, expected_prefix)?;
+    Ok(dir.join(format!("{id}.{ext}", ext = RECORD_EXTENSION)))
+}
+
 /// Build the absolute path to a specific lease record file.
-pub fn lease_path(repo_root: &Path, lease_id: &str) -> PathBuf {
-    leases_dir(repo_root).join(format!("{lease_id}.{ext}", ext = RECORD_EXTENSION))
+pub fn lease_path(repo_root: &Path, lease_id: &str) -> PulseResult<PathBuf> {
+    record_path(leases_dir(repo_root), "lease", lease_id, "lease_")
 }
 
 /// Build the absolute path to a specific workspace record file.
-pub fn workspace_path(repo_root: &Path, workspace_id: &str) -> PathBuf {
-    workspaces_dir(repo_root).join(format!("{workspace_id}.{ext}", ext = RECORD_EXTENSION))
+pub fn workspace_path(repo_root: &Path, workspace_id: &str) -> PulseResult<PathBuf> {
+    record_path(workspaces_dir(repo_root), "workspace", workspace_id, "wt_")
 }
 
 /// Build the absolute path to a specific prepared-assignment record file.
-pub fn prepared_assignment_path(repo_root: &Path, pa_id: &str) -> PathBuf {
-    prepared_dir(repo_root).join(format!("{pa_id}.{ext}", ext = RECORD_EXTENSION))
+pub fn prepared_assignment_path(repo_root: &Path, pa_id: &str) -> PulseResult<PathBuf> {
+    record_path(prepared_dir(repo_root), "prepared assignment", pa_id, "pa_")
 }
 
 /// Build the absolute path to a specific tombstone record file.
-pub fn tombstone_path(repo_root: &Path, lease_id: &str) -> PathBuf {
-    tombstones_dir(repo_root).join(format!("{lease_id}.{ext}", ext = RECORD_EXTENSION))
+pub fn tombstone_path(repo_root: &Path, lease_id: &str) -> PulseResult<PathBuf> {
+    record_path(tombstones_dir(repo_root), "lease", lease_id, "lease_")
 }
 
 // ---------------------------------------------------------------------------
@@ -190,6 +377,10 @@ fn list_ids_from_dir(dir: &Path) -> PulseResult<Vec<String>> {
     let mut ids: Vec<String> = Vec::new();
     for entry in fs::read_dir(dir).map_err(|e| PulseError::io(dir, e))? {
         let entry = entry.map_err(|e| PulseError::io(dir, e))?;
+        let file_type = entry.file_type().map_err(|e| PulseError::io(dir, e))?;
+        if !file_type.is_file() {
+            continue;
+        }
         if let Some(id) = id_from_filename(&entry.path()) {
             ids.push(id);
         }
@@ -237,8 +428,10 @@ pub fn list_tombstone_ids(repo_root: &Path) -> PulseResult<Vec<String>> {
 /// Load a live lease record by ID.
 pub fn load_lease(repo_root: &Path, lease_id: &str) -> PulseResult<AssignmentLeaseRecordV1> {
     check_enrolled(repo_root)?;
-    let path = lease_path(repo_root, lease_id);
-    storage::read_json(&path)
+    let path = lease_path(repo_root, lease_id)?;
+    let record = storage::read_json(&path)?;
+    validate_lease_record(&record)?;
+    Ok(record)
 }
 
 /// Load a workspace record by ID.
@@ -247,22 +440,28 @@ pub fn load_workspace(
     workspace_id: &str,
 ) -> PulseResult<AssignmentWorkspaceRecordV1> {
     check_enrolled(repo_root)?;
-    let path = workspace_path(repo_root, workspace_id);
-    storage::read_json(&path)
+    let path = workspace_path(repo_root, workspace_id)?;
+    let record = storage::read_json(&path)?;
+    validate_workspace_record(&record)?;
+    Ok(record)
 }
 
 /// Load a prepared-assignment record by ID.
 pub fn load_prepared(repo_root: &Path, pa_id: &str) -> PulseResult<PreparedAssignmentRecordV1> {
     check_enrolled(repo_root)?;
-    let path = prepared_assignment_path(repo_root, pa_id);
-    storage::read_json(&path)
+    let path = prepared_assignment_path(repo_root, pa_id)?;
+    let record = storage::read_json(&path)?;
+    validate_prepared_record(&record)?;
+    Ok(record)
 }
 
 /// Load a tombstone record by lease ID.
 pub fn load_tombstone(repo_root: &Path, lease_id: &str) -> PulseResult<AssignmentTombstoneV1> {
     check_enrolled(repo_root)?;
-    let path = tombstone_path(repo_root, lease_id);
-    storage::read_json(&path)
+    let path = tombstone_path(repo_root, lease_id)?;
+    let record = storage::read_json(&path)?;
+    validate_tombstone_record(&record)?;
+    Ok(record)
 }
 
 // ---------------------------------------------------------------------------
@@ -280,29 +479,32 @@ fn ensure_dir(dir: &Path) -> PulseResult<()> {
 /// Errors if the file already exists.
 pub fn write_lease(repo_root: &Path, record: &AssignmentLeaseRecordV1) -> PulseResult<()> {
     check_enrolled(repo_root)?;
+    validate_lease_record(record)?;
     let dir = leases_dir(repo_root);
     ensure_dir(&dir)?;
     let bytes = crate::canonical_json::to_canonical_bytes(record)?;
-    storage::create_new(&lease_path(repo_root, &record.lease_id), &bytes)
+    storage::create_new(&lease_path(repo_root, &record.lease_id)?, &bytes)
 }
 
 /// Write a workspace record as a new file (create-new semantics).
 pub fn write_workspace(repo_root: &Path, record: &AssignmentWorkspaceRecordV1) -> PulseResult<()> {
     check_enrolled(repo_root)?;
+    validate_workspace_record(record)?;
     let dir = workspaces_dir(repo_root);
     ensure_dir(&dir)?;
     let bytes = crate::canonical_json::to_canonical_bytes(record)?;
-    storage::create_new(&workspace_path(repo_root, &record.workspace_id), &bytes)
+    storage::create_new(&workspace_path(repo_root, &record.workspace_id)?, &bytes)
 }
 
 /// Write a prepared-assignment record as a new file (create-new semantics).
 pub fn write_prepared(repo_root: &Path, record: &PreparedAssignmentRecordV1) -> PulseResult<()> {
     check_enrolled(repo_root)?;
+    validate_prepared_record(record)?;
     let dir = prepared_dir(repo_root);
     ensure_dir(&dir)?;
     let bytes = crate::canonical_json::to_canonical_bytes(record)?;
     storage::create_new(
-        &prepared_assignment_path(repo_root, &record.prepared_assignment_id),
+        &prepared_assignment_path(repo_root, &record.prepared_assignment_id)?,
         &bytes,
     )
 }
@@ -310,10 +512,11 @@ pub fn write_prepared(repo_root: &Path, record: &PreparedAssignmentRecordV1) -> 
 /// Write a tombstone record as a new file (create-new semantics).
 pub fn write_tombstone(repo_root: &Path, tombstone: &AssignmentTombstoneV1) -> PulseResult<()> {
     check_enrolled(repo_root)?;
+    validate_tombstone_record(tombstone)?;
     let dir = tombstones_dir(repo_root);
     ensure_dir(&dir)?;
     let bytes = crate::canonical_json::to_canonical_bytes(tombstone)?;
-    storage::create_new(&tombstone_path(repo_root, &tombstone.lease_id), &bytes)
+    storage::create_new(&tombstone_path(repo_root, &tombstone.lease_id)?, &bytes)
 }
 
 // ---------------------------------------------------------------------------
@@ -326,7 +529,7 @@ pub fn write_tombstone(repo_root: &Path, tombstone: &AssignmentTombstoneV1) -> P
 /// does not exist or removal fails.
 pub fn remove_lease(repo_root: &Path, lease_id: &str) -> PulseResult<()> {
     check_enrolled(repo_root)?;
-    let path = lease_path(repo_root, lease_id);
+    let path = lease_path(repo_root, lease_id)?;
     fs::remove_file(&path).map_err(|e| {
         if e.kind() == std::io::ErrorKind::NotFound {
             PulseError::NotFound {
@@ -341,7 +544,7 @@ pub fn remove_lease(repo_root: &Path, lease_id: &str) -> PulseResult<()> {
 /// Remove a workspace record file.
 pub fn remove_workspace(repo_root: &Path, workspace_id: &str) -> PulseResult<()> {
     check_enrolled(repo_root)?;
-    let path = workspace_path(repo_root, workspace_id);
+    let path = workspace_path(repo_root, workspace_id)?;
     fs::remove_file(&path).map_err(|e| {
         if e.kind() == std::io::ErrorKind::NotFound {
             PulseError::NotFound {
@@ -384,11 +587,15 @@ pub fn find_live_lease_for_subject(
     let lease_ids = list_lease_ids(repo_root)?;
     for lease_id in &lease_ids {
         // Skip leases with a terminal tombstone.
-        if tombstones_present && tombstone_path(repo_root, lease_id).exists() {
+        if tombstones_present && tombstone_path(repo_root, lease_id)?.exists() {
             continue;
         }
-        // Load the lease record.
-        let record = match load_lease(repo_root, lease_id) {
+        // Load and validate the lease record. Corrupt or schema-invalid records
+        // are not live; recovery classification surfaces them separately.
+        let record = match load_lease(repo_root, lease_id).and_then(|record| {
+            validate_lease_record(&record)?;
+            Ok(record)
+        }) {
             Ok(r) => r,
             Err(_) => continue,
         };
@@ -401,10 +608,11 @@ pub fn find_live_lease_for_subject(
             continue;
         }
         // Check not expired.
-        if let Ok(expires) = chrono::DateTime::parse_from_rfc3339(&record.expires_at) {
-            if chrono::Utc::now() > expires {
-                continue;
-            }
+        let Ok(expires) = chrono::DateTime::parse_from_rfc3339(&record.expires_at) else {
+            continue;
+        };
+        if chrono::Utc::now() > expires {
+            continue;
         }
         return Ok(Some(lease_id.clone()));
     }
@@ -414,10 +622,11 @@ pub fn find_live_lease_for_subject(
 /// Check whether a specific lease ID has a terminal tombstone.
 pub fn has_tombstone(repo_root: &Path, lease_id: &str) -> PulseResult<bool> {
     check_enrolled(repo_root)?;
+    validate_lease_id(lease_id)?;
     if !tombstones_dir_exists(repo_root) {
         return Ok(false);
     }
-    Ok(tombstone_path(repo_root, lease_id).exists())
+    Ok(tombstone_path(repo_root, lease_id)?.exists())
 }
 
 // ---------------------------------------------------------------------------
@@ -433,7 +642,9 @@ pub enum LeaseClassification {
     Expired,
     /// Lease that has a terminal tombstone (released/expired/stale).
     Tombstoned,
-    /// Lease record that could not be loaded or parsed.
+    /// Runtime state is internally inconsistent and must not be repaired silently.
+    Ambiguous(String),
+    /// Lease record that could not be loaded, parsed or validated.
     Invalid(String),
 }
 
@@ -463,7 +674,9 @@ pub struct AssignmentRecoveryReport {
     pub expired_count: usize,
     /// Lease IDs that have a terminal tombstone.
     pub tombstoned_count: usize,
-    /// Lease IDs that could not be loaded or parsed.
+    /// Runtime entries that are internally inconsistent and require operator repair.
+    pub ambiguous_count: usize,
+    /// Lease IDs that could not be loaded, parsed or validated.
     pub invalid_count: usize,
     /// Orphan workspace IDs that have no matching live/tombstoned lease.
     pub orphan_workspace_ids: Vec<String>,
@@ -486,6 +699,7 @@ pub fn classify_assignment_recovery_state(
     let mut live_count = 0usize;
     let mut expired_count = 0usize;
     let mut tombstoned_count = 0usize;
+    let mut ambiguous_count = 0usize;
     let mut invalid_count = 0usize;
 
     // Collect all known lease IDs (live leases + tombstones).
@@ -506,22 +720,36 @@ pub fn classify_assignment_recovery_state(
     all_ids.dedup();
 
     for lease_id in &all_ids {
-        let has_live_file = lease_path(repo_root, lease_id).exists();
-        let has_tombstone_file = tombstone_path(repo_root, lease_id).exists();
+        let has_live_file = lease_path(repo_root, lease_id)?.exists();
+        let has_tombstone_file = tombstone_path(repo_root, lease_id)?.exists();
 
         if !has_live_file && has_tombstone_file {
             // Tombstone-only entry: lease was released/expired.
             match load_tombstone(repo_root, lease_id) {
-                Ok(tombstone) => {
-                    tombstoned_count += 1;
-                    entries.push(RecoveryEntry {
-                        lease_id: lease_id.clone(),
-                        subject_id: tombstone.subject_id,
-                        classification: LeaseClassification::Tombstoned,
-                        state: tombstone.state,
-                        workspace_id: String::new(),
-                    });
-                }
+                Ok(tombstone) => match validate_tombstone_record(&tombstone) {
+                    Ok(()) => {
+                        tombstoned_count += 1;
+                        entries.push(RecoveryEntry {
+                            lease_id: lease_id.clone(),
+                            subject_id: tombstone.subject_id,
+                            classification: LeaseClassification::Tombstoned,
+                            state: tombstone.state,
+                            workspace_id: String::new(),
+                        });
+                    }
+                    Err(error) => {
+                        invalid_count += 1;
+                        entries.push(RecoveryEntry {
+                            lease_id: lease_id.clone(),
+                            subject_id: tombstone.subject_id,
+                            classification: LeaseClassification::Invalid(format!(
+                                "tombstone invalid: {error}"
+                            )),
+                            state: tombstone.state,
+                            workspace_id: String::new(),
+                        });
+                    }
+                },
                 Err(_) => {
                     invalid_count += 1;
                     entries.push(RecoveryEntry {
@@ -555,27 +783,40 @@ pub fn classify_assignment_recovery_state(
         // Live lease file exists.
         match load_lease(repo_root, lease_id) {
             Ok(record) => {
-                if has_tombstone_file {
-                    // Both live file and tombstone: likely a partial
-                    // recovery that wrote the tombstone but hasn't
-                    // removed the live file.
-                    tombstoned_count += 1;
-                    entries.push(RecoveryEntry {
-                        lease_id: lease_id.clone(),
-                        subject_id: record.subject.id,
-                        classification: LeaseClassification::Tombstoned,
-                        state: record.state,
-                        workspace_id: record.workspace_id,
-                    });
-                } else if record.state != crate::assignment::LEASE_STATE_PREPARED {
-                    // Non-prepared lease without a matching tombstone:
-                    // inconsistent state.
+                if let Err(error) = validate_lease_record(&record) {
                     invalid_count += 1;
                     entries.push(RecoveryEntry {
                         lease_id: lease_id.clone(),
                         subject_id: record.subject.id,
-                        classification: LeaseClassification::Invalid(
-                            "non-prepared state without tombstone".to_string(),
+                        classification: LeaseClassification::Invalid(format!(
+                            "lease invalid: {error}"
+                        )),
+                        state: record.state,
+                        workspace_id: record.workspace_id,
+                    });
+                } else if has_tombstone_file {
+                    // Both live file and tombstone: ambiguous ownership until
+                    // a later mutating recovery command proves whether release
+                    // completed or the live record should be preserved.
+                    ambiguous_count += 1;
+                    entries.push(RecoveryEntry {
+                        lease_id: lease_id.clone(),
+                        subject_id: record.subject.id,
+                        classification: LeaseClassification::Ambiguous(
+                            "live lease and terminal tombstone both exist".to_string(),
+                        ),
+                        state: record.state,
+                        workspace_id: record.workspace_id,
+                    });
+                } else if record.state != LEASE_STATE_PREPARED {
+                    // Non-prepared lease without a matching tombstone:
+                    // ambiguous terminal state.
+                    ambiguous_count += 1;
+                    entries.push(RecoveryEntry {
+                        lease_id: lease_id.clone(),
+                        subject_id: record.subject.id,
+                        classification: LeaseClassification::Ambiguous(
+                            "non-prepared live lease without tombstone".to_string(),
                         ),
                         state: record.state,
                         workspace_id: record.workspace_id,
@@ -645,7 +886,9 @@ pub fn classify_assignment_recovery_state(
     for ws_id in &workspace_ids {
         match load_workspace(repo_root, ws_id) {
             Ok(ws) => {
-                if !all_known_lease_ids.contains(&ws.lease_id) {
+                if validate_workspace_record(&ws).is_err()
+                    || !all_known_lease_ids.contains(&ws.lease_id)
+                {
                     orphan_workspace_ids.push(ws_id.clone());
                 }
             }
@@ -661,6 +904,7 @@ pub fn classify_assignment_recovery_state(
         live_count,
         expired_count,
         tombstoned_count,
+        ambiguous_count,
         invalid_count,
         orphan_workspace_ids,
     })
@@ -837,6 +1081,18 @@ mod tests {
         assert_eq!(e.code(), "not_enrolled");
     }
 
+    #[test]
+    fn non_enrolled_write_rejects_before_runtime_creation_even_with_bad_id() {
+        let repo = non_enrolled_repo();
+        let lease = dummy_lease("../escape", "TK-001");
+        let err = write_lease(repo.path(), &lease).expect_err("expected non-enrolled error");
+        assert_eq!(err.code(), "not_enrolled");
+        assert!(
+            !repo.path().join(".pulse/runtime").exists(),
+            "non-enrolled writes must not bootstrap runtime paths"
+        );
+    }
+
     // -----------------------------------------------------------------------
     // Write + List + Load round-trips
     // -----------------------------------------------------------------------
@@ -852,6 +1108,36 @@ mod tests {
 
         let loaded = load_lease(repo.path(), "lease_01JTEST").expect("load lease");
         assert_eq!(loaded, lease);
+
+        let bytes = fs::read_to_string(lease_path(repo.path(), "lease_01JTEST").unwrap())
+            .expect("read canonical lease bytes");
+        let expected =
+            String::from_utf8(crate::canonical_json::to_canonical_bytes(&lease).unwrap())
+                .expect("canonical JSON is UTF-8");
+        assert_eq!(bytes, expected);
+    }
+
+    #[test]
+    fn write_rejects_path_traversal_ids_before_directory_creation() {
+        let repo = enrolled_repo();
+        let lease = dummy_lease("lease_../escape", "TK-001");
+        let err = write_lease(repo.path(), &lease).expect_err("unsafe id should fail");
+        assert_eq!(err.code(), "invalid_assignment_record_id");
+        assert!(
+            !leases_dir(repo.path()).exists(),
+            "unsafe record IDs must reject before creating runtime dirs"
+        );
+    }
+
+    #[test]
+    fn load_remove_and_tombstone_reject_path_traversal_ids() {
+        let repo = enrolled_repo();
+        let err = load_lease(repo.path(), "../escape").unwrap_err();
+        assert_eq!(err.code(), "invalid_assignment_record_id");
+        let err = remove_lease(repo.path(), "lease_/escape").unwrap_err();
+        assert_eq!(err.code(), "invalid_assignment_record_id");
+        let err = has_tombstone(repo.path(), "lease_..escape").unwrap_err();
+        assert_eq!(err.code(), "invalid_assignment_record_id");
     }
 
     #[test]
@@ -865,6 +1151,19 @@ mod tests {
 
         let loaded = load_workspace(repo.path(), "wt_TK-001_01JTEST").expect("load workspace");
         assert_eq!(loaded, ws);
+    }
+
+    #[test]
+    fn write_workspace_rejects_unsafe_workspace_path_before_directory_creation() {
+        let repo = enrolled_repo();
+        let mut ws = dummy_workspace("wt_UNSAFE", "lease_01JTEST");
+        ws.path = "../outside".to_string();
+        let err = write_workspace(repo.path(), &ws).expect_err("unsafe workspace path should fail");
+        assert_eq!(err.code(), "invalid_assignment_record");
+        assert!(
+            !workspaces_dir(repo.path()).exists(),
+            "unsafe workspace paths must reject before creating runtime dirs"
+        );
     }
 
     #[test]
@@ -1104,6 +1403,7 @@ mod tests {
         assert_eq!(report.live_count, 0);
         assert_eq!(report.expired_count, 0);
         assert_eq!(report.tombstoned_count, 0);
+        assert_eq!(report.ambiguous_count, 0);
         assert_eq!(report.invalid_count, 0);
         assert!(report.orphan_workspace_ids.is_empty());
     }
@@ -1150,6 +1450,40 @@ mod tests {
             report.entries[0].classification,
             LeaseClassification::Tombstoned
         );
+    }
+
+    #[test]
+    fn recovery_report_classifies_live_plus_tombstone_as_ambiguous() {
+        let repo = enrolled_repo();
+        let lease = dummy_lease("lease_01JAMB", "TK-AMB");
+        write_lease(repo.path(), &lease).expect("write lease");
+        let tombstone = dummy_tombstone("lease_01JAMB", "TK-AMB", "released");
+        write_tombstone(repo.path(), &tombstone).expect("write tombstone");
+
+        let report =
+            classify_assignment_recovery_state(repo.path()).expect("classify recovery state");
+        assert_eq!(report.ambiguous_count, 1);
+        assert_eq!(report.live_count, 0);
+        assert!(matches!(
+            report.entries[0].classification,
+            LeaseClassification::Ambiguous(_)
+        ));
+    }
+
+    #[test]
+    fn recovery_report_classifies_invalid_runtime_records() {
+        let repo = enrolled_repo();
+        let dir = leases_dir(repo.path());
+        fs::create_dir_all(&dir).expect("create lease dir");
+        fs::write(dir.join("lease_BAD.json"), b"{not json").expect("write corrupt lease");
+
+        let report =
+            classify_assignment_recovery_state(repo.path()).expect("classify recovery state");
+        assert_eq!(report.invalid_count, 1);
+        assert!(matches!(
+            report.entries[0].classification,
+            LeaseClassification::Invalid(_)
+        ));
     }
 
     #[test]
