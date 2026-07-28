@@ -490,6 +490,87 @@ pub fn check_repository_identity(
     Ok(evidence)
 }
 
+// ---------------------------------------------------------------------------
+// Workspace-specific source validation (P2S2-I5)
+// -------------------------------------------------------------------------
+
+/// Result of a workspace base validation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorkspaceBaseValidation {
+    pub commit: String,
+    pub head_ref: Option<String>,
+    pub worktree_root_kind: WorktreeRootKind,
+    pub cleanliness: SourceCleanliness,
+    pub operation_state: RepositoryOperationState,
+}
+
+/// Validate a workspace path as an exact-base, clean, non-operating Git
+/// repository.
+///
+/// This is a lighter version of `packet_base_snapshot` that does NOT require
+/// evidence/docs/knowledge manifest enrollment. It verifies:
+/// - HEAD resolves to the expected commit (full 40-char hex)
+/// - Worktree is clean (no tracked or untracked non-ignored changes)
+/// - No Git operation is in progress
+///
+/// Returns `WorkspaceBaseValidation` on success, or one of:
+/// - `work_packet_source_unavailable` if HEAD cannot be resolved
+/// - `work_packet_dirty_source_unsupported` if the worktree is dirty
+/// - `work_packet_source_operation_in_progress` if a Git operation is active
+/// - `work_packet_source_changed` if HEAD does not match `expected_commit`
+pub fn check_workspace_base(
+    repo_root: &Path,
+    expected_commit: &str,
+) -> Result<WorkspaceBaseValidation> {
+    let commit = packet_head_commit(repo_root)?;
+    if commit.len() != 40 || !commit.chars().all(|c| c.is_ascii_hexdigit()) {
+        return Err(PulseError::validation(
+            "work_packet_source_unavailable",
+            "HEAD does not resolve to a full 40-character hex commit",
+        ));
+    }
+
+    if commit != expected_commit {
+        return Err(PulseError::validation(
+            "work_packet_source_changed",
+            format!(
+                "HEAD commit {} does not match expected commit {}",
+                commit, expected_commit
+            ),
+        ));
+    }
+
+    let head_ref = resolve_head_ref(repo_root)?;
+    let worktree_root_kind = detect_worktree_kind(repo_root)?;
+
+    let cleanliness = check_cleanliness(repo_root)?;
+    if cleanliness == SourceCleanliness::Dirty {
+        return Err(PulseError::validation(
+            "work_packet_dirty_source_unsupported",
+            "workspace worktree has tracked or untracked non-ignored changes",
+        ));
+    }
+
+    let operation_state = detect_operation_state(repo_root)?;
+    if operation_state != RepositoryOperationState::Normal {
+        return Err(PulseError::validation(
+            "work_packet_source_operation_in_progress",
+            format!(
+                "Git operation in progress in workspace: {}",
+                operation_state.as_str()
+            ),
+        ));
+    }
+
+    Ok(WorkspaceBaseValidation {
+        commit,
+        head_ref,
+        worktree_root_kind,
+        cleanliness,
+        operation_state,
+    })
+}
+
 fn map_manifest_error<T>(result: Result<T>) -> Result<T> {
     result.map_err(|error| match error.code() {
         "work_packet_repository_identity_missing"
