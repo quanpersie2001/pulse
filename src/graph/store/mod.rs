@@ -250,6 +250,7 @@ impl Default for OperationContext {
 pub struct JsonGraphStore {
     pub(crate) repo_root: PathBuf,
     pub(crate) failpoint: Option<TransactionFailpoint>,
+    pub(crate) work_packet_after_first_fence_failpoint: bool,
 }
 
 impl JsonGraphStore {
@@ -257,6 +258,7 @@ impl JsonGraphStore {
         Self {
             repo_root: repo_root.into(),
             failpoint: None,
+            work_packet_after_first_fence_failpoint: false,
         }
     }
 
@@ -265,6 +267,16 @@ impl JsonGraphStore {
         Self {
             repo_root: repo_root.into(),
             failpoint: Some(failpoint),
+            work_packet_after_first_fence_failpoint: false,
+        }
+    }
+
+    #[cfg(any(test, debug_assertions))]
+    pub fn with_work_packet_after_first_fence_failpoint(repo_root: impl Into<PathBuf>) -> Self {
+        Self {
+            repo_root: repo_root.into(),
+            failpoint: None,
+            work_packet_after_first_fence_failpoint: true,
         }
     }
 

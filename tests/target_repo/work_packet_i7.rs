@@ -392,6 +392,7 @@ fn run_packet_with_barrier(repo: &TestRepo, ticket_id: &str, dir: &Path) -> std:
     )
     .arg("--repo-root")
     .arg(repo.path())
+    .arg("--test-work-packet-after-first-fence")
     .args(["work", "packet", ticket_id, "--json"])
     .env("PULSE_WORK_PACKET_AFTER_FIRST_FENCE_SIGNAL", &signal)
     .env("PULSE_WORK_PACKET_AFTER_FIRST_FENCE_WAIT", &release)
@@ -695,7 +696,7 @@ fn selected_suggestion_hash_rank_and_score_changes_affect_fingerprint() {
 }
 
 #[test]
-fn packet_side_effects_are_limited_to_cache_and_lock_paths() {
+fn packet_side_effects_are_limited_to_ignored_cache_and_lock_paths() {
     let repo = TestRepo::from_fixture("minimal-service");
     let ticket_id = setup_ready_ticket(&repo);
     let before = tracked_snapshot(repo.path());
@@ -715,12 +716,33 @@ fn packet_side_effects_are_limited_to_cache_and_lock_paths() {
     }
     assert!(
         after.keys().any(|path| path.starts_with(".pulse/cache/")),
-        "packet query should only materialize disposable cache state"
+        "packet query should only materialize disposable cache state when cache paths are ignored"
     );
     assert!(
         repo.git_is_clean(),
         "allowed side effects must be git-ignored"
     );
+}
+
+#[test]
+fn packet_rejects_non_ignored_operational_paths_before_dirtying_clean_repo() {
+    let repo = TestRepo::from_fixture("minimal-service");
+    let ticket_id = setup_ready_ticket(&repo);
+    fs::write(repo.path().join(".gitignore"), b"node_modules/\n").unwrap();
+    commit_all(repo.path(), "stop ignoring pulse operational paths");
+    let before = tracked_snapshot(repo.path());
+
+    let output = repo.pulse(&["work", "packet", &ticket_id, "--json"]);
+    assert!(!output.status.success());
+    let err: Value = serde_json::from_slice(&output.stderr).unwrap();
+    assert_eq!(err["code"], "work_packet_operational_path_not_ignored");
+
+    let after = tracked_snapshot(repo.path());
+    assert_eq!(
+        before, after,
+        "failed packet must not create cache or lock files"
+    );
+    assert!(repo.git_is_clean(), "failed packet must leave source clean");
 }
 
 #[test]

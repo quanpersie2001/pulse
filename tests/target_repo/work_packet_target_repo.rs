@@ -459,7 +459,8 @@ fn target_repo_packet_creates_no_lease_workspace_or_run_state() {
         .map(|entries| entries.filter_map(|e| e.ok()).map(|e| e.path()).collect())
         .unwrap_or_default();
 
-    // Compare top-level entries. Allowed additions:
+    // Compare top-level entries. Allowed additions when the target repository
+    // explicitly ignores operational state:
     // - .pulse/cache/workgraph.snapshot.json (from graph projection cache)
     // - .pulse/cache/docs-search/ (cache-only docs search)
     // - .pulse/runtime/locks/workgraph.lock (repository fence lock)

@@ -21,12 +21,16 @@ pub fn run(cli: Cli) -> Result<(), PulseError> {
     let repo_root = cli
         .repo_root
         .unwrap_or_else(|| std::env::current_dir().expect("current dir"));
-    #[cfg(debug_assertions)]
-    let store = match cli.test_failpoint {
-        Some(failpoint) => JsonGraphStore::with_failpoint(repo_root, failpoint.into()),
-        None => JsonGraphStore::new(repo_root),
+    #[cfg(any(test, debug_assertions))]
+    let store = if cli.test_work_packet_after_first_fence {
+        JsonGraphStore::with_work_packet_after_first_fence_failpoint(repo_root)
+    } else {
+        match cli.test_failpoint {
+            Some(failpoint) => JsonGraphStore::with_failpoint(repo_root, failpoint.into()),
+            None => JsonGraphStore::new(repo_root),
+        }
     };
-    #[cfg(not(debug_assertions))]
+    #[cfg(not(any(test, debug_assertions)))]
     let store = JsonGraphStore::new(repo_root);
 
     match cli.command {

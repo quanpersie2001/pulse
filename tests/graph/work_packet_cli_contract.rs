@@ -72,7 +72,7 @@ fn init_git_repo(repo: &TempDir) {
         .arg("-q")
         .output()
         .expect("git init");
-    // Create a .gitignore that excludes .pulse/ runtime state so bootstrap
+    // Create a .gitignore that excludes .pulse/ operational state so bootstrap
     // and packet creation don't leave untracked non-ignored files.
     fs::write(repo.path().join(".gitignore"), b".pulse/\n").unwrap();
     // Create an initial file so the commit has content
@@ -422,6 +422,8 @@ fn work_packet_emits_stable_json_for_ready_ticket() {
     assert_eq!(packet["schema_version"], 1);
     assert_eq!(packet["profile"], "phase2_work_packet_preview_v1");
     assert_eq!(packet["code"], "reservation_candidate");
+    let typed: pulse::work_packet::WorkPacketV1 = serde_json::from_value(packet.clone()).unwrap();
+    typed.validate_schema_contract().unwrap();
 
     // Subject
     assert_eq!(packet["subject"]["kind"], "ticket");

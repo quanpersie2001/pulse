@@ -701,6 +701,7 @@ pub(crate) fn handle(store: &JsonGraphStore, command: WorkCommand) -> Result<(),
         },
         WorkCommand::Packet { id, json } => {
             let packet = store.work_packet(&id)?;
+            packet.validate_schema_contract()?;
             let human = packet_human(&packet);
             render(json, &packet, human)
         }

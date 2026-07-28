@@ -9,9 +9,12 @@ use clap::{Parser, Subcommand, ValueEnum};
 pub struct Cli {
     #[arg(long, global = true)]
     pub(crate) repo_root: Option<PathBuf>,
-    #[cfg(debug_assertions)]
+    #[cfg(any(test, debug_assertions))]
     #[arg(long, global = true, hide = true, value_enum)]
     pub(crate) test_failpoint: Option<FailpointArg>,
+    #[cfg(any(test, debug_assertions))]
+    #[arg(long, global = true, hide = true)]
+    pub(crate) test_work_packet_after_first_fence: bool,
     #[command(subcommand)]
     pub(crate) command: Command,
 }
@@ -51,7 +54,7 @@ pub(crate) enum FailpointArg {
     AfterEvent,
 }
 
-#[cfg(debug_assertions)]
+#[cfg(any(test, debug_assertions))]
 impl From<FailpointArg> for TransactionFailpoint {
     fn from(value: FailpointArg) -> Self {
         match value {

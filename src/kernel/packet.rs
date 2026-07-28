@@ -14,6 +14,8 @@
 
 use std::collections::BTreeMap;
 use std::fs;
+use std::path::{Path, PathBuf};
+use std::process::Command;
 
 use crate::docs::applicability::{ApplicableDocsReport, ApplicableDocument};
 use crate::docs::model::{DocumentAuthority, DocumentKind, WorkDocumentationContext};
@@ -80,8 +82,10 @@ impl JsonGraphStore {
         // ==================================================================
         let evidence = check_repository_identity(&self.repo_root)?;
         let repository_id = evidence.repository_id.clone();
+        self.require_existing_workgraph_unlocked()?;
+        validate_packet_operational_paths(&self.repo_root)?;
 
-        let guard = WriteGuard::acquire(&self.repo_root)?;
+        let guard = acquire_packet_fence(&self.repo_root)?;
         self.require_existing_workgraph_unlocked()?;
         recover_prepared_transactions(&self.repo_root)?;
         let projection = self.export_unlocked()?;
@@ -136,7 +140,7 @@ impl JsonGraphStore {
 
         // Phase 1 complete: drop first fence.
         drop(guard);
-        work_packet_test_barrier_after_first_fence()?;
+        self.work_packet_test_barrier_after_first_fence()?;
 
         // ==================================================================
         // Between fences — cache-only docs index refresh
@@ -165,8 +169,9 @@ impl JsonGraphStore {
         // ==================================================================
         // Phase 2 — Second fence: revalidate, search, assemble
         // ==================================================================
-        let guard2 = WriteGuard::acquire(&self.repo_root)?;
+        let guard2 = acquire_packet_fence(&self.repo_root)?;
         self.require_existing_workgraph_unlocked()?;
+        validate_packet_operational_paths(&self.repo_root)?;
         recover_prepared_transactions(&self.repo_root)?;
         let projection2 = self.export_unlocked()?;
 
@@ -234,8 +239,10 @@ impl JsonGraphStore {
         // Revalidate source (HEAD, cleanliness, operation state).
         crate::source::revalidate_packet_base(&self.repo_root, &pre_source)?;
 
-        // Permission check: no retry on snapshot/source change.
-        drop(guard2);
+        // Permission check: no retry on snapshot/source change. Keep the
+        // second repository fence held through final packet assembly,
+        // normalization, fingerprinting and fixed-point budget enforcement so
+        // the returned bytes are produced under the revalidated snapshot.
 
         // Build fully integrated documentation section before completing the
         // snapshot, so the snapshot/revalidation precondition binds the same
@@ -295,6 +302,7 @@ impl JsonGraphStore {
         };
         packet.normalize();
         packet.finalize_size()?;
+        drop(guard2);
         Ok(packet)
     }
 }
@@ -1064,6 +1072,10 @@ fn work_documentation_context(node: &Node) -> WorkDocumentationContext {
 fn map_docs_index_error(error: PulseError, context: &str) -> PulseError {
     match error.code() {
         "work_packet_docs_score_invalid" | "work_packet_snapshot_changed" => error,
+        "lock_timeout" => PulseError::validation(
+            "work_packet_lock_timeout",
+            format!("docs search cache lock timed out; cause_code=lock_timeout: {error}"),
+        ),
         code if code.starts_with("docs_") => PulseError::validation(
             "work_packet_docs_index_unavailable",
             format!("{context}; cause_code={code}: {error}"),
@@ -1072,44 +1084,114 @@ fn map_docs_index_error(error: PulseError, context: &str) -> PulseError {
     }
 }
 
-fn work_packet_test_barrier_after_first_fence() -> PulseResult<()> {
-    #[cfg(debug_assertions)]
-    {
-        use std::io::Write;
-        use std::time::{Duration, Instant};
+fn acquire_packet_fence(repo_root: &Path) -> PulseResult<WriteGuard> {
+    WriteGuard::acquire(repo_root).map_err(map_packet_lock_error)
+}
 
-        let Some(signal_path) = std::env::var_os("PULSE_WORK_PACKET_AFTER_FIRST_FENCE_SIGNAL")
-        else {
+fn map_packet_lock_error(error: PulseError) -> PulseError {
+    match error {
+        PulseError::LockTimeout { .. } => PulseError::validation(
+            "work_packet_lock_timeout",
+            format!("repository fence lock timed out; cause_code=lock_timeout: {error}"),
+        ),
+        other => other,
+    }
+}
+
+fn validate_packet_operational_paths(repo_root: &Path) -> PulseResult<()> {
+    for relative in [
+        ".pulse/runtime/locks/workgraph.lock",
+        ".pulse/runtime/locks/docs-search.lock",
+        ".pulse/cache/workgraph.snapshot.json",
+        ".pulse/cache/docs-search/CURRENT",
+    ] {
+        validate_packet_operational_path(repo_root, relative)?;
+    }
+    Ok(())
+}
+
+fn validate_packet_operational_path(repo_root: &Path, relative: &str) -> PulseResult<()> {
+    let path = repo_root.join(relative);
+    if path.exists() {
+        return Ok(());
+    }
+    let output = Command::new("git")
+        .current_dir(repo_root)
+        .args(["check-ignore", "-q", "--", relative])
+        .output()
+        .map_err(|error| PulseError::io(repo_root, error))?;
+    if output.status.success() {
+        return Ok(());
+    }
+    if output.status.code() == Some(1) {
+        return Err(PulseError::validation(
+            "work_packet_operational_path_not_ignored",
+            format!(
+                "packet operational path {relative} would dirty the source tree; ignore .pulse/runtime/ and .pulse/cache/ before running work packet"
+            ),
+        ));
+    }
+    Err(PulseError::validation(
+        "work_packet_source_unavailable",
+        format!(
+            "git check-ignore failed for {relative}: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ),
+    ))
+}
+
+impl JsonGraphStore {
+    fn work_packet_test_barrier_after_first_fence(&self) -> PulseResult<()> {
+        if !self.work_packet_after_first_fence_failpoint {
             return Ok(());
-        };
-        let signal_path = std::path::PathBuf::from(signal_path);
-        if let Some(parent) = signal_path.parent() {
-            fs::create_dir_all(parent).map_err(|error| PulseError::io(parent, error))?;
         }
-        let mut file =
-            fs::File::create(&signal_path).map_err(|error| PulseError::io(&signal_path, error))?;
-        file.write_all(b"after_first_fence\n")
-            .map_err(|error| PulseError::io(&signal_path, error))?;
-        file.sync_all()
-            .map_err(|error| PulseError::io(&signal_path, error))?;
+        test_only_work_packet_barrier_after_first_fence()
+    }
+}
 
-        if let Some(wait_path) = std::env::var_os("PULSE_WORK_PACKET_AFTER_FIRST_FENCE_WAIT") {
-            let wait_path = std::path::PathBuf::from(wait_path);
-            let start = Instant::now();
-            while !wait_path.exists() {
-                if start.elapsed() > Duration::from_secs(10) {
-                    return Err(PulseError::validation(
-                        "work_packet_snapshot_changed",
-                        format!(
-                            "timed out waiting for test barrier release at {}",
-                            wait_path.display()
-                        ),
-                    ));
-                }
-                std::thread::sleep(Duration::from_millis(10));
+#[cfg(any(test, debug_assertions))]
+fn test_only_work_packet_barrier_after_first_fence() -> PulseResult<()> {
+    use std::io::Write;
+    use std::time::{Duration, Instant};
+
+    let Some(signal_path) = std::env::var_os("PULSE_WORK_PACKET_AFTER_FIRST_FENCE_SIGNAL") else {
+        return Err(PulseError::validation(
+            "work_packet_test_failpoint_missing",
+            "--test-work-packet-after-first-fence requires PULSE_WORK_PACKET_AFTER_FIRST_FENCE_SIGNAL",
+        ));
+    };
+    let signal_path = PathBuf::from(signal_path);
+    if let Some(parent) = signal_path.parent() {
+        fs::create_dir_all(parent).map_err(|error| PulseError::io(parent, error))?;
+    }
+    let mut file =
+        fs::File::create(&signal_path).map_err(|error| PulseError::io(&signal_path, error))?;
+    file.write_all(b"after_first_fence\n")
+        .map_err(|error| PulseError::io(&signal_path, error))?;
+    file.sync_all()
+        .map_err(|error| PulseError::io(&signal_path, error))?;
+
+    if let Some(wait_path) = std::env::var_os("PULSE_WORK_PACKET_AFTER_FIRST_FENCE_WAIT") {
+        let wait_path = PathBuf::from(wait_path);
+        let start = Instant::now();
+        while !wait_path.exists() {
+            if start.elapsed() > Duration::from_secs(10) {
+                return Err(PulseError::validation(
+                    "work_packet_snapshot_changed",
+                    format!(
+                        "timed out waiting for test barrier release at {}",
+                        wait_path.display()
+                    ),
+                ));
             }
+            std::thread::sleep(Duration::from_millis(10));
         }
     }
+    Ok(())
+}
+
+#[cfg(not(any(test, debug_assertions)))]
+fn test_only_work_packet_barrier_after_first_fence() -> PulseResult<()> {
     Ok(())
 }
 

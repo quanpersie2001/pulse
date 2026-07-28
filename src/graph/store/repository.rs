@@ -45,7 +45,7 @@ impl JsonGraphStore {
         Ok(())
     }
 
-    pub(crate) fn require_existing_workgraph_unlocked(&self) -> PulseResult<()> {
+    pub fn require_existing_workgraph_unlocked(&self) -> PulseResult<()> {
         match self.classify_workgraph_bootstrap_state()? {
             WorkgraphBootstrapState::ExistingCurrent => Ok(()),
             WorkgraphBootstrapState::Empty | WorkgraphBootstrapState::SafePartialCurrent => {
