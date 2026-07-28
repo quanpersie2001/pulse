@@ -305,6 +305,67 @@ fn public_cli_ticket_create_requires_explicit_assessed_classification() {
 }
 
 #[test]
+fn cli_ready_to_active_public_transition_rejects_with_prepared_assignment_required() {
+    let repo = tempfile::tempdir().unwrap();
+    let created = run_ok(
+        &repo,
+        &[
+            "work",
+            "create",
+            "--kind",
+            "ticket",
+            "--title",
+            "ReadyTicket",
+            "--role",
+            "implementation",
+            "--risk",
+            "low",
+            "--materialization",
+            "R0",
+            "--json",
+        ],
+    );
+    let id = created["value"]["id"].as_str().unwrap().to_string();
+
+    // Manually set the node to Ready (bypass readiness gate for test setup).
+    let node_path = repo
+        .path()
+        .join(format!(".pulse/workgraph/nodes/{id}.json"));
+    let mut node: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&node_path).unwrap()).unwrap();
+    node["status"] = serde_json::json!("ready");
+    node["revision"] = serde_json::json!(2u64);
+    std::fs::write(&node_path, serde_json::to_vec_pretty(&node).unwrap()).unwrap();
+
+    // Now call the CLI with --expected-revision 2 (matching the manual bump).
+    let err = run_err(
+        &repo,
+        &[
+            "work",
+            "transition",
+            &id,
+            "--to",
+            "active",
+            "--expected-revision",
+            "2",
+            "--actor",
+            "test:actor",
+            "--json",
+        ],
+    );
+    assert_eq!(
+        err["code"], "prepared_assignment_required",
+        "CLI transition Ready->Active must report prepared_assignment_required not {:?}",
+        err["code"]
+    );
+
+    // The node must remain unchanged.
+    let shown = run_ok(&repo, &["work", "show", &id, "--json"]);
+    assert_eq!(shown["node"]["status"], "ready");
+    assert_eq!(shown["node"]["revision"], 2);
+}
+
+#[test]
 fn public_cli_rejects_classification_flags_for_non_tickets() {
     let repo = tempfile::tempdir().unwrap();
     let err = run_err(

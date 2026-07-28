@@ -177,6 +177,12 @@ impl JsonGraphStore {
     /// direction-specific grant (`work.transition.shaped` /
     /// `work.transition.ready`) in addition to the readiness `authority` family
     /// which checks policy availability and the shaping approver grant.
+    ///
+    /// The `PreparedAssignment` gate rejects all generic/public callers with
+    /// `prepared_assignment_required` because the assignment-runtime context
+    /// needed to evaluate it is unavailable on the generic transition path.
+    /// Use [`evaluate_prepared_assignment_gate_for_active`] for the internal
+    /// kernel-owned evaluation seam.
     fn evaluate_transition_gate(
         &self,
         node: &Node,
@@ -189,17 +195,34 @@ impl JsonGraphStore {
             return Ok(None);
         };
 
+        // The PreparedAssignment gate requires assignment-runtime context
+        // that the generic transition path cannot supply. No user-supplied
+        // proof bypass is accepted. Only the internal seam evaluates this
+        // gate.
+        if matches!(profile_kind, GateProfile::PreparedAssignment) {
+            return Err(PulseError::validation(
+                "prepared_assignment_required",
+                format!(
+                    "transition {} -> {:?} requires a valid prepared-assignment record from the assignment runtime; use the internal `evaluate_prepared_assignment_gate_for_active` seam",
+                    node.id,
+                    to,
+                ),
+            ));
+        }
+
         let policy_report = crate::policy::load_authority_policy(&self.repo_root)?;
         let caller = crate::policy::parse_actor(&ctx.actor);
         let grant = match profile_kind {
             GateProfile::Shaped => "work.transition.shaped",
             GateProfile::Ready => "work.transition.ready",
+            GateProfile::PreparedAssignment => unreachable!("handled above"),
         };
         crate::policy::authorize(&policy_report, &caller, &[grant])?;
 
         let eval_profile = match profile_kind {
             GateProfile::Shaped => EvalProfile::Shaped,
             GateProfile::Ready => EvalProfile::Ready,
+            GateProfile::PreparedAssignment => unreachable!("handled above"),
         };
         let snapshot = self.build_readiness_snapshot(node)?;
         let inputs = snapshot.as_inputs(node);
@@ -238,6 +261,103 @@ impl JsonGraphStore {
             status: report.status_as_word().to_string(),
             shaping_receipt,
         }))
+    }
+
+    /// Internal prepared-assignment gate evaluation and mutation seam (P2S2-I7).
+    ///
+    /// Evaluates the `Ready -> Active` prepared-assignment gate and produces
+    /// the after-state node and its canonical JSON bytes **without** committing
+    /// a mutation event or calling `commit_mutation`. The caller (I8) is
+    /// responsible for committing the prepared transaction using the returned
+    /// after-bytes.
+    ///
+    /// This seam:
+    /// 1. Acquires the repository fence.
+    /// 2. Loads the node and validates CAS revision, Ready status, and graph
+    ///    integrity of the planned mutation.
+    /// 3. Produces the after-state node (status=Active, revision+1,
+    ///    updated_at=now) and its canonical bytes.
+    /// 4. Returns `(Node, Vec<u8>)` without writing any files or events.
+    ///
+    /// I8 will extend this seam with actual assignment-runtime verification
+    /// (prepared-assignment record lookup, lease validation, workspace binding
+    /// check) before producing the after-bytes.
+    #[allow(dead_code)]
+    pub(crate) fn evaluate_prepared_assignment_gate_for_active(
+        &self,
+        id: &str,
+        expected_revision: u64,
+        ctx: OperationContext,
+    ) -> PulseResult<(Node, Vec<u8>)> {
+        let _guard = WriteGuard::acquire(&self.repo_root)?;
+        self.bootstrap_unlocked()?;
+        recover_prepared_transactions(&self.repo_root)?;
+
+        let path = self.node_path(id);
+        if !path.exists() {
+            return Err(PulseError::NotFound {
+                subject: id.to_string(),
+            });
+        }
+        let before_bytes = fs::read(&path).map_err(|error| PulseError::io(&path, error))?;
+        let mut node: Node = serde_json::from_slice(&before_bytes)
+            .map_err(|error| PulseError::json(&path, error))?;
+
+        if node.revision != expected_revision {
+            return Err(PulseError::CasConflict {
+                subject: id.to_string(),
+                expected_revision,
+                current_revision: node.revision,
+            });
+        }
+
+        if node.status != NodeStatus::Ready {
+            return Err(PulseError::validation(
+                "invalid_status",
+                format!(
+                    "prepared-assignment gate requires Ready status, but {} is {:?}",
+                    node.id, node.status
+                ),
+            ));
+        }
+
+        // Validate the transition direction is legal and the gate is installed.
+        let _exp = validate_transition(NodeStatus::Ready, NodeStatus::Active, None)?;
+        debug_assert!(
+            installed_gate(NodeStatus::Ready, NodeStatus::Active)
+                == Some(GateProfile::PreparedAssignment)
+        );
+
+        // I8: insert assignment-runtime verification here (prepared-assignment
+        // record lookup, lease validity, workspace binding check). For I7 the
+        // seam unconditionally accepts a valid Ready node under the held fence.
+
+        // Produce the after-state node.
+        node.status = NodeStatus::Active;
+        node.status_reason = None;
+        node.revision += 1;
+        node.updated_at = ctx.now;
+
+        // Validate graph integrity of the planned mutation.
+        let node_values = self
+            .load_nodes_with_override(node.clone())?
+            .into_values()
+            .collect::<Vec<_>>();
+        let edge_values = self
+            .load_edges()?
+            .iter()
+            .map(|(_, e)| e.clone())
+            .collect::<Vec<_>>();
+        validate_graph(
+            &self.repo_root,
+            &self.manifest()?,
+            &node_values,
+            &edge_values,
+        )
+        .into_result()?;
+
+        let after_bytes = to_canonical_bytes(&node)?;
+        Ok((node, after_bytes))
     }
 }
 

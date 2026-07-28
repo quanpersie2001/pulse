@@ -226,6 +226,69 @@ fn l6_transition_clears_stale_reason_when_target_does_not_require_it() {
 }
 
 #[test]
+fn l7_ready_to_active_has_installed_prepared_assignment_gate() {
+    use pulse::graph::lifecycle::{installed_gate, GateProfile};
+    // The prepared-assignment gate is now installed for Ready -> Active.
+    // validate_transition must pass (was transition_gate_unavailable before).
+    let exp = validate_transition(NodeStatus::Ready, NodeStatus::Active, None).unwrap();
+    assert_eq!(exp.policy, TransitionPolicy::Gated);
+    assert_eq!(
+        installed_gate(NodeStatus::Ready, NodeStatus::Active),
+        Some(GateProfile::PreparedAssignment)
+    );
+}
+
+#[test]
+fn l8_ready_to_active_public_transition_rejects_with_prepared_assignment_required() {
+    let (_dir, store) = repo();
+    // Create a ticket at Ready status
+    let mut tk = store
+        .create_node_with_context(WorkKind::Ticket, "ReadyTicket".into(), ctx(1))
+        .unwrap()
+        .value;
+    tk.status = NodeStatus::Ready;
+    fs::write(
+        _dir.path()
+            .join(".pulse/workgraph/nodes")
+            .join(format!("{}.json", tk.id)),
+        to_canonical_bytes(&tk).unwrap(),
+    )
+    .unwrap();
+
+    // Public transition must reject with prepared_assignment_required, NOT
+    // transition_gate_unavailable.
+    let err = store
+        .transition_node_with_context(&tk.id, NodeStatus::Active, 1, None, ctx(2))
+        .unwrap_err();
+    assert_eq!(
+        err.code(),
+        "prepared_assignment_required",
+        "expected prepared_assignment_required but got {:?}",
+        err
+    );
+}
+
+#[test]
+fn l9_ready_to_active_reject_is_not_transition_gate_unavailable() {
+    // Verify the exact error code is prepared_assignment_required, not
+    // transition_gate_unavailable. This is a pure model-level assertion.
+    use pulse::graph::lifecycle::{validate_transition, GateProfile, TransitionPolicy};
+    // validate_transition must succeed because the gate is installed.
+    let exp = validate_transition(NodeStatus::Ready, NodeStatus::Active, None).unwrap();
+    assert_eq!(exp.policy, TransitionPolicy::Gated);
+    assert_ne!(exp.policy, TransitionPolicy::Supported);
+    assert_ne!(exp.policy, TransitionPolicy::Illegal);
+    // Installed gate must be PreparedAssignment.
+    assert_eq!(
+        pulse::graph::lifecycle::installed_gate(
+            pulse::graph::node::NodeStatus::Ready,
+            pulse::graph::node::NodeStatus::Active
+        ),
+        Some(GateProfile::PreparedAssignment)
+    );
+}
+
+#[test]
 fn validation_rejects_stale_and_missing_status_reason() {
     let (_dir, store) = repo();
     let mut node = store

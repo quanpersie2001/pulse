@@ -34,6 +34,11 @@ pub enum GateProfile {
     Shaped,
     /// `shaped -> ready` full readiness gate (`phase1_contract_readiness_v1`).
     Ready,
+    /// `ready -> active` prepared-assignment gate
+    /// (`phase2_prepared_assignment_v1`). The gate is evaluated by the
+    /// assignment runtime under the repository fence; public/unsupported
+    /// callers always receive `prepared_assignment_required`.
+    PreparedAssignment,
 }
 
 impl GateProfile {
@@ -41,6 +46,7 @@ impl GateProfile {
         match self {
             GateProfile::Shaped => "phase1_shaped_v1",
             GateProfile::Ready => "phase1_contract_readiness_v1",
+            GateProfile::PreparedAssignment => "phase2_prepared_assignment_v1",
         }
     }
 }
@@ -55,6 +61,7 @@ pub fn installed_gate(from: NodeStatus, to: NodeStatus) -> Option<GateProfile> {
     match (from, to) {
         (NodeStatus::Draft, NodeStatus::Shaped) => Some(GateProfile::Shaped),
         (NodeStatus::Shaped, NodeStatus::Ready) => Some(GateProfile::Ready),
+        (NodeStatus::Ready, NodeStatus::Active) => Some(GateProfile::PreparedAssignment),
         _ => None,
     }
 }
