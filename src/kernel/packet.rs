@@ -1329,12 +1329,28 @@ fn build_dispatch(
                 value: snapshot.graph_fingerprint.clone(),
             },
             PacketRevalidationPrecondition {
+                field: "snapshot.readiness_profile".to_string(),
+                value: snapshot.readiness_profile.clone(),
+            },
+            PacketRevalidationPrecondition {
                 field: "snapshot.readiness_fingerprint".to_string(),
                 value: snapshot.readiness_fingerprint.clone(),
             },
             PacketRevalidationPrecondition {
+                field: "snapshot.readiness_status".to_string(),
+                value: snapshot.readiness_status.clone(),
+            },
+            PacketRevalidationPrecondition {
+                field: "snapshot.authority_policy_revision".to_string(),
+                value: snapshot.authority_policy_revision.to_string(),
+            },
+            PacketRevalidationPrecondition {
                 field: "snapshot.authority_policy_fingerprint".to_string(),
                 value: snapshot.authority_policy_fingerprint.clone(),
+            },
+            PacketRevalidationPrecondition {
+                field: "snapshot.docs_registry_revision".to_string(),
+                value: snapshot.docs_registry_revision.to_string(),
             },
             PacketRevalidationPrecondition {
                 field: "snapshot.docs_registry_fingerprint".to_string(),
@@ -2702,10 +2718,57 @@ mod tests {
         assert!(dispatch.reservation_candidate);
         assert!(!dispatch.dispatch_authorized);
         assert_eq!(dispatch.authorization_status, "not_reserved");
-        assert!(!dispatch
+
+        // Every snapshot field plus source.cleanliness must have a
+        // revalidation precondition.  No packet_fingerprint precondition.
+        let pre_fields: Vec<&str> = dispatch
             .revalidation_preconditions
             .iter()
-            .any(|precondition| precondition.field == "packet_fingerprint"));
+            .map(|p| p.field.as_str())
+            .collect();
+        for field in [
+            "snapshot.graph_fingerprint",
+            "snapshot.readiness_profile",
+            "snapshot.readiness_fingerprint",
+            "snapshot.readiness_status",
+            "snapshot.authority_policy_revision",
+            "snapshot.authority_policy_fingerprint",
+            "snapshot.docs_registry_revision",
+            "snapshot.docs_registry_fingerprint",
+            "snapshot.docs_index_fingerprint",
+            "snapshot.source_commit",
+            "source.cleanliness",
+        ] {
+            assert!(
+                pre_fields.contains(&field),
+                "missing revalidation precondition: {}",
+                field
+            );
+        }
+        assert!(
+            !pre_fields.contains(&"packet_fingerprint"),
+            "packet_fingerprint must not be a revalidation precondition"
+        );
+
+        // Verify preconditions carry the expected values
+        let lookup = |field: &str| -> Option<&str> {
+            dispatch
+                .revalidation_preconditions
+                .iter()
+                .find(|p| p.field == field)
+                .map(|p| p.value.as_str())
+        };
+        assert_eq!(lookup("snapshot.graph_fingerprint"), Some("sha256:graph"));
+        assert_eq!(
+            lookup("snapshot.readiness_profile"),
+            Some("phase1_contract_readiness_v1")
+        );
+        assert_eq!(lookup("snapshot.readiness_status"), Some("ready"));
+        assert_eq!(lookup("snapshot.authority_policy_revision"), Some("1"));
+        assert_eq!(lookup("snapshot.docs_registry_revision"), Some("1"));
+        assert_eq!(lookup("source.cleanliness"), Some("clean"));
+
+        // Pre-reservation gate families are correctly set
         let documentation_context = dispatch
             .gate_families
             .iter()
@@ -2713,6 +2776,8 @@ mod tests {
             .unwrap();
         assert_eq!(documentation_context.status, "passed");
         assert!(documentation_context.reason_codes.is_empty());
+
+        // Runtime future gates stay not_evaluated with appropriate reason codes
         assert_eq!(
             dispatch
                 .gate_families
@@ -2722,5 +2787,245 @@ mod tests {
                 .status,
             "not_evaluated"
         );
+        assert_eq!(
+            dispatch
+                .gate_families
+                .iter()
+                .find(|gate| gate.family == "workspace_binding")
+                .unwrap()
+                .status,
+            "not_evaluated"
+        );
+        assert_eq!(
+            dispatch
+                .gate_families
+                .iter()
+                .find(|gate| gate.family == "capability_match")
+                .unwrap()
+                .status,
+            "not_evaluated"
+        );
+        assert_eq!(
+            dispatch
+                .gate_families
+                .iter()
+                .find(|gate| gate.family == "qa_baseline_and_cases")
+                .unwrap()
+                .status,
+            "not_applicable"
+        );
+    }
+
+    // ===================================================================
+    // P2S1-I5: No fabricated pass / empty meaning
+    // ===================================================================
+
+    #[test]
+    fn no_gate_family_claims_passed_when_not_evaluated() {
+        let report = ReadinessReport {
+            schema_version: 1,
+            code: "ready".to_string(),
+            subject: crate::graph::readiness::ReadinessSubject {
+                id: "TK-001".to_string(),
+                revision: 1,
+                contract_revision: 1,
+                status: NodeStatus::Ready,
+            },
+            profile: "phase1_contract_readiness_v1".to_string(),
+            status: ReadinessStatus::Ready,
+            transition_eligible: true,
+            dispatch_authorized: false,
+            readiness_fingerprint: "sha256:ready".to_string(),
+            graph_fingerprint_observed: "sha256:graph".to_string(),
+            gate_families: vec![GateFamilyReport {
+                family: "readiness".to_string(),
+                status: GateStatus::Passed,
+                reason_codes: vec![],
+            }],
+            destination: None,
+            remaining_non_blocking_uncertainty: vec![],
+            future_gate_families: vec![],
+            reason_codes: vec![],
+        };
+        let snapshot = work_packet::SnapshotReport {
+            graph_fingerprint: "sha256:graph".to_string(),
+            readiness_profile: "phase1_contract_readiness_v1".to_string(),
+            readiness_fingerprint: "sha256:ready".to_string(),
+            readiness_status: "ready".to_string(),
+            authority_policy_revision: 1,
+            authority_policy_fingerprint: "sha256:policy".to_string(),
+            docs_registry_revision: 1,
+            docs_registry_fingerprint: "sha256:registry".to_string(),
+            docs_index_fingerprint: "sha256:registry".to_string(),
+            source_commit: "0123456789abcdef0123456789abcdef01234567".to_string(),
+        };
+        let source = PacketSource {
+            repository_id: "repo".to_string(),
+            kind: "git_commit".to_string(),
+            commit: snapshot.source_commit.clone(),
+            head_ref: Some("refs/heads/main".to_string()),
+            worktree_root_kind: "primary_or_existing_worktree".to_string(),
+            cleanliness: "clean".to_string(),
+            operation_state: "normal".to_string(),
+            currentness: "current".to_string(),
+        };
+        let dispatch = build_dispatch(&report, &snapshot, &source);
+
+        // Only the four pre-reservation gate families that Slice 1 owns
+        // should appear as "passed".  Every other gate must stay at its
+        // default typed state — never fabricated empty/pass.
+        for gate in &dispatch.gate_families {
+            match gate.family.as_str() {
+                "readiness" | "packet_completeness" | "source_base" | "documentation_context" => {
+                    assert_eq!(
+                        gate.status, "passed",
+                        "gate {} should be 'passed' but is '{}'",
+                        gate.family, gate.status
+                    );
+                }
+                "qa_baseline_and_cases" => {
+                    assert_eq!(
+                        gate.status, "not_applicable",
+                        "gate {} should be 'not_applicable' but is '{}'",
+                        gate.family, gate.status
+                    );
+                }
+                "lease" | "workspace_binding" | "capability_match" => {
+                    assert_eq!(
+                        gate.status, "not_evaluated",
+                        "runtime gate {} should be 'not_evaluated' but is '{}'",
+                        gate.family, gate.status
+                    );
+                }
+                other => {
+                    panic!("unexpected gate family: {}", other);
+                }
+            }
+        }
+
+        // Runtime gates must carry typed reason codes, not empty strings
+        let lease = dispatch
+            .gate_families
+            .iter()
+            .find(|g| g.family == "lease")
+            .unwrap();
+        assert!(
+            !lease.reason_codes.is_empty(),
+            "lease gate must have reason codes"
+        );
+        assert_eq!(lease.reason_codes[0], "lease_resolver_not_installed");
+
+        let workspace = dispatch
+            .gate_families
+            .iter()
+            .find(|g| g.family == "workspace_binding")
+            .unwrap();
+        assert!(
+            !workspace.reason_codes.is_empty(),
+            "workspace_binding gate must have reason codes"
+        );
+        assert_eq!(workspace.reason_codes[0], "workspace_not_allocated");
+
+        let capability = dispatch
+            .gate_families
+            .iter()
+            .find(|g| g.family == "capability_match")
+            .unwrap();
+        assert!(
+            !capability.reason_codes.is_empty(),
+            "capability_match gate must have reason codes"
+        );
+        assert_eq!(capability.reason_codes[0], "capability_inventory_not_bound");
+    }
+
+    // ===================================================================
+    // P2S1-I5: No authorization path — dispatch_authorized is always false
+    // ===================================================================
+
+    #[test]
+    fn no_authorization_path_in_preview_packet() {
+        // Verify that every possible path through build_dispatch produces
+        // dispatch_authorized=false and authorization_status=not_reserved.
+        let base_report = ReadinessReport {
+            schema_version: 1,
+            code: "ready".to_string(),
+            subject: crate::graph::readiness::ReadinessSubject {
+                id: "TK-001".to_string(),
+                revision: 1,
+                contract_revision: 1,
+                status: NodeStatus::Ready,
+            },
+            profile: "phase1_contract_readiness_v1".to_string(),
+            status: ReadinessStatus::Ready,
+            transition_eligible: true,
+            dispatch_authorized: false,
+            readiness_fingerprint: "sha256:ready".to_string(),
+            graph_fingerprint_observed: "sha256:graph".to_string(),
+            gate_families: vec![GateFamilyReport {
+                family: "readiness".to_string(),
+                status: GateStatus::Passed,
+                reason_codes: vec![],
+            }],
+            destination: None,
+            remaining_non_blocking_uncertainty: vec![],
+            future_gate_families: vec![],
+            reason_codes: vec![],
+        };
+        let snapshot = work_packet::SnapshotReport {
+            graph_fingerprint: "sha256:graph".to_string(),
+            readiness_profile: "phase1_contract_readiness_v1".to_string(),
+            readiness_fingerprint: "sha256:ready".to_string(),
+            readiness_status: "ready".to_string(),
+            authority_policy_revision: 1,
+            authority_policy_fingerprint: "sha256:policy".to_string(),
+            docs_registry_revision: 1,
+            docs_registry_fingerprint: "sha256:registry".to_string(),
+            docs_index_fingerprint: "sha256:registry".to_string(),
+            source_commit: "0123456789abcdef0123456789abcdef01234567".to_string(),
+        };
+        let source = PacketSource {
+            repository_id: "repo".to_string(),
+            kind: "git_commit".to_string(),
+            commit: snapshot.source_commit.clone(),
+            head_ref: Some("refs/heads/main".to_string()),
+            worktree_root_kind: "primary_or_existing_worktree".to_string(),
+            cleanliness: "clean".to_string(),
+            operation_state: "normal".to_string(),
+            currentness: "current".to_string(),
+        };
+
+        // Case 1: transition_eligible=true (normal happy path)
+        let dispatch = build_dispatch(&base_report, &snapshot, &source);
+        assert!(
+            !dispatch.dispatch_authorized,
+            "dispatch_authorized must be false when transition_eligible=true"
+        );
+        assert_eq!(
+            dispatch.authorization_status, "not_reserved",
+            "authorization_status must be not_reserved when transition_eligible=true"
+        );
+
+        // Case 2: transition_eligible=false (e.g. stale readiness)
+        let stale_report = ReadinessReport {
+            transition_eligible: false,
+            ..base_report
+        };
+        let dispatch2 = build_dispatch(&stale_report, &snapshot, &source);
+        assert!(
+            !dispatch2.dispatch_authorized,
+            "dispatch_authorized must be false when transition_eligible=false"
+        );
+        assert_eq!(
+            dispatch2.authorization_status, "not_reserved",
+            "authorization_status must be not_reserved when transition_eligible=false"
+        );
+
+        // readiness gate shows 'failed' but dispatch_authorized stays false
+        let readiness_gate = dispatch2
+            .gate_families
+            .iter()
+            .find(|g| g.family == "readiness")
+            .unwrap();
+        assert_eq!(readiness_gate.status, "failed");
     }
 }
