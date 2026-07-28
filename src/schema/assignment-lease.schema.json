@@ -32,7 +32,8 @@
       "pattern": "^lease_[A-Za-z0-9]+$"
     },
     "kind": {
-      "type": "string"
+      "type": "string",
+      "const": "implementation_assignment"
     },
     "subject": {
       "type": "object",
@@ -64,7 +65,7 @@
     "issued_at": { "type": "string", "format": "date-time" },
     "expires_at": { "type": "string", "format": "date-time" },
     "ttl_seconds": { "type": "integer", "minimum": 60, "maximum": 86400 },
-    "state": { "type": "string" },
+    "state": { "type": "string", "enum": ["prepared", "released", "expired", "stale_needs_operator"] },
     "packet_fingerprint": { "type": "string", "pattern": "^sha256:[A-Fa-f0-9]{64}$" },
     "readiness_fingerprint": { "type": "string", "pattern": "^sha256:[A-Fa-f0-9]{64}$" },
     "workspace_id": { "type": "string", "pattern": "^wt_[A-Za-z0-9_-]+$" },

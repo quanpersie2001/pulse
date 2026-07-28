@@ -24,7 +24,8 @@
       "type": "string"
     },
     "status": {
-      "type": "string"
+      "type": "string",
+      "enum": ["matched", "failed"]
     },
     "required": {
       "type": "array",

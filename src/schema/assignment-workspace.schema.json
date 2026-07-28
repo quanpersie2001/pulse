@@ -57,7 +57,7 @@
     "base_commit": { "type": "string", "pattern": "^[A-Fa-f0-9]{40}$" },
     "head_commit_at_bind": { "type": "string", "pattern": "^[A-Fa-f0-9]{40}$" },
     "cleanliness_at_bind": { "type": "string" },
-    "state": { "type": "string" },
+    "state": { "type": "string", "enum": ["bound", "released", "stale_needs_operator"] },
     "created_at": { "type": "string", "format": "date-time" },
     "released_at": {
       "type": ["string", "null"],

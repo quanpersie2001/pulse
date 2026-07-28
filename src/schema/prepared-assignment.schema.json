@@ -32,7 +32,8 @@
       "const": "phase2_prepared_assignment_v1"
     },
     "code": {
-      "type": "string"
+      "type": "string",
+      "const": "prepared_assignment"
     },
     "prepared_assignment_id": {
       "type": "string",
@@ -40,7 +41,34 @@
     },
     "packet": {
       "type": "object",
-      "description": "Embedded WorkPacketV1 preview packet. Semantics unchanged: dispatch_authorized=false."
+      "description": "Embedded WorkPacketV1 preview packet. Semantics unchanged: dispatch_authorized=false.",
+      "required": ["dispatch", "capabilities", "workspace"],
+      "properties": {
+        "dispatch": {
+          "type": "object",
+          "required": ["dispatch_authorized", "authorization_status"],
+          "properties": {
+            "dispatch_authorized": { "type": "boolean", "const": false },
+            "authorization_status": { "type": "string", "const": "not_reserved" }
+          }
+        },
+        "capabilities": {
+          "type": "object",
+          "required": ["evaluation_status", "inventory_identity"],
+          "properties": {
+            "evaluation_status": { "type": "string", "const": "not_evaluated" },
+            "inventory_identity": { "type": "null" }
+          }
+        },
+        "workspace": {
+          "type": "object",
+          "required": ["binding_status", "workspace_id"],
+          "properties": {
+            "binding_status": { "type": "string", "const": "not_allocated" },
+            "workspace_id": { "type": "null" }
+          }
+        }
+      }
     },
     "packet_fingerprint": {
       "type": "string",
@@ -120,7 +148,7 @@
       ],
       "properties": {
         "lease_id": { "type": "string", "pattern": "^lease_[A-Za-z0-9]+$" },
-        "state": { "type": "string" },
+        "state": { "type": "string", "const": "prepared" },
         "assignee": { "type": "string" },
         "issued_by": { "type": "string" },
         "issued_at": { "type": "string", "format": "date-time" },
@@ -144,7 +172,7 @@
       ],
       "properties": {
         "workspace_id": { "type": "string", "pattern": "^wt_[A-Za-z0-9_-]+$" },
-        "binding_status": { "type": "string" },
+        "binding_status": { "type": "string", "const": "bound" },
         "mode": { "type": "string", "enum": ["in_place", "isolated_worktree"] },
         "path": { "type": "string" },
         "repository_id": { "type": "string" },
@@ -168,9 +196,9 @@
         "event_id"
       ],
       "properties": {
-        "transition": { "type": "string" },
-        "gate_profile": { "type": "string" },
-        "gate_status": { "type": "string" },
+        "transition": { "type": "string", "const": "ready_to_active" },
+        "gate_profile": { "type": "string", "const": "phase2_prepared_assignment_v1" },
+        "gate_status": { "type": "string", "const": "passed" },
         "expected_revision": { "type": "integer", "minimum": 0 },
         "new_revision": { "type": "integer", "minimum": 0 },
         "event_id": { "type": "string" }
@@ -187,8 +215,8 @@
       ],
       "properties": {
         "dispatch_authorized": { "type": "boolean", "const": true },
-        "authorization_status": { "type": "string" },
-        "runner_status": { "type": "string" },
+        "authorization_status": { "type": "string", "const": "prepared_assignment" },
+        "runner_status": { "type": "string", "const": "not_started" },
         "gate_families": {
           "type": "array",
           "items": {
@@ -225,7 +253,7 @@
           "default": []
         },
         "event_path": { "type": "string" },
-        "recovery_state": { "type": "string" }
+        "recovery_state": { "type": "string", "const": "complete" }
       }
     }
   },
@@ -246,10 +274,10 @@
       "properties": {
         "inventory_identity": { "type": "string", "pattern": "^sha256:[A-Fa-f0-9]{64}$" },
         "principal": { "type": "string" },
-        "status": { "type": "string" },
+        "status": { "type": "string", "const": "matched" },
         "required": { "type": "array", "items": { "type": "string" } },
         "matched": { "type": "array", "items": { "type": "string" } },
-        "missing": { "type": "array", "items": { "type": "string" } },
+        "missing": { "type": "array", "items": { "type": "string" }, "maxItems": 0 },
         "extra": { "type": "array", "items": { "type": "string" } },
         "reason_codes": { "type": "array", "items": { "type": "string" } }
       }

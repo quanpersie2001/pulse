@@ -115,6 +115,27 @@ pub const LIFECYCLE_READY_TO_ACTIVE: &str = "ready_to_active";
 /// Lifecycle gate profile.
 pub const LIFECYCLE_GATE_PROFILE: &str = "phase2_prepared_assignment_v1";
 
+/// JSON Schema for `PreparedAssignmentV1`.
+pub const PREPARED_ASSIGNMENT_SCHEMA: &str = include_str!("schema/prepared-assignment.schema.json");
+
+/// JSON Schema for `PreparedAssignmentRecordV1`.
+pub const PREPARED_ASSIGNMENT_RECORD_SCHEMA: &str =
+    include_str!("schema/prepared-assignment-record.schema.json");
+
+/// JSON Schema for `AssignmentLeaseRecordV1`.
+pub const ASSIGNMENT_LEASE_SCHEMA: &str = include_str!("schema/assignment-lease.schema.json");
+
+/// JSON Schema for `AssignmentWorkspaceRecordV1`.
+pub const ASSIGNMENT_WORKSPACE_SCHEMA: &str =
+    include_str!("schema/assignment-workspace.schema.json");
+
+/// JSON Schema for `CapabilityInventoryV1`.
+pub const CAPABILITY_INVENTORY_SCHEMA: &str =
+    include_str!("schema/capability-inventory.schema.json");
+
+/// JSON Schema for `CapabilityMatchReport`.
+pub const CAPABILITY_MATCH_SCHEMA: &str = include_str!("schema/capability-match.schema.json");
+
 // ---------------------------------------------------------------------------
 // Top-level PreparedAssignmentV1
 // ---------------------------------------------------------------------------
@@ -497,32 +518,56 @@ impl PreparedAssignmentV1 {
     /// workspace summary, capability_match, lifecycle, dispatch gate
     /// statuses, transaction ID and event path, and reason_codes.
     pub fn compute_fingerprint(&self) -> PulseResult<String> {
-        let value = serde_json::to_value(self)?;
-        let projection = strip_assignment_fingerprint_self_ref(&value);
+        let mut owned = self.clone();
+        owned.normalize();
+        let value = serde_json::to_value(&owned)?;
+        let projection = strip_prepared_assignment_fingerprint_projection(&value);
         let canonical = canonical_json::to_canonical_value(&projection)?;
         let bytes = canonical_json::canonical_value_bytes(&canonical)?;
         Ok(canonical_json::hash_bytes(&bytes))
     }
 }
 
-/// Strip self-referential `prepared_assignment_fingerprint` from the
+impl PreparedAssignmentRecordV1 {
+    /// Compute the canonical prepared-assignment record fingerprint.
+    ///
+    /// The runtime record is a lossless projection of the prepared assignment
+    /// without embedded packet bytes. It therefore uses the same fingerprint
+    /// projection as `PreparedAssignmentV1`: exclude the self-reference and the
+    /// convenience `packet` field, and rely on `packet_fingerprint` as the packet
+    /// identity boundary.
+    pub fn compute_fingerprint(&self) -> PulseResult<String> {
+        let mut owned = self.clone();
+        owned.normalize();
+        let value = serde_json::to_value(&owned)?;
+        let projection = strip_prepared_assignment_fingerprint_projection(&value);
+        let canonical = canonical_json::to_canonical_value(&projection)?;
+        let bytes = canonical_json::canonical_value_bytes(&canonical)?;
+        Ok(canonical_json::hash_bytes(&bytes))
+    }
+}
+
+/// Strip self-referential/non-semantic fields from the prepared-assignment
 /// fingerprint projection.
-fn strip_assignment_fingerprint_self_ref(value: &Value) -> Value {
+fn strip_prepared_assignment_fingerprint_projection(value: &Value) -> Value {
     match value {
         Value::Object(map) => {
             let mut out = Map::new();
             for (key, child) in map {
-                if key == "prepared_assignment_fingerprint" {
+                if key == "prepared_assignment_fingerprint" || key == "packet" {
                     continue;
                 }
-                out.insert(key.clone(), strip_assignment_fingerprint_self_ref(child));
+                out.insert(
+                    key.clone(),
+                    strip_prepared_assignment_fingerprint_projection(child),
+                );
             }
             Value::Object(out)
         }
         Value::Array(items) => Value::Array(
             items
                 .iter()
-                .map(strip_assignment_fingerprint_self_ref)
+                .map(strip_prepared_assignment_fingerprint_projection)
                 .collect(),
         ),
         other => other.clone(),
@@ -962,18 +1007,114 @@ mod tests {
         }
     }
 
+    fn schema_validator(schema: &str) -> jsonschema::JSONSchema {
+        let schema_value: Value =
+            serde_json::from_str(schema).expect("test fixture should be valid");
+        jsonschema::JSONSchema::compile(&schema_value).expect("test fixture should be valid")
+    }
+
+    fn assert_schema_accepts(schema: &str, value: &Value) {
+        let compiled = schema_validator(schema);
+        let errors: Vec<String> = compiled
+            .validate(value)
+            .err()
+            .map(|errs| errs.map(|err| err.to_string()).collect())
+            .unwrap_or_default();
+        assert!(errors.is_empty(), "schema validation failed: {errors:?}");
+    }
+
+    fn assert_schema_rejects(schema: &str, value: &Value) {
+        let compiled = schema_validator(schema);
+        assert!(
+            compiled.validate(value).is_err(),
+            "schema unexpectedly accepted {value}"
+        );
+    }
+
     // -----------------------------------------------------------------------
     // Deny-unknown round-trip tests
     // -----------------------------------------------------------------------
 
     #[test]
+    fn public_assignment_schemas_compile_and_enforce_boundaries() {
+        for schema in [
+            PREPARED_ASSIGNMENT_SCHEMA,
+            PREPARED_ASSIGNMENT_RECORD_SCHEMA,
+            ASSIGNMENT_LEASE_SCHEMA,
+            ASSIGNMENT_WORKSPACE_SCHEMA,
+            CAPABILITY_INVENTORY_SCHEMA,
+            CAPABILITY_MATCH_SCHEMA,
+        ] {
+            schema_validator(schema);
+        }
+
+        let mut pa = minimal_prepared_assignment("pa_01JSCHEMATEST");
+        pa.transaction.transaction_id = "txn_01JSCHEMATEST".to_string();
+        pa.transaction.event_path = ".pulse/events/2026-07-28/evt_01JSCHEMATEST.json".to_string();
+        pa.prepared_assignment_fingerprint = pa
+            .compute_fingerprint()
+            .expect("test fixture should be valid");
+        let pa_value = serde_json::to_value(&pa).expect("test fixture should be valid");
+        assert_schema_accepts(PREPARED_ASSIGNMENT_SCHEMA, &pa_value);
+
+        let mut authorized_nested_packet = pa_value.clone();
+        authorized_nested_packet["packet"]["dispatch"]["dispatch_authorized"] = Value::Bool(true);
+        assert_schema_rejects(PREPARED_ASSIGNMENT_SCHEMA, &authorized_nested_packet);
+
+        let mut missing_capability = pa_value.clone();
+        missing_capability["capability_match"]["status"] =
+            Value::String(CAP_MATCH_FAILED.to_string());
+        missing_capability["capability_match"]["missing"] =
+            Value::Array(vec![Value::String("source.write".to_string())]);
+        assert_schema_rejects(PREPARED_ASSIGNMENT_SCHEMA, &missing_capability);
+
+        let record = PreparedAssignmentRecordV1 {
+            schema_version: pa.schema_version,
+            profile: pa.profile.clone(),
+            code: pa.code.clone(),
+            prepared_assignment_id: pa.prepared_assignment_id.clone(),
+            subject: pa.subject.clone(),
+            packet_fingerprint: pa.packet_fingerprint.clone(),
+            revalidated_snapshot: pa.revalidated_snapshot.clone(),
+            lease: pa.lease.clone(),
+            workspace: pa.workspace.clone(),
+            capability_match: pa.capability_match.clone(),
+            lifecycle: pa.lifecycle.clone(),
+            dispatch: pa.dispatch.clone(),
+            transaction: pa.transaction.clone(),
+            prepared_assignment_fingerprint: pa.prepared_assignment_fingerprint.clone(),
+            reason_codes: pa.reason_codes.clone(),
+        };
+        let record_value = serde_json::to_value(&record).expect("test fixture should be valid");
+        assert_schema_accepts(PREPARED_ASSIGNMENT_RECORD_SCHEMA, &record_value);
+
+        let inventory = CapabilityInventoryV1 {
+            schema_version: CAPABILITY_INVENTORY_SCHEMA_VERSION,
+            principal: "agent:codex-local".to_string(),
+            inventory_id: "local-codex-default".to_string(),
+            capabilities: vec!["source.read".to_string()],
+        };
+        assert_schema_accepts(
+            CAPABILITY_INVENTORY_SCHEMA,
+            &serde_json::to_value(&inventory).expect("test fixture should be valid"),
+        );
+        assert_schema_accepts(
+            CAPABILITY_MATCH_SCHEMA,
+            &serde_json::to_value(&pa.capability_match).expect("test fixture should be valid"),
+        );
+    }
+
+    #[test]
     fn prepared_assignment_deny_unknown_fields() {
         let mut pa = minimal_prepared_assignment("pa_01J00000000000000000000000");
-        pa.prepared_assignment_fingerprint = pa.compute_fingerprint().unwrap();
-        let json = serde_json::to_value(&pa).unwrap();
+        pa.prepared_assignment_fingerprint = pa
+            .compute_fingerprint()
+            .expect("test fixture should be valid");
+        let json = serde_json::to_value(&pa).expect("test fixture should be valid");
 
         // Round-trip succeeds.
-        let round_trip: PreparedAssignmentV1 = serde_json::from_value(json.clone()).unwrap();
+        let round_trip: PreparedAssignmentV1 =
+            serde_json::from_value(json.clone()).expect("test fixture should be valid");
         assert_eq!(round_trip, pa);
 
         // Unknown field rejected.
@@ -1003,7 +1144,8 @@ mod tests {
             "ttl_seconds": 1800,
             "exclusive": true
         });
-        let parsed: AssignmentLeaseSummary = serde_json::from_value(val.clone()).unwrap();
+        let parsed: AssignmentLeaseSummary =
+            serde_json::from_value(val.clone()).expect("test fixture should be valid");
         assert_eq!(parsed.ttl_seconds, 1800);
 
         let mut tampered = val.clone();
@@ -1032,7 +1174,8 @@ mod tests {
             "cleanliness": "clean",
             "owner_lease_id": "lease_test"
         });
-        let parsed: AssignmentWorkspaceSummary = serde_json::from_value(val.clone()).unwrap();
+        let parsed: AssignmentWorkspaceSummary =
+            serde_json::from_value(val.clone()).expect("test fixture should be valid");
         assert_eq!(parsed.mode, "isolated_worktree");
 
         let mut tampered = val;
@@ -1061,7 +1204,8 @@ mod tests {
             "extra": [],
             "reason_codes": []
         });
-        let parsed: CapabilityMatchReport = serde_json::from_value(val.clone()).unwrap();
+        let parsed: CapabilityMatchReport =
+            serde_json::from_value(val.clone()).expect("test fixture should be valid");
         assert_eq!(parsed.status, "matched");
 
         let mut tampered = val;
@@ -1086,7 +1230,8 @@ mod tests {
             "inventory_id": "test-inventory",
             "capabilities": ["source.read", "source.write"]
         });
-        let parsed: CapabilityInventoryV1 = serde_json::from_value(val.clone()).unwrap();
+        let parsed: CapabilityInventoryV1 =
+            serde_json::from_value(val.clone()).expect("test fixture should be valid");
         assert_eq!(parsed.principal, "agent:test");
 
         let mut tampered = val;
@@ -1110,8 +1255,10 @@ mod tests {
     #[test]
     fn prepared_assignment_rejects_unknown_runner_fields_in_nested_objects() {
         let mut pa = minimal_prepared_assignment("pa_deny_runner");
-        pa.prepared_assignment_fingerprint = pa.compute_fingerprint().unwrap();
-        let mut json = serde_json::to_value(&pa).unwrap();
+        pa.prepared_assignment_fingerprint = pa
+            .compute_fingerprint()
+            .expect("test fixture should be valid");
+        let mut json = serde_json::to_value(&pa).expect("test fixture should be valid");
 
         // Add a runner-only field inside dispatch that is not in the DTO.
         if let Some(Value::Object(ref mut map)) = json.get_mut("dispatch") {
@@ -1203,14 +1350,55 @@ mod tests {
     fn prepared_assignment_fingerprint_excludes_self() {
         let mut pa = minimal_prepared_assignment("pa_fp_self");
         pa.prepared_assignment_fingerprint = "sha256:placeholder".to_string();
-        let fp1 = pa.compute_fingerprint().unwrap();
+        let fp1 = pa
+            .compute_fingerprint()
+            .expect("test fixture should be valid");
 
         // Changing fingerprint field should not change result.
         pa.prepared_assignment_fingerprint = "sha256:other".to_string();
-        let fp2 = pa.compute_fingerprint().unwrap();
+        let fp2 = pa
+            .compute_fingerprint()
+            .expect("test fixture should be valid");
         assert_eq!(
             fp1, fp2,
             "fingerprint must exclude prepared_assignment_fingerprint field"
+        );
+    }
+
+    #[test]
+    fn prepared_assignment_fingerprint_uses_packet_fingerprint_boundary() {
+        let a = minimal_prepared_assignment("pa_fp_packet_boundary");
+        let mut b = a.clone();
+        b.packet.subject.title = "Different embedded rendering".to_string();
+        assert_eq!(
+            a.compute_fingerprint().expect("test fixture should be valid"),
+            b.compute_fingerprint().expect("test fixture should be valid"),
+            "prepared-assignment fingerprint must use packet_fingerprint, not embedded packet bytes"
+        );
+
+        b.packet_fingerprint =
+            "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc".to_string();
+        assert_ne!(
+            a.compute_fingerprint()
+                .expect("test fixture should be valid"),
+            b.compute_fingerprint()
+                .expect("test fixture should be valid"),
+            "packet_fingerprint remains the semantic packet identity boundary"
+        );
+    }
+
+    #[test]
+    fn prepared_assignment_fingerprint_normalizes_set_like_fields() {
+        let mut a = minimal_prepared_assignment("pa_fp_norm");
+        let mut b = minimal_prepared_assignment("pa_fp_norm");
+        a.reason_codes = vec!["z".to_string(), "a".to_string()];
+        b.reason_codes = vec!["a".to_string(), "z".to_string()];
+        assert_eq!(
+            a.compute_fingerprint()
+                .expect("test fixture should be valid"),
+            b.compute_fingerprint()
+                .expect("test fixture should be valid"),
+            "fingerprint computation must normalize set-like fields internally"
         );
     }
 
@@ -1220,8 +1408,12 @@ mod tests {
         let mut b = minimal_prepared_assignment("pa_fp_det");
         a.normalize();
         b.normalize();
-        a.prepared_assignment_fingerprint = a.compute_fingerprint().unwrap();
-        b.prepared_assignment_fingerprint = b.compute_fingerprint().unwrap();
+        a.prepared_assignment_fingerprint = a
+            .compute_fingerprint()
+            .expect("test fixture should be valid");
+        b.prepared_assignment_fingerprint = b
+            .compute_fingerprint()
+            .expect("test fixture should be valid");
         assert_eq!(a, b, "same inputs produce same fingerprint and assignment");
     }
 
@@ -1231,8 +1423,12 @@ mod tests {
         let mut b = minimal_prepared_assignment("pa_fp_diff2");
         a.normalize();
         b.normalize();
-        let fp1 = a.compute_fingerprint().unwrap();
-        let fp2 = b.compute_fingerprint().unwrap();
+        let fp1 = a
+            .compute_fingerprint()
+            .expect("test fixture should be valid");
+        let fp2 = b
+            .compute_fingerprint()
+            .expect("test fixture should be valid");
         assert_ne!(fp1, fp2, "different id must produce different fingerprint");
     }
 
@@ -1243,9 +1439,11 @@ mod tests {
     #[test]
     fn prepared_assignment_has_no_floats() {
         let mut pa = minimal_prepared_assignment("pa_nofloat");
-        pa.prepared_assignment_fingerprint = pa.compute_fingerprint().unwrap();
-        let bytes = serde_json::to_vec_pretty(&pa).unwrap();
-        let text = String::from_utf8(bytes).unwrap();
+        pa.prepared_assignment_fingerprint = pa
+            .compute_fingerprint()
+            .expect("test fixture should be valid");
+        let bytes = serde_json::to_vec_pretty(&pa).expect("test fixture should be valid");
+        let text = String::from_utf8(bytes).expect("test fixture should be valid");
 
         // All numbers must be integers (no decimal point).
         for line in text.lines() {
@@ -1272,9 +1470,9 @@ mod tests {
             inventory_id: "test".to_string(),
             capabilities: vec!["source.read".to_string()],
         };
-        let _result = serde_json::to_value(&inv).unwrap();
-        let bytes = serde_json::to_vec_pretty(&inv).unwrap();
-        let text = String::from_utf8(bytes).unwrap();
+        let _result = serde_json::to_value(&inv).expect("test fixture should be valid");
+        let bytes = serde_json::to_vec_pretty(&inv).expect("test fixture should be valid");
+        let text = String::from_utf8(bytes).expect("test fixture should be valid");
 
         // All numbers must be integers (no decimal point).
         for line in text.lines() {
@@ -1333,8 +1531,9 @@ mod tests {
                 base_commit: "0123456789abcdef0123456789abcdef01234567".to_string(),
             },
         };
-        let json = serde_json::to_value(&record).unwrap();
-        let round_trip: AssignmentLeaseRecordV1 = serde_json::from_value(json).unwrap();
+        let json = serde_json::to_value(&record).expect("test fixture should be valid");
+        let round_trip: AssignmentLeaseRecordV1 =
+            serde_json::from_value(json).expect("test fixture should be valid");
         assert_eq!(round_trip, record);
     }
 
@@ -1367,7 +1566,8 @@ mod tests {
                 "base_commit": "0123456789abcdef0123456789abcdef01234567"
             }
         });
-        let parsed: AssignmentLeaseRecordV1 = serde_json::from_value(val.clone()).unwrap();
+        let parsed: AssignmentLeaseRecordV1 =
+            serde_json::from_value(val.clone()).expect("test fixture should be valid");
         assert_eq!(parsed.kind, "implementation_assignment");
 
         let mut tampered = val;
@@ -1411,8 +1611,9 @@ mod tests {
                 status: "not_requested".to_string(),
             },
         };
-        let json = serde_json::to_value(&record).unwrap();
-        let round_trip: AssignmentWorkspaceRecordV1 = serde_json::from_value(json).unwrap();
+        let json = serde_json::to_value(&record).expect("test fixture should be valid");
+        let round_trip: AssignmentWorkspaceRecordV1 =
+            serde_json::from_value(json).expect("test fixture should be valid");
         assert_eq!(round_trip, record);
     }
 
@@ -1435,7 +1636,8 @@ mod tests {
             "released_at": null,
             "cleanup": {"policy": "safe_remove_if_clean_at_base", "status": "not_requested"}
         });
-        let parsed: AssignmentWorkspaceRecordV1 = serde_json::from_value(val.clone()).unwrap();
+        let parsed: AssignmentWorkspaceRecordV1 =
+            serde_json::from_value(val.clone()).expect("test fixture should be valid");
         assert_eq!(parsed.mode, "isolated_worktree");
 
         let mut tampered = val;
@@ -1467,8 +1669,12 @@ mod tests {
             inventory_id: "test".to_string(),
             capabilities: vec!["source.read".to_string(), "source.write".to_string()],
         };
-        let id1 = inv1.compute_inventory_identity().unwrap();
-        let id2 = inv2.compute_inventory_identity().unwrap();
+        let id1 = inv1
+            .compute_inventory_identity()
+            .expect("test fixture should be valid");
+        let id2 = inv2
+            .compute_inventory_identity()
+            .expect("test fixture should be valid");
         assert_eq!(
             id1, id2,
             "capability inventory identity must be order-independent"
@@ -1489,8 +1695,12 @@ mod tests {
             inventory_id: "test".to_string(),
             capabilities: vec!["source.write".to_string()],
         };
-        let id1 = inv1.compute_inventory_identity().unwrap();
-        let id2 = inv2.compute_inventory_identity().unwrap();
+        let id1 = inv1
+            .compute_inventory_identity()
+            .expect("test fixture should be valid");
+        let id2 = inv2
+            .compute_inventory_identity()
+            .expect("test fixture should be valid");
         assert_ne!(
             id1, id2,
             "different capabilities must produce different identity"
@@ -1548,8 +1758,9 @@ mod tests {
             prepared_assignment_fingerprint: pa.prepared_assignment_fingerprint.clone(),
             reason_codes: pa.reason_codes.clone(),
         };
-        let json = serde_json::to_value(&record).unwrap();
-        let round_trip: PreparedAssignmentRecordV1 = serde_json::from_value(json).unwrap();
+        let json = serde_json::to_value(&record).expect("test fixture should be valid");
+        let round_trip: PreparedAssignmentRecordV1 =
+            serde_json::from_value(json).expect("test fixture should be valid");
         assert_eq!(round_trip, record);
     }
 

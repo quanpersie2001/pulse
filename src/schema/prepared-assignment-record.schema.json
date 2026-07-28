@@ -1,0 +1,166 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://pulse.reboot/schemas/prepared-assignment-record.schema.json",
+  "title": "PreparedAssignmentRecordV1",
+  "description": "Persisted runtime prepared-assignment record. Mirrors PreparedAssignmentV1 without embedding WorkPacketV1 bytes.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "profile",
+    "code",
+    "prepared_assignment_id",
+    "subject",
+    "packet_fingerprint",
+    "revalidated_snapshot",
+    "lease",
+    "workspace",
+    "capability_match",
+    "lifecycle",
+    "dispatch",
+    "transaction",
+    "prepared_assignment_fingerprint",
+    "reason_codes"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "profile": { "type": "string", "const": "phase2_prepared_assignment_v1" },
+    "code": { "type": "string", "const": "prepared_assignment" },
+    "prepared_assignment_id": { "type": "string", "pattern": "^pa_[A-Za-z0-9]+$" },
+    "packet_fingerprint": { "type": "string", "pattern": "^sha256:[A-Fa-f0-9]{64}$" },
+    "prepared_assignment_fingerprint": { "type": "string", "pattern": "^sha256:[A-Fa-f0-9]{64}$" },
+    "reason_codes": { "type": "array", "items": { "type": "string" }, "default": [] },
+    "subject": { "$ref": "#/definitions/AssignmentSubjectSnapshot" },
+    "revalidated_snapshot": { "$ref": "#/definitions/RevalidatedSnapshot" },
+    "lease": { "$ref": "#/definitions/AssignmentLeaseSummary" },
+    "workspace": { "$ref": "#/definitions/AssignmentWorkspaceSummary" },
+    "capability_match": { "$ref": "#/definitions/CapabilityMatchReport" },
+    "lifecycle": { "$ref": "#/definitions/AssignmentLifecycle" },
+    "dispatch": { "$ref": "#/definitions/AssignmentDispatch" },
+    "transaction": { "$ref": "#/definitions/AssignmentTransaction" }
+  },
+  "definitions": {
+    "AssignmentSubjectSnapshot": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "kind", "revision_before", "revision_after", "contract_revision", "status_before", "status_after"],
+      "properties": {
+        "id": { "type": "string" },
+        "kind": { "type": "string" },
+        "revision_before": { "type": "integer", "minimum": 0 },
+        "revision_after": { "type": "integer", "minimum": 0 },
+        "contract_revision": { "type": "integer", "minimum": 0 },
+        "status_before": { "type": "string" },
+        "status_after": { "type": "string" }
+      }
+    },
+    "RevalidatedSnapshot": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["graph_fingerprint", "readiness_profile", "readiness_fingerprint", "authority_policy_fingerprint", "docs_registry_fingerprint", "docs_index_fingerprint", "source_commit", "source_cleanliness", "repository_id"],
+      "properties": {
+        "graph_fingerprint": { "type": "string", "pattern": "^sha256:[A-Fa-f0-9]{64}$" },
+        "readiness_profile": { "type": "string" },
+        "readiness_fingerprint": { "type": "string", "pattern": "^sha256:[A-Fa-f0-9]{64}$" },
+        "authority_policy_fingerprint": { "type": "string", "pattern": "^sha256:[A-Fa-f0-9]{64}$" },
+        "docs_registry_fingerprint": { "type": "string", "pattern": "^sha256:[A-Fa-f0-9]{64}$" },
+        "docs_index_fingerprint": { "type": "string", "pattern": "^sha256:[A-Fa-f0-9]{64}$" },
+        "source_commit": { "type": "string", "pattern": "^[A-Fa-f0-9]{40}$" },
+        "source_cleanliness": { "type": "string" },
+        "repository_id": { "type": "string" }
+      }
+    },
+    "AssignmentLeaseSummary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["lease_id", "state", "assignee", "issued_by", "issued_at", "expires_at", "ttl_seconds", "exclusive"],
+      "properties": {
+        "lease_id": { "type": "string", "pattern": "^lease_[A-Za-z0-9]+$" },
+        "state": { "type": "string", "const": "prepared" },
+        "assignee": { "type": "string" },
+        "issued_by": { "type": "string" },
+        "issued_at": { "type": "string", "format": "date-time" },
+        "expires_at": { "type": "string", "format": "date-time" },
+        "ttl_seconds": { "type": "integer", "minimum": 60, "maximum": 86400 },
+        "exclusive": { "type": "boolean", "const": true }
+      }
+    },
+    "AssignmentWorkspaceSummary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["workspace_id", "binding_status", "mode", "path", "repository_id", "base_commit", "cleanliness", "owner_lease_id"],
+      "properties": {
+        "workspace_id": { "type": "string", "pattern": "^wt_[A-Za-z0-9_-]+$" },
+        "binding_status": { "type": "string", "const": "bound" },
+        "mode": { "type": "string", "enum": ["in_place", "isolated_worktree"] },
+        "path": { "type": "string" },
+        "repository_id": { "type": "string" },
+        "base_commit": { "type": "string", "pattern": "^[A-Fa-f0-9]{40}$" },
+        "cleanliness": { "type": "string" },
+        "owner_lease_id": { "type": "string", "pattern": "^lease_[A-Za-z0-9]+$" }
+      }
+    },
+    "CapabilityMatchReport": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["inventory_identity", "principal", "status", "required", "matched", "missing", "extra", "reason_codes"],
+      "properties": {
+        "inventory_identity": { "type": "string", "pattern": "^sha256:[A-Fa-f0-9]{64}$" },
+        "principal": { "type": "string" },
+        "status": { "type": "string", "const": "matched" },
+        "required": { "type": "array", "items": { "type": "string" } },
+        "matched": { "type": "array", "items": { "type": "string" } },
+        "missing": { "type": "array", "items": { "type": "string" }, "maxItems": 0 },
+        "extra": { "type": "array", "items": { "type": "string" } },
+        "reason_codes": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "AssignmentLifecycle": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["transition", "gate_profile", "gate_status", "expected_revision", "new_revision", "event_id"],
+      "properties": {
+        "transition": { "type": "string", "const": "ready_to_active" },
+        "gate_profile": { "type": "string", "const": "phase2_prepared_assignment_v1" },
+        "gate_status": { "type": "string", "const": "passed" },
+        "expected_revision": { "type": "integer", "minimum": 0 },
+        "new_revision": { "type": "integer", "minimum": 0 },
+        "event_id": { "type": "string" }
+      }
+    },
+    "AssignmentDispatch": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["dispatch_authorized", "authorization_status", "runner_status", "gate_families"],
+      "properties": {
+        "dispatch_authorized": { "type": "boolean", "const": true },
+        "authorization_status": { "type": "string", "const": "prepared_assignment" },
+        "runner_status": { "type": "string", "const": "not_started" },
+        "gate_families": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["family", "status", "reason_codes"],
+            "properties": {
+              "family": { "type": "string" },
+              "status": { "type": "string" },
+              "reason_codes": { "type": "array", "items": { "type": "string" }, "default": [] }
+            }
+          }
+        }
+      }
+    },
+    "AssignmentTransaction": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["transaction_id", "committed_targets", "event_path", "recovery_state"],
+      "properties": {
+        "transaction_id": { "type": "string" },
+        "committed_targets": { "type": "array", "items": { "type": "string" }, "default": [] },
+        "event_path": { "type": "string" },
+        "recovery_state": { "type": "string", "const": "complete" }
+      }
+    }
+  }
+}
