@@ -13,8 +13,7 @@ pub mod transaction;
 
 use crate::error::{PulseError, Result};
 use serde::de::DeserializeOwned;
-use std::fs::{self, OpenOptions};
-use std::io::Write;
+use std::fs;
 use std::path::{Component, Path, PathBuf};
 
 pub use lock::WriteGuard;
@@ -33,23 +32,7 @@ pub fn atomic_write(path: &Path, bytes: &[u8]) -> Result<()> {
 }
 
 pub fn create_new(path: &Path, bytes: &[u8]) -> Result<()> {
-    let parent = path.parent().ok_or_else(|| {
-        PulseError::validation(
-            "invalid_path",
-            format!("path has no parent: {}", path.display()),
-        )
-    })?;
-    fs::create_dir_all(parent).map_err(|error| PulseError::io(parent, error))?;
-    let mut file = OpenOptions::new()
-        .create_new(true)
-        .write(true)
-        .open(path)
-        .map_err(|error| PulseError::io(path, error))?;
-    file.write_all(bytes)
-        .map_err(|error| PulseError::io(path, error))?;
-    file.sync_all()
-        .map_err(|error| PulseError::io(path, error))?;
-    Ok(())
+    atomic::atomic_create_new(path, bytes).map(|_| ())
 }
 
 pub fn read_json<T: DeserializeOwned>(path: &Path) -> Result<T> {

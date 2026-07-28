@@ -82,11 +82,16 @@ pub struct TransactionTarget {
 
 impl TransactionTarget {
     pub fn new(path: PathBuf, before: FileState, after: FileState, after_bytes: &[u8]) -> Self {
+        let after_bytes_base64 = if after == FileState::Absent {
+            None
+        } else {
+            Some(BASE64_STANDARD.encode(after_bytes))
+        };
         Self {
             path,
             before,
             after,
-            after_bytes_base64: Some(BASE64_STANDARD.encode(after_bytes)),
+            after_bytes_base64,
         }
     }
 
@@ -195,8 +200,26 @@ impl MultiTargetTransactionIntent {
             });
         }
         targets.sort_by(|left, right| left.path.cmp(&right.path));
+        for window in targets.windows(2) {
+            if window[0].path == window[1].path {
+                return Err(PulseError::InvalidTransaction {
+                    message: format!(
+                        "multi-target transaction contains duplicate target path {}",
+                        window[0].path.display()
+                    ),
+                });
+            }
+        }
         for target in &targets {
             if target.after == FileState::Absent {
+                if target.after_bytes_base64.is_some() {
+                    return Err(PulseError::InvalidTransaction {
+                        message: format!(
+                            "remove target must not store an after payload for {}",
+                            target.path.display()
+                        ),
+                    });
+                }
                 // Remove target: no after-payload to validate. The after
                 // payload is absent by definition; the on-disk state is
                 // checked at commit/recovery time via before-hash matching.
@@ -372,7 +395,7 @@ pub fn commit_prepared_multi_target_transaction(
             &target.path,
             &target.before,
             &target.after,
-            &target.after_bytes()?,
+            &target_after_bytes(target)?,
         )?;
         #[cfg(debug_assertions)]
         if index == 0 && failpoint == Some(TransactionFailpoint::AfterMultiTargetFirst) {
@@ -500,7 +523,7 @@ fn recover_one_multi_target(
                     &target.path,
                     &target.before,
                     &target.after,
-                    &target.after_bytes()?,
+                    &target_after_bytes(target)?,
                 )?;
             }
             write_event_create_new_multi(intent)?;
@@ -577,6 +600,13 @@ fn observed_target_state(
     }
 }
 
+fn target_after_bytes(target: &TransactionTarget) -> Result<Vec<u8>> {
+    match target.after {
+        FileState::Absent => Ok(Vec::new()),
+        FileState::Present { .. } => target.after_bytes(),
+    }
+}
+
 fn write_target_respecting_before(
     path: &Path,
     before: &FileState,
@@ -585,12 +615,14 @@ fn write_target_respecting_before(
 ) -> Result<()> {
     let observed = observed_target_state(path, before, after)?;
     match (before, &observed, after) {
-        (FileState::Absent, ObservedTarget::Before, _) => crate::storage::create_new(path, bytes),
-        (_, ObservedTarget::Before, after) if *after == FileState::Absent => {
+        (_, ObservedTarget::Before, FileState::Absent) => {
             // Remove target: the transaction plans to delete this file.
-            fs::remove_file(path).map_err(|error| PulseError::io(path, error))?;
+            if path.exists() {
+                atomic::remove_file(path)?;
+            }
             Ok(())
         }
+        (FileState::Absent, ObservedTarget::Before, _) => crate::storage::create_new(path, bytes),
         (_, ObservedTarget::Before, _) => atomic::atomic_replace(path, bytes).map(|_| ()),
         (_, ObservedTarget::After, _) => Ok(()),
         (_, ObservedTarget::Other, _) => Err(PulseError::AmbiguousTransaction {

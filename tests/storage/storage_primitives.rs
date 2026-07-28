@@ -954,3 +954,175 @@ fn multi_target_recovery_rejects_empty_targets() {
     .unwrap_err();
     assert!(matches!(err, PulseError::InvalidTransaction { .. }));
 }
+
+#[test]
+fn multi_target_preparation_sorts_targets_and_rejects_duplicate_paths() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path();
+    bootstrap(repo).unwrap();
+
+    let target_a = repo.join(".pulse/runtime/a_record.json");
+    let target_b = repo.join(".pulse/runtime/b_record.json");
+    let bytes_a = to_canonical_bytes(&json!({"id": "a"})).unwrap();
+    let bytes_b = to_canonical_bytes(&json!({"id": "b"})).unwrap();
+
+    let intent = MultiTargetTransactionIntent::prepared(
+        "evt_sorted",
+        "test.multi",
+        "test",
+        vec![
+            TransactionTarget::new(
+                target_b.clone(),
+                FileState::Absent,
+                FileState::Present {
+                    hash: hash_bytes(&bytes_b),
+                    revision: 1,
+                },
+                &bytes_b,
+            ),
+            TransactionTarget::new(
+                target_a.clone(),
+                FileState::Absent,
+                FileState::Present {
+                    hash: hash_bytes(&bytes_a),
+                    revision: 1,
+                },
+                &bytes_a,
+            ),
+        ],
+        repo.join(".pulse/events/sorted.json"),
+        json!({"event": "sorted"}),
+    )
+    .unwrap();
+    assert_eq!(intent.targets[0].path, target_a);
+    assert_eq!(intent.targets[1].path, target_b);
+
+    let err = MultiTargetTransactionIntent::prepared(
+        "evt_duplicate",
+        "test.multi",
+        "test",
+        vec![
+            TransactionTarget::new(
+                target_a.clone(),
+                FileState::Absent,
+                FileState::Present {
+                    hash: hash_bytes(&bytes_a),
+                    revision: 1,
+                },
+                &bytes_a,
+            ),
+            TransactionTarget::new(
+                target_a.clone(),
+                FileState::Absent,
+                FileState::Present {
+                    hash: hash_bytes(&bytes_b),
+                    revision: 1,
+                },
+                &bytes_b,
+            ),
+        ],
+        repo.join(".pulse/events/duplicate.json"),
+        json!({"event": "duplicate"}),
+    )
+    .unwrap_err();
+    assert!(matches!(err, PulseError::InvalidTransaction { .. }));
+}
+
+#[test]
+fn multi_target_prepare_rejects_hash_mismatch_and_remove_payload() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path();
+    bootstrap(repo).unwrap();
+
+    let target = repo.join(".pulse/runtime/record.json");
+    let bytes = to_canonical_bytes(&json!({"id": "record"})).unwrap();
+    let different_bytes = to_canonical_bytes(&json!({"id": "different"})).unwrap();
+    let err = MultiTargetTransactionIntent::prepared(
+        "evt_hash_mismatch",
+        "test.multi",
+        "test",
+        vec![TransactionTarget::new(
+            target.clone(),
+            FileState::Absent,
+            FileState::Present {
+                hash: hash_bytes(&different_bytes),
+                revision: 1,
+            },
+            &bytes,
+        )],
+        repo.join(".pulse/events/hash_mismatch.json"),
+        json!({"event": "hash_mismatch"}),
+    )
+    .unwrap_err();
+    assert!(matches!(err, PulseError::InvalidTransaction { .. }));
+
+    let err = MultiTargetTransactionIntent::prepared(
+        "evt_remove_payload",
+        "test.multi",
+        "test",
+        vec![TransactionTarget {
+            path: target,
+            before: FileState::Present {
+                hash: hash_bytes(&bytes),
+                revision: 1,
+            },
+            after: FileState::Absent,
+            after_bytes_base64: Some(base64::Engine::encode(
+                &base64::prelude::BASE64_STANDARD,
+                b"unexpected",
+            )),
+        }],
+        repo.join(".pulse/events/remove_payload.json"),
+        json!({"event": "remove_payload"}),
+    )
+    .unwrap_err();
+    assert!(matches!(err, PulseError::InvalidTransaction { .. }));
+}
+
+#[test]
+fn multi_target_recovery_rejects_event_before_targets() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path();
+    bootstrap(repo).unwrap();
+
+    let target_a = repo.join(".pulse/runtime/a_record.json");
+    let target_b = repo.join(".pulse/runtime/b_record.json");
+    let bytes_a = to_canonical_bytes(&json!({"id": "a"})).unwrap();
+    let bytes_b = to_canonical_bytes(&json!({"id": "b"})).unwrap();
+    fs::create_dir_all(target_a.parent().unwrap()).unwrap();
+    fs::write(&target_a, &bytes_a).unwrap();
+
+    let intent = MultiTargetTransactionIntent::prepared(
+        "evt_event_before_targets",
+        "test.multi",
+        "test",
+        vec![
+            TransactionTarget::new(
+                target_a,
+                FileState::Absent,
+                FileState::Present {
+                    hash: hash_bytes(&bytes_a),
+                    revision: 1,
+                },
+                &bytes_a,
+            ),
+            TransactionTarget::new(
+                target_b,
+                FileState::Absent,
+                FileState::Present {
+                    hash: hash_bytes(&bytes_b),
+                    revision: 1,
+                },
+                &bytes_b,
+            ),
+        ],
+        repo.join(".pulse/events/2026-01-01/event_before_targets.json"),
+        json!({"event": "event_before_targets"}),
+    )
+    .unwrap();
+    persist_multi_target_intent(repo, &intent).unwrap();
+    write_event_create_new_multi(&intent).unwrap();
+
+    let err = recover_prepared_transactions(repo).unwrap_err();
+    assert!(matches!(err, PulseError::AmbiguousTransaction { .. }));
+}
