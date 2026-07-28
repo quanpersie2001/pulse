@@ -13,6 +13,7 @@
 use std::path::{Component, Path, PathBuf};
 use std::process::Command;
 use std::str::FromStr;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use serde::{Deserialize, Serialize};
 
@@ -303,16 +304,58 @@ fn validate_path_components(path: &Path, runtime_root: &Path) -> std::result::Re
 // Workspace ID and path generation
 // ---------------------------------------------------------------------------
 
-/// Generate a deterministic workspace ID from a ticket ID and a random suffix.
+static WORKSPACE_ID_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+fn sanitize_workspace_id_part(value: &str) -> String {
+    let sanitized: String = value
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' {
+                ch
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    let trimmed = sanitized.trim_matches('_');
+    if trimmed.is_empty() {
+        "work".to_string()
+    } else {
+        trimmed.to_string()
+    }
+}
+
+fn validate_workspace_id(workspace_id: &str) -> WorkspaceResult<()> {
+    if workspace_id.is_empty()
+        || workspace_id == "."
+        || workspace_id == ".."
+        || workspace_id.contains('/')
+        || workspace_id.contains('\\')
+        || !workspace_id
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '_')
+    {
+        return Err(PulseError::validation(
+            "unsafe_path",
+            format!("workspace id is not a safe single path component: {workspace_id}"),
+        ));
+    }
+    Ok(())
+}
+
+/// Generate a deterministic workspace ID from a ticket ID and a process-local
+/// unique suffix.
 ///
-/// Format: `wt_TK-XXX_<randomhex>`
+/// Format: `wt_TK-XXX_<hex>`.
 pub fn generate_workspace_id(ticket_id: &str) -> String {
     use std::time::{SystemTime, UNIX_EPOCH};
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default();
-    let suffix = format!("{:016x}", now.as_nanos() & 0xffff_ffff_ffff_ffff);
-    format!("wt_{}_{}", ticket_id, suffix)
+    let counter = WORKSPACE_ID_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let pid = u64::from(std::process::id());
+    let suffix = ((now.as_nanos() as u64) ^ pid.rotate_left(17)).wrapping_add(counter);
+    format!("wt_{}_{suffix:016x}", sanitize_workspace_id_part(ticket_id))
 }
 
 /// Generate a deterministic workspace path under the runtime workspaces root.
@@ -354,12 +397,30 @@ pub struct InPlaceBinding {
 /// - `work_packet_dirty_source_unsupported` if the worktree is dirty.
 /// - `work_packet_source_operation_in_progress` if a Git op is active.
 /// - `work_packet_source_changed` if HEAD does not match `base_commit`.
+fn validate_workspace_source(
+    repo_root: &Path,
+    base_commit: &str,
+    repository_id: &str,
+) -> WorkspaceResult<source::WorkspaceBaseValidation> {
+    let manifest = source::check_repository_identity(repo_root)?;
+    if manifest.repository_id != repository_id {
+        return Err(PulseError::validation(
+            "work_packet_repository_identity_mismatch",
+            format!(
+                "workspace repository_id '{}' does not match expected '{}'",
+                manifest.repository_id, repository_id
+            ),
+        ));
+    }
+    source::check_workspace_base(repo_root, base_commit)
+}
+
 pub fn bind_in_place(
     repo_root: &Path,
     base_commit: &str,
     repository_id: &str,
 ) -> WorkspaceResult<InPlaceBinding> {
-    let validation = source::check_workspace_base(repo_root, base_commit)?;
+    let validation = validate_workspace_source(repo_root, base_commit, repository_id)?;
 
     Ok(InPlaceBinding {
         path: repo_root.to_path_buf(),
@@ -423,7 +484,8 @@ pub fn create_isolated_worktree(
     base_commit: &str,
     repository_id: &str,
 ) -> WorkspaceResult<IsolatedWorktreeBinding> {
-    let worktree_path = generate_workspace_path(runtime_workspaces_root, workspace_id);
+    validate_workspace_id(workspace_id)?;
+    validate_workspace_source(repo_root, base_commit, repository_id)?;
 
     // Ensure the runtime workspaces directory exists.
     if !runtime_workspaces_root.exists() {
@@ -431,11 +493,22 @@ pub fn create_isolated_worktree(
             .map_err(|error| PulseError::io(runtime_workspaces_root, error))?;
     }
 
+    if source::check_cleanliness(repo_root)? != source::SourceCleanliness::Clean {
+        return Err(PulseError::validation(
+            "work_packet_dirty_source_unsupported",
+            "source repository became dirty before workspace creation",
+        ));
+    }
+
+    let managed_path = validate_managed_path(Path::new(workspace_id), runtime_workspaces_root)?;
+    let worktree_path = managed_path.canonical_path;
+
     // Check if the path already exists (possible adoption scenario).
     if worktree_path.exists() {
         // Attempt to adopt the existing worktree.
         if can_adopt_worktree(&worktree_path, base_commit, repository_id).unwrap_or(false) {
-            let validation = source::check_workspace_base(&worktree_path, base_commit)?;
+            let validation = validate_workspace_source(&worktree_path, base_commit, repository_id)?;
+            validate_detached_worktree(&validation)?;
             return Ok(IsolatedWorktreeBinding {
                 path: worktree_path,
                 workspace_id: workspace_id.to_string(),
@@ -479,9 +552,19 @@ pub fn create_isolated_worktree(
         .map_err(|error| PulseError::io(repo_root.join(".git"), error))?;
 
     if !output.status.success() {
-        // Clean up the pending directory on git failure.
-        let _ = std::fs::remove_dir_all(&worktree_path);
+        let cleanup_result =
+            cleanup_pending_workspace(repo_root, runtime_workspaces_root, &worktree_path);
         let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        if cleanup_result.is_err() {
+            return Err(PulseError::validation(
+                "assignment_workspace_cleanup_needed",
+                format!(
+                    "git worktree add failed and pending path needs operator cleanup: {}; {}",
+                    worktree_path.display(),
+                    stderr
+                ),
+            ));
+        }
         return Err(PulseError::validation(
             "assignment_workspace_create_failed",
             format!("git worktree add failed: {}", stderr),
@@ -489,11 +572,14 @@ pub fn create_isolated_worktree(
     }
 
     // Validate the new worktree source state.
-    let validation =
-        source::check_workspace_base(&worktree_path, base_commit).inspect_err(|_| {
+    let validation = validate_workspace_source(&worktree_path, base_commit, repository_id)
+        .inspect_err(|_| {
             // Clean up the worktree on validation failure when safe.
             let _ = cleanup_worktree(repo_root, &worktree_path);
         })?;
+    validate_detached_worktree(&validation).inspect_err(|_| {
+        let _ = cleanup_worktree(repo_root, &worktree_path);
+    })?;
 
     Ok(IsolatedWorktreeBinding {
         path: worktree_path,
@@ -522,6 +608,22 @@ pub fn validate_exact_base(
     source::check_workspace_base(repo_root, expected_commit)
 }
 
+fn validate_detached_worktree(validation: &source::WorkspaceBaseValidation) -> WorkspaceResult<()> {
+    if validation.worktree_root_kind != source::WorktreeRootKind::LinkedWorktree {
+        return Err(PulseError::validation(
+            "assignment_workspace_source_mismatch",
+            "isolated workspace must be a linked Git worktree",
+        ));
+    }
+    if validation.head_ref.is_some() {
+        return Err(PulseError::validation(
+            "assignment_workspace_source_mismatch",
+            "isolated worktree must be detached at the exact base commit",
+        ));
+    }
+    Ok(())
+}
+
 // ---------------------------------------------------------------------------
 // Worktree cleanup and adoption (P2S2-D8/D10)
 // ---------------------------------------------------------------------------
@@ -537,31 +639,28 @@ pub fn validate_exact_base(
 pub fn can_adopt_worktree(
     worktree_path: &Path,
     expected_base_commit: &str,
-    _expected_repository_id: &str,
+    expected_repository_id: &str,
 ) -> WorkspaceResult<bool> {
     if !worktree_path.join(".git").exists() && !worktree_path.join(".git").is_symlink() {
         return Ok(false);
     }
 
-    // Check if HEAD resolves.
-    let head = match source::head_commit(worktree_path) {
-        Ok(h) => h,
-        Err(_) => return Ok(false),
-    };
-
-    Ok(head == expected_base_commit)
+    match validate_workspace_source(worktree_path, expected_base_commit, expected_repository_id) {
+        Ok(validation) => Ok(validate_detached_worktree(&validation).is_ok()),
+        Err(_) => Ok(false),
+    }
 }
 
 /// Safely remove an isolated worktree.
 ///
-/// Uses `git worktree remove` when possible, falling back to manual directory
-/// removal. This function will NOT remove a path that appears to be the
-/// primary repository root (checks for `../../.git` vs `./.git` patterns).
+/// Uses `git worktree remove` only after proving the target is a clean Git
+/// worktree. This function will NOT remove a path that appears to be the
+/// primary repository root, dirty worktree, or unknown user directory.
 ///
 /// Rules:
 /// - Never delete the in-place root (caller must ensure).
-/// - Uses `git worktree remove --force` for clean worktrees.
-/// - Falls back to `std::fs::remove_dir_all` only when safe.
+/// - Never force-remove dirty or unknown user state.
+/// - Do not fall back to recursive directory deletion for worktrees.
 pub fn cleanup_worktree(repo_root: &Path, worktree_path: &Path) -> WorkspaceResult<()> {
     // Safety: never delete the primary repo root.
     let canonical_worktree = worktree_path
@@ -577,22 +676,89 @@ pub fn cleanup_worktree(repo_root: &Path, worktree_path: &Path) -> WorkspaceResu
         ));
     }
 
-    // First try `git worktree remove`.
-    let output = Command::new("git")
-        .args(["worktree", "remove", "--force"])
-        .arg(worktree_path.as_os_str())
-        .current_dir(repo_root)
-        .output();
-
-    if let Ok(output) = output {
-        if output.status.success() {
-            return Ok(());
-        }
+    if source::check_cleanliness(worktree_path)
+        .map(|cleanliness| cleanliness != source::SourceCleanliness::Clean)
+        .unwrap_or(true)
+    {
+        return Err(PulseError::validation(
+            "assignment_workspace_not_safe_to_remove",
+            format!(
+                "workspace is dirty, unknown or not a Git worktree: {}",
+                worktree_path.display()
+            ),
+        ));
     }
 
-    // Fall back to safe manual removal.
-    std::fs::remove_dir_all(worktree_path).map_err(|error| PulseError::io(worktree_path, error))?;
-    Ok(())
+    let output = Command::new("git")
+        .args(["worktree", "remove"])
+        .arg(worktree_path.as_os_str())
+        .current_dir(repo_root)
+        .output()
+        .map_err(|error| PulseError::io(repo_root.join(".git"), error))?;
+
+    if output.status.success() {
+        return Ok(());
+    }
+
+    Err(PulseError::validation(
+        "assignment_workspace_not_safe_to_remove",
+        format!(
+            "git worktree remove did not prove cleanup safe: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ),
+    ))
+}
+
+fn cleanup_pending_workspace(
+    repo_root: &Path,
+    runtime_workspaces_root: &Path,
+    worktree_path: &Path,
+) -> WorkspaceResult<()> {
+    let runtime_root = runtime_workspaces_root
+        .canonicalize()
+        .map_err(|error| PulseError::io(runtime_workspaces_root, error))?;
+    let canonical_or_parent = if worktree_path.exists() {
+        worktree_path
+            .canonicalize()
+            .map_err(|error| PulseError::io(worktree_path, error))?
+    } else {
+        worktree_path
+            .parent()
+            .ok_or_else(|| PulseError::validation("unsafe_path", "workspace path has no parent"))?
+            .canonicalize()
+            .map_err(|error| PulseError::io(worktree_path, error))?
+    };
+    if !canonical_or_parent.starts_with(&runtime_root) {
+        return Err(PulseError::validation(
+            "unsafe_path",
+            format!(
+                "pending workspace escapes runtime root: {}",
+                worktree_path.display()
+            ),
+        ));
+    }
+
+    if !worktree_path.exists() {
+        return Ok(());
+    }
+    if worktree_path.join(".git").exists() || worktree_path.join(".git").is_symlink() {
+        return cleanup_worktree(repo_root, worktree_path);
+    }
+
+    let mut entries =
+        std::fs::read_dir(worktree_path).map_err(|error| PulseError::io(worktree_path, error))?;
+    if entries.next().is_none() {
+        std::fs::remove_dir(worktree_path).map_err(|error| PulseError::io(worktree_path, error))?;
+        return Ok(());
+    }
+
+    Err(PulseError::validation(
+        "assignment_workspace_cleanup_needed",
+        format!(
+            "pending workspace contains unknown state: {}",
+            worktree_path.display()
+        ),
+    ))
 }
 
 // ---------------------------------------------------------------------------
@@ -601,7 +767,11 @@ pub fn cleanup_worktree(repo_root: &Path, worktree_path: &Path) -> WorkspaceResu
 
 /// Generate a workspace ID from a ticket ID and a stable suffix (for tests).
 pub fn generate_workspace_id_with_suffix(ticket_id: &str, suffix: &str) -> String {
-    format!("wt_{}_{}", ticket_id, suffix)
+    format!(
+        "wt_{}_{}",
+        sanitize_workspace_id_part(ticket_id),
+        sanitize_workspace_id_part(suffix)
+    )
 }
 
 // ===========================================================================
@@ -741,6 +911,22 @@ mod tests {
         assert_eq!(id, "wt_TK-005_test_suffix");
     }
 
+    #[test]
+    fn generate_workspace_id_sanitizes_unsafe_ticket_text() {
+        let id = generate_workspace_id_with_suffix("../TK 005", "bad/suffix");
+        assert_eq!(id, "wt_TK_005_bad_suffix");
+        assert!(validate_workspace_id(&id).is_ok());
+    }
+
+    #[test]
+    fn generate_workspace_id_is_unique_for_rapid_calls() {
+        let first = generate_workspace_id("TK-UNIQ");
+        let second = generate_workspace_id("TK-UNIQ");
+        assert_ne!(first, second);
+        assert!(validate_workspace_id(&first).is_ok());
+        assert!(validate_workspace_id(&second).is_ok());
+    }
+
     // -------------------------------------------------------------------
     // Managed path validation
     // -------------------------------------------------------------------
@@ -777,6 +963,22 @@ mod tests {
         assert!(result.is_within_runtime_root);
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn validate_managed_path_rejects_existing_symlink_escape() {
+        use std::os::unix::fs::symlink;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let runtime_root = tmp.path().join("runtime");
+        let outside = tmp.path().join("outside");
+        std::fs::create_dir_all(&runtime_root).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        symlink(&outside, runtime_root.join("link")).unwrap();
+
+        let err = validate_managed_path(Path::new("link/wt_test"), &runtime_root).unwrap_err();
+        assert_eq!(err.code(), "unsafe_path");
+    }
+
     // -------------------------------------------------------------------
     // In-place binding (requires temp Git repo)
     // -------------------------------------------------------------------
@@ -803,6 +1005,33 @@ mod tests {
             .output()
             .expect("git commit");
         assert!(output.status.success(), "git commit failed");
+    }
+
+    fn enroll_repo(path: &Path) -> String {
+        let manifest = crate::evidence::bootstrap(path).unwrap().manifest;
+        crate::docs::manifest::bootstrap(path).unwrap();
+        std::fs::write(path.join(".gitignore"), ".pulse/runtime/\n").unwrap();
+        let output = Command::new("git")
+            .args(["add", ".pulse", ".gitignore"])
+            .current_dir(path)
+            .output()
+            .expect("git add .pulse");
+        assert!(output.status.success(), "git add .pulse failed");
+        let output = Command::new("git")
+            .args([
+                "-c",
+                "user.name=Test",
+                "-c",
+                "user.email=test@test",
+                "commit",
+                "-m",
+                "enroll pulse",
+            ])
+            .current_dir(path)
+            .output()
+            .expect("git commit .pulse");
+        assert!(output.status.success(), "git commit .pulse failed");
+        manifest.repository_id
     }
 
     fn commit_file(path: &Path, rel: &str, content: &[u8]) -> String {
@@ -843,9 +1072,10 @@ mod tests {
     fn bind_in_place_clean_repo() {
         let tmp = tempfile::tempdir().unwrap();
         init_repo(tmp.path());
+        let repo_id = enroll_repo(tmp.path());
         let head = commit_file(tmp.path(), "README.md", b"hello");
-        let binding = bind_in_place(tmp.path(), &head, "repo_test").unwrap();
-        assert_eq!(binding.repository_id, "repo_test");
+        let binding = bind_in_place(tmp.path(), &head, &repo_id).unwrap();
+        assert_eq!(binding.repository_id, repo_id);
         assert_eq!(binding.base_commit, head);
         assert_eq!(binding.head_commit, head);
         assert_eq!(binding.cleanliness, "clean");
@@ -855,10 +1085,11 @@ mod tests {
     fn bind_in_place_wrong_commit_fails() {
         let tmp = tempfile::tempdir().unwrap();
         init_repo(tmp.path());
-        let head = commit_file(tmp.path(), "README.md", b"hello");
+        let repo_id = enroll_repo(tmp.path());
+        commit_file(tmp.path(), "README.md", b"hello");
         // Use a different (nonexistent) commit.
-        let wrong = format!("{}0", &head[..39]);
-        let err = bind_in_place(tmp.path(), &wrong, "repo_test").unwrap_err();
+        let wrong = "0000000000000000000000000000000000000000";
+        let err = bind_in_place(tmp.path(), wrong, &repo_id).unwrap_err();
         assert_eq!(err.code(), "work_packet_source_changed");
     }
 
@@ -866,11 +1097,33 @@ mod tests {
     fn bind_in_place_dirty_repo_fails() {
         let tmp = tempfile::tempdir().unwrap();
         init_repo(tmp.path());
+        let repo_id = enroll_repo(tmp.path());
         let head = commit_file(tmp.path(), "README.md", b"hello");
         // Dirty the worktree.
         std::fs::write(tmp.path().join("README.md"), b"modified").unwrap();
-        let err = bind_in_place(tmp.path(), &head, "repo_test").unwrap_err();
+        let err = bind_in_place(tmp.path(), &head, &repo_id).unwrap_err();
         assert_eq!(err.code(), "work_packet_dirty_source_unsupported");
+    }
+
+    #[test]
+    fn bind_in_place_untracked_repo_fails() {
+        let tmp = tempfile::tempdir().unwrap();
+        init_repo(tmp.path());
+        let repo_id = enroll_repo(tmp.path());
+        let head = commit_file(tmp.path(), "README.md", b"hello");
+        std::fs::write(tmp.path().join("untracked.txt"), b"new").unwrap();
+        let err = bind_in_place(tmp.path(), &head, &repo_id).unwrap_err();
+        assert_eq!(err.code(), "work_packet_dirty_source_unsupported");
+    }
+
+    #[test]
+    fn bind_in_place_repository_id_mismatch_fails() {
+        let tmp = tempfile::tempdir().unwrap();
+        init_repo(tmp.path());
+        enroll_repo(tmp.path());
+        let head = commit_file(tmp.path(), "README.md", b"hello");
+        let err = bind_in_place(tmp.path(), &head, "repo_wrong").unwrap_err();
+        assert_eq!(err.code(), "work_packet_repository_identity_mismatch");
     }
 
     #[test]
@@ -882,7 +1135,7 @@ mod tests {
             "repo_test",
         )
         .unwrap_err();
-        assert_eq!(err.code(), "work_packet_source_unavailable");
+        assert_eq!(err.code(), "work_packet_repository_identity_missing");
     }
 
     // -------------------------------------------------------------------
@@ -893,26 +1146,22 @@ mod tests {
     fn create_isolated_worktree_success() {
         let tmp = tempfile::tempdir().unwrap();
         init_repo(tmp.path());
+        let repo_id = enroll_repo(tmp.path());
         let head = commit_file(tmp.path(), "README.md", b"hello");
 
         let workspaces_root = tmp.path().join(".pulse/runtime/workspaces");
         let workspace_id = "wt_TK-001_test";
 
-        let binding = create_isolated_worktree(
-            tmp.path(),
-            &workspaces_root,
-            workspace_id,
-            &head,
-            "repo_test",
-        )
-        .unwrap();
+        let binding =
+            create_isolated_worktree(tmp.path(), &workspaces_root, workspace_id, &head, &repo_id)
+                .unwrap();
 
         assert_eq!(binding.workspace_id, workspace_id);
         assert!(binding.was_newly_created);
         assert_eq!(binding.base_commit, head);
         assert_eq!(binding.head_commit, head);
         assert_eq!(binding.cleanliness, "clean");
-        assert_eq!(binding.repository_id, "repo_test");
+        assert_eq!(binding.repository_id, repo_id);
         assert_eq!(binding.worktree_root_kind, "linked_worktree");
         assert!(binding.path.exists());
 
@@ -924,24 +1173,20 @@ mod tests {
     fn create_isolated_worktree_wrong_commit_fails() {
         let tmp = tempfile::tempdir().unwrap();
         init_repo(tmp.path());
-        let head = commit_file(tmp.path(), "README.md", b"hello");
-        let wrong = format!("{}0", &head[..39]);
+        let repo_id = enroll_repo(tmp.path());
+        commit_file(tmp.path(), "README.md", b"hello");
+        let wrong = "0000000000000000000000000000000000000000";
 
         let workspaces_root = tmp.path().join(".pulse/runtime/workspaces");
         let workspace_id = "wt_TK-002_test";
 
         // git worktree add --detach will fail because the commit doesn't exist.
-        let err = create_isolated_worktree(
-            tmp.path(),
-            &workspaces_root,
-            workspace_id,
-            &wrong,
-            "repo_test",
-        )
-        .unwrap_err();
-        assert_eq!(err.code(), "assignment_workspace_create_failed");
+        let err =
+            create_isolated_worktree(tmp.path(), &workspaces_root, workspace_id, wrong, &repo_id)
+                .unwrap_err();
+        assert_eq!(err.code(), "work_packet_source_changed");
 
-        // Worktree should have been cleaned up.
+        // Worktree should not have been created.
         assert!(!workspaces_root.join(workspace_id).exists());
     }
 
@@ -959,7 +1204,7 @@ mod tests {
             "repo_test",
         )
         .unwrap_err();
-        assert_eq!(err.code(), "assignment_workspace_create_failed");
+        assert_eq!(err.code(), "work_packet_repository_identity_missing");
     }
 
     // -------------------------------------------------------------------
@@ -970,19 +1215,15 @@ mod tests {
     fn cleanup_worktree_removes_worktree() {
         let tmp = tempfile::tempdir().unwrap();
         init_repo(tmp.path());
+        let repo_id = enroll_repo(tmp.path());
         let head = commit_file(tmp.path(), "README.md", b"hello");
 
         let workspaces_root = tmp.path().join(".pulse/runtime/workspaces");
         let workspace_id = "wt_TK-004_cleanup";
 
-        let binding = create_isolated_worktree(
-            tmp.path(),
-            &workspaces_root,
-            workspace_id,
-            &head,
-            "repo_test",
-        )
-        .unwrap();
+        let binding =
+            create_isolated_worktree(tmp.path(), &workspaces_root, workspace_id, &head, &repo_id)
+                .unwrap();
 
         assert!(binding.path.exists());
         cleanup_worktree(tmp.path(), &binding.path).unwrap();
@@ -997,6 +1238,50 @@ mod tests {
         assert_eq!(err.code(), "unsafe_path");
     }
 
+    #[test]
+    fn cleanup_worktree_rejects_dirty_worktree() {
+        let tmp = tempfile::tempdir().unwrap();
+        init_repo(tmp.path());
+        let repo_id = enroll_repo(tmp.path());
+        let head = commit_file(tmp.path(), "README.md", b"hello");
+        let workspaces_root = tmp.path().join(".pulse/runtime/workspaces");
+        let binding = create_isolated_worktree(
+            tmp.path(),
+            &workspaces_root,
+            "wt_TK-005_dirty_cleanup",
+            &head,
+            &repo_id,
+        )
+        .unwrap();
+        std::fs::write(binding.path.join("untracked.txt"), b"do not delete").unwrap();
+
+        let err = cleanup_worktree(tmp.path(), &binding.path).unwrap_err();
+        assert_eq!(err.code(), "assignment_workspace_not_safe_to_remove");
+
+        let _ = Command::new("git")
+            .args([
+                "worktree",
+                "remove",
+                "--force",
+                binding.path.to_str().unwrap(),
+            ])
+            .current_dir(tmp.path())
+            .output();
+    }
+
+    #[test]
+    fn cleanup_worktree_rejects_unknown_directory() {
+        let tmp = tempfile::tempdir().unwrap();
+        init_repo(tmp.path());
+        let unknown = tmp.path().join("not-a-worktree");
+        std::fs::create_dir_all(&unknown).unwrap();
+        std::fs::write(unknown.join("file.txt"), b"user state").unwrap();
+
+        let err = cleanup_worktree(tmp.path(), &unknown).unwrap_err();
+        assert_eq!(err.code(), "assignment_workspace_not_safe_to_remove");
+        assert!(unknown.exists());
+    }
+
     // -------------------------------------------------------------------
     // Worktree adoption checks
     // -------------------------------------------------------------------
@@ -1005,19 +1290,35 @@ mod tests {
     fn can_adopt_worktree_matching_commit() {
         let tmp = tempfile::tempdir().unwrap();
         init_repo(tmp.path());
+        let repo_id = enroll_repo(tmp.path());
         let head = commit_file(tmp.path(), "README.md", b"hello");
+        let wt_path = tmp.path().join(".pulse/runtime/workspaces/wt_adopt_check");
+        let output = Command::new("git")
+            .args([
+                "worktree",
+                "add",
+                "--detach",
+                wt_path.to_str().unwrap(),
+                &head,
+            ])
+            .current_dir(tmp.path())
+            .output()
+            .expect("git worktree add");
+        assert!(output.status.success(), "git worktree add failed");
 
-        assert!(can_adopt_worktree(tmp.path(), &head, "repo_test").unwrap());
+        assert!(can_adopt_worktree(&wt_path, &head, &repo_id).unwrap());
+        cleanup_worktree(tmp.path(), &wt_path).unwrap();
     }
 
     #[test]
     fn can_adopt_worktree_non_matching_commit() {
         let tmp = tempfile::tempdir().unwrap();
         init_repo(tmp.path());
-        let head = commit_file(tmp.path(), "README.md", b"hello");
-        let wrong = format!("{}0", &head[..39]);
+        let repo_id = enroll_repo(tmp.path());
+        commit_file(tmp.path(), "README.md", b"hello");
+        let wrong = "0000000000000000000000000000000000000000";
 
-        assert!(!can_adopt_worktree(tmp.path(), &wrong, "repo_test").unwrap());
+        assert!(!can_adopt_worktree(tmp.path(), wrong, &repo_id).unwrap());
     }
 
     #[test]
@@ -1039,6 +1340,7 @@ mod tests {
     fn create_isolated_worktree_adopts_existing_matching() {
         let tmp = tempfile::tempdir().unwrap();
         init_repo(tmp.path());
+        let repo_id = enroll_repo(tmp.path());
         let head = commit_file(tmp.path(), "README.md", b"hello");
 
         let workspaces_root = tmp.path().join(".pulse/runtime/workspaces");
@@ -1060,14 +1362,9 @@ mod tests {
         assert!(output.status.success(), "first worktree add failed");
 
         // Now "create" again — should adopt the existing worktree.
-        let binding = create_isolated_worktree(
-            tmp.path(),
-            &workspaces_root,
-            workspace_id,
-            &head,
-            "repo_test",
-        )
-        .unwrap();
+        let binding =
+            create_isolated_worktree(tmp.path(), &workspaces_root, workspace_id, &head, &repo_id)
+                .unwrap();
 
         assert_eq!(binding.workspace_id, workspace_id);
         assert!(!binding.was_newly_created);
@@ -1077,14 +1374,55 @@ mod tests {
     }
 
     #[test]
+    fn create_isolated_worktree_rejects_existing_primary_repo_even_if_head_matches() {
+        let source_tmp = tempfile::tempdir().unwrap();
+        init_repo(source_tmp.path());
+        let repo_id = enroll_repo(source_tmp.path());
+        let head = commit_file(source_tmp.path(), "README.md", b"hello");
+
+        let runtime_tmp = tempfile::tempdir().unwrap();
+        let workspaces_root = runtime_tmp.path().join("workspaces");
+        std::fs::create_dir_all(&workspaces_root).unwrap();
+        let workspace_id = "wt_TK-006_primary";
+        let primary_copy = workspaces_root.join(workspace_id);
+        let output = Command::new("git")
+            .args([
+                "clone",
+                source_tmp.path().to_str().unwrap(),
+                primary_copy.to_str().unwrap(),
+            ])
+            .output()
+            .expect("git clone");
+        assert!(output.status.success(), "git clone failed");
+        let output = Command::new("git")
+            .args(["checkout", &head])
+            .current_dir(&primary_copy)
+            .output()
+            .expect("git checkout cloned copy");
+        assert!(output.status.success(), "git checkout cloned copy failed");
+
+        let err = create_isolated_worktree(
+            source_tmp.path(),
+            &workspaces_root,
+            workspace_id,
+            &head,
+            &repo_id,
+        )
+        .unwrap_err();
+        assert_eq!(err.code(), "assignment_workspace_cleanup_needed");
+    }
+
+    #[test]
     fn create_isolated_worktree_existing_non_adoptable_fails() {
         let tmp = tempfile::tempdir().unwrap();
         init_repo(tmp.path());
+        let repo_id = enroll_repo(tmp.path());
         let head = commit_file(tmp.path(), "README.md", b"hello");
 
         // Create a different repo to get a different commit.
         let other_tmp = tempfile::tempdir().unwrap();
         init_repo(other_tmp.path());
+        enroll_repo(other_tmp.path());
         let other_head = commit_file(other_tmp.path(), "OTHER.md", b"other");
 
         let workspaces_root = tmp.path().join(".pulse/runtime/workspaces");
@@ -1106,14 +1444,9 @@ mod tests {
         assert!(output.status.success(), "worktree add from other repo");
 
         // Attempt to create with different base — should fail.
-        let err = create_isolated_worktree(
-            tmp.path(),
-            &workspaces_root,
-            workspace_id,
-            &head,
-            "repo_test",
-        )
-        .unwrap_err();
+        let err =
+            create_isolated_worktree(tmp.path(), &workspaces_root, workspace_id, &head, &repo_id)
+                .unwrap_err();
         assert_eq!(err.code(), "assignment_workspace_cleanup_needed");
 
         // Clean up manually.
@@ -1145,9 +1478,9 @@ mod tests {
     fn validate_exact_base_mismatch() {
         let tmp = tempfile::tempdir().unwrap();
         init_repo(tmp.path());
-        let head = commit_file(tmp.path(), "README.md", b"hello");
-        let wrong = format!("{}0", &head[..39]);
-        let err = validate_exact_base(tmp.path(), &wrong).unwrap_err();
+        commit_file(tmp.path(), "README.md", b"hello");
+        let wrong = "0000000000000000000000000000000000000000";
+        let err = validate_exact_base(tmp.path(), wrong).unwrap_err();
         assert_eq!(err.code(), "work_packet_source_changed");
     }
 }

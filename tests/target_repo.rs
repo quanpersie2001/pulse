@@ -8,6 +8,8 @@
 #[path = "common/mod.rs"]
 mod common;
 
+#[path = "target_repo/assignment_workspace.rs"]
+mod assignment_workspace;
 #[path = "target_repo/target_repo_fixture.rs"]
 mod target_repo_fixture;
 #[path = "target_repo/work_packet_i7.rs"]
