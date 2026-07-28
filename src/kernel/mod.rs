@@ -4,6 +4,7 @@
 //! This module is the sanctioned place for coherent operations that compose the
 //! graph store with documentation, evidence, policy and source/content checks.
 
+pub mod assignment_store;
 pub mod frontier;
 pub mod lifecycle;
 pub mod packet;

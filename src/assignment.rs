@@ -136,6 +136,22 @@ pub const CAPABILITY_INVENTORY_SCHEMA: &str =
 /// JSON Schema for `CapabilityMatchReport`.
 pub const CAPABILITY_MATCH_SCHEMA: &str = include_str!("schema/capability-match.schema.json");
 
+/// Tombstone schema version.
+pub const TOMBSTONE_SCHEMA_VERSION: u32 = 1;
+
+/// JSON Schema for `AssignmentTombstoneV1`.
+pub const ASSIGNMENT_TOMBSTONE_SCHEMA: &str =
+    include_str!("schema/assignment-tombstone.schema.json");
+
+/// Tombstone state: released (terminal).
+pub const TOMBSTONE_STATE_RELEASED: &str = "released";
+
+/// Tombstone state: expired (terminal).
+pub const TOMBSTONE_STATE_EXPIRED: &str = "expired";
+
+/// Tombstone state: stale_needs_operator (terminal).
+pub const TOMBSTONE_STATE_STALE: &str = "stale_needs_operator";
+
 // ---------------------------------------------------------------------------
 // Top-level PreparedAssignmentV1
 // ---------------------------------------------------------------------------
@@ -438,6 +454,37 @@ pub struct PreparedAssignmentRecordV1 {
     pub prepared_assignment_fingerprint: String,
     #[serde(default)]
     pub reason_codes: Vec<String>,
+}
+
+// ---------------------------------------------------------------------------
+// Tombstone record (persisted terminal lease state)
+// ---------------------------------------------------------------------------
+
+/// Terminal tombstone record for a prepared-assignment lease.
+///
+/// Written atomically with live-lease removal during release/recovery.
+/// A tombstone prevents duplicate claims by proving the lease ID is no
+/// longer live, even if the live lease file was already removed.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct AssignmentTombstoneV1 {
+    pub schema_version: u32,
+    pub lease_id: String,
+    pub subject_id: String,
+    pub state: String,
+    pub recorded_at: String,
+    pub actor: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    #[serde(default)]
+    pub reason_codes: Vec<String>,
+}
+
+impl AssignmentTombstoneV1 {
+    /// Normalize (no set-like collections currently).
+    pub fn normalize(&mut self) {
+        sort_strings(&mut self.reason_codes);
+    }
 }
 
 // ---------------------------------------------------------------------------

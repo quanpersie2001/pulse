@@ -7,17 +7,18 @@
 
 use pulse::assignment::{
     AssignmentDispatch, AssignmentGateFamily, AssignmentLeaseRecordV1, AssignmentLeaseSummary,
-    AssignmentLifecycle, AssignmentSubjectSnapshot, AssignmentTransaction,
+    AssignmentLifecycle, AssignmentSubjectSnapshot, AssignmentTombstoneV1, AssignmentTransaction,
     AssignmentWorkspaceRecordV1, AssignmentWorkspaceSummary, CapabilityInventoryV1,
     CapabilityMatchReport, PreparedAssignmentRecordV1, PreparedAssignmentV1, RevalidatedSnapshot,
-    ASSIGNMENT_LEASE_SCHEMA, ASSIGNMENT_SCHEMA_VERSION, ASSIGNMENT_WORKSPACE_SCHEMA,
-    CAPABILITY_INVENTORY_SCHEMA, CAPABILITY_INVENTORY_SCHEMA_VERSION, CAPABILITY_MATCH_SCHEMA,
-    CAP_MATCH_MATCHED, DEFAULT_TTL_SECONDS, DISPATCH_AUTHORIZED_STATUS, LEASE_KIND_IMPLEMENTATION,
-    LEASE_SCHEMA_VERSION, LEASE_STATE_PREPARED, LIFECYCLE_GATE_PROFILE, LIFECYCLE_READY_TO_ACTIVE,
-    MAX_TTL_SECONDS, MIN_TTL_SECONDS, PREPARED_ASSIGNMENT_PROFILE,
+    ASSIGNMENT_LEASE_SCHEMA, ASSIGNMENT_SCHEMA_VERSION, ASSIGNMENT_TOMBSTONE_SCHEMA,
+    ASSIGNMENT_WORKSPACE_SCHEMA, CAPABILITY_INVENTORY_SCHEMA, CAPABILITY_INVENTORY_SCHEMA_VERSION,
+    CAPABILITY_MATCH_SCHEMA, CAP_MATCH_MATCHED, DEFAULT_TTL_SECONDS, DISPATCH_AUTHORIZED_STATUS,
+    LEASE_KIND_IMPLEMENTATION, LEASE_SCHEMA_VERSION, LEASE_STATE_PREPARED, LIFECYCLE_GATE_PROFILE,
+    LIFECYCLE_READY_TO_ACTIVE, MAX_TTL_SECONDS, MIN_TTL_SECONDS, PREPARED_ASSIGNMENT_PROFILE,
     PREPARED_ASSIGNMENT_RECORD_SCHEMA, PREPARED_ASSIGNMENT_SCHEMA, RUNNER_STATUS_NOT_STARTED,
-    WORKSPACE_MODE_IN_PLACE, WORKSPACE_MODE_ISOLATED, WORKSPACE_SCHEMA_VERSION,
-    WORKSPACE_STATE_BOUND,
+    TOMBSTONE_SCHEMA_VERSION, TOMBSTONE_STATE_EXPIRED, TOMBSTONE_STATE_RELEASED,
+    TOMBSTONE_STATE_STALE, WORKSPACE_MODE_IN_PLACE, WORKSPACE_MODE_ISOLATED,
+    WORKSPACE_SCHEMA_VERSION, WORKSPACE_STATE_BOUND,
 };
 use pulse::docs::{
     ApplicabilityOptions, DocsRegistry, DocumentAuthority, DocumentKind, DocumentLifecycle,
@@ -494,12 +495,31 @@ fn assignment_public_paths_compile() {
         reason_codes: vec![],
     };
 
+    // Tombstone DTO checks.
+    let _tombstone = AssignmentTombstoneV1 {
+        schema_version: TOMBSTONE_SCHEMA_VERSION,
+        lease_id: "lease_01Jtomb".to_string(),
+        subject_id: "TK-001".to_string(),
+        state: TOMBSTONE_STATE_RELEASED.to_string(),
+        recorded_at: "2026-07-28T11:00:00Z".to_string(),
+        actor: "human:test".to_string(),
+        reason: None,
+        reason_codes: vec![],
+    };
+    assert_eq!(_tombstone.schema_version, 1);
+    assert_eq!(TOMBSTONE_SCHEMA_VERSION, 1);
+    assert_eq!(TOMBSTONE_STATE_RELEASED, "released");
+    assert_eq!(TOMBSTONE_STATE_EXPIRED, "expired");
+    assert_eq!(TOMBSTONE_STATE_STALE, "stale_needs_operator");
+    assert!(ASSIGNMENT_TOMBSTONE_SCHEMA.contains("AssignmentTombstoneV1"));
+
     // Type-acceptance checks.
     fn _accepts_prepared(_: PreparedAssignmentV1) {}
     fn _accepts_lease_record(_: AssignmentLeaseRecordV1) {}
     fn _accepts_workspace_record(_: AssignmentWorkspaceRecordV1) {}
     fn _accepts_cap_inventory(_: CapabilityInventoryV1) {}
     fn _accepts_cap_match(_: CapabilityMatchReport) {}
+    fn _accepts_tombstone(_: AssignmentTombstoneV1) {}
 
     // Workspace mode checks.
     assert_eq!(WorkspaceMode::InPlace.as_str(), "in_place");
