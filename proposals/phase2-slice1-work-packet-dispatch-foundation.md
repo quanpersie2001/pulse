@@ -1,11 +1,15 @@
 # Phase 2 — Slice 1: Bounded Work Packet + Dispatch Preparation Foundation
 
-> Trạng thái: **accepted implementation proposal**, chưa implemented hoặc
-> verified; đây không phải compatibility contract.
+> Trạng thái: **implemented and verified** for Phase 2 Slice 1. Implementation
+> landed across commits `ed68c08`, `823607e`, `e47f90d`, `cf65ec4`,
+> `d236774`, `7f62545`, `e28c5c0`, `ddef30a` and verification hardening commit
+> `6d3076b`; supporting fix/verification commits are listed in the completion
+> evidence below. This remains a pre-Core-v1 current baseline, not a released
+> compatibility contract.
 > Tiền đề:
 > [`phase1-slice7-shaping-readiness-frontier.md`](phase1-slice7-shaping-readiness-frontier.md)
 > đã được implement và verify tại commit `677c593`.
-> Sở hữu: implementation strategy cho lát cắt đầu tiên của Phase 2: packet thực
+> Sở hữu: implemented Slice 1 behavior for the first Phase 2 slice: packet thực
 > thi versioned/bounded, coherent packet snapshot, exact source-base identity,
 > workspace/lease/capability requirements và projection chuẩn bị dispatch không
 > tự nhận đã reserve hoặc chạy Agent.
@@ -1709,40 +1713,77 @@ packet belongs Slice 2, và không claim run/close scenarios.
 
 ## Definition of Done
 
-- [ ] Public `pulse::work_packet::WorkPacketV1` schema/types, explicit packet
+- [x] Public `pulse::work_packet::WorkPacketV1` schema/types, explicit packet
       contract DTO, deny-unknown round-trip và non-self-referential canonical
       fingerprint implemented.
-- [ ] `pulse work packet <ticket-id> --json` stable command implemented.
-- [ ] Only current ready implementation Ticket can produce packet.
-- [ ] Packet contains typed contract, parent, Decision, shaping, relation,
+- [x] `pulse work packet <ticket-id> --json` stable command implemented.
+- [x] Only current ready implementation Ticket can produce packet.
+- [x] Packet contains typed contract, parent, Decision, shaping, relation,
       blocker, docs, source, assurance and runtime-requirement context.
-- [ ] Existing docs manifest/registry is required; packet contains current
+- [x] Existing docs manifest/registry is required; packet contains current
       required/optional/write/excluded docs and max 8 lexical section suggestions.
-- [ ] Deterministic docs query algorithm implemented exactly as specified.
-- [ ] Packet binds existing stable repository ID and exact clean Git HEAD.
-- [ ] Dirty source and Git operation in progress reject.
-- [ ] Workspace requirement mapping implemented; no workspace ID fabricated.
-- [ ] Capability requirements derive exactly from D7 vocabulary/rules.
-- [ ] Knowledge/promotion/close/runtime families report typed not installed or
+- [x] Deterministic docs query algorithm implemented exactly as specified.
+- [x] Packet binds existing stable repository ID and exact clean Git HEAD.
+- [x] Dirty source and Git operation in progress reject.
+- [x] Workspace requirement mapping implemented; no workspace ID fabricated.
+- [x] Capability requirements derive exactly from D7 vocabulary/rules.
+- [x] Knowledge/promotion/close/runtime families report typed not installed or
       not evaluated, not fabricated empty/pass.
-- [ ] Every successful preview packet has schema-constant
+- [x] Every successful preview packet has schema-constant
       `reservation_candidate=true`; failed pre-reservation gates return stable
       non-zero packet errors.
-- [ ] `dispatch_authorized` always false in this profile.
-- [ ] Packet builder observes coherent canonical/source state and revalidates
+- [x] `dispatch_authorized` always false in this profile.
+- [x] Packet builder observes coherent canonical/source state and revalidates
       after cache-only docs search.
-- [ ] Packet JSON contains no floats; search scores use integer micros.
-- [ ] 128 KiB hard budget, size fixed point and overflow rules enforced without
+- [x] Packet JSON contains no floats; search scores use integer micros.
+- [x] 128 KiB hard budget, size fixed point and overflow rules enforced without
       required-context truncation.
-- [ ] Read query writes only generic repository lock, disposable workgraph
+- [x] Read query writes only generic repository lock, disposable workgraph
       snapshot cache and disposable docs search cache.
-- [ ] No node/edge/manifest/event/lease/workspace/run mutation from packet query.
-- [ ] Focused schema/unit/integration/concurrency/source tests pass.
-- [ ] `cargo fmt --check` passes.
-- [ ] `cargo clippy --all-targets --quiet -- -D warnings` passes.
-- [ ] `cargo test --all-targets` passes under default threading.
-- [ ] `git diff --check` passes.
-- [ ] Proposal and roadmap completion status updated only after verified commit.
+- [x] No node/edge/manifest/event/lease/workspace/run mutation from packet query.
+- [x] Focused schema/unit/integration/concurrency/source tests pass.
+- [x] `cargo fmt --check` passes.
+- [x] `cargo clippy --all-targets --quiet -- -D warnings` passes.
+- [x] `cargo test --all-targets` passes under default threading.
+- [x] `git diff --check` passes.
+- [x] Proposal and roadmap completion status updated only after verified commit.
+
+### Completion evidence
+
+Verified implementation commits:
+
+- `ed68c08` — packet contract/schema/types, normalization, canonical
+  fingerprinting and schema tests.
+- `5478234` — schema verification hardening for the packet contract.
+- `823607e` — preserve/no-bootstrap repository identity and exact source-base
+  snapshot support.
+- `067533a` — source identity edge-case verification.
+- `e47f90d` — coherent packet snapshot kernel builder and context projection.
+- `7e89033` — packet snapshot verification hardening.
+- `cf65ec4` — documentation applicability/search integration, deterministic
+  docs query and cache-only search path.
+- `a6d3125` — documentation packet integration hardening.
+- `d236774` — pre-reservation dispatch preparation projection.
+- `c306a22` — dispatch preview projection hardening.
+- `7f62545` — CLI and contract/integration tests.
+- `e28c5c0` — read-only side-effect contract fix.
+- `ddef30a` — coherence, concurrency and budget hardening.
+- `6d3076b` — final P2S1-I7 verification of side effects, fingerprint and
+  deterministic hardening invariants.
+
+Final P2S1-I8 verification evidence before marking complete:
+
+- `cargo fmt --check` — pass.
+- `cargo clippy --all-targets --quiet -- -D warnings` — pass.
+- `cargo test --all-targets` under default threading — pass: 458 tests across
+  library, binary and integration crates; the docs retrieval bench harness
+  executable also passed.
+- `git diff --check` — pass.
+
+This completes only the Phase 2 Slice 1 preview `WorkPacketV1` foundation. It
+still does not acquire leases, allocate workspaces, emit `PreparedAssignmentV1`,
+open `ready -> active`, run agents, perform handoff/verification, or close work;
+those remain the Slice 2+ responsibilities below.
 
 ---
 
