@@ -392,7 +392,9 @@ The supervisor:
 2. creates a dedicated process group/session or platform-equivalent job;
 3. launches the Codex process in the bound workspace;
 4. reports child identity through the startup handshake;
-5. writes heartbeat/control observations;
+5. writes heartbeat/control observations only through managed paths with
+   restrictive directory/file permissions where supported, no symlink following,
+   and create-new/atomic-replace semantics;
 6. enforces the run timeout because it owns the child wait loop;
 7. waits for exit or cancel request;
 8. records an exit observation file using create-new/atomic replace;
@@ -512,15 +514,19 @@ Invariants:
 - terminal run records remain available; local tombstones are optional only for
   future retention and are not used to hide history.
 
-### P2S3-D9 — Lease TTL is pre-start TTL; a live run owns execution liveness
+### P2S3-D9 — Lease TTL is pre-run TTL; unresolved run state owns execution liveness
 
-Before `run.started`, the Slice 2 prepared lease TTL applies normally. Once
-`run.started` is durable:
+Before any `run.starting` transaction is durable, the Slice 2 prepared lease TTL
+applies normally. Once a run record exists, even if it is still `starting` and
+`run.started` has not committed yet:
 
 - the prepared lease remains the ownership binding;
 - lease expiry alone does not permit another claim or auto-requeue;
 - duplicate claim/start is blocked by the live or unresolved run record;
-- run liveness uses supervisor heartbeat and process identity;
+- `starting` recovery must deterministically adopt, fail-to-start, or mark stale
+  before any later assignment disposition policy may consider release/requeue;
+- after `run.started`, run liveness uses supervisor heartbeat and process
+  identity rather than lease TTL;
 - `work leases recover` must refuse to expire/requeue an assignment with a live
   or unresolved run and report `blocked_by_run`;
 - `work release` remains no-run only and rejects once any run record exists;
@@ -613,8 +619,10 @@ Resume eligibility:
   repository identity still match;
 - workspace is not in merge/rebase/cherry-pick/revert/bisect operation;
 - current `WorkspaceSnapshotV1` equals the previous attempt's recorded final or
-  interrupted snapshot;
-- source scope has not been externally modified since that snapshot;
+  interrupted snapshot; for a clean `failed_to_start` with no child identity and
+  no final/interrupted snapshot, current preflight snapshot must equal the
+  original `workspace_before` snapshot and original start preconditions;
+- source scope has not been externally modified since that comparison snapshot;
 - adapter profile is current and compatible, or caller explicitly chooses a
   current profile under policy;
 - actor has `work.run.resume`.
@@ -635,9 +643,13 @@ must state whether the workspace is `in_place` or `isolated_worktree`. In-place
 runs are allowed only after excluding Pulse-owned runtime/coordination paths
 from source drift identity, otherwise heartbeats/logs/control files would make
 the workspace appear changed by Pulse itself. Exclusion rules are fixed and
-narrow (`.pulse/runtime/`, `.pulse/cache/`, and other gitignored Pulse runtime
-coordination paths); `.pulse/workgraph`, `.pulse/docs`, `.pulse/evidence`,
-`.pulse/events`, docs and source files remain normal source changes.
+narrow (`.pulse/runtime/`, `.pulse/cache/`, and other managed Pulse-generated
+runtime/cache paths only); `.pulse/workgraph`, `.pulse/docs`, `.pulse/evidence`,
+`.pulse/events`, `.pulse/run/runner-profiles.json`, docs, source files and
+arbitrary user/project gitignored files are not excluded by this Pulse-runtime
+rule. If a worker intentionally edits ignored files that are part of the bounded
+source scope, Slice 3 must either include them through an explicit source-scope
+rule or mark the snapshot unsupported rather than silently hiding the change.
 
 ```json
 {
@@ -869,11 +881,25 @@ run.exited
 run.recovered
 ```
 
+`run.resume_starting` owns the starting-state commit for attempt number > 1.
+The later verified-running commit for that attempt emits `run.started` with the
+new attempt ID; Slice 3 does not add a separate `run.resumed` terminal or running
+event.
+
 `run.recovered` is emitted only for a recovery mutation that changes durable run
 state but has no more specific event type. Recovery that completes a prepared
 `run.started`, `run.exited`, `run.cancelled`, `run.interrupted` or
 `run.failed_to_start` transition emits that specific lifecycle event instead,
 not an additional `run.recovered` audit event.
+
+Semantic event commit owner is deterministic: the public parent command owns
+`run.starting`, `run.resume_starting` and the normal `run.started`; the cancel
+caller owns `run.cancel_requested`; terminal observation finalization is owned
+by the first authorized mutating path that holds the repository fence (`run
+recover`, `run cancel` finalization, or a future explicit foreground observer),
+and recovery owns adopted/repair transitions. Repeated commands use current
+state plus transaction/event IDs to return idempotently rather than emitting a
+second semantic event.
 
 Every event uses the shared `EventEnvelope` and correlation:
 
@@ -1351,9 +1377,12 @@ Supervisor continues independently:
 - writes create-new exit observation;
 - exits.
 
-A later `run show`, `run recover`, cancel caller or foreground observer commits
-semantic terminal state from the observation. The supervisor itself does not
-write semantic event or canonical run record files.
+A later mutating path such as `run recover`, cancel finalization or a future
+explicit foreground observer commits semantic terminal state from the observation.
+`run show` and `run list` remain read-only: they may report
+`terminal_observation_pending=true` and derived classifications, but they never
+finalize exit state or write events. The supervisor itself does not write
+semantic event or canonical run record files.
 
 ---
 
@@ -1743,7 +1772,9 @@ is absent.
    attempt N+1 under same run ID.
 2. Resume uses same lease/prepared assignment/workspace and active Ticket
    revision.
-3. Current snapshot must equal previous recorded snapshot.
+3. Current snapshot must equal the previous recorded final/interrupted snapshot;
+   clean failed-to-start without child identity compares against the original
+   pre-start snapshot and preflight instead.
 4. Tracked change drift rejects.
 5. Untracked content/path/mode drift rejects.
 6. Git operation in progress rejects.
@@ -1834,6 +1865,9 @@ feasible:
 
 - Implement preserve-only profile registry load/validate/fingerprint.
 - Add production `codex_process_v1` and internal fixture adapter selection.
+- Prove public production profile JSON/help rejects `fixture_process_v1` and any
+  other test-only adapter; fixture adapters are injectable only through
+  crate-private test APIs.
 - Add path/env/timeout/log bounds and no-shell tests.
 
 ### P2S3-I3 — Add runtime run store and classification
