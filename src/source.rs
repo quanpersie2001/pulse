@@ -21,8 +21,14 @@ use crate::canonical_json::{hash_bytes, hash_serializable};
 use crate::{PulseError, Result};
 use serde::{Deserialize, Serialize};
 use std::fs;
+use std::io::Read;
 use std::path::Path;
-use std::process::Command;
+use std::process::{Command, Stdio};
+
+use crate::run::{
+    WorkspaceCleanlinessV1, WorkspaceModeV1, WorkspaceOperationStateV1, WorkspaceSnapshotStatusV1,
+    WorkspaceSnapshotV1,
+};
 
 const EVIDENCE_ONLY_PREFIXES: [&str; 2] = [".pulse/evidence/", ".pulse/events/"];
 
@@ -109,8 +115,9 @@ impl RepositoryOperationState {
     }
 }
 
-/// P2S3-I0 workspace snapshot feasibility result. This is a bounded identity
-/// probe, not a replayable archive and not public runner state.
+/// P2S3 workspace snapshot result used by I0 feasibility callers. The full
+/// contract is `crate::run::WorkspaceSnapshotV1`; this compatibility wrapper
+/// omits volatile `captured_at` and `snapshot_identity` fields for older tests.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct WorkspaceSnapshotFeasibilityV1 {
@@ -136,7 +143,12 @@ pub struct WorkspaceSnapshotOptions {
     pub workspace_id: String,
     pub workspace_mode: String,
     pub base_commit: String,
+    pub diff_base_commit: String,
+    pub included_paths: Vec<String>,
+    pub captured_at: String,
     pub max_tracked_diff_bytes: usize,
+    pub max_status_bytes: usize,
+    pub max_untracked_entries: usize,
     pub max_untracked_file_bytes: u64,
     pub max_untracked_total_bytes: u64,
 }
@@ -153,75 +165,130 @@ impl WorkspaceSnapshotOptions {
             workspace_id: workspace_id.to_string(),
             workspace_mode: workspace_mode.to_string(),
             base_commit: base_commit.to_string(),
+            diff_base_commit: base_commit.to_string(),
+            included_paths: Vec::new(),
+            captured_at: "1970-01-01T00:00:00Z".to_string(),
             max_tracked_diff_bytes: 1024 * 1024,
+            max_status_bytes: 1024 * 1024,
+            max_untracked_entries: 4096,
             max_untracked_file_bytes: 1024 * 1024,
             max_untracked_total_bytes: 4 * 1024 * 1024,
         }
     }
 }
 
+pub fn workspace_snapshot(
+    repo_root: &Path,
+    options: &WorkspaceSnapshotOptions,
+) -> Result<WorkspaceSnapshotV1> {
+    if options.diff_base_commit != options.base_commit {
+        return bounded_snapshot(
+            repo_root,
+            options,
+            vec!["diff_base_must_equal_base".to_string()],
+        );
+    }
+
+    let mut reason_codes = Vec::new();
+    let head = head_commit(repo_root)?;
+    let operation_state = detect_operation_state(repo_root)?;
+    if operation_state != RepositoryOperationState::Normal {
+        reason_codes.push(format!("git_operation_{}", operation_state.as_str()));
+    }
+
+    let tracked = tracked_diff_identity(repo_root, options)?;
+    extend_reason(&mut reason_codes, "tracked_diff", &tracked.status);
+
+    let status = status_identity(repo_root, options)?;
+    extend_reason(&mut reason_codes, "status", &status.status);
+
+    let untracked = untracked_manifest_identity(repo_root, options)?;
+    extend_reason(&mut reason_codes, "untracked_manifest", &untracked.status);
+
+    if has_ignored_source_paths(repo_root, options)? {
+        reason_codes.push("ignored_source_paths_unsupported".to_string());
+    }
+
+    let snapshot_status = snapshot_status_from_reasons(&reason_codes);
+    let cleanliness = if status.dirty || untracked.dirty || tracked.dirty {
+        WorkspaceCleanlinessV1::Dirty
+    } else {
+        WorkspaceCleanlinessV1::Clean
+    };
+
+    build_workspace_snapshot(
+        options,
+        WorkspaceSnapshotBuildParts {
+            head,
+            operation_state: operation_state_to_v1(&operation_state),
+            cleanliness,
+            tracked_diff_identity: tracked.identity,
+            untracked_manifest_identity: untracked.identity,
+            status_identity: status.identity,
+            snapshot_status,
+        },
+    )
+}
+
+fn bounded_snapshot(
+    repo_root: &Path,
+    options: &WorkspaceSnapshotOptions,
+    reason_codes: Vec<String>,
+) -> Result<WorkspaceSnapshotV1> {
+    let head = head_commit(repo_root)?;
+    build_workspace_snapshot(
+        options,
+        WorkspaceSnapshotBuildParts {
+            head,
+            operation_state: WorkspaceOperationStateV1::Unknown,
+            cleanliness: WorkspaceCleanlinessV1::Unknown,
+            tracked_diff_identity: hash_bytes(&[]),
+            untracked_manifest_identity: hash_bytes(&[]),
+            status_identity: hash_bytes(&[]),
+            snapshot_status: snapshot_status_from_reasons(&reason_codes),
+        },
+    )
+}
+
 pub fn workspace_snapshot_feasibility(
     repo_root: &Path,
     options: &WorkspaceSnapshotOptions,
 ) -> Result<WorkspaceSnapshotFeasibilityV1> {
-    let head = head_commit(repo_root)?;
-    let operation_state = detect_operation_state(repo_root)?;
-    let (tracked_diff_identity, tracked_status) = tracked_diff_identity(
-        repo_root,
-        &options.base_commit,
-        options.max_tracked_diff_bytes,
-    )?;
-    let status_bytes = git_bytes(
-        repo_root,
-        ["status", "--porcelain=v1", "-z", "--untracked-files=all"],
-        "run_workspace_snapshot_unsupported",
-    )?;
-    let (status_identity, status_status) = filtered_status_identity(&status_bytes)?;
-    let (untracked_manifest_identity, untracked_status) = untracked_manifest_identity(
-        repo_root,
-        options.max_untracked_file_bytes,
-        options.max_untracked_total_bytes,
-    )?;
-    let mut reason_codes = Vec::new();
-    for (code, status) in [
-        ("tracked_diff_bounded_out", tracked_status.as_str()),
-        ("status_unsupported", status_status.as_str()),
-        ("untracked_manifest_bounded_out", untracked_status.as_str()),
-    ] {
-        if status != "complete" {
-            reason_codes.push(code.to_string());
-        }
-    }
-    if operation_state != RepositoryOperationState::Normal {
-        reason_codes.push("git_operation_in_progress".to_string());
-    }
-    let snapshot_status = if reason_codes.is_empty() {
-        "complete"
-    } else if reason_codes.iter().any(|code| code.contains("bounded_out")) {
-        "bounded_out"
-    } else {
-        "unsupported"
-    };
+    let snapshot = workspace_snapshot(repo_root, options)?;
     Ok(WorkspaceSnapshotFeasibilityV1 {
-        schema_version: 1,
-        repository_id: options.repository_id.clone(),
-        workspace_id: options.workspace_id.clone(),
-        workspace_mode: options.workspace_mode.clone(),
-        base_commit: options.base_commit.clone(),
-        head_commit: head,
-        diff_base_commit: options.base_commit.clone(),
-        operation_state: operation_state.as_str().to_string(),
-        cleanliness: if workspace_snapshot_status_path(&status_bytes)? {
-            "dirty"
-        } else {
-            "clean"
-        }
-        .to_string(),
-        tracked_diff_identity,
-        untracked_manifest_identity,
-        status_identity,
-        snapshot_status: snapshot_status.to_string(),
-        reason_codes,
+        schema_version: snapshot.schema_version as u64,
+        repository_id: snapshot.repository_id,
+        workspace_id: snapshot.workspace_id,
+        workspace_mode: match snapshot.workspace_mode {
+            WorkspaceModeV1::InPlace => "in_place".to_string(),
+            WorkspaceModeV1::IsolatedWorktree => "isolated_worktree".to_string(),
+        },
+        base_commit: snapshot.base_commit,
+        head_commit: snapshot.head_commit,
+        diff_base_commit: snapshot.diff_base_commit,
+        operation_state: match snapshot.operation_state {
+            WorkspaceOperationStateV1::None => "normal".to_string(),
+            WorkspaceOperationStateV1::Merge => "merge_in_progress".to_string(),
+            WorkspaceOperationStateV1::Rebase => "rebase_in_progress".to_string(),
+            WorkspaceOperationStateV1::CherryPick => "cherry_pick_in_progress".to_string(),
+            WorkspaceOperationStateV1::Revert => "revert_in_progress".to_string(),
+            WorkspaceOperationStateV1::Bisect => "bisect_in_progress".to_string(),
+            WorkspaceOperationStateV1::Unknown => "unknown".to_string(),
+        },
+        cleanliness: match snapshot.cleanliness {
+            WorkspaceCleanlinessV1::Clean => "clean".to_string(),
+            WorkspaceCleanlinessV1::Dirty => "dirty".to_string(),
+            WorkspaceCleanlinessV1::Unknown => "unknown".to_string(),
+        },
+        tracked_diff_identity: snapshot.tracked_diff_identity,
+        untracked_manifest_identity: snapshot.untracked_manifest_identity,
+        status_identity: snapshot.status_identity,
+        snapshot_status: match snapshot.snapshot_status {
+            WorkspaceSnapshotStatusV1::Complete => "complete".to_string(),
+            WorkspaceSnapshotStatusV1::Unsupported => "unsupported".to_string(),
+            WorkspaceSnapshotStatusV1::BoundedOut => "bounded_out".to_string(),
+        },
+        reason_codes: Vec::new(),
     })
 }
 
@@ -307,27 +374,6 @@ fn is_evidence_only_path(path: &str) -> bool {
 
 fn git<const N: usize>(repo_root: &Path, args: [&str; N]) -> Result<String> {
     git_with_code(repo_root, args, "source_binding_stale")
-}
-
-fn git_bytes<const N: usize>(
-    repo_root: &Path,
-    args: [&str; N],
-    error_code: &'static str,
-) -> Result<Vec<u8>> {
-    let output = Command::new("git")
-        .args(args)
-        .env("LC_ALL", "C")
-        .env("GIT_EXTERNAL_DIFF", "true")
-        .current_dir(repo_root)
-        .output()
-        .map_err(|error| PulseError::io(repo_root.join(".git"), error))?;
-    if !output.status.success() {
-        return Err(PulseError::validation(
-            error_code,
-            String::from_utf8_lossy(&output.stderr).trim().to_string(),
-        ));
-    }
-    Ok(output.stdout)
 }
 
 fn packet_git<const N: usize>(repo_root: &Path, args: [&str; N]) -> Result<String> {
@@ -478,31 +524,116 @@ fn status_line_path(line: &str) -> Option<&str> {
     Some(path.rsplit(" -> ").next().unwrap_or(path).trim_matches('"'))
 }
 
-fn tracked_diff_identity(
-    repo_root: &Path,
-    base_commit: &str,
-    max_bytes: usize,
-) -> Result<(String, String)> {
-    let bytes = git_bytes(
-        repo_root,
-        [
-            "diff",
-            "--binary",
-            "--full-index",
-            "--no-ext-diff",
-            "--no-color",
-            "-z",
-            base_commit,
-        ],
-        "run_workspace_snapshot_unsupported",
-    )?;
-    if bytes.len() > max_bytes {
-        return Ok((hash_bytes(&bytes[..max_bytes]), "bounded_out".to_string()));
-    }
-    Ok((hash_bytes(&bytes), "complete".to_string()))
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SnapshotComponent {
+    identity: String,
+    status: ComponentStatus,
+    dirty: bool,
 }
 
-fn filtered_status_identity(bytes: &[u8]) -> Result<(String, String)> {
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ComponentStatus {
+    Complete,
+    Unsupported(String),
+    BoundedOut(String),
+}
+
+fn tracked_diff_identity(
+    repo_root: &Path,
+    options: &WorkspaceSnapshotOptions,
+) -> Result<SnapshotComponent> {
+    let mut args = vec![
+        "diff",
+        "--binary",
+        "--full-index",
+        "--no-ext-diff",
+        "--no-color",
+        "-z",
+        &options.diff_base_commit,
+        "--",
+    ];
+    for path in &options.included_paths {
+        validate_snapshot_scope_path(path)?;
+        args.push(path);
+    }
+    let bytes = match git_bytes_bounded(repo_root, &args, options.max_tracked_diff_bytes) {
+        Ok(bytes) => bytes,
+        Err(SnapshotReadError::BoundedOut(bytes)) => {
+            return Ok(SnapshotComponent {
+                identity: hash_bytes(&bytes),
+                status: ComponentStatus::BoundedOut("tracked_diff_bounded_out".to_string()),
+                dirty: true,
+            });
+        }
+        Err(SnapshotReadError::Git(message)) => {
+            return Ok(SnapshotComponent {
+                identity: hash_bytes(message.as_bytes()),
+                status: ComponentStatus::Unsupported("tracked_diff_unsupported".to_string()),
+                dirty: false,
+            });
+        }
+        Err(SnapshotReadError::Io(error)) => {
+            return Err(PulseError::io(repo_root.join(".git"), error))
+        }
+    };
+    if contains_unsupported_diff_marker(&bytes) {
+        return Ok(SnapshotComponent {
+            identity: hash_bytes(&bytes),
+            status: ComponentStatus::Unsupported("tracked_diff_unsupported".to_string()),
+            dirty: true,
+        });
+    }
+    Ok(SnapshotComponent {
+        dirty: !bytes.is_empty(),
+        identity: hash_bytes(&bytes),
+        status: ComponentStatus::Complete,
+    })
+}
+
+fn status_identity(
+    repo_root: &Path,
+    options: &WorkspaceSnapshotOptions,
+) -> Result<SnapshotComponent> {
+    let mut args = vec![
+        "status",
+        "--porcelain=v1",
+        "-z",
+        "--untracked-files=all",
+        "--",
+    ];
+    for path in &options.included_paths {
+        validate_snapshot_scope_path(path)?;
+        args.push(path);
+    }
+    let bytes = match git_bytes_bounded(repo_root, &args, options.max_status_bytes) {
+        Ok(bytes) => bytes,
+        Err(SnapshotReadError::BoundedOut(bytes)) => {
+            return Ok(SnapshotComponent {
+                identity: hash_bytes(&bytes),
+                status: ComponentStatus::BoundedOut("status_bounded_out".to_string()),
+                dirty: true,
+            });
+        }
+        Err(SnapshotReadError::Git(message)) => {
+            return Ok(SnapshotComponent {
+                identity: hash_bytes(message.as_bytes()),
+                status: ComponentStatus::Unsupported("status_unsupported".to_string()),
+                dirty: false,
+            });
+        }
+        Err(SnapshotReadError::Io(error)) => {
+            return Err(PulseError::io(repo_root.join(".git"), error))
+        }
+    };
+    let retained = filter_git_records(&bytes)?;
+    Ok(SnapshotComponent {
+        dirty: !retained.is_empty(),
+        identity: hash_bytes(&retained),
+        status: ComponentStatus::Complete,
+    })
+}
+
+fn filter_git_records(bytes: &[u8]) -> Result<Vec<u8>> {
     let mut retained = Vec::new();
     for entry in bytes
         .split(|byte| *byte == 0)
@@ -511,31 +642,41 @@ fn filtered_status_identity(bytes: &[u8]) -> Result<(String, String)> {
         let text = std::str::from_utf8(entry).map_err(|_| {
             PulseError::validation(
                 "run_workspace_snapshot_unsupported",
-                "git status path is not valid UTF-8",
+                "git path is not valid UTF-8",
             )
         })?;
-        let path = text.get(3..).unwrap_or("").trim_matches('"');
+        let path = status_or_diff_path(text);
+        validate_managed_relative_path(path)?;
         if !is_pulse_runtime_generated_path(path) {
             retained.extend_from_slice(entry);
             retained.push(0);
         }
     }
-    Ok((hash_bytes(&retained), "complete".to_string()))
+    Ok(retained)
 }
 
 fn untracked_manifest_identity(
     repo_root: &Path,
-    max_file_bytes: u64,
-    max_total_bytes: u64,
-) -> Result<(String, String)> {
-    let output = git_bytes(
-        repo_root,
-        ["ls-files", "--others", "--exclude-standard", "-z"],
-        "run_workspace_snapshot_unsupported",
-    )?;
+    options: &WorkspaceSnapshotOptions,
+) -> Result<SnapshotComponent> {
+    let mut args = vec!["ls-files", "--others", "-z", "--"];
+    for path in &options.included_paths {
+        validate_snapshot_scope_path(path)?;
+        args.push(path);
+    }
+    let output = git_bytes(repo_root, &args, "run_workspace_snapshot_unsupported")?;
+    let mut special_scan_budget = options.max_untracked_entries;
+    if let Some(status) = directory_special_status(repo_root, &mut special_scan_budget)? {
+        return Ok(SnapshotComponent {
+            dirty: true,
+            identity: hash_bytes(b"special_file_scan"),
+            status,
+        });
+    }
     let mut entries = Vec::new();
     let mut total = 0_u64;
-    let mut status = "complete".to_string();
+    let mut count = 0_usize;
+    let mut status = ComponentStatus::Complete;
     for raw in output
         .split(|byte| *byte == 0)
         .filter(|entry| !entry.is_empty())
@@ -546,27 +687,54 @@ fn untracked_manifest_identity(
                 "untracked path is not valid UTF-8",
             )
         })?;
+        validate_managed_relative_path(relative)?;
         if is_pulse_runtime_generated_path(relative) {
             continue;
+        }
+        count += 1;
+        if count > options.max_untracked_entries {
+            status = ComponentStatus::BoundedOut("untracked_entries_bounded_out".to_string());
+            break;
         }
         let path = repo_root.join(relative);
         let metadata = fs::symlink_metadata(&path).map_err(|error| PulseError::io(&path, error))?;
         let file_type = metadata.file_type();
         if file_type.is_dir() {
-            return Ok((hash_bytes(relative.as_bytes()), "unsupported".to_string()));
+            if path.join(".git").exists() {
+                return Ok(unsupported_manifest(
+                    relative,
+                    "nested_repository_unsupported",
+                ));
+            }
+            let mut directory_budget = options.max_untracked_entries;
+            if let Some(status) = directory_special_status(&path, &mut directory_budget)? {
+                return Ok(SnapshotComponent {
+                    dirty: true,
+                    identity: hash_bytes(relative.as_bytes()),
+                    status,
+                });
+            }
+            continue;
         }
         #[cfg(unix)]
-        let mode = {
-            use std::os::unix::fs::PermissionsExt;
+        let executable = {
+            use std::os::unix::fs::{FileTypeExt, PermissionsExt};
+            if file_type.is_socket()
+                || file_type.is_fifo()
+                || file_type.is_block_device()
+                || file_type.is_char_device()
+            {
+                return Ok(unsupported_manifest(relative, "special_file_unsupported"));
+            }
             metadata.permissions().mode() & 0o111 != 0
         };
         #[cfg(not(unix))]
-        let mode = false;
+        let executable = false;
         let (kind, len, digest) = if file_type.is_file() {
-            if metadata.len() > max_file_bytes
-                || total.saturating_add(metadata.len()) > max_total_bytes
+            if metadata.len() > options.max_untracked_file_bytes
+                || total.saturating_add(metadata.len()) > options.max_untracked_total_bytes
             {
-                status = "bounded_out".to_string();
+                status = ComponentStatus::BoundedOut("untracked_manifest_bounded_out".to_string());
                 ("regular_bounded_out", metadata.len(), hash_bytes(&[]))
             } else {
                 let bytes = fs::read(&path).map_err(|error| PulseError::io(&path, error))?;
@@ -575,41 +743,306 @@ fn untracked_manifest_identity(
             }
         } else if file_type.is_symlink() {
             let target = fs::read_link(&path).map_err(|error| PulseError::io(&path, error))?;
+            let target_bytes = os_str_bytes(target.as_os_str())?;
             (
                 "symlink",
-                target.as_os_str().len() as u64,
-                hash_bytes(target.to_string_lossy().as_bytes()),
+                target_bytes.len() as u64,
+                hash_bytes(target_bytes),
             )
         } else {
-            return Ok((hash_bytes(relative.as_bytes()), "unsupported".to_string()));
+            return Ok(unsupported_manifest(relative, "special_file_unsupported"));
         };
-        entries.push((relative.to_string(), kind.to_string(), mode, len, digest));
+        entries.push((
+            relative.to_string(),
+            kind.to_string(),
+            executable,
+            len,
+            digest,
+        ));
     }
     entries.sort_by(|left, right| left.0.cmp(&right.0));
-    Ok((hash_serializable(&entries)?, status))
+    Ok(SnapshotComponent {
+        dirty: !entries.is_empty(),
+        identity: hash_serializable(&entries)?,
+        status,
+    })
+}
+
+fn unsupported_manifest(relative: &str, reason: &str) -> SnapshotComponent {
+    SnapshotComponent {
+        dirty: true,
+        identity: hash_bytes(relative.as_bytes()),
+        status: ComponentStatus::Unsupported(reason.to_string()),
+    }
+}
+
+fn directory_special_status(path: &Path, budget: &mut usize) -> Result<Option<ComponentStatus>> {
+    for entry in fs::read_dir(path).map_err(|error| PulseError::io(path, error))? {
+        let entry = entry.map_err(|error| PulseError::io(path, error))?;
+        if entry.file_name() == ".git" {
+            continue;
+        }
+        if *budget == 0 {
+            return Ok(Some(ComponentStatus::BoundedOut(
+                "untracked_entries_bounded_out".to_string(),
+            )));
+        }
+        *budget -= 1;
+        let entry_path = entry.path();
+        let metadata = fs::symlink_metadata(&entry_path)
+            .map_err(|error| PulseError::io(&entry_path, error))?;
+        let file_type = metadata.file_type();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::FileTypeExt;
+            if file_type.is_socket()
+                || file_type.is_fifo()
+                || file_type.is_block_device()
+                || file_type.is_char_device()
+            {
+                return Ok(Some(ComponentStatus::Unsupported(
+                    "special_file_unsupported".to_string(),
+                )));
+            }
+        }
+        if file_type.is_dir() {
+            if let Some(status) = directory_special_status(&entry_path, budget)? {
+                return Ok(Some(status));
+            }
+        }
+    }
+    Ok(None)
 }
 
 fn is_pulse_runtime_generated_path(path: &str) -> bool {
     path.starts_with(".pulse/runtime/") || path.starts_with(".pulse/cache/")
 }
 
-fn workspace_snapshot_status_path(bytes: &[u8]) -> Result<bool> {
-    for entry in bytes
+fn has_ignored_source_paths(repo_root: &Path, options: &WorkspaceSnapshotOptions) -> Result<bool> {
+    let mut args = vec![
+        "ls-files",
+        "--others",
+        "--ignored",
+        "--exclude-standard",
+        "-z",
+        "--",
+    ];
+    for path in &options.included_paths {
+        validate_snapshot_scope_path(path)?;
+        args.push(path);
+    }
+    let output = git_bytes(repo_root, &args, "run_workspace_snapshot_unsupported")?;
+    for raw in output
         .split(|byte| *byte == 0)
         .filter(|entry| !entry.is_empty())
     {
-        let text = std::str::from_utf8(entry).map_err(|_| {
+        let relative = std::str::from_utf8(raw).map_err(|_| {
             PulseError::validation(
                 "run_workspace_snapshot_unsupported",
-                "git status path is not valid UTF-8",
+                "ignored path is not valid UTF-8",
             )
         })?;
-        let path = text.get(3..).unwrap_or("").trim_matches('"');
-        if !is_pulse_runtime_generated_path(path) {
+        validate_managed_relative_path(relative)?;
+        if !is_pulse_runtime_generated_path(relative) {
             return Ok(true);
         }
     }
     Ok(false)
+}
+
+fn status_or_diff_path(text: &str) -> &str {
+    let path = if text.len() >= 3 { &text[3..] } else { text };
+    path.rsplit(" -> ").next().unwrap_or(path).trim_matches('"')
+}
+
+fn validate_snapshot_scope_path(path: &str) -> Result<()> {
+    validate_managed_relative_path(path)
+}
+
+fn validate_managed_relative_path(path: &str) -> Result<()> {
+    if path.is_empty()
+        || path.starts_with('/')
+        || path.starts_with("../")
+        || path == ".."
+        || path.contains("/../")
+        || path.contains("//")
+        || path.contains('\\')
+        || path.as_bytes().contains(&0)
+    {
+        return Err(PulseError::validation(
+            "run_workspace_snapshot_unsupported",
+            format!("unsafe repository-relative path: {path}"),
+        ));
+    }
+    Ok(())
+}
+
+fn contains_unsupported_diff_marker(bytes: &[u8]) -> bool {
+    bytes
+        .windows(b"Subproject commit".len())
+        .any(|window| window == b"Subproject commit")
+}
+
+fn extend_reason(reason_codes: &mut Vec<String>, prefix: &str, status: &ComponentStatus) {
+    match status {
+        ComponentStatus::Complete => {}
+        ComponentStatus::Unsupported(reason) | ComponentStatus::BoundedOut(reason) => {
+            if reason.starts_with(prefix) || prefix.is_empty() {
+                reason_codes.push(reason.clone());
+            } else {
+                reason_codes.push(format!("{prefix}_{reason}"));
+            }
+        }
+    }
+}
+
+fn snapshot_status_from_reasons(reason_codes: &[String]) -> WorkspaceSnapshotStatusV1 {
+    if reason_codes.is_empty() {
+        WorkspaceSnapshotStatusV1::Complete
+    } else if reason_codes.iter().any(|code| code.contains("bounded_out")) {
+        WorkspaceSnapshotStatusV1::BoundedOut
+    } else {
+        WorkspaceSnapshotStatusV1::Unsupported
+    }
+}
+
+struct WorkspaceSnapshotBuildParts {
+    head: String,
+    operation_state: WorkspaceOperationStateV1,
+    cleanliness: WorkspaceCleanlinessV1,
+    tracked_diff_identity: String,
+    untracked_manifest_identity: String,
+    status_identity: String,
+    snapshot_status: WorkspaceSnapshotStatusV1,
+}
+
+fn build_workspace_snapshot(
+    options: &WorkspaceSnapshotOptions,
+    parts: WorkspaceSnapshotBuildParts,
+) -> Result<WorkspaceSnapshotV1> {
+    let workspace_mode = match options.workspace_mode.as_str() {
+        "in_place" => WorkspaceModeV1::InPlace,
+        "isolated_worktree" => WorkspaceModeV1::IsolatedWorktree,
+        _ => {
+            return Err(PulseError::validation(
+                "run_workspace_snapshot_unsupported",
+                "workspace mode must be in_place or isolated_worktree",
+            ));
+        }
+    };
+    let mut snapshot = WorkspaceSnapshotV1 {
+        schema_version: 1,
+        repository_id: options.repository_id.clone(),
+        workspace_id: options.workspace_id.clone(),
+        workspace_mode,
+        base_commit: options.base_commit.clone(),
+        head_commit: parts.head,
+        diff_base_commit: options.diff_base_commit.clone(),
+        operation_state: parts.operation_state,
+        cleanliness: parts.cleanliness,
+        tracked_diff_identity: parts.tracked_diff_identity,
+        untracked_manifest_identity: parts.untracked_manifest_identity,
+        status_identity: parts.status_identity,
+        snapshot_status: parts.snapshot_status,
+        captured_at: options.captured_at.clone(),
+        snapshot_identity: String::new(),
+    };
+    snapshot.snapshot_identity = snapshot.compute_identity()?;
+    Ok(snapshot)
+}
+
+fn operation_state_to_v1(state: &RepositoryOperationState) -> WorkspaceOperationStateV1 {
+    match state {
+        RepositoryOperationState::Normal => WorkspaceOperationStateV1::None,
+        RepositoryOperationState::MergeInProgress => WorkspaceOperationStateV1::Merge,
+        RepositoryOperationState::RebaseInProgress => WorkspaceOperationStateV1::Rebase,
+        RepositoryOperationState::CherryPickInProgress => WorkspaceOperationStateV1::CherryPick,
+        RepositoryOperationState::RevertInProgress => WorkspaceOperationStateV1::Revert,
+        RepositoryOperationState::BisectInProgress => WorkspaceOperationStateV1::Bisect,
+    }
+}
+
+enum SnapshotReadError {
+    BoundedOut(Vec<u8>),
+    Git(String),
+    Io(std::io::Error),
+}
+
+fn git_bytes_bounded(
+    repo_root: &Path,
+    args: &[&str],
+    max_bytes: usize,
+) -> std::result::Result<Vec<u8>, SnapshotReadError> {
+    let mut child = Command::new("git")
+        .args(args)
+        .env("LC_ALL", "C")
+        .env("GIT_EXTERNAL_DIFF", "true")
+        .current_dir(repo_root)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(SnapshotReadError::Io)?;
+    let mut stdout = child.stdout.take().expect("stdout piped");
+    let mut retained = Vec::new();
+    let mut buf = [0_u8; 8192];
+    let mut bounded = false;
+    loop {
+        let read = stdout.read(&mut buf).map_err(SnapshotReadError::Io)?;
+        if read == 0 {
+            break;
+        }
+        if retained.len().saturating_add(read) > max_bytes {
+            let keep = max_bytes.saturating_sub(retained.len());
+            retained.extend_from_slice(&buf[..keep]);
+            bounded = true;
+            let _ = child.kill();
+            break;
+        }
+        retained.extend_from_slice(&buf[..read]);
+    }
+    let output = child.wait_with_output().map_err(SnapshotReadError::Io)?;
+    if bounded {
+        return Err(SnapshotReadError::BoundedOut(retained));
+    }
+    if !output.status.success() {
+        return Err(SnapshotReadError::Git(
+            String::from_utf8_lossy(&output.stderr).trim().to_string(),
+        ));
+    }
+    Ok(retained)
+}
+
+fn git_bytes(repo_root: &Path, args: &[&str], error_code: &'static str) -> Result<Vec<u8>> {
+    let output = Command::new("git")
+        .args(args)
+        .env("LC_ALL", "C")
+        .env("GIT_EXTERNAL_DIFF", "true")
+        .current_dir(repo_root)
+        .output()
+        .map_err(|error| PulseError::io(repo_root.join(".git"), error))?;
+    if !output.status.success() {
+        return Err(PulseError::validation(
+            error_code,
+            String::from_utf8_lossy(&output.stderr).trim().to_string(),
+        ));
+    }
+    Ok(output.stdout)
+}
+
+#[cfg(unix)]
+fn os_str_bytes(value: &std::ffi::OsStr) -> Result<&[u8]> {
+    use std::os::unix::ffi::OsStrExt;
+    Ok(value.as_bytes())
+}
+
+#[cfg(not(unix))]
+fn os_str_bytes(value: &std::ffi::OsStr) -> Result<&[u8]> {
+    value.to_str().map(|s| s.as_bytes()).ok_or_else(|| {
+        PulseError::validation(
+            "run_workspace_snapshot_unsupported",
+            "path is not valid UTF-8",
+        )
+    })
 }
 
 fn is_pulse_metadata_path(path: &str) -> bool {

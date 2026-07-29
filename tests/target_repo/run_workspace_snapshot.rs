@@ -1,10 +1,35 @@
-use pulse::source::{workspace_snapshot_feasibility, WorkspaceSnapshotOptions};
+use pulse::run::{WorkspaceCleanlinessV1, WorkspaceOperationStateV1, WorkspaceSnapshotStatusV1};
+use pulse::source::{workspace_snapshot, workspace_snapshot_feasibility, WorkspaceSnapshotOptions};
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::process::Command;
 
 #[path = "../common/git.rs"]
 mod git;
+
+fn options(base: &str) -> WorkspaceSnapshotOptions {
+    WorkspaceSnapshotOptions::feasibility_defaults("repo", "wt", "in_place", base)
+}
+
+#[test]
+fn snapshot_is_deterministic_and_captured_at_excluded_from_identity() {
+    let tmp = tempfile::tempdir().unwrap();
+    git::commit_all(tmp.path());
+    let base = git::git(tmp.path(), &["rev-parse", "HEAD"]);
+    fs::write(tmp.path().join("README.md"), b"changed").unwrap();
+
+    let mut first = options(&base);
+    first.captured_at = "2026-01-01T00:00:00Z".to_string();
+    let mut second = first.clone();
+    second.captured_at = "2026-01-01T00:00:01Z".to_string();
+
+    let one = workspace_snapshot(tmp.path(), &first).unwrap();
+    let two = workspace_snapshot(tmp.path(), &second).unwrap();
+    assert_eq!(one.snapshot_status, WorkspaceSnapshotStatusV1::Complete);
+    assert_eq!(one.cleanliness, WorkspaceCleanlinessV1::Dirty);
+    assert_eq!(one.snapshot_identity, two.snapshot_identity);
+    assert_eq!(one.tracked_diff_identity, two.tracked_diff_identity);
+}
 
 #[test]
 fn snapshot_ignores_pulse_runtime_but_not_canonical_pulse_state() {
@@ -13,15 +38,19 @@ fn snapshot_ignores_pulse_runtime_but_not_canonical_pulse_state() {
     let base = git::git(tmp.path(), &["rev-parse", "HEAD"]);
     fs::create_dir_all(tmp.path().join(".pulse/runtime/run/logs")).unwrap();
     fs::write(tmp.path().join(".pulse/runtime/run/logs/a.log"), b"runtime").unwrap();
-    let options = WorkspaceSnapshotOptions::feasibility_defaults("repo", "wt", "in_place", &base);
-    let snapshot = workspace_snapshot_feasibility(tmp.path(), &options).unwrap();
-    assert_eq!(snapshot.snapshot_status, "complete");
-    assert_eq!(snapshot.cleanliness, "clean");
+    fs::create_dir_all(tmp.path().join(".pulse/cache/docs")).unwrap();
+    fs::write(tmp.path().join(".pulse/cache/docs/index"), b"cache").unwrap();
+    let snapshot = workspace_snapshot(tmp.path(), &options(&base)).unwrap();
+    assert_eq!(
+        snapshot.snapshot_status,
+        WorkspaceSnapshotStatusV1::Complete
+    );
+    assert_eq!(snapshot.cleanliness, WorkspaceCleanlinessV1::Clean);
 
     fs::create_dir_all(tmp.path().join(".pulse/workgraph/nodes")).unwrap();
     fs::write(tmp.path().join(".pulse/workgraph/nodes/TK-1.json"), b"{}").unwrap();
-    let snapshot = workspace_snapshot_feasibility(tmp.path(), &options).unwrap();
-    assert_eq!(snapshot.cleanliness, "dirty");
+    let snapshot = workspace_snapshot(tmp.path(), &options(&base)).unwrap();
+    assert_eq!(snapshot.cleanliness, WorkspaceCleanlinessV1::Dirty);
 }
 
 #[test]
@@ -38,26 +67,52 @@ fn snapshot_detects_untracked_file_mode_symlink_and_huge_caps() {
     #[cfg(unix)]
     std::os::unix::fs::symlink("tool.sh", tmp.path().join("tool-link")).unwrap();
 
-    let options =
-        WorkspaceSnapshotOptions::feasibility_defaults("repo", "wt", "isolated_worktree", &base);
-    let snapshot = workspace_snapshot_feasibility(tmp.path(), &options).unwrap();
-    assert_eq!(snapshot.snapshot_status, "complete");
-    assert_eq!(snapshot.cleanliness, "dirty");
+    let snapshot = workspace_snapshot(tmp.path(), &options(&base)).unwrap();
+    assert_eq!(
+        snapshot.snapshot_status,
+        WorkspaceSnapshotStatusV1::Complete
+    );
+    assert_eq!(snapshot.cleanliness, WorkspaceCleanlinessV1::Dirty);
     assert!(snapshot.untracked_manifest_identity.starts_with("sha256:"));
 
     fs::write(tmp.path().join("huge.bin"), vec![7_u8; 32]).unwrap();
-    let mut capped = options.clone();
+    let mut capped = options(&base);
     capped.max_untracked_file_bytes = 8;
     capped.max_untracked_total_bytes = 16;
-    let snapshot = workspace_snapshot_feasibility(tmp.path(), &capped).unwrap();
-    assert_eq!(snapshot.snapshot_status, "bounded_out");
-    assert!(snapshot
-        .reason_codes
-        .contains(&"untracked_manifest_bounded_out".to_string()));
+    let snapshot = workspace_snapshot(tmp.path(), &capped).unwrap();
+    assert_eq!(
+        snapshot.snapshot_status,
+        WorkspaceSnapshotStatusV1::BoundedOut
+    );
 }
 
 #[test]
-fn snapshot_hashes_lfs_pointer_as_worktree_file_and_rejects_submodule_gitlink() {
+fn snapshot_hashes_tracked_binary_and_mode_changes() {
+    let tmp = tempfile::tempdir().unwrap();
+    fs::write(tmp.path().join("bin.dat"), [0, 159, 146, 150]).unwrap();
+    git::commit_all(tmp.path());
+    let base = git::git(tmp.path(), &["rev-parse", "HEAD"]);
+    fs::write(tmp.path().join("bin.dat"), [0, 1, 2, 3, 255]).unwrap();
+    let changed_bytes = workspace_snapshot(tmp.path(), &options(&base)).unwrap();
+
+    git::git(tmp.path(), &["checkout", "--", "bin.dat"]);
+    let mut permissions = fs::metadata(tmp.path().join("bin.dat"))
+        .unwrap()
+        .permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(tmp.path().join("bin.dat"), permissions).unwrap();
+    let mode_change = workspace_snapshot(tmp.path(), &options(&base)).unwrap();
+
+    assert_eq!(changed_bytes.cleanliness, WorkspaceCleanlinessV1::Dirty);
+    assert_eq!(mode_change.cleanliness, WorkspaceCleanlinessV1::Dirty);
+    assert_ne!(
+        changed_bytes.tracked_diff_identity,
+        mode_change.tracked_diff_identity
+    );
+}
+
+#[test]
+fn snapshot_hashes_lfs_pointer_as_worktree_file_and_rejects_nested_repo() {
     let tmp = tempfile::tempdir().unwrap();
     git::commit_all(tmp.path());
     let base = git::git(tmp.path(), &["rev-parse", "HEAD"]);
@@ -66,24 +121,106 @@ fn snapshot_hashes_lfs_pointer_as_worktree_file_and_rejects_submodule_gitlink() 
         b"version https://git-lfs.github.com/spec/v1\noid sha256:abc\nsize 1\n",
     )
     .unwrap();
-    let options = WorkspaceSnapshotOptions::feasibility_defaults("repo", "wt", "in_place", &base);
-    let snapshot = workspace_snapshot_feasibility(tmp.path(), &options).unwrap();
-    assert_eq!(snapshot.snapshot_status, "complete");
+    let snapshot = workspace_snapshot(tmp.path(), &options(&base)).unwrap();
+    assert_eq!(
+        snapshot.snapshot_status,
+        WorkspaceSnapshotStatusV1::Complete
+    );
 
-    let sub = tempfile::tempdir().unwrap();
-    git::commit_all(sub.path());
-    let status = Command::new("git")
-        .current_dir(tmp.path())
-        .args([
-            "submodule",
-            "add",
-            sub.path().to_str().unwrap(),
-            "vendor/sub",
-        ])
-        .output()
+    fs::create_dir_all(tmp.path().join("nested")).unwrap();
+    git::git(&tmp.path().join("nested"), &["init"]);
+    let snapshot = workspace_snapshot(tmp.path(), &options(&base)).unwrap();
+    assert_eq!(
+        snapshot.snapshot_status,
+        WorkspaceSnapshotStatusV1::Unsupported
+    );
+}
+
+#[test]
+fn snapshot_reports_git_operation_and_diff_base_mismatch() {
+    let tmp = tempfile::tempdir().unwrap();
+    fs::write(tmp.path().join("README.md"), b"base\n").unwrap();
+    git::commit_all(tmp.path());
+    let base = git::git(tmp.path(), &["rev-parse", "HEAD"]);
+    fs::write(tmp.path().join(".git/MERGE_HEAD"), &base).unwrap();
+    let snapshot = workspace_snapshot(tmp.path(), &options(&base)).unwrap();
+    assert_eq!(
+        snapshot.snapshot_status,
+        WorkspaceSnapshotStatusV1::Unsupported
+    );
+    assert_eq!(snapshot.operation_state, WorkspaceOperationStateV1::Merge);
+
+    let mut bad = options(&base);
+    bad.diff_base_commit = "0000000000000000000000000000000000000000".to_string();
+    let snapshot = workspace_snapshot(tmp.path(), &bad).unwrap();
+    assert_eq!(
+        snapshot.snapshot_status,
+        WorkspaceSnapshotStatusV1::Unsupported
+    );
+}
+
+#[test]
+fn snapshot_bounds_tracked_diff_and_status_output() {
+    let tmp = tempfile::tempdir().unwrap();
+    fs::write(tmp.path().join("large.bin"), vec![1_u8; 4096]).unwrap();
+    git::commit_all(tmp.path());
+    let base = git::git(tmp.path(), &["rev-parse", "HEAD"]);
+    fs::write(tmp.path().join("large.bin"), vec![2_u8; 4096]).unwrap();
+    let mut capped = options(&base);
+    capped.max_tracked_diff_bytes = 128;
+    let snapshot = workspace_snapshot(tmp.path(), &capped).unwrap();
+    assert_eq!(
+        snapshot.snapshot_status,
+        WorkspaceSnapshotStatusV1::BoundedOut
+    );
+
+    let mut status_capped = options(&base);
+    status_capped.max_status_bytes = 4;
+    let snapshot = workspace_snapshot(tmp.path(), &status_capped).unwrap();
+    assert_eq!(
+        snapshot.snapshot_status,
+        WorkspaceSnapshotStatusV1::BoundedOut
+    );
+}
+
+#[test]
+fn ignored_file_in_scope_is_not_silently_hidden() {
+    let tmp = tempfile::tempdir().unwrap();
+    fs::write(tmp.path().join(".gitignore"), b"*.secret\n").unwrap();
+    git::commit_all(tmp.path());
+    let base = git::git(tmp.path(), &["rev-parse", "HEAD"]);
+    fs::write(tmp.path().join("notes.secret"), b"worker ignored change").unwrap();
+    let snapshot = workspace_snapshot(tmp.path(), &options(&base)).unwrap();
+    assert_eq!(
+        snapshot.snapshot_status,
+        WorkspaceSnapshotStatusV1::Unsupported
+    );
+}
+
+#[test]
+fn feasibility_wrapper_preserves_i0_surface() {
+    let tmp = tempfile::tempdir().unwrap();
+    git::commit_all(tmp.path());
+    let base = git::git(tmp.path(), &["rev-parse", "HEAD"]);
+    let snapshot = workspace_snapshot_feasibility(tmp.path(), &options(&base)).unwrap();
+    assert_eq!(snapshot.schema_version, 1);
+    assert_eq!(snapshot.snapshot_status, "complete");
+}
+
+#[cfg(unix)]
+#[test]
+fn snapshot_rejects_special_files() {
+    let tmp = tempfile::tempdir().unwrap();
+    git::commit_all(tmp.path());
+    let base = git::git(tmp.path(), &["rev-parse", "HEAD"]);
+    let status = Command::new("mkfifo")
+        .arg(tmp.path().join("pipe"))
+        .status()
         .unwrap();
-    if status.status.success() {
-        let snapshot = workspace_snapshot_feasibility(tmp.path(), &options).unwrap();
-        assert_ne!(snapshot.snapshot_status, "complete");
-    }
+    assert!(status.success());
+    let snapshot = workspace_snapshot(tmp.path(), &options(&base)).unwrap();
+    assert_eq!(
+        snapshot.snapshot_status,
+        WorkspaceSnapshotStatusV1::Unsupported
+    );
 }

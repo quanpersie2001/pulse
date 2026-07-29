@@ -573,7 +573,7 @@ impl RunAttemptRecordV1 {
 
 impl WorkspaceSnapshotV1 {
     pub fn compute_identity(&self) -> PulseResult<String> {
-        fingerprint_without_fields(self, &["snapshot_identity"])
+        fingerprint_without_fields(self, &["snapshot_identity", "captured_at"])
     }
 }
 
