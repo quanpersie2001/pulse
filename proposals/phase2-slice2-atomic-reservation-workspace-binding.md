@@ -3,9 +3,9 @@
 > Trạng thái: **implemented and verified** for Phase 2 Slice 2. Implementation
 > landed across commits `0c9a888`, `57ec28f`, `f66d103`, `9abb940`, `dd704da`,
 > `e1f86e6`, `1dc2473`, `7108e9e`, `f8a747b`, `367dfed`, verification
-> hardening commit `e6c6402`, I11 documentation commit `d21282c`, and the
-> subsequent final verifier/fixer commit; supporting fix/verification commits
-> are listed in the completion evidence below. This remains a pre-Core-v1 current baseline,
+> hardening commit `e6c6402`, I11 documentation commit `d21282c`, and final
+> verifier/fixer commit `428f149`; supporting fix/verification commits are
+> listed in the completion evidence below. This remains a pre-Core-v1 current baseline,
 > not a released compatibility contract.
 > Tiền đề:
 > [`phase2-slice1-work-packet-dispatch-foundation.md`](phase2-slice1-work-packet-dispatch-foundation.md)
@@ -1753,13 +1753,13 @@ implementation hardening verification `e6c6402`):
   hardening.
 - `e6c6402` — commit: P2S2-I10 final hardening and concurrent verification.
 - `d21282c` — commit: P2S2-I11 implementation completion documentation.
-- Final verifier/fixer commit after `d21282c` — corrected verifier-found
-  markdown/diagnostic issues, reran whole-slice validation, and left the
-  repository tree clean except for the intentional committed changes.
+- `428f149` — verify: corrected verifier-found markdown/diagnostic issues,
+  reran whole-slice validation, and left the repository tree clean after the
+  intentional committed changes.
 
 Final P2S2-I11 verification evidence before marking complete:
 
-- Documentation claims audited against actual `075b161..d21282c` history.
+- Documentation claims audited against actual `075b161..428f149` history.
 - Key boundary/code checks audited from source/tests: `WorkPacketV1` preview
   remains non-authorized, `work claim`/`release`/`leases`/`leases recover`
   surfaces exist, non-enrolled repositories reject before runtime bootstrap,

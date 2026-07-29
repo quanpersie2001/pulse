@@ -109,7 +109,7 @@ verified through commit `6d3076b` (458 tests).
 Slice 2 (atomic reservation + workspace binding): implemented in
 [`proposals/phase2-slice2-atomic-reservation-workspace-binding.md`](../proposals/phase2-slice2-atomic-reservation-workspace-binding.md),
 verified through implementation hardening commit `e6c6402`, I11 documentation
-commit `d21282c`, and the subsequent final verifier/fixer commit (675 tests).
+commit `d21282c`, and final verifier/fixer commit `428f149` (675 tests).
 Implementation includes assignment value contracts, runtime lease/workspace/
 prepared-assignment store, multi-target transaction extensions, capability
 inventory matching, in-place and isolated worktree binding, fence-aware packet
