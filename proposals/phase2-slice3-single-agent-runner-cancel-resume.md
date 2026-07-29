@@ -3,7 +3,10 @@
 > Trạng thái: **draft implementation proposal for review**. This proposal defines
 > the next Phase 2 implementation contract after Slice 2 atomic reservation and
 > workspace binding. It is not implemented and must not be described as current
-> behavior until source changes, tests and independent verification land.
+> behavior until source changes, tests and independent verification land. Fresh
+> adversarial re-review after commit `a6cffe0` found implementation blockers;
+> this draft now includes prerequisite spikes and narrower platform/security
+> commitments before coding may claim the runner contract is feasible.
 > Tiền đề:
 > [`phase2-slice1-work-packet-dispatch-foundation.md`](phase2-slice1-work-packet-dispatch-foundation.md)
 > and
@@ -68,6 +71,9 @@ boundary is intentionally narrow. Slice 3 installs one current adapter profile,
 Fixture-only internal process adapters may be used by tests. This is not the
 Phase 5 independent Codex task/thread transport contract and does not create an
 Agent Registry, mailbox, delivery receipt or native thread identity guarantee.
+It also does not introduce a mandatory daemon: the supervisor is a short-lived
+Pulse-owned child process of the same installed `pulse` binary, invoked through
+a hidden internal command surface.
 
 ---
 
@@ -232,9 +238,14 @@ The target repository declares the current runner profile in tracked JSON:
 .pulse/run/runner-profiles.json
 ```
 
-Slice 3 does not introduce YAML parsing or reinterpret `.pulse/config.yaml`.
-The profile registry is a narrow pre-Core-v1 contract owned by the runner
-subsystem and may later be composed into the broader operational config system.
+This is an explicit D-68 pre-release contract choice for Slice 3, not evidence
+that `.pulse/config.yaml` stops owning broader operational config in the
+normative roadmap. Slice 3 does not introduce YAML parsing or reinterpret
+`.pulse/config.yaml`; the profile registry is a narrow pre-Core-v1 contract
+owned by the runner subsystem and may later be composed into the broader
+operational config system through a separate Decision. It is intentionally
+tracked because changing the executable/argv/env allowlist changes what code a
+runner may execute.
 
 Minimum profile:
 
@@ -267,8 +278,17 @@ Rules:
 - profile IDs are unique and filesystem-safe;
 - adapter must be `codex_process_v1`;
 - executable is one program path/name, not a shell command;
+- executable resolution must be deterministic for the local machine: absolute
+  paths are allowed only if they are normalized regular files, bare program
+  names are resolved with the supervisor's inherited `PATH`, and the resolved
+  path plus executable metadata available on the platform are recorded in the
+  attempt identity; relative paths containing separators are rejected in Slice 3
+  unless a later Decision defines repository-relative tool resolution;
 - args are strings with no template expansion except Pulse-owned appended args;
 - environment is allowlisted; repository secrets are not copied implicitly;
+- inherited environment values are never fingerprinted or reported, so changing
+  `PATH`/`CODEX_HOME` between attempts is an operator-controlled local input and
+  not a reproducible semantic field;
 - timeouts and log limits are bounded by kernel minima/maxima;
 - profile bytes have a canonical `profile_fingerprint` bound into the run;
 - non-enrolled or missing profile registry fails without runtime bootstrap;
@@ -277,7 +297,12 @@ Rules:
 ### P2S3-D4 — `RunInputV1` is deterministic and bounded
 
 Slice 3 adds `RunInputV1`, built from the committed prepared assignment and
-current source/workspace preconditions. It contains:
+current source/workspace preconditions. Treat the rendered prompt and canonical
+input as repository-sensitive runtime data: they may contain Ticket context,
+source paths, docs excerpts, acceptance criteria and operator instructions.
+They are never event payloads, never evidence by default and must be protected
+with the same runtime-private permissions/redaction posture as logs. It
+contains:
 
 - run/attempt IDs;
 - exact prepared assignment ID/fingerprint;
@@ -295,6 +320,8 @@ The canonical JSON is the identity source. A deterministic bounded Markdown
 render may be passed to Codex stdin for usability, but the run record stores its
 hash, not the full prompt. Full input bytes live only under the protected,
 gitignored run directory. Events never include prompt or repository content.
+CLI `show/list` must not print prompt/input bytes; an explicit later diagnostic
+command may expose bounded redacted input only after a separate policy review.
 
 `RunInputV1` does not mutate the nested `WorkPacketV1` or
 `PreparedAssignmentV1`. It is a new wrapper/input contract.
@@ -344,7 +371,13 @@ exist but is excluded from public help and contracts.
 ### P2S3-D6 — Pulse uses a supervisor handshake, not a naked background PID
 
 The public CLI does not spawn Codex and immediately trust a PID. It launches a
-Pulse-owned supervisor process with:
+Pulse-owned supervisor process by re-executing the current `pulse` binary (or a
+configured test binary in internal tests) with a hidden command. Slice 3 does
+not require a daemon, service manager, background server installation or second
+supervisor artifact. If the implementation cannot reliably determine the
+current executable path through Rust 1.78-compatible APIs on a supported
+platform, that platform is `run_platform_unsupported` until the prerequisite
+spike resolves packaging. The supervisor receives:
 
 - run ID and attempt ID;
 - random supervisor nonce;
@@ -360,9 +393,14 @@ The supervisor:
 3. launches the Codex process in the bound workspace;
 4. reports child identity through the startup handshake;
 5. writes heartbeat/control observations;
-6. waits for exit or cancel request;
-7. records an exit observation file using create-new/atomic replace;
-8. never mutates graph, assignment or semantic event files directly.
+6. enforces the run timeout because it owns the child wait loop;
+7. waits for exit or cancel request;
+8. records an exit observation file using create-new/atomic replace;
+9. never mutates graph, assignment or semantic event files directly.
+
+The parent `run start` command owns only the startup handshake timeout and the
+semantic transition to `running`; it is not required to stay alive for the run
+timeout or terminal finalization.
 
 The parent `run start` command durably commits `run.started` only after the
 handshake proves the supervisor and child were created. The supervisor nonce and
@@ -381,9 +419,17 @@ process-start proof prevent PID alone from becoming authority.
   "started_at": "2026-07-29T10:00:00Z",
   "platform_start_marker": "...",
   "argv_hash": "sha256:...",
+  "executable_identity": "best_effort:...",
   "identity_status": "verified"
 }
 ```
+
+The `platform_start_marker` is not a vague string. The implementation must
+choose and test a concrete marker per supported platform before enabling start:
+for example process start time/boot ID from `/proc` on Linux, an available
+kernel process start timestamp on macOS, or a Job Object/process creation marker
+on Windows. If the chosen marker cannot distinguish PID reuse well enough for
+conservative cancellation, the platform remains unsupported.
 
 Rules:
 
@@ -393,12 +439,14 @@ Rules:
 - PID reuse or unverifiable identity yields `run_process_identity_mismatch` and
   `stale_needs_operator`; Pulse does not kill the process;
 - platform support lives behind one low-level process module;
-- Unix implementation uses a dedicated process group/session when supported by
-  the chosen Rust/platform APIs and records a platform start marker available on
-  that OS; macOS and Linux behavior must be tested separately rather than
-  inferred from a generic Unix claim;
-- Windows implementation uses an owned Job Object or reports the adapter
-  unsupported until equivalent identity/cancellation tests pass;
+- Slice 3's implementation target is macOS + Linux only after the process
+  identity spike proves Rust 1.78-compatible APIs/crates; do not claim generic
+  Unix support from `cfg(unix)` alone;
+- Windows implementation is explicitly out of scope for this slice and must
+  return `run_platform_unsupported` until an owned Job Object design and tests
+  land in a later proposal;
+- any crate added for process groups, signals, metadata or job objects must be
+  MSRV-audited against Rust 1.78 before coding begins;
 - unsupported platforms fail before launch with `run_platform_unsupported`, not
   with best-effort unsafe cancellation.
 
@@ -422,7 +470,6 @@ stale_needs_operator
 Attempt state:
 
 ```text
-prepared
 starting
 running
 cancel_requested
@@ -432,6 +479,11 @@ interrupted
 failed_to_start
 stale_needs_operator
 ```
+
+There is no durable attempt `prepared` state in Slice 3. A new attempt is
+created by the same transaction that makes it `starting`, because a persisted
+non-starting attempt would create a second lifecycle vocabulary with no process
+or recovery semantics.
 
 Resume availability is a derived projection field, not a durable run state:
 
@@ -452,6 +504,11 @@ Invariants:
 - process exit zero does not mean Ticket done;
 - `interrupted` means the known process is gone or supervisor continuity broke;
 - `stale_needs_operator` means Pulse cannot safely classify/kill/resume;
+- for duplicate-start and lease recovery,
+  `starting|running|cancel_requested|interrupted|failed_to_start|stale_needs_operator`
+  are unresolved until a later explicit disposition/release policy exists;
+- `exited|cancelled` are process-terminal but still do not release the
+  assignment or close the Ticket;
 - terminal run records remain available; local tombstones are optional only for
   future retention and are not used to hide history.
 
@@ -548,7 +605,9 @@ same assignment/workspace. It does not claim to resume a native Codex thread.
 
 Resume eligibility:
 
-- run is `interrupted|exited` and policy allows another attempt;
+- run is `interrupted|failed_to_start|exited` and policy allows another
+  attempt; cancellation is not automatically resumable in Slice 3 because a
+  user-requested cancel may mean stop-work rather than retry;
 - no live/unresolved attempt exists;
 - prepared lease, prepared assignment, Ticket active revision, workspace ID and
   repository identity still match;
@@ -570,14 +629,25 @@ native session, that is a new contract/proposal.
 
 ### P2S3-D13 — Workspace snapshot is deterministic identity, not a full archive
 
-Slice 3 introduces `WorkspaceSnapshotV1` for drift detection:
+Slice 3 introduces `WorkspaceSnapshotV1` for drift detection. It is captured for
+the bound workspace path, not implicitly for the repository root, and the record
+must state whether the workspace is `in_place` or `isolated_worktree`. In-place
+runs are allowed only after excluding Pulse-owned runtime/coordination paths
+from source drift identity, otherwise heartbeats/logs/control files would make
+the workspace appear changed by Pulse itself. Exclusion rules are fixed and
+narrow (`.pulse/runtime/`, `.pulse/cache/`, and other gitignored Pulse runtime
+coordination paths); `.pulse/workgraph`, `.pulse/docs`, `.pulse/evidence`,
+`.pulse/events`, docs and source files remain normal source changes.
 
 ```json
 {
   "schema_version": 1,
   "repository_id": "repo_...",
+  "workspace_id": "wt_...",
+  "workspace_mode": "isolated_worktree",
   "base_commit": "012345...",
   "head_commit": "012345...",
+  "diff_base_commit": "012345...",
   "operation_state": "none",
   "cleanliness": "dirty",
   "tracked_diff_identity": "sha256:...",
@@ -590,12 +660,18 @@ Slice 3 introduces `WorkspaceSnapshotV1` for drift detection:
 
 Canonicalization:
 
-- tracked changes hash raw bytes from `git diff --binary --no-ext-diff --no-color`
-  against assignment base/HEAD, with stable environment (`LC_ALL=C`, no external
-  diff driver) and with unsupported Git diff features causing
-  `snapshot_status=unsupported` rather than a guessed identity;
+- `base_commit` is the prepared assignment source commit; `head_commit` is the
+  current workspace HEAD; `diff_base_commit` is the merge-base/diff base used to
+  compute tracked changes and must equal `base_commit` for the first Slice 3
+  implementation unless a later Decision permits rebased workspaces;
+- tracked changes hash raw bytes from `git diff --binary --full-index
+  --no-ext-diff --no-color -z <diff_base_commit> -- <included paths>`, with
+  stable environment (`LC_ALL=C`, no external diff driver) and with unsupported
+  Git diff features causing `snapshot_status=unsupported` rather than a guessed
+  identity;
 - status identity hashes normalized `git status --porcelain=v1 -z
-  --untracked-files=all` bytes;
+  --untracked-files=all -- <included paths>` bytes after applying the same
+  Pulse-runtime exclusions;
 - all path lists are parsed as NUL-delimited bytes and rejected as unsupported if
   they cannot be represented as safe repository-relative UTF-8 managed paths;
 - untracked manifest sorts repository-relative paths and hashes path, file type,
@@ -603,9 +679,13 @@ Canonicalization:
 - regular files are hashed by bytes; invalid UTF-8 file content is allowed;
 - symlinks hash link target bytes and never follow outside workspace;
 - executable-bit changes are included for tracked and untracked regular files;
+- Git LFS pointer files are hashed as files as seen in the worktree; Pulse does
+  not dereference LFS object storage in Slice 3;
 - submodule, nested repository, named pipe, socket, device and other unsupported
   special-file changes yield `snapshot_status=unsupported`;
-- each untracked file and total bytes are capped;
+- each untracked file and total bytes are capped; tracked diff output is also
+  capped because a huge binary diff can otherwise make resume hashing
+  unbounded;
 - exceeding caps yields `snapshot_status=bounded_out` and blocks automatic
   resume with `run_workspace_snapshot_unsupported`;
 - snapshot identifies current workspace state but is not a replayable archive;
@@ -617,11 +697,11 @@ may require a later stronger snapshot contract.
 
 ### P2S3-D14 — Logs are runtime data with bounded retention and explicit redaction status
 
-Raw logs live under:
+Retained log bytes live under managed per-run log paths, represented as bounded
+prefix/tail segments or an equivalent tested ring layout:
 
 ```text
-.pulse/runtime/run/logs/<run-id>/<attempt-id>.stdout.log
-.pulse/runtime/run/logs/<run-id>/<attempt-id>.stderr.log
+.pulse/runtime/run/logs/<run-id>/<attempt-id>.<stream>.<segment>.log
 ```
 
 Rules:
@@ -635,11 +715,19 @@ Rules:
 - `RunLogRefV1` contains path, byte counts, content hash, truncation and
   redaction status;
 - default raw log `redaction_status` is `not_applied_runtime_private`;
-- human/JSON CLI output returns bounded tail only after applying the current
-  explicit redaction profile; if no redaction profile is configured, output is
-  marked `redaction_status=not_applied_runtime_private` and remains bounded;
+- human/JSON CLI output returns only a bounded tail hash/count by default; a
+  caller must opt into `--tail-bytes <n>` to render log bytes, and rendered bytes
+  remain capped even for JSON;
+- when rendering is requested, Pulse applies the current explicit redaction
+  profile; if no redaction profile is configured, output is marked
+  `redaction_status=not_applied_runtime_private` and remains bounded;
 - regex redaction rules must be length/time bounded by implementation tests; an
   unsafe redaction profile fails closed rather than rendering raw output;
+- bounded prefix+tail retention cannot be implemented by appending to a single
+  flat file and hashing at the end without unbounded storage; the process module
+  must either use segmented prefix/tail files plus counters or another tested
+  bounded ring strategy, and `content_hash` must explicitly identify whether it
+  covers full untruncated content or only retained bytes;
 - no raw prompt, environment secret or full log is written into event files;
 - promoting logs to evidence is deferred unless explicit redaction or
   caller-asserted policy is supplied through a later receipt flow;
@@ -697,6 +785,9 @@ work.run.recover
 
 Rules:
 
+- `work.run.recover` is a mutation grant, not an observation grant: read-only
+  stale/invalid classification by `run show/list` remains allowed through the
+  normal read surface and must not require mutation authority;
 - actor grant is checked independently from assignee capability inventory;
 - assignee must equal the prepared lease owner;
 - start/resume actor may differ from assignee only if policy grants the action;
@@ -778,6 +869,12 @@ run.exited
 run.recovered
 ```
 
+`run.recovered` is emitted only for a recovery mutation that changes durable run
+state but has no more specific event type. Recovery that completes a prepared
+`run.started`, `run.exited`, `run.cancelled`, `run.interrupted` or
+`run.failed_to_start` transition emits that specific lifecycle event instead,
+not an additional `run.recovered` audit event.
+
 Every event uses the shared `EventEnvelope` and correlation:
 
 ```json
@@ -819,13 +916,16 @@ A hidden command such as:
 pulse __run-supervisor --control <managed-relative-path>
 ```
 
-may be used internally. It must:
+may be used internally. It is invoked with the same `--repo-root` parsing path
+as public commands so control paths are interpreted relative to the enrolled
+target repository, but it is absent from public help. It must:
 
 - be absent from public help and stable docs;
 - reject control paths outside `.pulse/runtime/run/control/`;
 - authenticate the control record via random nonce passed through an inherited
-  descriptor or protected environment variable and compare only its hash on
-  disk;
+  descriptor where supported, otherwise a protected environment variable with
+  documented same-user threat limitations; the nonce plaintext is never written
+  to disk and only its hash is stored;
 - never accept arbitrary graph/repository mutations;
 - never parse untrusted shell commands;
 - return structured internal exit classes for tests/recovery;
@@ -949,6 +1049,10 @@ Profile rules:
 - maximum 32 profiles;
 - profile ID length 1..128;
 - executable length 1..4096 and contains no NUL;
+- executable path resolution follows P2S3-D3: absolute normalized file or bare
+  program name only; repository-relative executable paths are deferred;
+- the resolved executable identity is recorded in attempts but excluded from
+  profile fingerprint because it is local-machine state, not tracked config;
 - fixed args maximum 64, each length 0..4096;
 - no shell metacharacter interpretation because no shell is used;
 - allowlisted environment names match `[A-Z_][A-Z0-9_]*`;
@@ -992,12 +1096,18 @@ All paths are target-repository local runtime coordination state:
       run_01J....attempt_01J....md
     logs/
       run_01J.../
-        attempt_01J....stdout.log
-        attempt_01J....stderr.log
+        attempt_01J....stdout.prefix.log
+        attempt_01J....stdout.tail.log
+        attempt_01J....stderr.prefix.log
+        attempt_01J....stderr.tail.log
     snapshots/
       attempt_01J....before.json
       attempt_01J....after.json
 ```
+
+The exact log retention filenames may change during implementation, but they
+must represent bounded retained bytes rather than an unbounded append-only raw
+log.
 
 Rules:
 
@@ -1045,6 +1155,7 @@ Rules:
     "adapter": "codex_process_v1",
     "profile_id": "codex-local",
     "profile_fingerprint": "sha256:...",
+    "resolved_executable_identity": "best_effort:...",
     "native_resume_status": "not_installed",
     "native_thread_id": null
   },
@@ -1264,7 +1375,10 @@ write semantic event or canonical run record files.
 14. never change run ID, lease, workspace or Ticket state.
 
 If workspace snapshot is unsupported, bounded out or drifted, reject without
-launch and preserve all state.
+launch and preserve all state. A clean `failed_to_start` with no child identity
+may resume without requiring a post-run workspace snapshot, but only after
+assignment/workspace/source preflight still matches the original start
+preconditions.
 
 ---
 
@@ -1625,7 +1739,8 @@ is absent.
 
 ### G. Resume
 
-1. Interrupted or policy-resumable exited run resumes as attempt N+1 under same run ID.
+1. Interrupted, clean failed-to-start, or policy-resumable exited run resumes as
+   attempt N+1 under same run ID.
 2. Resume uses same lease/prepared assignment/workspace and active Ticket
    revision.
 3. Current snapshot must equal previous recorded snapshot.
@@ -1671,10 +1786,42 @@ is absent.
 8. Process/failpoint suites pass under default threading repeatedly.
 9. Tracked fixtures remain immutable.
 10. Full repo reliability commands pass.
+11. MSRV audit proves every new dependency builds on Rust 1.78 or the dependency
+    is rejected.
+12. macOS and Linux platform tests are separate; no generic Unix claim is made
+    from one platform.
+13. Windows returns `run_platform_unsupported` until a later tested Job Object
+    design lands.
 
 ---
 
 ## Implementation sequence
+
+### P2S3-I0 — Prerequisite feasibility spikes before runner coding
+
+These spikes are part of making the draft implementable. They do not implement
+public runner behavior and should land before claiming P2S3-I5 or later is
+feasible:
+
+1. **Process identity/platform spike:** prove macOS and Linux process-group,
+   start-marker, PID-reuse detection, signal and child-tree cancellation using
+   Rust 1.78-compatible APIs/crates. Record unsupported-platform behavior and
+   keep Windows out of scope unless a Job Object design is added.
+2. **Hidden supervisor packaging spike:** prove the installed `pulse` binary can
+   re-exec itself as `__run-supervisor` in development, test and packaged
+   contexts without a daemon or second artifact, and define fallback errors.
+3. **Secure control nonce spike:** choose descriptor-vs-environment transport,
+   file permissions and same-user threat model; verify plaintext nonce never
+   reaches disk or semantic records.
+4. **Bounded log retention spike:** implement/prove prefix+tail or ring
+   retention with continuous draining, explicit retained/full hash semantics and
+   no unbounded flat raw log.
+5. **Workspace snapshot spike:** prove in-place and isolated snapshot identity
+   with Pulse-runtime exclusions, binary diff caps, file modes, symlinks, LFS
+   pointer behavior, submodule/special-file rejection and huge-file caps.
+6. **Runner profile threat-model spike:** finalize executable resolution,
+   environment inheritance, redaction defaults and prompt/input confidentiality
+   before public config help is written.
 
 ### P2S3-I1 — Lock run value contracts
 
@@ -1700,7 +1847,10 @@ is absent.
 
 - Extend `source.rs` with bounded deterministic tracked diff/status/untracked
   manifest identities.
-- Add symlink, executable bit, untracked cap, operation-state and drift tests.
+- Add Pulse-runtime exclusions for in-place workspaces without excluding
+  canonical graph/docs/evidence/events changes.
+- Add symlink, executable bit, untracked cap, tracked binary diff cap,
+  operation-state, LFS pointer, submodule/special-file and drift tests.
 - Do not claim replayable archive/evidence semantics.
 
 ### P2S3-I5 — Implement low-level process supervisor
@@ -1800,24 +1950,35 @@ until implementation and verifier commits exist.
 - [ ] Run/attempt/input/snapshot/profile/report DTOs and strict schemas exist.
 - [ ] `WorkPacketV1` and `PreparedAssignmentV1` bytes/semantics remain unchanged.
 - [ ] A live prepared assignment can start exactly one Codex process adapter.
+- [ ] Prerequisite spikes prove supervisor packaging, process identity, control
+      nonce transport, bounded logs, workspace snapshot and runner profile threat
+      model before process implementation claims feasibility.
 - [ ] Runner uses no shell and no public arbitrary command input.
 - [ ] Start commits durable starting and running states with exactly one event
       per state transition.
-- [ ] Supervisor/process identity is stronger than PID alone.
+- [ ] Supervisor/process identity is stronger than PID alone and separately
+      tested on each supported platform.
 - [ ] Process tree cancellation is verified and conservative.
 - [ ] Timeout and cancel grace/force policy are bounded and audited.
-- [ ] Runtime logs are bounded, gitignored and absent from semantic events.
+- [ ] Runtime logs and run inputs are bounded, gitignored, runtime-private and
+      absent from semantic events.
 - [ ] Exit zero does not transition or close Ticket.
 - [ ] Ticket remains active; lease/workspace are preserved.
 - [ ] Crash between durable starting, spawn and started commit recovers safely.
 - [ ] Known exit observations finalize idempotently without duplicate event.
-- [ ] Workspace snapshots deterministically detect tracked/untracked drift.
-- [ ] Interrupted work resumes as a new attempt only on exact snapshot match.
+- [ ] Workspace snapshots deterministically detect tracked/untracked drift,
+      including mode, symlink, LFS pointer, submodule/special-file and huge-file
+      edge cases.
+- [ ] Interrupted work resumes as a new attempt only on exact snapshot match;
+      clean failed-to-start may resume only after original preflight still
+      matches.
 - [ ] Native Codex thread resume is not fabricated.
 - [ ] Duplicate start/resume races have exactly one winner.
 - [ ] `run show/list` are read-only and no-bootstrap.
 - [ ] `run recover` applies only safe deterministic repairs.
 - [ ] `work release`/lease recovery refuse live or unresolved runs.
+- [ ] Windows and unproven platforms fail before launch with
+      `run_platform_unsupported`.
 - [ ] Run state is not persisted in graph nodes or pure graph read DTOs.
 - [ ] No handoff/verification/QA/close state is created.
 - [ ] Non-enrolled repositories reject before runtime bootstrap.
@@ -1845,6 +2006,10 @@ The following are deliberately not compatibility promises of Slice 3:
 8. Verification profile execution and `active -> verifying` gate.
 9. Automatic assignment release/requeue after run completion/cancel.
 10. Generic runner adapters beyond proven Codex process usage.
+11. Windows process supervision/cancellation support.
+12. Repository-relative runner executable resolution and secret-provider-backed
+    environment injection.
+13. Native daemon/service-manager ownership for run supervision.
 
 Expected next proposal after Slice 3:
 

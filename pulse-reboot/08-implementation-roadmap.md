@@ -123,7 +123,14 @@ promotion. Draft Slice 3 proposal
 [`proposals/phase2-slice3-single-agent-runner-cancel-resume.md`](../proposals/phase2-slice3-single-agent-runner-cancel-resume.md)
 defines the proposed next runner/cancel/resume contract, but it is not accepted
 as implemented behavior until source changes, tests and independent verification
-land. Handoff/verification and close-gate work remain later Phase 2 slices.
+land. Fresh re-review after `a6cffe0` narrowed Slice 3: prerequisite spikes must
+prove platform process identity/cancellation, hidden-supervisor packaging,
+secure nonce transport, bounded prefix/tail logs, workspace snapshot semantics
+and runner profile threat model before implementation claims feasibility.
+Windows supervision, native Codex task resume, daemon/service-manager ownership,
+repository-relative runner executables and secret-provider environment injection
+are deferred. Handoff/verification and close-gate work remain later Phase 2
+slices.
 
 - Codex adapter cho một run.
 - Minimal `pulse-shape` path để tạo/review shaping result trước dispatch; đủ cho R0/R1 và làm nền cho capability pack đầy đủ ở Phase 3.
