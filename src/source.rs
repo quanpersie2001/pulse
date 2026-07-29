@@ -191,6 +191,9 @@ pub fn workspace_snapshot(
 
     let mut reason_codes = Vec::new();
     let head = head_commit(repo_root)?;
+    if let Some(reason) = validate_snapshot_base_relationship(repo_root, options, &head)? {
+        reason_codes.push(reason);
+    }
     let operation_state = detect_operation_state(repo_root)?;
     if operation_state != RepositoryOperationState::Normal {
         reason_codes.push(format!("git_operation_{}", operation_state.as_str()));
@@ -547,6 +550,7 @@ fn tracked_diff_identity(
         "--binary",
         "--full-index",
         "--no-ext-diff",
+        "--no-textconv",
         "--no-color",
         "-z",
         &options.diff_base_commit,
@@ -666,7 +670,7 @@ fn untracked_manifest_identity(
     }
     let output = git_bytes(repo_root, &args, "run_workspace_snapshot_unsupported")?;
     let mut special_scan_budget = options.max_untracked_entries;
-    if let Some(status) = directory_special_status(repo_root, &mut special_scan_budget)? {
+    if let Some(status) = scoped_special_status(repo_root, options, &mut special_scan_budget)? {
         return Ok(SnapshotComponent {
             dirty: true,
             identity: hash_bytes(b"special_file_scan"),
@@ -707,7 +711,8 @@ fn untracked_manifest_identity(
                 ));
             }
             let mut directory_budget = options.max_untracked_entries;
-            if let Some(status) = directory_special_status(&path, &mut directory_budget)? {
+            if let Some(status) = directory_special_status(repo_root, &path, &mut directory_budget)?
+            {
                 return Ok(SnapshotComponent {
                     dirty: true,
                     identity: hash_bytes(relative.as_bytes()),
@@ -776,7 +781,98 @@ fn unsupported_manifest(relative: &str, reason: &str) -> SnapshotComponent {
     }
 }
 
-fn directory_special_status(path: &Path, budget: &mut usize) -> Result<Option<ComponentStatus>> {
+fn validate_snapshot_base_relationship(
+    repo_root: &Path,
+    options: &WorkspaceSnapshotOptions,
+    head: &str,
+) -> Result<Option<String>> {
+    if resolve_full_commit(repo_root, &options.base_commit).is_err() {
+        return Ok(Some("base_commit_unavailable".to_string()));
+    }
+    let merge_base = Command::new("git")
+        .args(["merge-base", &options.base_commit, head])
+        .current_dir(repo_root)
+        .output()
+        .map_err(|error| PulseError::io(repo_root.join(".git"), error))?;
+    if !merge_base.status.success() {
+        return Ok(Some("base_commit_not_related_to_head".to_string()));
+    }
+    let actual = String::from_utf8_lossy(&merge_base.stdout)
+        .trim()
+        .to_string();
+    if actual != options.base_commit {
+        return Ok(Some("base_commit_not_head_ancestor".to_string()));
+    }
+    let is_ancestor = Command::new("git")
+        .args(["merge-base", "--is-ancestor", &options.base_commit, head])
+        .current_dir(repo_root)
+        .status()
+        .map_err(|error| PulseError::io(repo_root.join(".git"), error))?;
+    if is_ancestor.success() {
+        Ok(None)
+    } else {
+        Ok(Some("base_commit_not_head_ancestor".to_string()))
+    }
+}
+
+fn scoped_special_status(
+    repo_root: &Path,
+    options: &WorkspaceSnapshotOptions,
+    budget: &mut usize,
+) -> Result<Option<ComponentStatus>> {
+    if options.included_paths.is_empty() {
+        return directory_special_status(repo_root, repo_root, budget);
+    }
+    for relative in &options.included_paths {
+        validate_snapshot_scope_path(relative)?;
+        if is_pulse_runtime_generated_path(relative) {
+            continue;
+        }
+        let scoped = repo_root.join(relative);
+        let metadata = match fs::symlink_metadata(&scoped) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => return Err(PulseError::io(&scoped, error)),
+        };
+        let file_type = metadata.file_type();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::FileTypeExt;
+            if file_type.is_socket()
+                || file_type.is_fifo()
+                || file_type.is_block_device()
+                || file_type.is_char_device()
+            {
+                return Ok(Some(ComponentStatus::Unsupported(
+                    "special_file_unsupported".to_string(),
+                )));
+            }
+        }
+        if file_type.is_dir() {
+            if scoped.join(".git").exists() {
+                return Ok(Some(ComponentStatus::Unsupported(
+                    "nested_repository_unsupported".to_string(),
+                )));
+            }
+            if let Some(status) = directory_special_status(repo_root, &scoped, budget)? {
+                return Ok(Some(status));
+            }
+        }
+    }
+    Ok(None)
+}
+
+fn directory_special_status(
+    repo_root: &Path,
+    path: &Path,
+    budget: &mut usize,
+) -> Result<Option<ComponentStatus>> {
+    if let Some(relative) = repo_relative_utf8(repo_root, path)? {
+        validate_managed_relative_path(&relative)?;
+        if is_pulse_runtime_generated_path(&relative) {
+            return Ok(None);
+        }
+    }
     for entry in fs::read_dir(path).map_err(|error| PulseError::io(path, error))? {
         let entry = entry.map_err(|error| PulseError::io(path, error))?;
         if entry.file_name() == ".git" {
@@ -806,12 +902,36 @@ fn directory_special_status(path: &Path, budget: &mut usize) -> Result<Option<Co
             }
         }
         if file_type.is_dir() {
-            if let Some(status) = directory_special_status(&entry_path, budget)? {
+            if entry_path.join(".git").exists() {
+                return Ok(Some(ComponentStatus::Unsupported(
+                    "nested_repository_unsupported".to_string(),
+                )));
+            }
+            if let Some(status) = directory_special_status(repo_root, &entry_path, budget)? {
                 return Ok(Some(status));
             }
         }
     }
     Ok(None)
+}
+
+fn repo_relative_utf8(repo_root: &Path, path: &Path) -> Result<Option<String>> {
+    let relative = match path.strip_prefix(repo_root) {
+        Ok(relative) => relative,
+        Err(_) => return Ok(None),
+    };
+    if relative.as_os_str().is_empty() {
+        return Ok(None);
+    }
+    relative
+        .to_str()
+        .map(|path| Some(path.replace(std::path::MAIN_SEPARATOR, "/")))
+        .ok_or_else(|| {
+            PulseError::validation(
+                "run_workspace_snapshot_unsupported",
+                "workspace path is not valid UTF-8",
+            )
+        })
 }
 
 fn is_pulse_runtime_generated_path(path: &str) -> bool {
@@ -968,16 +1088,25 @@ enum SnapshotReadError {
     Io(std::io::Error),
 }
 
+fn hardened_git_command(repo_root: &Path, args: &[&str]) -> Command {
+    let mut command = Command::new("git");
+    command
+        .args(["-c", "diff.external=", "-c", "core.pager="])
+        .args(args)
+        .env("LC_ALL", "C")
+        .env_remove("GIT_EXTERNAL_DIFF")
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("GIT_PAGER", "cat")
+        .current_dir(repo_root);
+    command
+}
+
 fn git_bytes_bounded(
     repo_root: &Path,
     args: &[&str],
     max_bytes: usize,
 ) -> std::result::Result<Vec<u8>, SnapshotReadError> {
-    let mut child = Command::new("git")
-        .args(args)
-        .env("LC_ALL", "C")
-        .env("GIT_EXTERNAL_DIFF", "true")
-        .current_dir(repo_root)
+    let mut child = hardened_git_command(repo_root, args)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
@@ -1013,11 +1142,7 @@ fn git_bytes_bounded(
 }
 
 fn git_bytes(repo_root: &Path, args: &[&str], error_code: &'static str) -> Result<Vec<u8>> {
-    let output = Command::new("git")
-        .args(args)
-        .env("LC_ALL", "C")
-        .env("GIT_EXTERNAL_DIFF", "true")
-        .current_dir(repo_root)
+    let output = hardened_git_command(repo_root, args)
         .output()
         .map_err(|error| PulseError::io(repo_root.join(".git"), error))?;
     if !output.status.success() {

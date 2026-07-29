@@ -112,6 +112,57 @@ fn snapshot_hashes_tracked_binary_and_mode_changes() {
 }
 
 #[test]
+fn tracked_diff_ignores_textconv_and_external_diff_transforms() {
+    let tmp = tempfile::tempdir().unwrap();
+    fs::write(
+        tmp.path().join("constant-filter.sh"),
+        "#!/bin/sh\nprintf constant\n",
+    )
+    .unwrap();
+    let mut permissions = fs::metadata(tmp.path().join("constant-filter.sh"))
+        .unwrap()
+        .permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(tmp.path().join("constant-filter.sh"), permissions).unwrap();
+    git::commit_all(tmp.path());
+
+    fs::write(tmp.path().join("blob.bin"), b"first raw bytes").unwrap();
+    fs::write(tmp.path().join(".gitattributes"), b"*.bin diff=constant\n").unwrap();
+    git::git(
+        tmp.path(),
+        &["config", "diff.constant.textconv", "./constant-filter.sh"],
+    );
+    git::commit_all(tmp.path());
+    let base = git::git(tmp.path(), &["rev-parse", "HEAD"]);
+
+    fs::write(tmp.path().join("blob.bin"), b"second distinct raw bytes").unwrap();
+    let snapshot = workspace_snapshot(tmp.path(), &options(&base)).unwrap();
+    assert_eq!(
+        snapshot.snapshot_status,
+        WorkspaceSnapshotStatusV1::Complete
+    );
+    assert_eq!(snapshot.cleanliness, WorkspaceCleanlinessV1::Dirty);
+
+    git::git(
+        tmp.path(),
+        &["config", "diff.external", "./constant-filter.sh"],
+    );
+    let with_external_config = workspace_snapshot(tmp.path(), &options(&base)).unwrap();
+    assert_eq!(
+        with_external_config.snapshot_status,
+        WorkspaceSnapshotStatusV1::Complete
+    );
+    assert_eq!(
+        with_external_config.cleanliness,
+        WorkspaceCleanlinessV1::Dirty
+    );
+    assert_eq!(
+        snapshot.tracked_diff_identity,
+        with_external_config.tracked_diff_identity
+    );
+}
+
+#[test]
 fn snapshot_hashes_lfs_pointer_as_worktree_file_and_rejects_nested_repo() {
     let tmp = tempfile::tempdir().unwrap();
     git::commit_all(tmp.path());
@@ -219,6 +270,108 @@ fn snapshot_rejects_special_files() {
         .unwrap();
     assert!(status.success());
     let snapshot = workspace_snapshot(tmp.path(), &options(&base)).unwrap();
+    assert_eq!(
+        snapshot.snapshot_status,
+        WorkspaceSnapshotStatusV1::Unsupported
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn scoped_snapshot_special_file_and_nested_repo_scans_honor_scope_and_runtime_exclusions() {
+    let tmp = tempfile::tempdir().unwrap();
+    fs::create_dir_all(tmp.path().join("src-other/src2")).unwrap();
+    fs::write(tmp.path().join("src-other/file.txt"), b"tracked").unwrap();
+    git::commit_all(tmp.path());
+    let base = git::git(tmp.path(), &["rev-parse", "HEAD"]);
+
+    let status = Command::new("mkfifo")
+        .arg(tmp.path().join("outside.pipe"))
+        .status()
+        .unwrap();
+    assert!(status.success());
+    git::git(&tmp.path().join("src-other/src2"), &["init"]);
+    fs::create_dir_all(tmp.path().join(".pulse/runtime/run/tmp")).unwrap();
+    let status = Command::new("mkfifo")
+        .arg(tmp.path().join(".pulse/runtime/run/tmp/runtime.pipe"))
+        .status()
+        .unwrap();
+    assert!(status.success());
+
+    let mut scoped = options(&base);
+    scoped.included_paths = vec!["src-other/file.txt".to_string()];
+    let snapshot = workspace_snapshot(tmp.path(), &scoped).unwrap();
+    assert_eq!(
+        snapshot.snapshot_status,
+        WorkspaceSnapshotStatusV1::Complete
+    );
+    assert_eq!(snapshot.cleanliness, WorkspaceCleanlinessV1::Clean);
+
+    let mut dir_scoped = options(&base);
+    dir_scoped.included_paths = vec!["src-other".to_string()];
+    let snapshot = workspace_snapshot(tmp.path(), &dir_scoped).unwrap();
+    assert_eq!(
+        snapshot.snapshot_status,
+        WorkspaceSnapshotStatusV1::Unsupported
+    );
+
+    let mut prefix_confusion = options(&base);
+    prefix_confusion.included_paths = vec!["src".to_string()];
+    let snapshot = workspace_snapshot(tmp.path(), &prefix_confusion).unwrap();
+    assert_eq!(
+        snapshot.snapshot_status,
+        WorkspaceSnapshotStatusV1::Complete
+    );
+    assert_eq!(snapshot.cleanliness, WorkspaceCleanlinessV1::Clean);
+}
+
+#[test]
+fn snapshot_validates_base_commit_as_head_ancestor() {
+    let tmp = tempfile::tempdir().unwrap();
+    fs::write(tmp.path().join("README.md"), b"base\n").unwrap();
+    git::commit_all(tmp.path());
+    let base = git::git(tmp.path(), &["rev-parse", "HEAD"]);
+    fs::write(tmp.path().join("README.md"), b"descendant\n").unwrap();
+    git::commit_all(tmp.path());
+    let descendant = git::git(tmp.path(), &["rev-parse", "HEAD"]);
+    git::git(tmp.path(), &["checkout", "--detach", &descendant]);
+    let snapshot = workspace_snapshot(tmp.path(), &options(&base)).unwrap();
+    assert_eq!(
+        snapshot.snapshot_status,
+        WorkspaceSnapshotStatusV1::Complete
+    );
+    assert_eq!(snapshot.cleanliness, WorkspaceCleanlinessV1::Dirty);
+
+    let mut missing = options("ffffffffffffffffffffffffffffffffffffffff");
+    missing.diff_base_commit = missing.base_commit.clone();
+    let snapshot = workspace_snapshot(tmp.path(), &missing).unwrap();
+    assert_eq!(
+        snapshot.snapshot_status,
+        WorkspaceSnapshotStatusV1::Unsupported
+    );
+
+    let unrelated = tempfile::tempdir().unwrap();
+    fs::write(unrelated.path().join("OTHER.md"), b"other\n").unwrap();
+    git::commit_all(unrelated.path());
+    let unrelated_base = git::git(unrelated.path(), &["rev-parse", "HEAD"]);
+    git::git(
+        tmp.path(),
+        &["fetch", unrelated.path().to_str().unwrap(), &unrelated_base],
+    );
+    let snapshot = workspace_snapshot(tmp.path(), &options(&unrelated_base)).unwrap();
+    assert_eq!(
+        snapshot.snapshot_status,
+        WorkspaceSnapshotStatusV1::Unsupported
+    );
+
+    git::git(tmp.path(), &["checkout", &base]);
+    fs::write(tmp.path().join("README.md"), b"rebased line\n").unwrap();
+    git::git(tmp.path(), &["commit", "-am", "rewrite from base"]);
+    let rewritten = git::git(tmp.path(), &["rev-parse", "HEAD"]);
+    let mut non_ancestor = options(&descendant);
+    non_ancestor.diff_base_commit = descendant;
+    let snapshot = workspace_snapshot(tmp.path(), &non_ancestor).unwrap();
+    assert_eq!(rewritten, snapshot.head_commit);
     assert_eq!(
         snapshot.snapshot_status,
         WorkspaceSnapshotStatusV1::Unsupported
