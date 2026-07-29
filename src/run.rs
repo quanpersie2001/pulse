@@ -792,7 +792,7 @@ pub fn runner_profile_threat_model() -> RunnerProfileThreatModelV1 {
         schema_version: 1,
         public_adapter: RunnerAdapterV1::CodexProcessV1,
         executable_resolution:
-            "absolute_normalized_regular_file_or_bare_path_lookup_no_repository_relative_paths"
+            "absolute_normalized_non_symlink_regular_executable_or_bare_path_first_safe_executable_no_repository_relative_paths_unix_execute_bits_non_unix_unsupported"
                 .to_string(),
         shell_invocation: "never".to_string(),
         inherited_environment_values_recorded: false,

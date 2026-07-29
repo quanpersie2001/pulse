@@ -17,7 +17,7 @@ use std::fs;
 use std::path::{Component, Path};
 
 #[cfg(unix)]
-use std::os::unix::fs::MetadataExt;
+use std::os::unix::fs::{MetadataExt, PermissionsExt};
 
 pub const RUNNER_PROFILE_REGISTRY_RELATIVE_PATH: &str = ".pulse/run/runner-profiles.json";
 
@@ -110,15 +110,26 @@ pub fn select_profile_from_registry(
 }
 
 fn resolve_executable(executable: &str) -> PulseResult<RunnerExecutableIdentityV1> {
+    #[cfg(not(unix))]
+    {
+        let _ = executable;
+        return Err(PulseError::validation(
+            "run_platform_unsupported",
+            "runner executable resolution requires platform-specific executable permission semantics",
+        ));
+    }
+    #[cfg(unix)]
     if Path::new(executable).is_absolute() {
         return resolve_absolute_executable(Path::new(executable));
     }
+    #[cfg(unix)]
     if has_path_separator(executable) || executable.chars().any(char::is_whitespace) {
         return Err(PulseError::validation(
             "run_profile_invalid",
             "executable must be an absolute path or a bare program name",
         ));
     }
+    #[cfg(unix)]
     let path = env::var_os("PATH").ok_or_else(|| {
         PulseError::validation(
             "run_command_not_found",
@@ -130,41 +141,98 @@ fn resolve_executable(executable: &str) -> PulseResult<RunnerExecutableIdentityV
             continue;
         }
         let candidate = dir.join(executable);
-        if candidate.exists() {
-            return resolve_absolute_executable(&candidate);
+        match safe_executable_candidate(&candidate) {
+            Ok(Some(executable)) => return Ok(executable),
+            Ok(None) => continue,
+            Err(error) if error.code() == "run_platform_unsupported" => return Err(error),
+            Err(_) => continue,
         }
     }
     Err(PulseError::validation(
         "run_command_not_found",
-        format!("runner executable {executable} was not found on inherited PATH"),
+        format!("runner executable {executable} was not found as a safe regular executable on inherited PATH"),
     ))
 }
 
 fn resolve_absolute_executable(path: &Path) -> PulseResult<RunnerExecutableIdentityV1> {
-    let canonical = fs::canonicalize(path).map_err(|error| PulseError::io(path, error))?;
+    match safe_executable_candidate(path)? {
+        Some(executable) => Ok(executable),
+        None => Err(PulseError::validation(
+            "run_profile_invalid",
+            "configured executable must be a normalized absolute non-symlink regular executable",
+        )),
+    }
+}
+
+fn safe_executable_candidate(path: &Path) -> PulseResult<Option<RunnerExecutableIdentityV1>> {
+    if !path.is_absolute()
+        || path
+            .components()
+            .any(|component| matches!(component, Component::ParentDir | Component::CurDir))
+    {
+        return Ok(None);
+    }
+    let link_metadata = match fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(_) => return Ok(None),
+    };
+    if link_metadata.file_type().is_symlink() || !link_metadata.is_file() {
+        return Ok(None);
+    }
+    if !has_conservative_execute_permission(&link_metadata)? {
+        return Ok(None);
+    }
+    let canonical = match fs::canonicalize(path) {
+        Ok(canonical) => canonical,
+        Err(_) => return Ok(None),
+    };
     if !canonical.is_absolute()
         || canonical
             .components()
             .any(|component| matches!(component, Component::ParentDir | Component::CurDir))
     {
-        return Err(PulseError::validation(
-            "run_profile_invalid",
-            "resolved executable path is not normalized and absolute",
-        ));
+        return Ok(None);
     }
-    let metadata = fs::metadata(&canonical).map_err(|error| PulseError::io(&canonical, error))?;
-    if !metadata.is_file() {
-        return Err(PulseError::validation(
-            "run_profile_invalid",
-            "resolved executable is not a regular file",
-        ));
+    let metadata = match fs::metadata(&canonical) {
+        Ok(metadata) => metadata,
+        Err(_) => return Ok(None),
+    };
+    if !metadata.is_file() || !has_conservative_execute_permission(&metadata)? {
+        return Ok(None);
     }
     let identity = executable_identity_hash(&canonical, &metadata)?;
-    Ok(RunnerExecutableIdentityV1 {
+    Ok(Some(RunnerExecutableIdentityV1 {
         resolved_path: canonical.to_string_lossy().to_string(),
         identity,
-        identity_status: "best_effort_metadata".to_string(),
-    })
+        identity_status: executable_identity_status(),
+    }))
+}
+
+#[cfg(unix)]
+fn has_conservative_execute_permission(metadata: &fs::Metadata) -> PulseResult<bool> {
+    // Rust 1.78 exposes mode bits through std::os::unix. The conservative
+    // Slice 3 policy accepts a regular file when at least one execute bit is
+    // set; actual execve may still fail later if ACLs, mount flags or a race
+    // intervene, so this identity is explicitly best-effort metadata.
+    Ok(metadata.permissions().mode() & 0o111 != 0)
+}
+
+#[cfg(unix)]
+fn executable_identity_status() -> String {
+    "best_effort_unix_metadata_non_symlink_executable".to_string()
+}
+
+#[cfg(not(unix))]
+fn has_conservative_execute_permission(_metadata: &fs::Metadata) -> PulseResult<bool> {
+    Err(PulseError::validation(
+        "run_platform_unsupported",
+        "runner executable permission semantics are not implemented on this platform",
+    ))
+}
+
+#[cfg(not(unix))]
+fn executable_identity_status() -> String {
+    "unsupported_non_unix_permission_semantics".to_string()
 }
 
 fn executable_identity_hash(canonical: &Path, metadata: &fs::Metadata) -> PulseResult<String> {
@@ -311,6 +379,8 @@ mod tests {
         let path = dir.join(name);
         let mut file = fs::File::create(&path).unwrap();
         writeln!(file, "#!/bin/sh").unwrap();
+        #[cfg(unix)]
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
         path
     }
 

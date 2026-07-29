@@ -12,8 +12,13 @@ use serde_json::{json, Map, Value};
 use std::env;
 use std::fs;
 use std::io::Write;
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 use tempfile::TempDir;
+
+static PATH_ENV_LOCK: Mutex<()> = Mutex::new(());
 
 fn schema_validate(value: &Value) {
     let schema_json: Value = serde_json::from_str(RUNNER_PROFILES_SCHEMA).unwrap();
@@ -79,11 +84,23 @@ fn write_registry(repo: &Path, registry: &RunnerProfileRegistryV1) {
     .unwrap();
 }
 
-fn executable_file(dir: &Path, name: &str) -> PathBuf {
+fn file_with_mode(dir: &Path, name: &str, mode: u32) -> PathBuf {
     let path = dir.join(name);
     let mut file = fs::File::create(&path).unwrap();
     writeln!(file, "#!/bin/sh").unwrap();
+    #[cfg(unix)]
+    fs::set_permissions(&path, fs::Permissions::from_mode(mode)).unwrap();
+    let _ = mode;
     path
+}
+
+fn executable_file(dir: &Path, name: &str) -> PathBuf {
+    file_with_mode(dir, name, 0o755)
+}
+
+#[cfg(unix)]
+fn non_executable_file(dir: &Path, name: &str) -> PathBuf {
+    file_with_mode(dir, name, 0o644)
 }
 
 #[test]
@@ -197,24 +214,123 @@ fn selected_profile_reports_no_environment_values_and_keeps_profile_fingerprint_
 }
 
 #[test]
-fn bare_name_resolution_uses_inherited_path_order_deterministically() {
-    let first = tempfile::tempdir().unwrap();
-    let second = tempfile::tempdir().unwrap();
-    let _first_exe = executable_file(first.path(), "codex-test");
-    let second_exe = executable_file(second.path(), "codex-test");
+#[cfg(unix)]
+fn executable_resolution_rejects_absolute_non_executable_file() {
+    let bin_dir = tempfile::tempdir().unwrap();
+    let executable = non_executable_file(bin_dir.path(), "codex-test");
+    let error =
+        select_profile_from_registry(&registry(executable.to_string_lossy()), None).unwrap_err();
+    assert_eq!(error.code(), "run_profile_invalid");
+}
+
+#[test]
+#[cfg(unix)]
+fn executable_resolution_rejects_absolute_directory_and_symlink() {
+    let bin_dir = tempfile::tempdir().unwrap();
+    let directory = bin_dir.path().join("codex-dir");
+    fs::create_dir(&directory).unwrap();
+    let error =
+        select_profile_from_registry(&registry(directory.to_string_lossy()), None).unwrap_err();
+    assert_eq!(error.code(), "run_profile_invalid");
+
+    let real = executable_file(bin_dir.path(), "codex-real");
+    let symlink = bin_dir.path().join("codex-link");
+    std::os::unix::fs::symlink(&real, &symlink).unwrap();
+    let error =
+        select_profile_from_registry(&registry(symlink.to_string_lossy()), None).unwrap_err();
+    assert_eq!(error.code(), "run_profile_invalid");
+}
+
+#[test]
+#[cfg(unix)]
+fn bare_name_resolution_skips_unsafe_path_candidates_and_keeps_order() {
+    let _guard = PATH_ENV_LOCK.lock().unwrap();
+    let unsafe_first = tempfile::tempdir().unwrap();
+    let unsafe_second = tempfile::tempdir().unwrap();
+    let safe_third = tempfile::tempdir().unwrap();
+    non_executable_file(unsafe_first.path(), "codex-test");
+    fs::create_dir(unsafe_second.path().join("codex-test")).unwrap();
+    let safe_exe = executable_file(safe_third.path(), "codex-test");
+
     let old_path = env::var_os("PATH");
-    let joined = env::join_paths([second.path(), first.path()]).unwrap();
+    let joined =
+        env::join_paths([unsafe_first.path(), unsafe_second.path(), safe_third.path()]).unwrap();
     env::set_var("PATH", joined);
     let selected = select_profile_from_registry(&registry("codex-test"), None).unwrap();
+    restore_path(old_path);
+    assert_eq!(
+        selected.executable.resolved_path,
+        fs::canonicalize(safe_exe).unwrap().to_string_lossy()
+    );
+}
+
+#[test]
+#[cfg(unix)]
+fn bare_name_resolution_skips_symlink_to_executable() {
+    let _guard = PATH_ENV_LOCK.lock().unwrap();
+    let symlink_dir = tempfile::tempdir().unwrap();
+    let safe_dir = tempfile::tempdir().unwrap();
+    let real = executable_file(safe_dir.path(), "codex-real");
+    std::os::unix::fs::symlink(&real, symlink_dir.path().join("codex-test")).unwrap();
+    let safe_exe = executable_file(safe_dir.path(), "codex-test");
+
+    let old_path = env::var_os("PATH");
+    let joined = env::join_paths([symlink_dir.path(), safe_dir.path()]).unwrap();
+    env::set_var("PATH", joined);
+    let selected = select_profile_from_registry(&registry("codex-test"), None).unwrap();
+    restore_path(old_path);
+    assert_eq!(
+        selected.executable.resolved_path,
+        fs::canonicalize(safe_exe).unwrap().to_string_lossy()
+    );
+}
+
+#[test]
+#[cfg(unix)]
+fn bare_name_resolution_reports_not_found_when_only_unsafe_candidates_exist() {
+    let _guard = PATH_ENV_LOCK.lock().unwrap();
+    let first = tempfile::tempdir().unwrap();
+    let second = tempfile::tempdir().unwrap();
+    non_executable_file(first.path(), "codex-test");
+    fs::create_dir(second.path().join("codex-test")).unwrap();
+
+    let old_path = env::var_os("PATH");
+    let joined = env::join_paths([first.path(), second.path()]).unwrap();
+    env::set_var("PATH", joined);
+    let error = select_profile_from_registry(&registry("codex-test"), None).unwrap_err();
+    restore_path(old_path);
+    assert_eq!(error.code(), "run_command_not_found");
+}
+
+#[test]
+#[cfg(unix)]
+fn bare_name_resolution_uses_first_safe_executable_in_path_order() {
+    let _guard = PATH_ENV_LOCK.lock().unwrap();
+    let first = tempfile::tempdir().unwrap();
+    let second = tempfile::tempdir().unwrap();
+    let first_exe = executable_file(first.path(), "codex-test");
+    let second_exe = executable_file(second.path(), "codex-test");
+    let old_path = env::var_os("PATH");
+    let joined = env::join_paths([first.path(), second.path()]).unwrap();
+    env::set_var("PATH", joined);
+    let selected = select_profile_from_registry(&registry("codex-test"), None).unwrap();
+    restore_path(old_path);
+    assert_eq!(
+        selected.executable.resolved_path,
+        fs::canonicalize(first_exe).unwrap().to_string_lossy()
+    );
+    assert_ne!(
+        selected.executable.resolved_path,
+        fs::canonicalize(second_exe).unwrap().to_string_lossy()
+    );
+}
+
+fn restore_path(old_path: Option<std::ffi::OsString>) {
     if let Some(old_path) = old_path {
         env::set_var("PATH", old_path);
     } else {
         env::remove_var("PATH");
     }
-    assert_eq!(
-        selected.executable.resolved_path,
-        fs::canonicalize(second_exe).unwrap().to_string_lossy()
-    );
 }
 
 #[test]
