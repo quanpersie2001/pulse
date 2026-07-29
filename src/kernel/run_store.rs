@@ -436,9 +436,49 @@ mod tests {
     use super::*;
     use crate::run::{RunnerAdapterV1, RunnerProfileV1, RUNNER_PROFILE_SCHEMA_VERSION};
     use serde_json::Map;
+    use std::ffi::OsString;
     use std::io::Write;
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
+    use std::sync::{Mutex, MutexGuard};
     use tempfile::TempDir;
+
+    static PATH_ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    struct PathEnvGuard {
+        _lock: MutexGuard<'static, ()>,
+        original_path: Option<OsString>,
+    }
+
+    impl PathEnvGuard {
+        fn new() -> Self {
+            let lock = PATH_ENV_LOCK
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            let original_path = env::var_os("PATH");
+            Self {
+                _lock: lock,
+                original_path,
+            }
+        }
+
+        fn set_path<'a>(&self, entries: impl IntoIterator<Item = &'a Path>) {
+            let mut paths = entries.into_iter().map(PathBuf::from).collect::<Vec<_>>();
+            if let Some(original_path) = &self.original_path {
+                paths.extend(env::split_paths(original_path));
+            }
+            env::set_var("PATH", env::join_paths(paths).unwrap());
+        }
+    }
+
+    impl Drop for PathEnvGuard {
+        fn drop(&mut self) {
+            if let Some(original_path) = self.original_path.clone() {
+                env::set_var("PATH", original_path);
+            } else {
+                env::remove_var("PATH");
+            }
+        }
+    }
 
     fn enrolled_repo() -> TempDir {
         let repo = tempfile::tempdir().unwrap();
@@ -555,25 +595,16 @@ mod tests {
 
     #[test]
     fn bare_executable_resolution_uses_inherited_path_order() {
+        let path_guard = PathEnvGuard::new();
         let first = tempfile::tempdir().unwrap();
         let second = tempfile::tempdir().unwrap();
         let first_exe = executable_file(first.path(), "codex-test");
         let second_exe = executable_file(second.path(), "codex-test");
-        let old_path = env::var_os("PATH");
         let first_path = fs::canonicalize(first.path()).unwrap();
         let second_path = fs::canonicalize(second.path()).unwrap();
-        let mut paths = vec![second_path, first_path];
-        if let Some(old_path) = &old_path {
-            paths.extend(env::split_paths(old_path));
-        }
-        env::set_var("PATH", env::join_paths(paths).unwrap());
+        path_guard.set_path([second_path.as_path(), first_path.as_path()]);
         let selected =
             select_profile_from_registry(&registry("codex-test".to_string()), None).unwrap();
-        if let Some(old_path) = old_path {
-            env::set_var("PATH", old_path);
-        } else {
-            env::remove_var("PATH");
-        }
         assert_eq!(
             selected.executable.resolved_path,
             canonical_utf8(&second_exe)
