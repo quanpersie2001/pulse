@@ -38,6 +38,8 @@ use pulse::knowledge::{
     Severity,
 };
 use pulse::policy::AuthorityPolicy;
+use pulse::process::{supervisor_packaging_probe, PLATFORM_SUPPORT};
+use pulse::run::{runner_profile_threat_model, PUBLIC_CODEX_ADAPTER};
 use pulse::source::head_commit;
 use pulse::storage::transaction::{recover_prepared_transactions, TransactionFailpoint};
 use pulse::storage::{bootstrap as storage_bootstrap, safe_repo_relative, MANIFEST_JSON};
@@ -167,6 +169,15 @@ fn docs_evidence_knowledge_storage_and_identity_public_paths_compile() {
         principals: vec![],
     };
     assert!(head_commit(repo.path()).is_err());
+    assert!(!PLATFORM_SUPPORT.is_empty());
+    assert_eq!(
+        runner_profile_threat_model().public_adapter,
+        PUBLIC_CODEX_ADAPTER
+    );
+    assert_eq!(
+        supervisor_packaging_probe().unwrap().hidden_command,
+        "__run-supervisor"
+    );
     let _ = recover_prepared_transactions(repo.path()).unwrap();
     assert!(matches!(
         TransactionFailpoint::AfterCanonical,

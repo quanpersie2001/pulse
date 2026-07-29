@@ -11,6 +11,8 @@ pub mod identity;
 pub mod kernel;
 pub mod knowledge;
 pub mod policy;
+pub mod process;
+pub mod run;
 pub mod source;
 pub mod storage;
 pub mod work_packet;

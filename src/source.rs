@@ -17,7 +17,10 @@
 //! `revalidate_packet_base`, `check_cleanliness` and `detect_operation_state`
 //! for exact clean-HEAD packet source identity.
 
+use crate::canonical_json::{hash_bytes, hash_serializable};
 use crate::{PulseError, Result};
+use serde::{Deserialize, Serialize};
+use std::fs;
 use std::path::Path;
 use std::process::Command;
 
@@ -106,6 +109,122 @@ impl RepositoryOperationState {
     }
 }
 
+/// P2S3-I0 workspace snapshot feasibility result. This is a bounded identity
+/// probe, not a replayable archive and not public runner state.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct WorkspaceSnapshotFeasibilityV1 {
+    pub schema_version: u64,
+    pub repository_id: String,
+    pub workspace_id: String,
+    pub workspace_mode: String,
+    pub base_commit: String,
+    pub head_commit: String,
+    pub diff_base_commit: String,
+    pub operation_state: String,
+    pub cleanliness: String,
+    pub tracked_diff_identity: String,
+    pub untracked_manifest_identity: String,
+    pub status_identity: String,
+    pub snapshot_status: String,
+    pub reason_codes: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorkspaceSnapshotOptions {
+    pub repository_id: String,
+    pub workspace_id: String,
+    pub workspace_mode: String,
+    pub base_commit: String,
+    pub max_tracked_diff_bytes: usize,
+    pub max_untracked_file_bytes: u64,
+    pub max_untracked_total_bytes: u64,
+}
+
+impl WorkspaceSnapshotOptions {
+    pub fn feasibility_defaults(
+        repository_id: &str,
+        workspace_id: &str,
+        workspace_mode: &str,
+        base_commit: &str,
+    ) -> Self {
+        Self {
+            repository_id: repository_id.to_string(),
+            workspace_id: workspace_id.to_string(),
+            workspace_mode: workspace_mode.to_string(),
+            base_commit: base_commit.to_string(),
+            max_tracked_diff_bytes: 1024 * 1024,
+            max_untracked_file_bytes: 1024 * 1024,
+            max_untracked_total_bytes: 4 * 1024 * 1024,
+        }
+    }
+}
+
+pub fn workspace_snapshot_feasibility(
+    repo_root: &Path,
+    options: &WorkspaceSnapshotOptions,
+) -> Result<WorkspaceSnapshotFeasibilityV1> {
+    let head = head_commit(repo_root)?;
+    let operation_state = detect_operation_state(repo_root)?;
+    let (tracked_diff_identity, tracked_status) = tracked_diff_identity(
+        repo_root,
+        &options.base_commit,
+        options.max_tracked_diff_bytes,
+    )?;
+    let status_bytes = git_bytes(
+        repo_root,
+        ["status", "--porcelain=v1", "-z", "--untracked-files=all"],
+        "run_workspace_snapshot_unsupported",
+    )?;
+    let (status_identity, status_status) = filtered_status_identity(&status_bytes)?;
+    let (untracked_manifest_identity, untracked_status) = untracked_manifest_identity(
+        repo_root,
+        options.max_untracked_file_bytes,
+        options.max_untracked_total_bytes,
+    )?;
+    let mut reason_codes = Vec::new();
+    for (code, status) in [
+        ("tracked_diff_bounded_out", tracked_status.as_str()),
+        ("status_unsupported", status_status.as_str()),
+        ("untracked_manifest_bounded_out", untracked_status.as_str()),
+    ] {
+        if status != "complete" {
+            reason_codes.push(code.to_string());
+        }
+    }
+    if operation_state != RepositoryOperationState::Normal {
+        reason_codes.push("git_operation_in_progress".to_string());
+    }
+    let snapshot_status = if reason_codes.is_empty() {
+        "complete"
+    } else if reason_codes.iter().any(|code| code.contains("bounded_out")) {
+        "bounded_out"
+    } else {
+        "unsupported"
+    };
+    Ok(WorkspaceSnapshotFeasibilityV1 {
+        schema_version: 1,
+        repository_id: options.repository_id.clone(),
+        workspace_id: options.workspace_id.clone(),
+        workspace_mode: options.workspace_mode.clone(),
+        base_commit: options.base_commit.clone(),
+        head_commit: head,
+        diff_base_commit: options.base_commit.clone(),
+        operation_state: operation_state.as_str().to_string(),
+        cleanliness: if workspace_snapshot_status_path(&status_bytes)? {
+            "dirty"
+        } else {
+            "clean"
+        }
+        .to_string(),
+        tracked_diff_identity,
+        untracked_manifest_identity,
+        status_identity,
+        snapshot_status: snapshot_status.to_string(),
+        reason_codes,
+    })
+}
+
 pub fn resolve_full_commit(repo_root: &Path, commit: &str) -> Result<String> {
     if commit.len() != 40 || !commit.chars().all(|c| c.is_ascii_hexdigit()) {
         return Err(PulseError::validation(
@@ -188,6 +307,27 @@ fn is_evidence_only_path(path: &str) -> bool {
 
 fn git<const N: usize>(repo_root: &Path, args: [&str; N]) -> Result<String> {
     git_with_code(repo_root, args, "source_binding_stale")
+}
+
+fn git_bytes<const N: usize>(
+    repo_root: &Path,
+    args: [&str; N],
+    error_code: &'static str,
+) -> Result<Vec<u8>> {
+    let output = Command::new("git")
+        .args(args)
+        .env("LC_ALL", "C")
+        .env("GIT_EXTERNAL_DIFF", "true")
+        .current_dir(repo_root)
+        .output()
+        .map_err(|error| PulseError::io(repo_root.join(".git"), error))?;
+    if !output.status.success() {
+        return Err(PulseError::validation(
+            error_code,
+            String::from_utf8_lossy(&output.stderr).trim().to_string(),
+        ));
+    }
+    Ok(output.stdout)
 }
 
 fn packet_git<const N: usize>(repo_root: &Path, args: [&str; N]) -> Result<String> {
@@ -336,6 +476,140 @@ fn status_line_path(line: &str) -> Option<&str> {
     // Porcelain v1 rename/copy lines use `old -> new`; source cleanliness is
     // concerned with the destination path now present in the worktree.
     Some(path.rsplit(" -> ").next().unwrap_or(path).trim_matches('"'))
+}
+
+fn tracked_diff_identity(
+    repo_root: &Path,
+    base_commit: &str,
+    max_bytes: usize,
+) -> Result<(String, String)> {
+    let bytes = git_bytes(
+        repo_root,
+        [
+            "diff",
+            "--binary",
+            "--full-index",
+            "--no-ext-diff",
+            "--no-color",
+            "-z",
+            base_commit,
+        ],
+        "run_workspace_snapshot_unsupported",
+    )?;
+    if bytes.len() > max_bytes {
+        return Ok((hash_bytes(&bytes[..max_bytes]), "bounded_out".to_string()));
+    }
+    Ok((hash_bytes(&bytes), "complete".to_string()))
+}
+
+fn filtered_status_identity(bytes: &[u8]) -> Result<(String, String)> {
+    let mut retained = Vec::new();
+    for entry in bytes
+        .split(|byte| *byte == 0)
+        .filter(|entry| !entry.is_empty())
+    {
+        let text = std::str::from_utf8(entry).map_err(|_| {
+            PulseError::validation(
+                "run_workspace_snapshot_unsupported",
+                "git status path is not valid UTF-8",
+            )
+        })?;
+        let path = text.get(3..).unwrap_or("").trim_matches('"');
+        if !is_pulse_runtime_generated_path(path) {
+            retained.extend_from_slice(entry);
+            retained.push(0);
+        }
+    }
+    Ok((hash_bytes(&retained), "complete".to_string()))
+}
+
+fn untracked_manifest_identity(
+    repo_root: &Path,
+    max_file_bytes: u64,
+    max_total_bytes: u64,
+) -> Result<(String, String)> {
+    let output = git_bytes(
+        repo_root,
+        ["ls-files", "--others", "--exclude-standard", "-z"],
+        "run_workspace_snapshot_unsupported",
+    )?;
+    let mut entries = Vec::new();
+    let mut total = 0_u64;
+    let mut status = "complete".to_string();
+    for raw in output
+        .split(|byte| *byte == 0)
+        .filter(|entry| !entry.is_empty())
+    {
+        let relative = std::str::from_utf8(raw).map_err(|_| {
+            PulseError::validation(
+                "run_workspace_snapshot_unsupported",
+                "untracked path is not valid UTF-8",
+            )
+        })?;
+        if is_pulse_runtime_generated_path(relative) {
+            continue;
+        }
+        let path = repo_root.join(relative);
+        let metadata = fs::symlink_metadata(&path).map_err(|error| PulseError::io(&path, error))?;
+        let file_type = metadata.file_type();
+        if file_type.is_dir() {
+            return Ok((hash_bytes(relative.as_bytes()), "unsupported".to_string()));
+        }
+        #[cfg(unix)]
+        let mode = {
+            use std::os::unix::fs::PermissionsExt;
+            metadata.permissions().mode() & 0o111 != 0
+        };
+        #[cfg(not(unix))]
+        let mode = false;
+        let (kind, len, digest) = if file_type.is_file() {
+            if metadata.len() > max_file_bytes
+                || total.saturating_add(metadata.len()) > max_total_bytes
+            {
+                status = "bounded_out".to_string();
+                ("regular_bounded_out", metadata.len(), hash_bytes(&[]))
+            } else {
+                let bytes = fs::read(&path).map_err(|error| PulseError::io(&path, error))?;
+                total += bytes.len() as u64;
+                ("regular", metadata.len(), hash_bytes(&bytes))
+            }
+        } else if file_type.is_symlink() {
+            let target = fs::read_link(&path).map_err(|error| PulseError::io(&path, error))?;
+            (
+                "symlink",
+                target.as_os_str().len() as u64,
+                hash_bytes(target.to_string_lossy().as_bytes()),
+            )
+        } else {
+            return Ok((hash_bytes(relative.as_bytes()), "unsupported".to_string()));
+        };
+        entries.push((relative.to_string(), kind.to_string(), mode, len, digest));
+    }
+    entries.sort_by(|left, right| left.0.cmp(&right.0));
+    Ok((hash_serializable(&entries)?, status))
+}
+
+fn is_pulse_runtime_generated_path(path: &str) -> bool {
+    path.starts_with(".pulse/runtime/") || path.starts_with(".pulse/cache/")
+}
+
+fn workspace_snapshot_status_path(bytes: &[u8]) -> Result<bool> {
+    for entry in bytes
+        .split(|byte| *byte == 0)
+        .filter(|entry| !entry.is_empty())
+    {
+        let text = std::str::from_utf8(entry).map_err(|_| {
+            PulseError::validation(
+                "run_workspace_snapshot_unsupported",
+                "git status path is not valid UTF-8",
+            )
+        })?;
+        let path = text.get(3..).unwrap_or("").trim_matches('"');
+        if !is_pulse_runtime_generated_path(path) {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 fn is_pulse_metadata_path(path: &str) -> bool {

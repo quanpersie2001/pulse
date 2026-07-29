@@ -10,6 +10,8 @@ mod common;
 
 #[path = "target_repo/assignment_workspace.rs"]
 mod assignment_workspace;
+#[path = "target_repo/run_workspace_snapshot.rs"]
+mod run_workspace_snapshot;
 #[path = "target_repo/target_repo_fixture.rs"]
 mod target_repo_fixture;
 #[path = "target_repo/work_packet_i7.rs"]
