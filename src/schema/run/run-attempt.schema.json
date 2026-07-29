@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://pulse.reboot/schemas/run/run-attempt.schema.json",
+  "title": "RunAttemptRecordV1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "attempt_id", "run_id", "attempt_number", "state", "input", "process", "workspace_before", "workspace_after", "logs", "timeout_seconds", "cancel", "created_at", "updated_at", "reason_codes", "attempt_fingerprint"],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "attempt_id": { "type": "string" },
+    "run_id": { "type": "string" },
+    "attempt_number": { "type": "integer", "minimum": 1 },
+    "state": { "enum": ["starting", "running", "cancel_requested", "exited", "cancelled", "interrupted", "failed_to_start", "stale_needs_operator"] },
+    "input": { "type": "object", "additionalProperties": false, "required": ["run_input_identity", "json_path", "rendered_prompt_identity", "rendered_prompt_path"], "properties": { "run_input_identity": { "$ref": "#/$defs/sha256" }, "json_path": { "type": "string" }, "rendered_prompt_identity": { "$ref": "#/$defs/sha256" }, "rendered_prompt_path": { "type": "string" } } },
+    "process": { "type": "object", "additionalProperties": false, "required": ["identity", "started_at", "ended_at", "exit"], "properties": { "identity": { "anyOf": [{ "$ref": "#/$defs/process_identity" }, { "type": "null" }] }, "started_at": { "type": ["string", "null"] }, "ended_at": { "type": ["string", "null"] }, "exit": { "anyOf": [{ "$ref": "#/$defs/exit" }, { "type": "null" }] } } },
+    "workspace_before": { "$ref": "workspace-snapshot.schema.json" },
+    "workspace_after": { "anyOf": [{ "$ref": "workspace-snapshot.schema.json" }, { "type": "null" }] },
+    "logs": { "type": "object", "additionalProperties": false, "required": ["stdout", "stderr"], "properties": { "stdout": { "$ref": "#/$defs/log_ref" }, "stderr": { "$ref": "#/$defs/log_ref" } } },
+    "timeout_seconds": { "type": "integer", "minimum": 1 },
+    "cancel": { "type": "object", "additionalProperties": false, "required": ["requested_at", "requested_by", "reason", "grace_seconds", "force_allowed"], "properties": { "requested_at": { "type": ["string", "null"] }, "requested_by": { "type": ["string", "null"] }, "reason": { "type": ["string", "null"] }, "grace_seconds": { "type": ["integer", "null"], "minimum": 0 }, "force_allowed": { "type": ["boolean", "null"] } } },
+    "created_at": { "type": "string" },
+    "updated_at": { "type": "string" },
+    "reason_codes": { "type": "array", "items": { "type": "string" } },
+    "attempt_fingerprint": { "$ref": "#/$defs/sha256" }
+  },
+  "$defs": {
+    "sha256": { "type": "string", "pattern": "^sha256:[A-Fa-f0-9]{64}$" },
+    "process_identity": { "type": "object", "additionalProperties": false, "required": ["supervisor_pid", "child_pid", "process_group_id", "supervisor_nonce_hash", "started_at", "platform_start_marker", "argv_hash", "executable_identity", "identity_status"], "properties": { "supervisor_pid": { "type": "integer" }, "child_pid": { "type": "integer" }, "process_group_id": { "type": ["integer", "null"] }, "supervisor_nonce_hash": { "$ref": "#/$defs/sha256" }, "started_at": { "type": "string" }, "platform_start_marker": { "type": "string" }, "argv_hash": { "$ref": "#/$defs/sha256" }, "executable_identity": { "type": "string" }, "identity_status": { "type": "string" } } },
+    "exit": { "type": "object", "additionalProperties": false, "required": ["kind", "code", "signal", "timed_out", "cancelled", "observed_at"], "properties": { "kind": { "enum": ["exited", "cancelled", "timed_out", "interrupted", "failed_to_start"] }, "code": { "type": ["integer", "null"] }, "signal": { "type": ["integer", "null"] }, "timed_out": { "type": "boolean" }, "cancelled": { "type": "boolean" }, "observed_at": { "type": "string" } } },
+    "log_ref": { "type": "object", "additionalProperties": false, "required": ["path", "retained_prefix_path", "retained_tail_path", "bytes_seen", "bytes_retained", "bytes_truncated", "content_hash", "hash_scope", "truncated", "redaction_status"], "properties": { "path": { "type": "string" }, "retained_prefix_path": { "type": ["string", "null"] }, "retained_tail_path": { "type": ["string", "null"] }, "bytes_seen": { "type": "integer" }, "bytes_retained": { "type": "integer" }, "bytes_truncated": { "type": "integer" }, "content_hash": { "$ref": "#/$defs/sha256" }, "hash_scope": { "enum": ["full_untruncated_content", "retained_bytes_only"] }, "truncated": { "type": "boolean" }, "redaction_status": { "type": "string" } } }
+  }
+}

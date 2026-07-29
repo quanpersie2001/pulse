@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://pulse.reboot/schemas/run/run-start-report.schema.json",
+  "title": "RunStartReportV1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "run", "attempt", "terminal_observation_pending", "handoff_status", "verification_status"],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "run": { "$ref": "run.schema.json" },
+    "attempt": { "$ref": "run-attempt.schema.json" },
+    "terminal_observation_pending": { "type": "boolean" },
+    "handoff_status": { "type": "string" },
+    "verification_status": { "type": "string" }
+  }
+}

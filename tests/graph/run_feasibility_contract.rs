@@ -1,11 +1,12 @@
 use pulse::run::{
-    runner_profile_threat_model, RunnerProfileRegistryV1, RunnerProfileV1, PUBLIC_CODEX_ADAPTER,
+    runner_profile_threat_model, RunnerAdapterV1, RunnerProfileRegistryV1, RunnerProfileV1,
+    PUBLIC_CODEX_ADAPTER,
 };
 
 fn profile() -> RunnerProfileV1 {
     RunnerProfileV1 {
         profile_id: "codex-local".to_string(),
-        adapter: PUBLIC_CODEX_ADAPTER.to_string(),
+        adapter: RunnerAdapterV1::CodexProcessV1,
         executable: "codex".to_string(),
         fixed_args: vec!["exec".to_string(), "--json".to_string()],
         environment_allow: vec![
@@ -36,12 +37,9 @@ fn profile_registry_validates_public_codex_only_contract() {
         .unwrap()
         .starts_with("sha256:"));
 
-    let mut invalid = registry.clone();
-    invalid.profiles[0].adapter = "fixture_process_v1".to_string();
-    assert_eq!(
-        invalid.validate().unwrap_err().code(),
-        "run_profile_invalid"
-    );
+    let mut invalid_json = serde_json::to_value(&registry).unwrap();
+    invalid_json["profiles"][0]["adapter"] = serde_json::json!("fixture_process_v1");
+    assert!(serde_json::from_value::<RunnerProfileRegistryV1>(invalid_json).is_err());
 
     let mut invalid = registry;
     invalid.profiles[0]
@@ -56,7 +54,8 @@ fn profile_registry_validates_public_codex_only_contract() {
 #[test]
 fn threat_model_keeps_env_prompt_and_logs_private() {
     let model = runner_profile_threat_model();
-    assert_eq!(model.public_adapter, PUBLIC_CODEX_ADAPTER);
+    assert_eq!(model.public_adapter, RunnerAdapterV1::CodexProcessV1);
+    assert_eq!(PUBLIC_CODEX_ADAPTER, "codex_process_v1");
     assert_eq!(model.shell_invocation, "never");
     assert!(!model.inherited_environment_values_recorded);
     assert!(model

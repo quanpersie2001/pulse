@@ -1,27 +1,373 @@
-//! Narrow Slice 3 runner feasibility contracts.
+//! Pure Slice 3 run value contracts.
 //!
-//! This module intentionally does **not** implement public `pulse run` behavior.
-//! It records the prerequisite feasibility decisions for P2S3-I0 in executable
-//! value contracts that later implementation slices can consume.
+//! This module owns only public DTOs, enums, deterministic normalization and
+//! fingerprints for the P2S3 single-agent runner contract. It intentionally has
+//! no graph-store, filesystem, process, Git, workspace, CLI or policy imports.
 
-use crate::canonical_json::{hash_bytes, hash_serializable};
-use crate::{PulseError, Result};
+use crate::assignment::{AssignmentWorkspaceSummary, PreparedAssignmentV1};
+use crate::canonical_json::{self, hash_bytes, hash_serializable};
+use crate::{PulseError, PulseResult, Result};
 use serde::{Deserialize, Serialize};
+use serde_json::{Map, Value};
 use std::collections::HashSet;
-use std::env;
-use std::fs;
-use std::path::{Path, PathBuf};
 
-pub const RUNNER_PROFILE_SCHEMA_VERSION: u64 = 1;
+pub const RUN_SCHEMA_VERSION: u32 = 1;
+pub const RUN_KIND_SINGLE_AGENT_IMPLEMENTATION: &str = "single_agent_implementation";
+pub const RUN_INPUT_PROFILE: &str = "phase2_single_agent_run_input_v1";
+pub const RUNNER_PROFILE_SCHEMA_VERSION: u32 = 1;
 pub const PUBLIC_CODEX_ADAPTER: &str = "codex_process_v1";
 pub const NATIVE_RESUME_STATUS: &str = "not_installed";
 pub const DEFAULT_LOG_REDACTION_STATUS: &str = "not_applied_runtime_private";
 pub const RUN_INPUT_CONFIDENTIALITY: &str = "runtime_private_repository_sensitive";
 
+pub const RUN_SCHEMA: &str = include_str!("schema/run/run.schema.json");
+pub const RUN_ATTEMPT_SCHEMA: &str = include_str!("schema/run/run-attempt.schema.json");
+pub const RUN_INPUT_SCHEMA: &str = include_str!("schema/run/run-input.schema.json");
+pub const WORKSPACE_SNAPSHOT_SCHEMA: &str =
+    include_str!("schema/run/workspace-snapshot.schema.json");
+pub const RUNNER_PROFILES_SCHEMA: &str = include_str!("schema/run/runner-profiles.schema.json");
+pub const RUN_START_REPORT_SCHEMA: &str = include_str!("schema/run/run-start-report.schema.json");
+pub const RUN_CANCEL_REPORT_SCHEMA: &str = include_str!("schema/run/run-cancel-report.schema.json");
+pub const RUN_RECOVERY_REPORT_SCHEMA: &str =
+    include_str!("schema/run/run-recovery-report.schema.json");
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum RunStateV1 {
+    Starting,
+    Running,
+    CancelRequested,
+    Interrupted,
+    Exited,
+    Cancelled,
+    FailedToStart,
+    StaleNeedsOperator,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum RunAttemptStateV1 {
+    Starting,
+    Running,
+    CancelRequested,
+    Exited,
+    Cancelled,
+    Interrupted,
+    FailedToStart,
+    StaleNeedsOperator,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum RunnerAdapterV1 {
+    CodexProcessV1,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum NativeResumeStatusV1 {
+    NotInstalled,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkspaceModeV1 {
+    InPlace,
+    IsolatedWorktree,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkspaceOperationStateV1 {
+    None,
+    Merge,
+    Rebase,
+    CherryPick,
+    Revert,
+    Bisect,
+    Unknown,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkspaceCleanlinessV1 {
+    Clean,
+    Dirty,
+    Unknown,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkspaceSnapshotStatusV1 {
+    Complete,
+    Unsupported,
+    BoundedOut,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum RunInputModeV1 {
+    Start,
+    Resume,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ResumeEligibilityV1 {
+    Available,
+    NotAvailable,
+    Blocked,
+    NotEvaluated,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum RunExitKindV1 {
+    Exited,
+    Cancelled,
+    TimedOut,
+    Interrupted,
+    FailedToStart,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum RunLogHashScopeV1 {
+    FullUntruncatedContent,
+    RetainedBytesOnly,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct RunRecordV1 {
+    pub schema_version: u32,
+    pub run_id: String,
+    pub kind: String,
+    pub state: RunStateV1,
+    pub subject: RunSubjectV1,
+    pub assignment: RunAssignmentV1,
+    pub workspace: RunWorkspaceBindingV1,
+    pub runner: RunRunnerV1,
+    pub current_attempt_id: String,
+    pub attempt_ids: Vec<String>,
+    pub created_by: String,
+    pub created_at: String,
+    pub updated_at: String,
+    pub last_heartbeat_at: Option<String>,
+    pub latest_exit: Option<RunExitResultV1>,
+    pub latest_workspace_snapshot_identity: Option<String>,
+    pub reason_codes: Vec<String>,
+    pub run_fingerprint: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct RunSubjectV1 {
+    pub kind: String,
+    pub id: String,
+    pub active_revision: u64,
+    pub contract_revision: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct RunAssignmentV1 {
+    pub lease_id: String,
+    pub prepared_assignment_id: String,
+    pub prepared_assignment_fingerprint: String,
+    pub packet_fingerprint: String,
+    pub assignee: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct RunWorkspaceBindingV1 {
+    pub workspace_id: String,
+    pub mode: WorkspaceModeV1,
+    pub path: String,
+    pub repository_id: String,
+    pub base_commit: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct RunRunnerV1 {
+    pub adapter: RunnerAdapterV1,
+    pub profile_id: String,
+    pub profile_fingerprint: String,
+    pub resolved_executable_identity: Option<String>,
+    pub native_resume_status: NativeResumeStatusV1,
+    pub native_thread_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct RunAttemptRecordV1 {
+    pub schema_version: u32,
+    pub attempt_id: String,
+    pub run_id: String,
+    pub attempt_number: u64,
+    pub state: RunAttemptStateV1,
+    pub input: RunAttemptInputRefV1,
+    pub process: RunAttemptProcessV1,
+    pub workspace_before: WorkspaceSnapshotV1,
+    pub workspace_after: Option<WorkspaceSnapshotV1>,
+    pub logs: RunAttemptLogsV1,
+    pub timeout_seconds: u64,
+    pub cancel: RunCancelStateV1,
+    pub created_at: String,
+    pub updated_at: String,
+    pub reason_codes: Vec<String>,
+    pub attempt_fingerprint: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct RunAttemptInputRefV1 {
+    pub run_input_identity: String,
+    pub json_path: String,
+    pub rendered_prompt_identity: String,
+    pub rendered_prompt_path: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct RunAttemptProcessV1 {
+    pub identity: Option<ProcessIdentityV1>,
+    pub started_at: Option<String>,
+    pub ended_at: Option<String>,
+    pub exit: Option<RunExitResultV1>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ProcessIdentityV1 {
+    pub supervisor_pid: u64,
+    pub child_pid: u64,
+    pub process_group_id: Option<u64>,
+    pub supervisor_nonce_hash: String,
+    pub started_at: String,
+    pub platform_start_marker: String,
+    pub argv_hash: String,
+    pub executable_identity: String,
+    pub identity_status: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct RunExitResultV1 {
+    pub kind: RunExitKindV1,
+    pub code: Option<i32>,
+    pub signal: Option<i32>,
+    pub timed_out: bool,
+    pub cancelled: bool,
+    pub observed_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct RunAttemptLogsV1 {
+    pub stdout: RunLogRefV1,
+    pub stderr: RunLogRefV1,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct RunLogRefV1 {
+    pub path: String,
+    pub retained_prefix_path: Option<String>,
+    pub retained_tail_path: Option<String>,
+    pub bytes_seen: u64,
+    pub bytes_retained: u64,
+    pub bytes_truncated: u64,
+    pub content_hash: String,
+    pub hash_scope: RunLogHashScopeV1,
+    pub truncated: bool,
+    pub redaction_status: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct RunCancelStateV1 {
+    pub requested_at: Option<String>,
+    pub requested_by: Option<String>,
+    pub reason: Option<String>,
+    pub grace_seconds: Option<u64>,
+    pub force_allowed: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct WorkspaceSnapshotV1 {
+    pub schema_version: u32,
+    pub repository_id: String,
+    pub workspace_id: String,
+    pub workspace_mode: WorkspaceModeV1,
+    pub base_commit: String,
+    pub head_commit: String,
+    pub diff_base_commit: String,
+    pub operation_state: WorkspaceOperationStateV1,
+    pub cleanliness: WorkspaceCleanlinessV1,
+    pub tracked_diff_identity: String,
+    pub untracked_manifest_identity: String,
+    pub status_identity: String,
+    pub snapshot_status: WorkspaceSnapshotStatusV1,
+    pub captured_at: String,
+    pub snapshot_identity: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct RunInputV1 {
+    pub schema_version: u32,
+    pub profile: String,
+    pub run_id: String,
+    pub attempt_id: String,
+    pub attempt_number: u64,
+    pub mode: RunInputModeV1,
+    pub prepared_assignment: PreparedAssignmentV1,
+    pub workspace: AssignmentWorkspaceSummary,
+    pub runner_profile: RunInputRunnerProfileV1,
+    pub instructions: RunInstructionsV1,
+    pub resume: RunInputResumeContextV1,
+    pub input_fingerprint: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct RunInputRunnerProfileV1 {
+    pub profile_id: String,
+    pub adapter: RunnerAdapterV1,
+    pub profile_fingerprint: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct RunInstructionsV1 {
+    pub objective: String,
+    pub acceptance: Vec<String>,
+    pub required_changes: Vec<String>,
+    pub invariants: Vec<String>,
+    pub hard_stops: Vec<String>,
+    pub expected_evidence: Vec<String>,
+    pub expected_handoff: Vec<String>,
+    pub authority_boundary: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct RunInputResumeContextV1 {
+    pub previous_attempt_id: Option<String>,
+    pub workspace_snapshot_identity: Option<String>,
+    pub previous_exit_kind: Option<RunExitKindV1>,
+    pub redacted_log_tail: Option<String>,
+    pub native_resume_status: NativeResumeStatusV1,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct RunnerProfileRegistryV1 {
-    pub schema_version: u64,
+    pub schema_version: u32,
     pub default_profile: String,
     pub profiles: Vec<RunnerProfileV1>,
 }
@@ -30,14 +376,14 @@ pub struct RunnerProfileRegistryV1 {
 #[serde(deny_unknown_fields)]
 pub struct RunnerProfileV1 {
     pub profile_id: String,
-    pub adapter: String,
+    pub adapter: RunnerAdapterV1,
     pub executable: String,
     #[serde(default)]
     pub fixed_args: Vec<String>,
     #[serde(default)]
     pub environment_allow: Vec<String>,
     #[serde(default)]
-    pub environment_set: serde_json::Map<String, serde_json::Value>,
+    pub environment_set: Map<String, Value>,
     pub start_timeout_seconds: u64,
     pub run_timeout_seconds: u64,
     pub cancel_grace_seconds: u64,
@@ -49,8 +395,8 @@ pub struct RunnerProfileV1 {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct RunnerProfileThreatModelV1 {
-    pub schema_version: u64,
-    pub public_adapter: String,
+    pub schema_version: u32,
+    pub public_adapter: RunnerAdapterV1,
     pub executable_resolution: String,
     pub shell_invocation: String,
     pub inherited_environment_values_recorded: bool,
@@ -58,18 +404,124 @@ pub struct RunnerProfileThreatModelV1 {
     pub raw_prompt_storage: String,
     pub raw_log_storage: String,
     pub default_log_redaction_status: String,
-    pub native_resume_status: String,
+    pub native_resume_status: NativeResumeStatusV1,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
-pub struct ResolvedExecutableIdentityV1 {
-    pub executable: String,
-    pub resolved_path: String,
-    pub metadata_identity: String,
+pub struct RunStartReportV1 {
+    pub schema_version: u32,
+    pub run: RunRecordV1,
+    pub attempt: RunAttemptRecordV1,
+    pub terminal_observation_pending: bool,
+    pub handoff_status: String,
+    pub verification_status: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct RunCancelReportV1 {
+    pub schema_version: u32,
+    pub run_id: String,
+    pub attempt_id: String,
+    pub state: RunStateV1,
+    pub already_terminal: bool,
+    pub reason_codes: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct RunRecoveryReportV1 {
+    pub schema_version: u32,
+    pub classifications: Vec<RunRecoveryClassificationV1>,
+    pub mutations_applied: Vec<String>,
+    pub reason_codes: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct RunRecoveryClassificationV1 {
+    pub run_id: Option<String>,
+    pub attempt_id: Option<String>,
+    pub classification: String,
+    pub mutation_available: bool,
+    pub reason_codes: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct RunViewV1 {
+    pub schema_version: u32,
+    pub run: Option<RunRecordV1>,
+    pub current_attempt: Option<RunAttemptRecordV1>,
+    pub resume_eligibility: ResumeEligibilityV1,
+    pub resume_blockers: Vec<String>,
+    pub terminal_observation_pending: bool,
+    pub invalid_reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct RunListReportV1 {
+    pub schema_version: u32,
+    pub runs: Vec<RunViewV1>,
+    pub invalid_records: Vec<RunRecoveryClassificationV1>,
+}
+
+impl RunRecordV1 {
+    pub fn normalize(&mut self) {
+        self.reason_codes.sort();
+        self.reason_codes.dedup();
+    }
+
+    pub fn compute_fingerprint(&self) -> PulseResult<String> {
+        fingerprint_without_fields(self, &["run_fingerprint", "last_heartbeat_at"])
+    }
+}
+
+impl RunAttemptRecordV1 {
+    pub fn normalize(&mut self) {
+        self.reason_codes.sort();
+        self.reason_codes.dedup();
+    }
+
+    pub fn compute_fingerprint(&self) -> PulseResult<String> {
+        fingerprint_without_fields(self, &["attempt_fingerprint"])
+    }
+}
+
+impl WorkspaceSnapshotV1 {
+    pub fn compute_identity(&self) -> PulseResult<String> {
+        fingerprint_without_fields(self, &["snapshot_identity"])
+    }
+}
+
+impl RunInputV1 {
+    pub fn normalize(&mut self) {
+        normalize_strings(&mut self.instructions.acceptance);
+        normalize_strings(&mut self.instructions.required_changes);
+        normalize_strings(&mut self.instructions.invariants);
+        normalize_strings(&mut self.instructions.hard_stops);
+        normalize_strings(&mut self.instructions.expected_evidence);
+        normalize_strings(&mut self.instructions.expected_handoff);
+        normalize_strings(&mut self.instructions.authority_boundary);
+        self.prepared_assignment.normalize();
+    }
+
+    pub fn compute_fingerprint(&self) -> PulseResult<String> {
+        fingerprint_without_fields(self, &["input_fingerprint"])
+    }
 }
 
 impl RunnerProfileRegistryV1 {
+    pub fn normalize(&mut self) {
+        for profile in &mut self.profiles {
+            profile.normalize();
+        }
+        self.profiles
+            .sort_by(|left, right| left.profile_id.cmp(&right.profile_id));
+    }
+
     pub fn validate(&self) -> Result<()> {
         if self.schema_version != RUNNER_PROFILE_SCHEMA_VERSION {
             return Err(PulseError::validation(
@@ -120,9 +572,14 @@ impl RunnerProfileRegistryV1 {
 }
 
 impl RunnerProfileV1 {
+    pub fn normalize(&mut self) {
+        normalize_strings(&mut self.fixed_args);
+        normalize_strings(&mut self.environment_allow);
+    }
+
     pub fn validate_public(&self) -> Result<()> {
         validate_profile_id(&self.profile_id)?;
-        if self.adapter != PUBLIC_CODEX_ADAPTER {
+        if self.adapter != RunnerAdapterV1::CodexProcessV1 {
             return Err(PulseError::validation(
                 "run_profile_invalid",
                 "public runner profiles may only use codex_process_v1",
@@ -173,7 +630,9 @@ impl RunnerProfileV1 {
 
     pub fn fingerprint(&self) -> Result<String> {
         self.validate_public()?;
-        hash_serializable(self)
+        let mut owned = self.clone();
+        owned.normalize();
+        hash_serializable(&owned)
     }
 
     pub fn environment_spec_fingerprint(&self) -> Result<String> {
@@ -189,12 +648,14 @@ impl RunnerProfileV1 {
             .map(String::as_str)
             .collect::<Vec<_>>();
         inherited.sort_unstable();
+        inherited.dedup();
         let mut literal_non_secret = self
             .environment_set
             .keys()
             .map(String::as_str)
             .collect::<Vec<_>>();
         literal_non_secret.sort_unstable();
+        literal_non_secret.dedup();
         hash_serializable(&EnvSpec {
             inherited,
             literal_non_secret,
@@ -205,7 +666,7 @@ impl RunnerProfileV1 {
 pub fn runner_profile_threat_model() -> RunnerProfileThreatModelV1 {
     RunnerProfileThreatModelV1 {
         schema_version: 1,
-        public_adapter: PUBLIC_CODEX_ADAPTER.to_string(),
+        public_adapter: RunnerAdapterV1::CodexProcessV1,
         executable_resolution:
             "absolute_normalized_regular_file_or_bare_path_lookup_no_repository_relative_paths"
                 .to_string(),
@@ -216,64 +677,43 @@ pub fn runner_profile_threat_model() -> RunnerProfileThreatModelV1 {
         raw_prompt_storage: RUN_INPUT_CONFIDENTIALITY.to_string(),
         raw_log_storage: "runtime_private_gitignored_bounded_prefix_tail".to_string(),
         default_log_redaction_status: DEFAULT_LOG_REDACTION_STATUS.to_string(),
-        native_resume_status: NATIVE_RESUME_STATUS.to_string(),
+        native_resume_status: NativeResumeStatusV1::NotInstalled,
     }
 }
 
-pub fn resolve_executable_identity(executable: &str) -> Result<ResolvedExecutableIdentityV1> {
-    validate_executable(executable)?;
-    let path = Path::new(executable);
-    let resolved = if path.is_absolute() {
-        let canonical = fs::canonicalize(path).map_err(|error| PulseError::io(path, error))?;
-        let metadata =
-            fs::metadata(&canonical).map_err(|error| PulseError::io(&canonical, error))?;
-        if !metadata.is_file() {
-            return Err(PulseError::validation(
-                "run_command_not_found",
-                "configured executable is not a regular file",
-            ));
-        }
-        canonical
-    } else {
-        resolve_bare_executable(executable)?
-    };
-    let metadata = fs::metadata(&resolved).map_err(|error| PulseError::io(&resolved, error))?;
-    let metadata_identity = hash_bytes(
-        format!(
-            "path={}\nlen={}\nreadonly={}\n",
-            resolved.display(),
-            metadata.len(),
-            metadata.permissions().readonly()
-        )
-        .as_bytes(),
-    );
-    Ok(ResolvedExecutableIdentityV1 {
-        executable: executable.to_string(),
-        resolved_path: resolved.to_string_lossy().to_string(),
-        metadata_identity,
-    })
+fn fingerprint_without_fields<T: Serialize>(value: &T, excluded: &[&str]) -> PulseResult<String> {
+    let value = serde_json::to_value(value)?;
+    let projection = strip_fields(&value, excluded);
+    let canonical = canonical_json::to_canonical_value(&projection)?;
+    let bytes = canonical_json::canonical_value_bytes(&canonical)?;
+    Ok(hash_bytes(&bytes))
 }
 
-fn resolve_bare_executable(executable: &str) -> Result<PathBuf> {
-    let path_var = env::var_os("PATH").ok_or_else(|| {
-        PulseError::validation(
-            "run_command_not_found",
-            "PATH is unavailable for executable lookup",
-        )
-    })?;
-    for dir in env::split_paths(&path_var) {
-        let candidate = dir.join(executable);
-        if let Ok(metadata) = fs::metadata(&candidate) {
-            if metadata.is_file() {
-                return fs::canonicalize(&candidate)
-                    .map_err(|error| PulseError::io(candidate, error));
+fn strip_fields(value: &Value, excluded: &[&str]) -> Value {
+    match value {
+        Value::Object(map) => {
+            let mut out = Map::new();
+            for (key, child) in map {
+                if excluded.iter().any(|excluded_key| excluded_key == key) {
+                    continue;
+                }
+                out.insert(key.clone(), strip_fields(child, excluded));
             }
+            Value::Object(out)
         }
+        Value::Array(items) => Value::Array(
+            items
+                .iter()
+                .map(|item| strip_fields(item, excluded))
+                .collect(),
+        ),
+        other => other.clone(),
     }
-    Err(PulseError::validation(
-        "run_command_not_found",
-        "configured executable was not found on PATH",
-    ))
+}
+
+fn normalize_strings(values: &mut Vec<String>) {
+    values.sort();
+    values.dedup();
 }
 
 fn validate_profile_id(value: &str) -> Result<()> {
@@ -298,8 +738,7 @@ fn validate_executable(value: &str) -> Result<()> {
             "executable must be non-empty, bounded, and contain no NUL",
         ));
     }
-    let path = Path::new(value);
-    if path.is_relative() && path.components().count() != 1 {
+    if (value.contains('/') || value.contains('\\')) && !value.starts_with('/') {
         return Err(PulseError::validation(
             "run_profile_invalid",
             "relative executable paths with separators are deferred in Slice 3",
@@ -335,75 +774,4 @@ fn validate_range(value: u64, min: u64, max: u64, field: &str) -> Result<()> {
         ));
     }
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn valid_profile() -> RunnerProfileV1 {
-        RunnerProfileV1 {
-            profile_id: "codex-local".to_string(),
-            adapter: PUBLIC_CODEX_ADAPTER.to_string(),
-            executable: "codex".to_string(),
-            fixed_args: vec!["exec".to_string(), "--json".to_string()],
-            environment_allow: vec![
-                "PATH".to_string(),
-                "HOME".to_string(),
-                "CODEX_HOME".to_string(),
-            ],
-            environment_set: serde_json::Map::new(),
-            start_timeout_seconds: 30,
-            run_timeout_seconds: 7200,
-            cancel_grace_seconds: 10,
-            force_kill_after_seconds: 10,
-            max_stdout_bytes: 16_777_216,
-            max_stderr_bytes: 16_777_216,
-        }
-    }
-
-    #[test]
-    fn profile_validation_rejects_shell_and_test_adapter_shapes() {
-        let mut profile = valid_profile();
-        profile.adapter = "fixture_process_v1".to_string();
-        assert_eq!(
-            profile.validate_public().unwrap_err().code(),
-            "run_profile_invalid"
-        );
-
-        let mut profile = valid_profile();
-        profile.executable = "tools/codex".to_string();
-        assert_eq!(
-            profile.validate_public().unwrap_err().code(),
-            "run_profile_invalid"
-        );
-    }
-
-    #[test]
-    fn environment_fingerprint_excludes_values() {
-        let mut profile = valid_profile();
-        profile.environment_set.insert(
-            "TOKEN".to_string(),
-            serde_json::Value::String("secret-one".to_string()),
-        );
-        let first = profile.environment_spec_fingerprint().unwrap();
-        profile.environment_set.insert(
-            "TOKEN".to_string(),
-            serde_json::Value::String("secret-two".to_string()),
-        );
-        let second = profile.environment_spec_fingerprint().unwrap();
-        assert_eq!(first, second);
-    }
-
-    #[test]
-    fn threat_model_records_input_and_log_confidentiality() {
-        let model = runner_profile_threat_model();
-        assert_eq!(model.shell_invocation, "never");
-        assert!(!model.inherited_environment_values_recorded);
-        assert_eq!(model.raw_prompt_storage, RUN_INPUT_CONFIDENTIALITY);
-        assert_eq!(
-            model.default_log_redaction_status,
-            DEFAULT_LOG_REDACTION_STATUS
-        );
-    }
 }

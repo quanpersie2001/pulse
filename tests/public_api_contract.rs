@@ -39,7 +39,12 @@ use pulse::knowledge::{
 };
 use pulse::policy::AuthorityPolicy;
 use pulse::process::{supervisor_packaging_probe, PLATFORM_SUPPORT};
-use pulse::run::{runner_profile_threat_model, PUBLIC_CODEX_ADAPTER};
+use pulse::run::{
+    runner_profile_threat_model, NativeResumeStatusV1, RunAttemptRecordV1, RunInputV1, RunRecordV1,
+    RunStateV1, RunnerAdapterV1, RunnerProfileRegistryV1, WorkspaceSnapshotV1,
+    PUBLIC_CODEX_ADAPTER, RUNNER_PROFILES_SCHEMA, RUN_ATTEMPT_SCHEMA, RUN_INPUT_SCHEMA, RUN_SCHEMA,
+    RUN_SCHEMA_VERSION, RUN_START_REPORT_SCHEMA, WORKSPACE_SNAPSHOT_SCHEMA,
+};
 use pulse::source::head_commit;
 use pulse::storage::transaction::{recover_prepared_transactions, TransactionFailpoint};
 use pulse::storage::{bootstrap as storage_bootstrap, safe_repo_relative, MANIFEST_JSON};
@@ -172,8 +177,9 @@ fn docs_evidence_knowledge_storage_and_identity_public_paths_compile() {
     assert!(!PLATFORM_SUPPORT.is_empty());
     assert_eq!(
         runner_profile_threat_model().public_adapter,
-        PUBLIC_CODEX_ADAPTER
+        RunnerAdapterV1::CodexProcessV1
     );
+    assert_eq!(PUBLIC_CODEX_ADAPTER, "codex_process_v1");
     assert_eq!(
         supervisor_packaging_probe().unwrap().hidden_command,
         "__run-supervisor"
@@ -207,6 +213,24 @@ fn docs_evidence_knowledge_storage_and_identity_public_paths_compile() {
     fn accepts_alias(_: Result<()>) {}
     accepts_result(Ok(()));
     accepts_alias(Ok(()));
+    let _: Option<RunRecordV1> = None;
+    let _: Option<RunAttemptRecordV1> = None;
+    let _: Option<RunInputV1> = None;
+    let _: Option<WorkspaceSnapshotV1> = None;
+    let _: Option<RunnerProfileRegistryV1> = None;
+    assert_eq!(RUN_SCHEMA_VERSION, 1);
+    assert_eq!(RunStateV1::Starting, RunStateV1::Starting);
+    assert_eq!(
+        NativeResumeStatusV1::NotInstalled,
+        NativeResumeStatusV1::NotInstalled
+    );
+    assert!(RUN_SCHEMA.contains("RunRecordV1"));
+    assert!(RUN_ATTEMPT_SCHEMA.contains("RunAttemptRecordV1"));
+    assert!(RUN_INPUT_SCHEMA.contains("RunInputV1"));
+    assert!(WORKSPACE_SNAPSHOT_SCHEMA.contains("WorkspaceSnapshotV1"));
+    assert!(RUNNER_PROFILES_SCHEMA.contains("RunnerProfileRegistryV1"));
+    assert!(RUN_START_REPORT_SCHEMA.contains("RunStartReportV1"));
+
     let error = PulseError::validation("baseline", "baseline");
     assert_eq!(error.code(), "baseline");
 }

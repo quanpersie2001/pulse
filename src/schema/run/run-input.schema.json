@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://pulse.reboot/schemas/run/run-input.schema.json",
+  "title": "RunInputV1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "profile", "run_id", "attempt_id", "attempt_number", "mode", "prepared_assignment", "workspace", "runner_profile", "instructions", "resume", "input_fingerprint"],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "profile": { "const": "phase2_single_agent_run_input_v1" },
+    "run_id": { "type": "string" },
+    "attempt_id": { "type": "string" },
+    "attempt_number": { "type": "integer", "minimum": 1 },
+    "mode": { "enum": ["start", "resume"] },
+    "prepared_assignment": { "type": "object" },
+    "workspace": { "type": "object" },
+    "runner_profile": { "type": "object", "additionalProperties": false, "required": ["profile_id", "adapter", "profile_fingerprint"], "properties": { "profile_id": { "type": "string" }, "adapter": { "const": "codex_process_v1" }, "profile_fingerprint": { "$ref": "#/$defs/sha256" } } },
+    "instructions": { "type": "object", "additionalProperties": false, "required": ["objective", "acceptance", "required_changes", "invariants", "hard_stops", "expected_evidence", "expected_handoff", "authority_boundary"], "properties": { "objective": { "type": "string" }, "acceptance": { "$ref": "#/$defs/strings" }, "required_changes": { "$ref": "#/$defs/strings" }, "invariants": { "$ref": "#/$defs/strings" }, "hard_stops": { "$ref": "#/$defs/strings" }, "expected_evidence": { "$ref": "#/$defs/strings" }, "expected_handoff": { "$ref": "#/$defs/strings" }, "authority_boundary": { "$ref": "#/$defs/strings" } } },
+    "resume": { "type": "object", "additionalProperties": false, "required": ["previous_attempt_id", "workspace_snapshot_identity", "previous_exit_kind", "redacted_log_tail", "native_resume_status"], "properties": { "previous_attempt_id": { "type": ["string", "null"] }, "workspace_snapshot_identity": { "type": ["string", "null"] }, "previous_exit_kind": { "enum": ["exited", "cancelled", "timed_out", "interrupted", "failed_to_start", null] }, "redacted_log_tail": { "type": ["string", "null"] }, "native_resume_status": { "const": "not_installed" } } },
+    "input_fingerprint": { "$ref": "#/$defs/sha256" }
+  },
+  "$defs": { "sha256": { "type": "string", "pattern": "^sha256:[A-Fa-f0-9]{64}$" }, "strings": { "type": "array", "items": { "type": "string" } } }
+}

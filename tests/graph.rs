@@ -50,6 +50,8 @@ mod readiness;
 mod readiness_cli_contract;
 #[path = "graph/run_feasibility_contract.rs"]
 mod run_feasibility_contract;
+#[path = "graph/run_model.rs"]
+mod run_model;
 #[path = "graph/shaping_cli_contract.rs"]
 mod shaping_cli_contract;
 #[path = "graph/shaping_contract.rs"]
