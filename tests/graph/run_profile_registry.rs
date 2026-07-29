@@ -10,6 +10,7 @@ use pulse::run::{
 };
 use serde_json::{json, Map, Value};
 use std::env;
+use std::ffi::OsString;
 use std::fs;
 use std::io::Write;
 #[cfg(unix)]
@@ -17,10 +18,38 @@ use std::os::unix::ffi::OsStringExt;
 #[cfg(unix)]
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Mutex, MutexGuard};
 use tempfile::TempDir;
 
 static PATH_ENV_LOCK: Mutex<()> = Mutex::new(());
+
+struct PathEnvGuard {
+    _lock: MutexGuard<'static, ()>,
+    original_path: Option<OsString>,
+}
+
+impl PathEnvGuard {
+    fn new() -> Self {
+        let lock = PATH_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let original_path = env::var_os("PATH");
+        Self {
+            _lock: lock,
+            original_path,
+        }
+    }
+
+    fn set_path<'a>(&self, entries: impl IntoIterator<Item = &'a Path>) {
+        env::set_var("PATH", path_with_original(entries, &self.original_path));
+    }
+}
+
+impl Drop for PathEnvGuard {
+    fn drop(&mut self) {
+        restore_path(self.original_path.clone());
+    }
+}
 
 fn schema_validate(value: &Value) {
     let schema_json: Value = serde_json::from_str(RUNNER_PROFILES_SCHEMA).unwrap();
@@ -260,7 +289,7 @@ fn executable_resolution_rejects_absolute_directory_and_symlink() {
 #[test]
 #[cfg(unix)]
 fn bare_name_resolution_skips_unsafe_path_candidates_and_keeps_order() {
-    let _guard = PATH_ENV_LOCK.lock().unwrap();
+    let path_guard = PathEnvGuard::new();
     let unsafe_first = tempfile::tempdir().unwrap();
     let unsafe_second = tempfile::tempdir().unwrap();
     let safe_third = tempfile::tempdir().unwrap();
@@ -268,89 +297,63 @@ fn bare_name_resolution_skips_unsafe_path_candidates_and_keeps_order() {
     fs::create_dir(unsafe_second.path().join("codex-test")).unwrap();
     let safe_exe = executable_file(safe_third.path(), "codex-test");
 
-    let old_path = env::var_os("PATH");
     let unsafe_first_path = canonical_path(unsafe_first.path());
     let unsafe_second_path = canonical_path(unsafe_second.path());
     let safe_third_path = canonical_path(safe_third.path());
-    env::set_var(
-        "PATH",
-        path_with_original(
-            [
-                unsafe_first_path.as_path(),
-                unsafe_second_path.as_path(),
-                safe_third_path.as_path(),
-            ],
-            &old_path,
-        ),
-    );
+    path_guard.set_path([
+        unsafe_first_path.as_path(),
+        unsafe_second_path.as_path(),
+        safe_third_path.as_path(),
+    ]);
     let selected = select_profile_from_registry(&registry("codex-test"), None).unwrap();
-    restore_path(old_path);
     assert_eq!(selected.executable.resolved_path, canonical_utf8(&safe_exe));
 }
 
 #[test]
 #[cfg(unix)]
 fn bare_name_resolution_skips_symlink_to_executable() {
-    let _guard = PATH_ENV_LOCK.lock().unwrap();
+    let path_guard = PathEnvGuard::new();
     let symlink_dir = tempfile::tempdir().unwrap();
     let safe_dir = tempfile::tempdir().unwrap();
     let real = executable_file(safe_dir.path(), "codex-real");
     std::os::unix::fs::symlink(&real, symlink_dir.path().join("codex-test")).unwrap();
     let safe_exe = executable_file(safe_dir.path(), "codex-test");
 
-    let old_path = env::var_os("PATH");
     let symlink_dir_path = canonical_path(symlink_dir.path());
     let safe_dir_path = canonical_path(safe_dir.path());
-    env::set_var(
-        "PATH",
-        path_with_original(
-            [symlink_dir_path.as_path(), safe_dir_path.as_path()],
-            &old_path,
-        ),
-    );
+    path_guard.set_path([symlink_dir_path.as_path(), safe_dir_path.as_path()]);
     let selected = select_profile_from_registry(&registry("codex-test"), None).unwrap();
-    restore_path(old_path);
     assert_eq!(selected.executable.resolved_path, canonical_utf8(&safe_exe));
 }
 
 #[test]
 #[cfg(unix)]
 fn bare_name_resolution_reports_not_found_when_only_unsafe_candidates_exist() {
-    let _guard = PATH_ENV_LOCK.lock().unwrap();
+    let path_guard = PathEnvGuard::new();
     let first = tempfile::tempdir().unwrap();
     let second = tempfile::tempdir().unwrap();
     non_executable_file(first.path(), "codex-test");
     fs::create_dir(second.path().join("codex-test")).unwrap();
 
-    let old_path = env::var_os("PATH");
     let first_path = canonical_path(first.path());
     let second_path = canonical_path(second.path());
-    env::set_var(
-        "PATH",
-        path_with_original([first_path.as_path(), second_path.as_path()], &old_path),
-    );
+    path_guard.set_path([first_path.as_path(), second_path.as_path()]);
     let error = select_profile_from_registry(&registry("codex-test"), None).unwrap_err();
-    restore_path(old_path);
     assert_eq!(error.code(), "run_command_not_found");
 }
 
 #[test]
 #[cfg(unix)]
 fn bare_name_resolution_uses_first_safe_executable_in_path_order() {
-    let _guard = PATH_ENV_LOCK.lock().unwrap();
+    let path_guard = PathEnvGuard::new();
     let first = tempfile::tempdir().unwrap();
     let second = tempfile::tempdir().unwrap();
     let first_exe = executable_file(first.path(), "codex-test");
     let second_exe = executable_file(second.path(), "codex-test");
-    let old_path = env::var_os("PATH");
     let first_path = canonical_path(first.path());
     let second_path = canonical_path(second.path());
-    env::set_var(
-        "PATH",
-        path_with_original([first_path.as_path(), second_path.as_path()], &old_path),
-    );
+    path_guard.set_path([first_path.as_path(), second_path.as_path()]);
     let selected = select_profile_from_registry(&registry("codex-test"), None).unwrap();
-    restore_path(old_path);
     assert_eq!(
         selected.executable.resolved_path,
         canonical_utf8(&first_exe)
@@ -363,8 +366,8 @@ fn bare_name_resolution_uses_first_safe_executable_in_path_order() {
 
 fn path_with_original<'a>(
     entries: impl IntoIterator<Item = &'a Path>,
-    old_path: &Option<std::ffi::OsString>,
-) -> std::ffi::OsString {
+    old_path: &Option<OsString>,
+) -> OsString {
     let mut paths = entries.into_iter().map(PathBuf::from).collect::<Vec<_>>();
     if let Some(old_path) = old_path {
         paths.extend(env::split_paths(old_path));
@@ -372,7 +375,7 @@ fn path_with_original<'a>(
     env::join_paths(paths).unwrap()
 }
 
-fn restore_path(old_path: Option<std::ffi::OsString>) {
+fn restore_path(old_path: Option<OsString>) {
     if let Some(old_path) = old_path {
         env::set_var("PATH", old_path);
     } else {
@@ -423,7 +426,7 @@ fn absolute_executable_rejects_symlink_directory_component() {
 #[test]
 #[cfg(unix)]
 fn path_resolution_rejects_symlink_path_directory_component() {
-    let _guard = PATH_ENV_LOCK.lock().unwrap();
+    let path_guard = PathEnvGuard::new();
     let base = tempfile::tempdir().unwrap();
     let real_dir = base.path().join("real-bin");
     fs::create_dir(&real_dir).unwrap();
@@ -433,21 +436,16 @@ fn path_resolution_rejects_symlink_path_directory_component() {
     let safe_dir = tempfile::tempdir().unwrap();
     let safe_exe = executable_file(safe_dir.path(), "codex-test");
 
-    let old_path = env::var_os("PATH");
     let safe_dir_path = canonical_path(safe_dir.path());
-    env::set_var(
-        "PATH",
-        path_with_original([link_dir.as_path(), safe_dir_path.as_path()], &old_path),
-    );
+    path_guard.set_path([link_dir.as_path(), safe_dir_path.as_path()]);
     let selected = select_profile_from_registry(&registry("codex-test"), None).unwrap();
-    restore_path(old_path);
     assert_eq!(selected.executable.resolved_path, canonical_utf8(&safe_exe));
 }
 
 #[test]
 #[cfg(unix)]
 fn path_resolution_rejects_non_utf8_path_entries_and_candidate_identity() {
-    let _guard = PATH_ENV_LOCK.lock().unwrap();
+    let path_guard = PathEnvGuard::new();
     let base = tempfile::tempdir().unwrap();
     let non_utf8_dir = base
         .path()
@@ -458,14 +456,9 @@ fn path_resolution_rejects_non_utf8_path_entries_and_candidate_identity() {
     let safe_dir = tempfile::tempdir().unwrap();
     let safe_exe = executable_file(safe_dir.path(), "codex-test");
 
-    let old_path = env::var_os("PATH");
     let safe_dir_path = canonical_path(safe_dir.path());
-    env::set_var(
-        "PATH",
-        path_with_original([non_utf8_dir.as_path(), safe_dir_path.as_path()], &old_path),
-    );
+    path_guard.set_path([non_utf8_dir.as_path(), safe_dir_path.as_path()]);
     let selected = select_profile_from_registry(&registry("codex-test"), None).unwrap();
-    restore_path(old_path);
     assert_eq!(selected.executable.resolved_path, canonical_utf8(&safe_exe));
 
     let lossy_configured_executable = base.path().join("bin-�").join("codex-test");
@@ -492,6 +485,7 @@ fn effective_permission_rejects_owner_without_owner_execute_even_when_other_exec
 #[test]
 #[cfg(unix)]
 fn effective_permission_accepts_owner_execute_and_profile_fingerprint_ignores_local_identity() {
+    let path_guard = PathEnvGuard::new();
     let first = tempfile::tempdir().unwrap();
     let second = tempfile::tempdir().unwrap();
     let _first_exe = executable_file(first.path(), "codex-test");
@@ -503,20 +497,12 @@ fn effective_permission_accepts_owner_execute_and_profile_fingerprint_ignores_lo
         first_registry.profiles[0].fingerprint().unwrap(),
         second_registry.profiles[0].fingerprint().unwrap()
     );
-    let old_path = env::var_os("PATH");
     let first_path = canonical_path(first.path());
-    env::set_var(
-        "PATH",
-        path_with_original([first_path.as_path()], &old_path),
-    );
+    path_guard.set_path([first_path.as_path()]);
     let first_selected = select_profile_from_registry(&first_registry, None).unwrap();
     let second_path = canonical_path(second.path());
-    env::set_var(
-        "PATH",
-        path_with_original([second_path.as_path()], &old_path),
-    );
+    path_guard.set_path([second_path.as_path()]);
     let second_selected = select_profile_from_registry(&second_registry, None).unwrap();
-    restore_path(old_path);
     assert_ne!(
         first_selected.executable.identity,
         second_selected.executable.identity
