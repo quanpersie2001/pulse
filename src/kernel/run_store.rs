@@ -35,6 +35,11 @@ pub const SNAPSHOTS_DIR: &str = "snapshots";
 const RECORD_EXTENSION: &str = "json";
 const PROMPT_EXTENSION: &str = "md";
 const LOG_EXTENSION: &str = "log";
+const MAX_RECORD_BYTES: u64 = 1024 * 1024;
+const MAX_PROMPT_BYTES: u64 = 2 * 1024 * 1024;
+const MAX_LOG_SEGMENT_BYTES: u64 = 64 * 1024 * 1024;
+const MAX_DIRECTORY_ENTRIES: usize = 4096;
+const MAX_CLASSIFICATIONS: usize = 8192;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RunStoreWriteMode {
@@ -170,19 +175,19 @@ pub fn heartbeat_path(repo_root: &Path, run_id: &str) -> PulseResult<PathBuf> {
 pub fn input_json_path(repo_root: &Path, run_id: &str, attempt_id: &str) -> PulseResult<PathBuf> {
     validate_run_id(run_id)?;
     validate_attempt_id(attempt_id)?;
-    Ok(inputs_dir(repo_root).join(format!("{run_id}.{attempt_id}.{RECORD_EXTENSION}")))
+    Ok(inputs_dir(repo_root).join(input_json_filename(run_id, attempt_id)))
 }
 
 pub fn input_prompt_path(repo_root: &Path, run_id: &str, attempt_id: &str) -> PulseResult<PathBuf> {
     validate_run_id(run_id)?;
     validate_attempt_id(attempt_id)?;
-    Ok(inputs_dir(repo_root).join(format!("{run_id}.{attempt_id}.{PROMPT_EXTENSION}")))
+    Ok(inputs_dir(repo_root).join(input_prompt_filename(run_id, attempt_id)))
 }
 
 pub fn snapshot_path(repo_root: &Path, attempt_id: &str, phase: &str) -> PulseResult<PathBuf> {
     validate_attempt_id(attempt_id)?;
-    validate_token("snapshot phase", phase)?;
-    Ok(snapshots_dir(repo_root).join(format!("{attempt_id}.{phase}.{RECORD_EXTENSION}")))
+    validate_snapshot_phase(phase)?;
+    Ok(snapshots_dir(repo_root).join(snapshot_filename(attempt_id, phase)))
 }
 
 pub fn log_segment_path(
@@ -198,7 +203,7 @@ pub fn log_segment_path(
     validate_log_segment(segment)?;
     Ok(logs_dir(repo_root)
         .join(run_id)
-        .join(format!("{attempt_id}.{stream}.{segment}.{LOG_EXTENSION}")))
+        .join(log_segment_filename(attempt_id, stream, segment)))
 }
 
 pub fn managed_relative_path(repo_root: &Path, path: &Path) -> PulseResult<String> {
@@ -353,6 +358,32 @@ fn validate_log_segment(segment: &str) -> PulseResult<()> {
     }
 }
 
+fn validate_snapshot_phase(phase: &str) -> PulseResult<()> {
+    match phase {
+        "before" | "after" => Ok(()),
+        _ => Err(PulseError::validation(
+            "invalid_run_record_id",
+            "snapshot phase must be before or after",
+        )),
+    }
+}
+
+fn input_json_filename(run_id: &str, attempt_id: &str) -> String {
+    format!("{run_id}.{attempt_id}.{RECORD_EXTENSION}")
+}
+
+fn input_prompt_filename(run_id: &str, attempt_id: &str) -> String {
+    format!("{run_id}.{attempt_id}.{PROMPT_EXTENSION}")
+}
+
+fn snapshot_filename(attempt_id: &str, phase: &str) -> String {
+    format!("{attempt_id}.{phase}.{RECORD_EXTENSION}")
+}
+
+fn log_segment_filename(attempt_id: &str, stream: &str, segment: &str) -> String {
+    format!("{attempt_id}.{stream}.{segment}.{LOG_EXTENSION}")
+}
+
 fn ensure_managed_existing_parent(repo_root: &Path, path: &Path) -> PulseResult<()> {
     let parent = path.parent().ok_or_else(|| {
         PulseError::validation("run_control_record_invalid", "managed path has no parent")
@@ -453,8 +484,7 @@ pub fn write_run_input(
     mode: RunStoreWriteMode,
 ) -> PulseResult<()> {
     assignment_store::check_enrolled(repo_root)?;
-    validate_run_id(&input.run_id)?;
-    validate_attempt_id(&input.attempt_id)?;
+    validate_run_input(input)?;
     write_canonical_managed(
         repo_root,
         &input_json_path(repo_root, &input.run_id, &input.attempt_id)?,
@@ -467,6 +497,25 @@ pub fn write_run_input(
         rendered_prompt.as_bytes(),
         mode,
     )
+}
+
+pub fn read_run_input_preserve(
+    repo_root: &Path,
+    run_id: &str,
+    attempt_id: &str,
+) -> PulseResult<Option<RunInputV1>> {
+    assignment_store::check_enrolled(repo_root)?;
+    let path = input_json_path(repo_root, run_id, attempt_id)?;
+    let Some(input) = read_optional_canonical_managed(repo_root, &path, validate_run_input)? else {
+        return Ok(None);
+    };
+    if input.run_id != run_id || input.attempt_id != attempt_id {
+        return Err(PulseError::validation(
+            "run_input_invalid",
+            "run input filename does not match internal IDs",
+        ));
+    }
+    Ok(Some(input))
 }
 
 pub fn write_workspace_snapshot(
@@ -523,7 +572,17 @@ pub fn read_run_record_preserve(
 ) -> PulseResult<Option<RunRecordV1>> {
     assignment_store::check_enrolled(repo_root)?;
     let path = run_record_path(repo_root, run_id)?;
-    read_optional_canonical_managed(repo_root, &path, validate_run_record)
+    let Some(record) = read_optional_canonical_managed(repo_root, &path, validate_run_record)?
+    else {
+        return Ok(None);
+    };
+    if record.run_id != run_id {
+        return Err(PulseError::validation(
+            "invalid_run_record",
+            "run record filename does not match internal run_id",
+        ));
+    }
+    Ok(Some(record))
 }
 
 pub fn read_attempt_record_preserve(
@@ -532,7 +591,17 @@ pub fn read_attempt_record_preserve(
 ) -> PulseResult<Option<RunAttemptRecordV1>> {
     assignment_store::check_enrolled(repo_root)?;
     let path = attempt_record_path(repo_root, attempt_id)?;
-    read_optional_canonical_managed(repo_root, &path, validate_attempt_record)
+    let Some(record) = read_optional_canonical_managed(repo_root, &path, validate_attempt_record)?
+    else {
+        return Ok(None);
+    };
+    if record.attempt_id != attempt_id {
+        return Err(PulseError::validation(
+            "invalid_run_record",
+            "attempt record filename does not match internal attempt_id",
+        ));
+    }
+    Ok(Some(record))
 }
 
 pub fn show_run_preserve(repo_root: &Path, run_id: &str) -> PulseResult<RunViewV1> {
@@ -550,14 +619,11 @@ pub fn show_run_preserve(repo_root: &Path, run_id: &str) -> PulseResult<RunViewV
         });
     };
     let current_attempt = read_attempt_record_preserve(repo_root, &run.current_attempt_id)?;
+    let invalid_reason = validate_run_attempt_relation(&run, current_attempt.as_ref()).err();
     Ok(RunViewV1 {
         schema_version: RUN_SCHEMA_VERSION,
         terminal_observation_pending: exit_observation_path(repo_root, run_id)?.is_file(),
-        invalid_reason: if current_attempt.is_some() {
-            None
-        } else {
-            Some("current_attempt_missing".to_string())
-        },
+        invalid_reason,
         resume_eligibility: ResumeEligibilityV1::NotEvaluated,
         resume_blockers: vec![],
         run: Some(run),
@@ -609,44 +675,63 @@ pub fn classify_run_store_preserve(repo_root: &Path) -> PulseResult<Vec<RunStore
     ensure_no_symlink_escape(repo_root, &run_runtime_root(repo_root), false)?;
     let mut out = Vec::new();
     let mut run_ids = BTreeSet::new();
-    let mut seen_run_paths: BTreeMap<String, Vec<PathBuf>> = BTreeMap::new();
-    collect_json_stems(&runs_dir(repo_root), &mut seen_run_paths)?;
-    for (run_id, paths) in seen_run_paths {
-        if paths.len() > 1 {
-            out.push(classification(
-                Some(run_id),
-                None,
-                RunStoreRecordStatus::Ambiguous,
-                paths.first(),
-                "ambiguous_run_record",
-            ));
+    let mut seen_internal_run_paths: BTreeMap<String, Vec<PathBuf>> = BTreeMap::new();
+    let mut run_attempt_ids: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+
+    for entry in bounded_read_dir(&runs_dir(repo_root), &mut out, "runs")? {
+        if !is_json_file_name(&entry.file_name) {
             continue;
         }
-        let path = &paths[0];
+        let path = entry.path;
+        let stem = json_stem(&entry.file_name).to_string();
         match read_required_canonical_managed::<RunRecordV1, _>(
             repo_root,
-            path,
+            &path,
             validate_run_record,
         ) {
-            Ok(record) => {
+            Ok(record) if record.run_id == stem => {
                 run_ids.insert(record.run_id.clone());
+                run_attempt_ids.insert(
+                    record.run_id.clone(),
+                    record.attempt_ids.iter().cloned().collect(),
+                );
+                seen_internal_run_paths
+                    .entry(record.run_id.clone())
+                    .or_default()
+                    .push(path.clone());
                 out.push(classification(
                     Some(record.run_id),
                     None,
                     RunStoreRecordStatus::Valid,
-                    Some(path),
+                    Some(&path),
                     "valid",
                 ));
             }
+            Ok(record) => {
+                seen_internal_run_paths
+                    .entry(record.run_id.clone())
+                    .or_default()
+                    .push(path.clone());
+                out.push(classification(
+                    Some(record.run_id),
+                    None,
+                    RunStoreRecordStatus::Invalid,
+                    Some(&path),
+                    "run_id_path_mismatch",
+                ));
+            }
             Err(error) => out.push(classification(
-                Some(run_id),
+                Some(stem),
                 None,
                 RunStoreRecordStatus::Invalid,
-                Some(path),
+                Some(&path),
                 error.code(),
             )),
         }
+        enforce_classification_limit(&mut out)?;
     }
+    mark_duplicate_internal_ids(&seen_internal_run_paths, &mut out, true)?;
+    classify_attempt_records(repo_root, &run_attempt_ids, &mut out)?;
     classify_orphan_controls(repo_root, &run_ids, &mut out)?;
     classify_orphan_logs(repo_root, &run_ids, &mut out)?;
     Ok(out)
@@ -669,14 +754,27 @@ fn write_bytes_managed(
     mode: RunStoreWriteMode,
 ) -> PulseResult<()> {
     validate_managed_absolute_path(repo_root, path)?;
+    ensure_write_size_bound(path, bytes.len())?;
     if let Some(parent) = path.parent() {
         create_managed_dir_all(repo_root, parent)?;
     }
     ensure_managed_target_for_write(repo_root, path)?;
     match mode {
-        RunStoreWriteMode::CreateNew => crate::storage::create_new(path, bytes),
-        RunStoreWriteMode::Replace => crate::storage::atomic_write(path, bytes),
+        RunStoreWriteMode::CreateNew => crate::storage::create_new(path, bytes)?,
+        RunStoreWriteMode::Replace => crate::storage::atomic_write(path, bytes)?,
     }
+    set_runtime_private_file_permissions(path)
+}
+
+fn ensure_write_size_bound(path: &Path, len: usize) -> PulseResult<()> {
+    let max = managed_file_size_limit(path)?;
+    if len as u64 > max {
+        return Err(PulseError::validation(
+            "run_record_too_large",
+            "managed runtime file exceeds Slice 3 store size bound",
+        ));
+    }
+    Ok(())
 }
 
 fn read_optional_canonical_managed<T, F>(
@@ -705,7 +803,7 @@ where
 {
     validate_managed_absolute_path(repo_root, path)?;
     ensure_no_symlink_escape(repo_root, path, false)?;
-    let bytes = fs::read(path).map_err(|error| PulseError::io(path, error))?;
+    let bytes = read_bounded_managed_file(path)?;
     let value: T = serde_json::from_slice(&bytes).map_err(|error| PulseError::json(path, error))?;
     let canonical = to_canonical_bytes(&value)?;
     if canonical != bytes {
@@ -716,6 +814,48 @@ where
     }
     validate(&value)?;
     Ok(value)
+}
+
+fn read_bounded_managed_file(path: &Path) -> PulseResult<Vec<u8>> {
+    let metadata = fs::symlink_metadata(path).map_err(|error| PulseError::io(path, error))?;
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return Err(PulseError::validation(
+            "invalid_run_record",
+            "managed runtime record must be a regular non-symlink file",
+        ));
+    }
+    let max = managed_file_size_limit(path)?;
+    if metadata.len() > max {
+        return Err(PulseError::validation(
+            "run_record_too_large",
+            "managed runtime record exceeds Slice 3 read bound",
+        ));
+    }
+    fs::read(path).map_err(|error| PulseError::io(path, error))
+}
+
+fn managed_file_size_limit(path: &Path) -> PulseResult<u64> {
+    let name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| {
+            PulseError::validation(
+                "run_control_record_invalid",
+                "managed runtime file name must be valid UTF-8",
+            )
+        })?;
+    if name.ends_with(&format!(".{LOG_EXTENSION}")) {
+        Ok(MAX_LOG_SEGMENT_BYTES)
+    } else if name.ends_with(&format!(".{PROMPT_EXTENSION}")) {
+        Ok(MAX_PROMPT_BYTES)
+    } else if name.ends_with(&format!(".{RECORD_EXTENSION}")) {
+        Ok(MAX_RECORD_BYTES)
+    } else {
+        Err(PulseError::validation(
+            "run_control_record_invalid",
+            "managed runtime file extension is not part of the run store layout",
+        ))
+    }
 }
 
 fn validate_managed_absolute_path(repo_root: &Path, path: &Path) -> PulseResult<()> {
@@ -777,6 +917,17 @@ fn set_runtime_private_permissions(_path: &Path) -> PulseResult<()> {
     Ok(())
 }
 
+#[cfg(unix)]
+fn set_runtime_private_file_permissions(path: &Path) -> PulseResult<()> {
+    fs::set_permissions(path, fs::Permissions::from_mode(0o600))
+        .map_err(|error| PulseError::io(path, error))
+}
+
+#[cfg(not(unix))]
+fn set_runtime_private_file_permissions(_path: &Path) -> PulseResult<()> {
+    Ok(())
+}
+
 fn validate_run_record(record: &RunRecordV1) -> PulseResult<()> {
     if record.schema_version != RUN_SCHEMA_VERSION {
         return Err(PulseError::validation(
@@ -786,14 +937,46 @@ fn validate_run_record(record: &RunRecordV1) -> PulseResult<()> {
     }
     validate_run_id(&record.run_id)?;
     validate_attempt_id(&record.current_attempt_id)?;
+    let mut attempt_ids = BTreeSet::new();
     for attempt_id in &record.attempt_ids {
         validate_attempt_id(attempt_id)?;
+        if !attempt_ids.insert(attempt_id) {
+            return Err(PulseError::validation(
+                "invalid_run_record",
+                "run attempt_ids must not contain duplicates",
+            ));
+        }
+    }
+    if !attempt_ids.contains(&record.current_attempt_id) {
+        return Err(PulseError::validation(
+            "invalid_run_record",
+            "current_attempt_id must be present in attempt_ids",
+        ));
     }
     if record.compute_fingerprint()? != record.run_fingerprint {
         return Err(PulseError::validation(
             "invalid_run_record",
             "run_fingerprint mismatch",
         ));
+    }
+    Ok(())
+}
+
+fn validate_run_attempt_relation(
+    run: &RunRecordV1,
+    current_attempt: Option<&RunAttemptRecordV1>,
+) -> std::result::Result<(), String> {
+    let Some(attempt) = current_attempt else {
+        return Err("current_attempt_missing".to_string());
+    };
+    if attempt.attempt_id != run.current_attempt_id {
+        return Err("current_attempt_id_mismatch".to_string());
+    }
+    if attempt.run_id != run.run_id {
+        return Err("current_attempt_cross_run".to_string());
+    }
+    if !run.attempt_ids.iter().any(|id| id == &attempt.attempt_id) {
+        return Err("current_attempt_not_listed".to_string());
     }
     Ok(())
 }
@@ -807,22 +990,7 @@ fn validate_attempt_record(record: &RunAttemptRecordV1) -> PulseResult<()> {
     }
     validate_attempt_id(&record.attempt_id)?;
     validate_run_id(&record.run_id)?;
-    validate_managed_relative_path(Path::new(&record.input.json_path))?;
-    validate_managed_relative_path(Path::new(&record.input.rendered_prompt_path))?;
-    validate_managed_relative_path(Path::new(&record.logs.stdout.path))?;
-    validate_managed_relative_path(Path::new(&record.logs.stderr.path))?;
-    if let Some(path) = &record.logs.stdout.retained_prefix_path {
-        validate_managed_relative_path(Path::new(path))?;
-    }
-    if let Some(path) = &record.logs.stdout.retained_tail_path {
-        validate_managed_relative_path(Path::new(path))?;
-    }
-    if let Some(path) = &record.logs.stderr.retained_prefix_path {
-        validate_managed_relative_path(Path::new(path))?;
-    }
-    if let Some(path) = &record.logs.stderr.retained_tail_path {
-        validate_managed_relative_path(Path::new(path))?;
-    }
+    validate_attempt_layout(record)?;
     if record.compute_fingerprint()? != record.attempt_fingerprint {
         return Err(PulseError::validation(
             "invalid_run_record",
@@ -830,6 +998,133 @@ fn validate_attempt_record(record: &RunAttemptRecordV1) -> PulseResult<()> {
         ));
     }
     Ok(())
+}
+
+fn validate_run_input(input: &RunInputV1) -> PulseResult<()> {
+    if input.schema_version != RUN_SCHEMA_VERSION || input.profile != crate::run::RUN_INPUT_PROFILE
+    {
+        return Err(PulseError::validation(
+            "run_input_invalid",
+            "run input schema_version/profile mismatch",
+        ));
+    }
+    validate_run_id(&input.run_id)?;
+    validate_attempt_id(&input.attempt_id)?;
+    if input.compute_fingerprint()? != input.input_fingerprint {
+        return Err(PulseError::validation(
+            "run_input_invalid",
+            "input_fingerprint mismatch",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_attempt_layout(record: &RunAttemptRecordV1) -> PulseResult<()> {
+    require_relative_path_string(
+        &record.input.json_path,
+        &PathBuf::from(".pulse")
+            .join("runtime")
+            .join("run")
+            .join(INPUTS_DIR)
+            .join(input_json_filename(&record.run_id, &record.attempt_id)),
+        "attempt input JSON path",
+    )?;
+    require_relative_path_string(
+        &record.input.rendered_prompt_path,
+        &PathBuf::from(".pulse")
+            .join("runtime")
+            .join("run")
+            .join(INPUTS_DIR)
+            .join(input_prompt_filename(&record.run_id, &record.attempt_id)),
+        "attempt prompt path",
+    )?;
+    validate_log_ref_layout(
+        &record.run_id,
+        &record.attempt_id,
+        "stdout",
+        &record.logs.stdout,
+    )?;
+    validate_log_ref_layout(
+        &record.run_id,
+        &record.attempt_id,
+        "stderr",
+        &record.logs.stderr,
+    )?;
+    Ok(())
+}
+
+fn validate_log_ref_layout(
+    run_id: &str,
+    attempt_id: &str,
+    stream: &str,
+    log: &crate::run::RunLogRefV1,
+) -> PulseResult<()> {
+    require_log_path(run_id, attempt_id, stream, &log.path)?;
+    if let Some(path) = &log.retained_prefix_path {
+        require_relative_path_string(
+            path,
+            &PathBuf::from(".pulse")
+                .join("runtime")
+                .join("run")
+                .join(LOGS_DIR)
+                .join(run_id)
+                .join(log_segment_filename(attempt_id, stream, "prefix")),
+            "retained prefix log path",
+        )?;
+    }
+    if let Some(path) = &log.retained_tail_path {
+        require_relative_path_string(
+            path,
+            &PathBuf::from(".pulse")
+                .join("runtime")
+                .join("run")
+                .join(LOGS_DIR)
+                .join(run_id)
+                .join(log_segment_filename(attempt_id, stream, "tail")),
+            "retained tail log path",
+        )?;
+    }
+    Ok(())
+}
+
+fn require_log_path(run_id: &str, attempt_id: &str, stream: &str, path: &str) -> PulseResult<()> {
+    let prefix = PathBuf::from(".pulse")
+        .join("runtime")
+        .join("run")
+        .join(LOGS_DIR)
+        .join(run_id)
+        .join(log_segment_filename(attempt_id, stream, "prefix"));
+    let tail = PathBuf::from(".pulse")
+        .join("runtime")
+        .join("run")
+        .join(LOGS_DIR)
+        .join(run_id)
+        .join(log_segment_filename(attempt_id, stream, "tail"));
+    let actual = safe_relative_layout_path(path)?;
+    if actual != prefix && actual != tail {
+        return Err(PulseError::validation(
+            "invalid_run_record",
+            "attempt log path does not match exact run-store log layout",
+        ));
+    }
+    Ok(())
+}
+
+fn require_relative_path_string(path: &str, expected: &Path, label: &str) -> PulseResult<()> {
+    let actual = safe_relative_layout_path(path)?;
+    if actual != expected {
+        return Err(PulseError::validation(
+            "invalid_run_record",
+            format!("{label} does not match exact run-store layout"),
+        ));
+    }
+    Ok(())
+}
+
+fn safe_relative_layout_path(path: &str) -> PulseResult<PathBuf> {
+    let relative = Path::new(path);
+    validate_managed_relative_path(relative)?;
+    Ok(relative.to_path_buf())
 }
 
 fn validate_workspace_snapshot(snapshot: &WorkspaceSnapshotV1) -> PulseResult<()> {
@@ -858,28 +1153,208 @@ fn validate_control_record(record: &SupervisorControlRecordV1) -> PulseResult<()
     }
     validate_run_id(&record.run_id)?;
     validate_attempt_id(&record.attempt_id)?;
-    validate_managed_relative_path(Path::new(&record.input_json_path))?;
-    validate_managed_relative_path(Path::new(&record.stdout_prefix_path))?;
-    validate_managed_relative_path(Path::new(&record.stdout_tail_path))?;
-    validate_managed_relative_path(Path::new(&record.stderr_prefix_path))?;
-    validate_managed_relative_path(Path::new(&record.stderr_tail_path))?;
+    require_relative_path_string(
+        &record.input_json_path,
+        &PathBuf::from(".pulse")
+            .join("runtime")
+            .join("run")
+            .join(INPUTS_DIR)
+            .join(input_json_filename(&record.run_id, &record.attempt_id)),
+        "control input JSON path",
+    )?;
+    require_relative_path_string(
+        &record.stdout_prefix_path,
+        &PathBuf::from(".pulse")
+            .join("runtime")
+            .join("run")
+            .join(LOGS_DIR)
+            .join(&record.run_id)
+            .join(log_segment_filename(&record.attempt_id, "stdout", "prefix")),
+        "control stdout prefix path",
+    )?;
+    require_relative_path_string(
+        &record.stdout_tail_path,
+        &PathBuf::from(".pulse")
+            .join("runtime")
+            .join("run")
+            .join(LOGS_DIR)
+            .join(&record.run_id)
+            .join(log_segment_filename(&record.attempt_id, "stdout", "tail")),
+        "control stdout tail path",
+    )?;
+    require_relative_path_string(
+        &record.stderr_prefix_path,
+        &PathBuf::from(".pulse")
+            .join("runtime")
+            .join("run")
+            .join(LOGS_DIR)
+            .join(&record.run_id)
+            .join(log_segment_filename(&record.attempt_id, "stderr", "prefix")),
+        "control stderr prefix path",
+    )?;
+    require_relative_path_string(
+        &record.stderr_tail_path,
+        &PathBuf::from(".pulse")
+            .join("runtime")
+            .join("run")
+            .join(LOGS_DIR)
+            .join(&record.run_id)
+            .join(log_segment_filename(&record.attempt_id, "stderr", "tail")),
+        "control stderr tail path",
+    )?;
     Ok(())
 }
 
-fn collect_json_stems(dir: &Path, out: &mut BTreeMap<String, Vec<PathBuf>>) -> PulseResult<()> {
-    if !dir.is_dir() {
-        return Ok(());
+#[derive(Debug)]
+struct ManagedDirEntry {
+    path: PathBuf,
+    file_name: String,
+}
+
+fn bounded_read_dir(
+    dir: &Path,
+    classifications: &mut Vec<RunStoreClassification>,
+    label: &str,
+) -> PulseResult<Vec<ManagedDirEntry>> {
+    if !dir.exists() {
+        return Ok(Vec::new());
     }
+    if !dir.is_dir() {
+        let dir_path = dir.to_path_buf();
+        classifications.push(classification(
+            None,
+            None,
+            RunStoreRecordStatus::Invalid,
+            Some(&dir_path),
+            "run_store_path_not_directory",
+        ));
+        return Ok(Vec::new());
+    }
+    let mut entries = Vec::new();
     for entry in fs::read_dir(dir).map_err(|error| PulseError::io(dir, error))? {
         let entry = entry.map_err(|error| PulseError::io(dir, error))?;
-        let path = entry.path();
-        if path.extension().and_then(|ext| ext.to_str()) == Some(RECORD_EXTENSION) {
-            if let Some(stem) = path.file_stem().and_then(|stem| stem.to_str()) {
-                out.entry(stem.to_string()).or_default().push(path);
-            }
+        if entries.len() >= MAX_DIRECTORY_ENTRIES {
+            let dir_path = dir.to_path_buf();
+            classifications.push(classification(
+                None,
+                None,
+                RunStoreRecordStatus::Invalid,
+                Some(&dir_path),
+                "run_store_directory_entry_cap_exceeded",
+            ));
+            break;
         }
+        let file_name = match entry.file_name().into_string() {
+            Ok(name) => name,
+            Err(_) => {
+                classifications.push(classification(
+                    None,
+                    None,
+                    RunStoreRecordStatus::Invalid,
+                    Some(&entry.path()),
+                    "run_store_non_utf8_name",
+                ));
+                continue;
+            }
+        };
+        if file_name.contains('/') || file_name.contains('\\') {
+            classifications.push(classification(
+                None,
+                None,
+                RunStoreRecordStatus::Invalid,
+                Some(&entry.path()),
+                "run_store_invalid_name",
+            ));
+            continue;
+        }
+        entries.push(ManagedDirEntry {
+            path: entry.path(),
+            file_name,
+        });
     }
-    Ok(())
+    entries.sort_by(|left, right| left.file_name.cmp(&right.file_name));
+    if entries.len() >= MAX_DIRECTORY_ENTRIES {
+        let dir_path = dir.to_path_buf();
+        classifications.push(classification(
+            None,
+            None,
+            RunStoreRecordStatus::Invalid,
+            Some(&dir_path),
+            &format!("{label}_entry_cap_reached"),
+        ));
+    }
+    enforce_classification_limit(classifications)?;
+    Ok(entries)
+}
+
+fn is_json_file_name(name: &str) -> bool {
+    name.ends_with(&format!(".{RECORD_EXTENSION}"))
+}
+
+fn json_stem(name: &str) -> &str {
+    name.strip_suffix(&format!(".{RECORD_EXTENSION}"))
+        .unwrap_or(name)
+}
+
+fn classify_attempt_records(
+    repo_root: &Path,
+    run_attempt_ids: &BTreeMap<String, BTreeSet<String>>,
+    out: &mut Vec<RunStoreClassification>,
+) -> PulseResult<()> {
+    let mut seen_internal_attempt_paths: BTreeMap<String, Vec<PathBuf>> = BTreeMap::new();
+    for entry in bounded_read_dir(&attempts_dir(repo_root), out, "attempts")? {
+        if !is_json_file_name(&entry.file_name) {
+            continue;
+        }
+        let path = entry.path;
+        let stem = json_stem(&entry.file_name).to_string();
+        match read_required_canonical_managed::<RunAttemptRecordV1, _>(
+            repo_root,
+            &path,
+            validate_attempt_record,
+        ) {
+            Ok(record) if record.attempt_id == stem => {
+                seen_internal_attempt_paths
+                    .entry(record.attempt_id.clone())
+                    .or_default()
+                    .push(path.clone());
+                let relation_ok = run_attempt_ids
+                    .get(&record.run_id)
+                    .is_some_and(|ids| ids.contains(&record.attempt_id));
+                if !relation_ok {
+                    out.push(classification(
+                        Some(record.run_id),
+                        Some(record.attempt_id),
+                        RunStoreRecordStatus::Invalid,
+                        Some(&path),
+                        "attempt_run_relation_mismatch",
+                    ));
+                }
+            }
+            Ok(record) => {
+                seen_internal_attempt_paths
+                    .entry(record.attempt_id.clone())
+                    .or_default()
+                    .push(path.clone());
+                out.push(classification(
+                    Some(record.run_id),
+                    Some(record.attempt_id),
+                    RunStoreRecordStatus::Invalid,
+                    Some(&path),
+                    "attempt_id_path_mismatch",
+                ));
+            }
+            Err(error) => out.push(classification(
+                None,
+                Some(stem),
+                RunStoreRecordStatus::Invalid,
+                Some(&path),
+                error.code(),
+            )),
+        }
+        enforce_classification_limit(out)?;
+    }
+    mark_duplicate_internal_ids(&seen_internal_attempt_paths, out, false)
 }
 
 fn classify_orphan_controls(
@@ -887,31 +1362,21 @@ fn classify_orphan_controls(
     run_ids: &BTreeSet<String>,
     out: &mut Vec<RunStoreClassification>,
 ) -> PulseResult<()> {
-    let dir = control_dir(repo_root);
-    if !dir.is_dir() {
-        return Ok(());
-    }
-    for entry in fs::read_dir(&dir).map_err(|error| PulseError::io(&dir, error))? {
-        let entry = entry.map_err(|error| PulseError::io(&dir, error))?;
-        let path = entry.path();
-        if path.extension().and_then(|ext| ext.to_str()) != Some(RECORD_EXTENSION) {
+    for entry in bounded_read_dir(&control_dir(repo_root), out, "control")? {
+        if !is_json_file_name(&entry.file_name) {
             continue;
         }
-        let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
-            continue;
-        };
-        let Some(run_id) = name.split('.').next() else {
-            continue;
-        };
+        let run_id = json_stem(&entry.file_name).split('.').next().unwrap_or("");
         if !run_ids.contains(run_id) {
             out.push(classification(
                 Some(run_id.to_string()),
                 None,
                 RunStoreRecordStatus::OrphanControl,
-                Some(&path),
+                Some(&entry.path),
                 "orphan_control",
             ));
         }
+        enforce_classification_limit(out)?;
     }
     Ok(())
 }
@@ -921,29 +1386,69 @@ fn classify_orphan_logs(
     run_ids: &BTreeSet<String>,
     out: &mut Vec<RunStoreClassification>,
 ) -> PulseResult<()> {
-    let dir = logs_dir(repo_root);
-    if !dir.is_dir() {
-        return Ok(());
-    }
-    for entry in fs::read_dir(&dir).map_err(|error| PulseError::io(&dir, error))? {
-        let entry = entry.map_err(|error| PulseError::io(&dir, error))?;
-        if !entry
-            .file_type()
-            .map_err(|error| PulseError::io(&dir, error))?
-            .is_dir()
-        {
+    for entry in bounded_read_dir(&logs_dir(repo_root), out, "logs")? {
+        let metadata = fs::symlink_metadata(&entry.path)
+            .map_err(|error| PulseError::io(&entry.path, error))?;
+        if metadata.file_type().is_symlink() || !metadata.is_dir() {
+            out.push(classification(
+                Some(entry.file_name),
+                None,
+                RunStoreRecordStatus::Invalid,
+                Some(&entry.path),
+                "run_log_entry_not_directory",
+            ));
             continue;
         }
-        let run_id = entry.file_name().to_string_lossy().to_string();
-        if !run_ids.contains(&run_id) {
+        if !run_ids.contains(&entry.file_name) {
             out.push(classification(
-                Some(run_id),
+                Some(entry.file_name),
                 None,
                 RunStoreRecordStatus::OrphanLog,
-                Some(&entry.path()),
+                Some(&entry.path),
                 "orphan_log",
             ));
         }
+        enforce_classification_limit(out)?;
+    }
+    Ok(())
+}
+
+fn mark_duplicate_internal_ids(
+    seen: &BTreeMap<String, Vec<PathBuf>>,
+    out: &mut Vec<RunStoreClassification>,
+    is_run: bool,
+) -> PulseResult<()> {
+    for (id, paths) in seen {
+        if paths.len() > 1 {
+            for path in paths {
+                out.push(classification(
+                    if is_run { Some(id.clone()) } else { None },
+                    if is_run { None } else { Some(id.clone()) },
+                    RunStoreRecordStatus::Ambiguous,
+                    Some(path),
+                    if is_run {
+                        "duplicate_internal_run_id"
+                    } else {
+                        "duplicate_internal_attempt_id"
+                    },
+                ));
+            }
+        }
+        enforce_classification_limit(out)?;
+    }
+    Ok(())
+}
+
+fn enforce_classification_limit(out: &mut Vec<RunStoreClassification>) -> PulseResult<()> {
+    if out.len() > MAX_CLASSIFICATIONS {
+        out.truncate(MAX_CLASSIFICATIONS);
+        out.push(RunStoreClassification {
+            run_id: None,
+            attempt_id: None,
+            status: RunStoreRecordStatus::Invalid,
+            path: None,
+            reason_codes: vec!["run_store_classification_cap_exceeded".to_string()],
+        });
     }
     Ok(())
 }
@@ -1400,11 +1905,12 @@ mod tests {
     use crate::run::{
         NativeResumeStatusV1, RunAssignmentV1, RunAttemptInputRefV1, RunAttemptLogsV1,
         RunAttemptProcessV1, RunAttemptRecordV1, RunAttemptStateV1, RunCancelStateV1,
-        RunLogHashScopeV1, RunLogRefV1, RunRecordV1, RunRunnerV1, RunStateV1, RunSubjectV1,
-        RunWorkspaceBindingV1, RunnerAdapterV1, RunnerProfileV1, WorkspaceCleanlinessV1,
-        WorkspaceModeV1, WorkspaceOperationStateV1, WorkspaceSnapshotStatusV1, WorkspaceSnapshotV1,
-        DEFAULT_LOG_REDACTION_STATUS, RUNNER_PROFILE_SCHEMA_VERSION,
-        RUN_KIND_SINGLE_AGENT_IMPLEMENTATION,
+        RunInputModeV1, RunInputResumeContextV1, RunInputRunnerProfileV1, RunInputV1,
+        RunInstructionsV1, RunLogHashScopeV1, RunLogRefV1, RunRecordV1, RunRunnerV1, RunStateV1,
+        RunSubjectV1, RunWorkspaceBindingV1, RunnerAdapterV1, RunnerProfileV1,
+        WorkspaceCleanlinessV1, WorkspaceModeV1, WorkspaceOperationStateV1,
+        WorkspaceSnapshotStatusV1, WorkspaceSnapshotV1, DEFAULT_LOG_REDACTION_STATUS,
+        RUNNER_PROFILE_SCHEMA_VERSION, RUN_INPUT_PROFILE, RUN_KIND_SINGLE_AGENT_IMPLEMENTATION,
     };
     use serde_json::Map;
     use std::ffi::OsString;
@@ -1534,11 +2040,9 @@ mod tests {
         value
     }
 
-    fn log_ref(stream: &str) -> RunLogRefV1 {
+    fn log_ref_for(run_id: &str, attempt_id: &str, stream: &str) -> RunLogRefV1 {
         RunLogRefV1 {
-            path: format!(
-                ".pulse/runtime/run/logs/run_01JTEST/attempt_01JTEST.{stream}.prefix.log"
-            ),
+            path: format!(".pulse/runtime/run/logs/{run_id}/{attempt_id}.{stream}.prefix.log"),
             retained_prefix_path: None,
             retained_tail_path: None,
             bytes_seen: 0,
@@ -1601,18 +2105,21 @@ mod tests {
     }
 
     fn attempt_record() -> RunAttemptRecordV1 {
+        attempt_record_for("run_01JTEST", "attempt_01JTEST")
+    }
+
+    fn attempt_record_for(run_id: &str, attempt_id: &str) -> RunAttemptRecordV1 {
         let mut value = RunAttemptRecordV1 {
             schema_version: RUN_SCHEMA_VERSION,
-            attempt_id: "attempt_01JTEST".to_string(),
-            run_id: "run_01JTEST".to_string(),
+            attempt_id: attempt_id.to_string(),
+            run_id: run_id.to_string(),
             attempt_number: 1,
             state: RunAttemptStateV1::Running,
             input: RunAttemptInputRefV1 {
                 run_input_identity: ZERO.to_string(),
-                json_path: ".pulse/runtime/run/inputs/run_01JTEST.attempt_01JTEST.json".to_string(),
+                json_path: format!(".pulse/runtime/run/inputs/{run_id}.{attempt_id}.json"),
                 rendered_prompt_identity: ONE.to_string(),
-                rendered_prompt_path: ".pulse/runtime/run/inputs/run_01JTEST.attempt_01JTEST.md"
-                    .to_string(),
+                rendered_prompt_path: format!(".pulse/runtime/run/inputs/{run_id}.{attempt_id}.md"),
             },
             process: RunAttemptProcessV1 {
                 identity: None,
@@ -1621,10 +2128,10 @@ mod tests {
                 exit: None,
             },
             workspace_before: snapshot(),
-            workspace_after: None,
+            workspace_after: Some(snapshot()),
             logs: RunAttemptLogsV1 {
-                stdout: log_ref("stdout"),
-                stderr: log_ref("stderr"),
+                stdout: log_ref_for(run_id, attempt_id, "stdout"),
+                stderr: log_ref_for(run_id, attempt_id, "stderr"),
             },
             timeout_seconds: 7200,
             cancel: RunCancelStateV1 {
@@ -1641,6 +2148,166 @@ mod tests {
         };
         value.attempt_fingerprint = value.compute_fingerprint().unwrap();
         value
+    }
+
+    fn run_input_record() -> RunInputV1 {
+        let mut value = RunInputV1 {
+            schema_version: RUN_SCHEMA_VERSION,
+            profile: RUN_INPUT_PROFILE.to_string(),
+            run_id: "run_01JTEST".to_string(),
+            attempt_id: "attempt_01JTEST".to_string(),
+            attempt_number: 1,
+            mode: RunInputModeV1::Start,
+            prepared_assignment: minimal_prepared_assignment(),
+            workspace: minimal_workspace_summary(),
+            runner_profile: RunInputRunnerProfileV1 {
+                profile_id: "codex-local".to_string(),
+                adapter: RunnerAdapterV1::CodexProcessV1,
+                profile_fingerprint: ZERO.to_string(),
+            },
+            instructions: RunInstructionsV1 {
+                objective: "Implement run store".to_string(),
+                acceptance: vec!["tests pass".to_string()],
+                required_changes: vec![],
+                invariants: vec!["do not close ticket".to_string()],
+                hard_stops: vec![],
+                expected_evidence: vec!["cargo test".to_string()],
+                expected_handoff: vec![],
+                authority_boundary: vec!["do_not_merge_or_deploy".to_string()],
+            },
+            resume: RunInputResumeContextV1 {
+                previous_attempt_id: None,
+                workspace_snapshot_identity: None,
+                previous_exit_kind: None,
+                redacted_log_tail: None,
+                native_resume_status: NativeResumeStatusV1::NotInstalled,
+            },
+            input_fingerprint: String::new(),
+        };
+        value.input_fingerprint = value.compute_fingerprint().unwrap();
+        value
+    }
+
+    fn minimal_workspace_summary() -> crate::assignment::AssignmentWorkspaceSummary {
+        crate::assignment::AssignmentWorkspaceSummary {
+            workspace_id: "wt_TK-031_01JTEST".to_string(),
+            binding_status: "bound".to_string(),
+            mode: "isolated_worktree".to_string(),
+            path: ".pulse/runtime/workspaces/wt_TK-031_01JTEST".to_string(),
+            repository_id: "repo_test".to_string(),
+            base_commit: "0123456789abcdef0123456789abcdef01234567".to_string(),
+            cleanliness: "clean".to_string(),
+            owner_lease_id: "lease_01JTEST".to_string(),
+        }
+    }
+
+    fn minimal_prepared_assignment() -> crate::assignment::PreparedAssignmentV1 {
+        serde_json::from_value(serde_json::json!({
+            "schema_version": 1,
+            "profile": "phase2_prepared_assignment_v1",
+            "code": "prepared_assignment",
+            "prepared_assignment_id": "pa_01JTEST",
+            "subject": {
+                "id": "TK-031",
+                "kind": "ticket",
+                "revision_before": 8,
+                "revision_after": 9,
+                "contract_revision": 4,
+                "status_before": "ready",
+                "status_after": "active"
+            },
+            "packet": {
+                "schema_version": 1,
+                "profile": "phase2_work_packet_preview_v1",
+                "code": "reservation_candidate",
+                "subject": {
+                    "id": "TK-031",
+                    "kind": "ticket",
+                    "role": "implementation",
+                    "title": "Run store",
+                    "revision": 8,
+                    "contract_revision": 4,
+                    "status": "ready",
+                    "risk": "medium",
+                    "materialization": "R1",
+                    "content_dir": "works/TK-031"
+                },
+                "snapshot": {
+                    "graph_fingerprint": ZERO,
+                    "readiness_profile": "phase1_contract_readiness_v1",
+                    "readiness_fingerprint": ONE,
+                    "readiness_status": "ready",
+                    "authority_policy_revision": 1,
+                    "authority_policy_fingerprint": TWO,
+                    "docs_registry_revision": 1,
+                    "docs_registry_fingerprint": ZERO,
+                    "docs_index_fingerprint": ONE,
+                    "source_commit": "0123456789abcdef0123456789abcdef01234567"
+                },
+                "contract": {
+                    "mode": "guided",
+                    "work_surface": "code",
+                    "plan_policy": "worker_optional",
+                    "semantic_impact": "behavior_or_public_risk_change",
+                    "effort": {"multi_session": false, "multiple_dependent_decisions": false, "resume_or_audit_continuity": false},
+                    "verification_profile": "service-change",
+                    "brief": null,
+                    "objective": "Implement run store",
+                    "current_behavior": "none",
+                    "target_behavior": "store",
+                    "code_anchors": [],
+                    "documentation_anchors": [],
+                    "configuration_anchors": [],
+                    "data_anchors": [],
+                    "research_refs": [],
+                    "required_changes": [],
+                    "invariants": [],
+                    "acceptance": [],
+                    "scope": {"included": [], "excluded": []},
+                    "implementation_freedom": [],
+                    "required_decisions": [],
+                    "shared_approach_refs": [],
+                    "expected_evidence": [],
+                    "expected_handoff": []
+                },
+                "context": {"parents": [], "decisions": []},
+                "shaping": {
+                    "status": "current",
+                    "receipt_id": "rcpt_00000000000000000000000000",
+                    "receipt_hash": ZERO,
+                    "owning_work": {"id": "ST-001", "revision_observed": 3, "contract_revision": 2},
+                    "shape_mode": "focused_branches",
+                    "destination": null,
+                    "map": null,
+                    "critical_branches": [],
+                    "bounded_fog": [],
+                    "remaining_uncertainty": [],
+                    "decision_frontier": {"status": "evaluated", "items": []}
+                },
+                "graph": {"structural_state": "executable", "hard_blockers": [], "soft_preferences": [], "supersession": null, "relations": {"outgoing": [], "incoming": []}},
+                "documentation": {"applicability": {"status": "complete", "required": [], "optional": [], "write_candidates": [], "excluded": []}, "suggestion_query": {"text": "run store", "normalized_terms": []}, "suggested_sections": [], "read_budget": {"required_sections": 0, "recommended_initial_sections": 4, "max_initial_lines": 120, "suggestion_limit": 8, "snippet_max_bytes_each": 4096}, "index": {"state": "current", "fingerprint": ZERO, "mode": "lexical"}},
+                "knowledge": {"status": "not_installed", "owner_phase": 4, "knowledge_fingerprint": null, "required": [], "recommended": [], "suggested": [], "excluded": []},
+                "source": {"repository_id": "repo_test", "kind": "git", "commit": "0123456789abcdef0123456789abcdef01234567", "head_ref": null, "worktree_root_kind": "isolated_worktree", "cleanliness": "clean", "operation_state": "none", "currentness": "current"},
+                "workspace": {"binding_status": "bound", "workspace_id": "wt_TK-031_01JTEST", "required_strategy": "isolated_worktree", "base_repository_id": "repo_test", "base_commit": "0123456789abcdef0123456789abcdef01234567", "requirements": []},
+                "budget": {"profile": "phase2_packet_budget_v1", "max_canonical_json_bytes": 12000, "max_incident_relations": 40, "max_decision_frontier_items": 8, "max_suggested_sections": 8, "max_snippet_bytes_each": 4096, "recommended_initial_sections": 4, "max_initial_lines": 120, "actual_canonical_json_bytes": 0, "truncations": []},
+                "dispatch": {"reservation_candidate": true, "dispatch_authorized": false, "authorization_status": "preview_only", "gate_families": [], "revalidation_preconditions": []},
+                "capabilities": {"evaluation_status": "matched", "required": [], "optional": [], "missing": [], "inventory_identity": null},
+                "scope": {"scope_hints": {"source_paths": [], "documentation_paths": [], "configuration_paths": [], "data_paths": [], "included": [], "excluded": []}, "implementation_freedom": [], "hard_stops": [], "enforcement": {"status": "bounded", "owner_phase": 2}},
+                "assurance": {"verification_profile": "service-change", "expected_evidence": [], "expected_handoff": [], "documentation_impact": {"posture": "none", "status": "complete", "required_doc_ids": []}, "qa": {"posture": "none", "status": "not_started", "affected_case_ids": []}, "promotion_policy": {"status": "deferred", "owner_phase": 2}, "close_gate": {"status": "blocked", "owner_phase": 2}},
+                "packet_fingerprint": ZERO,
+                "reason_codes": []
+            },
+            "packet_fingerprint": ZERO,
+            "revalidated_snapshot": {"graph_fingerprint": ZERO, "readiness_profile": "phase1_contract_readiness_v1", "readiness_fingerprint": ONE, "authority_policy_fingerprint": TWO, "docs_registry_fingerprint": ZERO, "docs_index_fingerprint": ONE, "source_commit": "0123456789abcdef0123456789abcdef01234567", "source_cleanliness": "clean", "repository_id": "repo_test"},
+            "lease": {"lease_id": "lease_01JTEST", "state": "prepared", "assignee": "agent:codex-local", "issued_by": "human:test", "issued_at": "2026-07-29T10:00:00Z", "expires_at": "2026-07-29T11:00:00Z", "ttl_seconds": 3600, "exclusive": true},
+            "workspace": minimal_workspace_summary(),
+            "capability_match": {"inventory_identity": ZERO, "principal": "agent:codex-local", "status": "matched", "required": [], "matched": [], "missing": []},
+            "lifecycle": {"transition": "ready_to_active", "gate_profile": "phase2_ready_to_active_v1", "gate_status": "passed", "expected_revision": 8, "new_revision": 9, "event_id": "evt_01JTEST"},
+            "dispatch": {"dispatch_authorized": true, "authorization_status": "authorized", "runner_status": "not_started", "gate_families": []},
+            "transaction": {"transaction_id": "txn_01JTEST", "committed_targets": [], "event_path": ".pulse/events/evt_01JTEST.json", "recovery_state": "committed"},
+            "prepared_assignment_fingerprint": ZERO,
+            "reason_codes": []
+        })).unwrap()
     }
 
     #[test]
@@ -1699,6 +2366,143 @@ mod tests {
         run.run_id = "run_../escape".to_string();
         let error = write_run_record(repo.path(), &run, RunStoreWriteMode::CreateNew).unwrap_err();
         assert_eq!(error.code(), "invalid_run_record_id");
+    }
+
+    #[test]
+    fn run_store_classifies_filename_id_mismatch_alias_and_broken_relation() {
+        let repo = enrolled_repo();
+        let run = run_record();
+        let attempt = attempt_record();
+        write_run_record(repo.path(), &run, RunStoreWriteMode::CreateNew).unwrap();
+        write_attempt_record(repo.path(), &attempt, RunStoreWriteMode::CreateNew).unwrap();
+
+        let alias_path = runs_dir(repo.path()).join("run_ALIAS.json");
+        fs::write(
+            &alias_path,
+            crate::canonical_json::to_canonical_bytes(&run).unwrap(),
+        )
+        .unwrap();
+        let classifications = classify_run_store_preserve(repo.path()).unwrap();
+        assert!(classifications
+            .iter()
+            .any(|item| item.status == RunStoreRecordStatus::Invalid
+                && item
+                    .reason_codes
+                    .contains(&"run_id_path_mismatch".to_string())));
+        assert!(classifications
+            .iter()
+            .any(|item| item.status == RunStoreRecordStatus::Ambiguous
+                && item
+                    .reason_codes
+                    .contains(&"duplicate_internal_run_id".to_string())));
+
+        let mut cross_run_attempt = attempt;
+        cross_run_attempt.run_id = "run_OTHER".to_string();
+        cross_run_attempt.attempt_fingerprint = cross_run_attempt.compute_fingerprint().unwrap();
+        fs::write(
+            attempt_record_path(repo.path(), &cross_run_attempt.attempt_id).unwrap(),
+            crate::canonical_json::to_canonical_bytes(&cross_run_attempt).unwrap(),
+        )
+        .unwrap();
+        let classifications = classify_run_store_preserve(repo.path()).unwrap();
+        assert!(classifications
+            .iter()
+            .any(|item| item.status == RunStoreRecordStatus::Invalid
+                && item
+                    .reason_codes
+                    .contains(&"invalid_run_record".to_string())));
+    }
+
+    #[test]
+    fn run_store_rejects_wrong_layout_paths_and_tampered_input_fingerprint() {
+        let repo = enrolled_repo();
+        let mut attempt = attempt_record();
+        attempt.input.json_path = ".pulse/runtime/run/control/run_01JTEST.json".to_string();
+        attempt.attempt_fingerprint = attempt.compute_fingerprint().unwrap();
+        let error =
+            write_attempt_record(repo.path(), &attempt, RunStoreWriteMode::CreateNew).unwrap_err();
+        assert_eq!(error.code(), "invalid_run_record");
+
+        let input = run_input_record();
+        write_run_input(repo.path(), &input, "prompt", RunStoreWriteMode::CreateNew).unwrap();
+        assert!(
+            read_run_input_preserve(repo.path(), &input.run_id, &input.attempt_id)
+                .unwrap()
+                .is_some()
+        );
+        let path = input_json_path(repo.path(), &input.run_id, &input.attempt_id).unwrap();
+        let mut tampered = input.clone();
+        tampered.instructions.objective = "tampered".to_string();
+        fs::write(
+            &path,
+            crate::canonical_json::to_canonical_bytes(&tampered).unwrap(),
+        )
+        .unwrap();
+        let error =
+            read_run_input_preserve(repo.path(), &input.run_id, &input.attempt_id).unwrap_err();
+        assert_eq!(error.code(), "run_input_invalid");
+    }
+
+    #[test]
+    fn run_store_classifies_orphan_only_tree_and_oversize_record() {
+        let repo = enrolled_repo();
+        fs::create_dir_all(control_dir(repo.path())).unwrap();
+        fs::write(
+            control_dir(repo.path()).join("run_ORPHAN.exit.json"),
+            b"{}\n",
+        )
+        .unwrap();
+        fs::create_dir_all(logs_dir(repo.path()).join("run_ORPHAN")).unwrap();
+        fs::write(
+            logs_dir(repo.path()).join("run_ORPHAN/attempt_X.stdout.prefix.log"),
+            b"x",
+        )
+        .unwrap();
+
+        let classifications = classify_run_store_preserve(repo.path()).unwrap();
+        assert!(classifications
+            .iter()
+            .any(|item| item.status == RunStoreRecordStatus::OrphanControl));
+        assert!(classifications
+            .iter()
+            .any(|item| item.status == RunStoreRecordStatus::OrphanLog));
+
+        fs::create_dir_all(runs_dir(repo.path())).unwrap();
+        fs::write(
+            runs_dir(repo.path()).join("run_TOO_BIG.json"),
+            vec![b' '; (MAX_RECORD_BYTES + 1) as usize],
+        )
+        .unwrap();
+        let classifications = classify_run_store_preserve(repo.path()).unwrap();
+        assert!(classifications.iter().any(|item| item
+            .reason_codes
+            .contains(&"run_record_too_large".to_string())));
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn run_store_reports_non_utf8_names_and_sets_file_modes() {
+        use std::ffi::OsString;
+        use std::os::unix::ffi::OsStringExt;
+
+        let repo = enrolled_repo();
+        fs::create_dir_all(runs_dir(repo.path())).unwrap();
+        let non_utf8 = OsString::from_vec(b"run_BAD_\xFF.json".to_vec());
+        if fs::write(runs_dir(repo.path()).join(non_utf8), b"{}\n").is_ok() {
+            let classifications = classify_run_store_preserve(repo.path()).unwrap();
+            assert!(classifications.iter().any(|item| item
+                .reason_codes
+                .contains(&"run_store_non_utf8_name".to_string())));
+        }
+
+        let run = run_record();
+        write_run_record(repo.path(), &run, RunStoreWriteMode::CreateNew).unwrap();
+        let mode = fs::metadata(run_record_path(repo.path(), &run.run_id).unwrap())
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(mode, 0o600);
     }
 
     #[test]
