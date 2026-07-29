@@ -235,6 +235,67 @@ fn snapshot_bounds_tracked_diff_and_status_output() {
 }
 
 #[test]
+fn snapshot_bounds_untracked_listing_before_manifest_buffering() {
+    let tmp = tempfile::tempdir().unwrap();
+    git::commit_all(tmp.path());
+    let base = git::git(tmp.path(), &["rev-parse", "HEAD"]);
+    for index in 0..64 {
+        fs::write(
+            tmp.path()
+                .join(format!("very-long-untracked-name-{index:03}.txt")),
+            b"x",
+        )
+        .unwrap();
+    }
+
+    let mut capped = options(&base);
+    capped.max_status_bytes = 64;
+    capped.max_untracked_entries = 4;
+    let snapshot = workspace_snapshot(tmp.path(), &capped).unwrap();
+    assert_eq!(
+        snapshot.snapshot_status,
+        WorkspaceSnapshotStatusV1::BoundedOut
+    );
+    assert_ne!(
+        snapshot.untracked_manifest_identity,
+        "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    );
+}
+
+#[test]
+fn snapshot_treats_bounded_ignored_listing_as_unsupported_source() {
+    let tmp = tempfile::tempdir().unwrap();
+    fs::write(tmp.path().join(".gitignore"), b"ignored-dir/\n").unwrap();
+    git::commit_all(tmp.path());
+    let base = git::git(tmp.path(), &["rev-parse", "HEAD"]);
+    fs::create_dir_all(tmp.path().join("ignored-dir")).unwrap();
+    for index in 0..64 {
+        fs::write(
+            tmp.path()
+                .join(format!("ignored-dir/ignored-name-{index:03}.txt")),
+            b"secret",
+        )
+        .unwrap();
+    }
+
+    let mut capped = options(&base);
+    capped.max_status_bytes = 4096;
+    capped.max_untracked_entries = 1024;
+    let snapshot = workspace_snapshot(tmp.path(), &capped).unwrap();
+    assert_eq!(
+        snapshot.snapshot_status,
+        WorkspaceSnapshotStatusV1::Unsupported
+    );
+    for _ in 0..5 {
+        let rerun = workspace_snapshot(tmp.path(), &capped).unwrap();
+        assert_eq!(
+            rerun.snapshot_status,
+            WorkspaceSnapshotStatusV1::Unsupported
+        );
+    }
+}
+
+#[test]
 fn ignored_file_in_scope_is_not_silently_hidden() {
     let tmp = tempfile::tempdir().unwrap();
     fs::write(tmp.path().join(".gitignore"), b"*.secret\n").unwrap();

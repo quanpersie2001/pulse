@@ -23,7 +23,8 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::io::Read;
 use std::path::Path;
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, Stdio};
+use std::thread;
 
 use crate::run::{
     WorkspaceCleanlinessV1, WorkspaceModeV1, WorkspaceOperationStateV1, WorkspaceSnapshotStatusV1,
@@ -668,7 +669,31 @@ fn untracked_manifest_identity(
         validate_snapshot_scope_path(path)?;
         args.push(path);
     }
-    let output = git_bytes(repo_root, &args, "run_workspace_snapshot_unsupported")?;
+    let output = match git_nul_records_bounded(
+        repo_root,
+        &args,
+        options.max_status_bytes,
+        options.max_untracked_entries,
+    ) {
+        Ok(records) => records,
+        Err(SnapshotReadError::BoundedOut(bytes)) => {
+            return Ok(SnapshotComponent {
+                dirty: true,
+                identity: hash_bytes(&bytes),
+                status: ComponentStatus::BoundedOut("untracked_entries_bounded_out".to_string()),
+            });
+        }
+        Err(SnapshotReadError::Git(message)) => {
+            return Ok(SnapshotComponent {
+                dirty: false,
+                identity: hash_bytes(message.as_bytes()),
+                status: ComponentStatus::Unsupported("untracked_manifest_unsupported".to_string()),
+            });
+        }
+        Err(SnapshotReadError::Io(error)) => {
+            return Err(PulseError::io(repo_root.join(".git"), error))
+        }
+    };
     let mut special_scan_budget = options.max_untracked_entries;
     if let Some(status) = scoped_special_status(repo_root, options, &mut special_scan_budget)? {
         return Ok(SnapshotComponent {
@@ -951,7 +976,19 @@ fn has_ignored_source_paths(repo_root: &Path, options: &WorkspaceSnapshotOptions
         validate_snapshot_scope_path(path)?;
         args.push(path);
     }
-    let output = git_bytes(repo_root, &args, "run_workspace_snapshot_unsupported")?;
+    let output = match git_nul_records_bounded(
+        repo_root,
+        &args,
+        options.max_status_bytes,
+        options.max_untracked_entries,
+    ) {
+        Ok(records) => records,
+        Err(SnapshotReadError::BoundedOut(_)) => return Ok(true),
+        Err(SnapshotReadError::Git(_)) => return Ok(true),
+        Err(SnapshotReadError::Io(error)) => {
+            return Err(PulseError::io(repo_root.join(".git"), error))
+        }
+    };
     for raw in output
         .split(|byte| *byte == 0)
         .filter(|entry| !entry.is_empty())
@@ -1106,52 +1143,254 @@ fn git_bytes_bounded(
     args: &[&str],
     max_bytes: usize,
 ) -> std::result::Result<Vec<u8>, SnapshotReadError> {
+    let output = run_git_bounded(repo_root, args, max_bytes, None)?;
+    if !output.complete {
+        return Err(SnapshotReadError::BoundedOut(output.stdout));
+    }
+    if !output.status_success {
+        return Err(SnapshotReadError::Git(
+            String::from_utf8_lossy(&output.stderr).trim().to_string(),
+        ));
+    }
+    Ok(output.stdout)
+}
+
+fn git_nul_records_bounded(
+    repo_root: &Path,
+    args: &[&str],
+    max_stdout_bytes: usize,
+    max_entries: usize,
+) -> std::result::Result<Vec<u8>, SnapshotReadError> {
     let mut child = hardened_git_command(repo_root, args)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
         .map_err(SnapshotReadError::Io)?;
-    let mut stdout = child.stdout.take().expect("stdout piped");
-    let mut retained = Vec::new();
-    let mut buf = [0_u8; 8192];
-    let mut bounded = false;
-    loop {
-        let read = stdout.read(&mut buf).map_err(SnapshotReadError::Io)?;
-        if read == 0 {
-            break;
+    let stderr = child.stderr.take().expect("stderr piped");
+    let stderr_handle = thread::spawn(move || read_limited(stderr, SNAPSHOT_GIT_STDERR_LIMIT));
+    let stdout = child.stdout.take().expect("stdout piped");
+    let stdout_read = match read_filtered_nul_stdout_bounded(stdout, max_stdout_bytes, max_entries)
+    {
+        Ok(read) => read,
+        Err(error) => {
+            terminate_child(&mut child);
+            let _ = child.wait();
+            let _ = stderr_handle.join();
+            return Err(SnapshotReadError::Io(error));
         }
-        if retained.len().saturating_add(read) > max_bytes {
-            let keep = max_bytes.saturating_sub(retained.len());
-            retained.extend_from_slice(&buf[..keep]);
-            bounded = true;
-            let _ = child.kill();
-            break;
-        }
-        retained.extend_from_slice(&buf[..read]);
+    };
+    if !stdout_read.complete {
+        terminate_child(&mut child);
     }
-    let output = child.wait_with_output().map_err(SnapshotReadError::Io)?;
-    if bounded {
-        return Err(SnapshotReadError::BoundedOut(retained));
+    let status = child.wait().map_err(SnapshotReadError::Io)?;
+    let stderr = stderr_handle
+        .join()
+        .map_err(|_| SnapshotReadError::Io(std::io::Error::other("stderr reader panicked")))?
+        .map_err(SnapshotReadError::Io)?;
+    if !stdout_read.complete {
+        return Err(SnapshotReadError::BoundedOut(stdout_read.bytes));
     }
-    if !output.status.success() {
+    if stdout_read.partial_record {
         return Err(SnapshotReadError::Git(
-            String::from_utf8_lossy(&output.stderr).trim().to_string(),
+            "partial NUL-delimited git record".to_string(),
         ));
     }
-    Ok(retained)
+    if !status.success() {
+        return Err(SnapshotReadError::Git(
+            String::from_utf8_lossy(&stderr).trim().to_string(),
+        ));
+    }
+    Ok(stdout_read.bytes)
 }
 
-fn git_bytes(repo_root: &Path, args: &[&str], error_code: &'static str) -> Result<Vec<u8>> {
-    let output = hardened_git_command(repo_root, args)
-        .output()
-        .map_err(|error| PulseError::io(repo_root.join(".git"), error))?;
-    if !output.status.success() {
-        return Err(PulseError::validation(
-            error_code,
-            String::from_utf8_lossy(&output.stderr).trim().to_string(),
-        ));
+struct BoundedGitOutput {
+    stdout: Vec<u8>,
+    stderr: Vec<u8>,
+    status_success: bool,
+    complete: bool,
+}
+
+const SNAPSHOT_GIT_STDERR_LIMIT: usize = 64 * 1024;
+
+fn run_git_bounded(
+    repo_root: &Path,
+    args: &[&str],
+    max_stdout_bytes: usize,
+    max_nul_records: Option<usize>,
+) -> std::result::Result<BoundedGitOutput, SnapshotReadError> {
+    let mut child = hardened_git_command(repo_root, args)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(SnapshotReadError::Io)?;
+    let stderr = child.stderr.take().expect("stderr piped");
+    let stderr_handle = thread::spawn(move || read_limited(stderr, SNAPSHOT_GIT_STDERR_LIMIT));
+    let stdout = child.stdout.take().expect("stdout piped");
+    let stdout_result = read_stdout_bounded(stdout, max_stdout_bytes, max_nul_records);
+    let stdout_read = match stdout_result {
+        Ok(read) => read,
+        Err(error) => {
+            terminate_child(&mut child);
+            let _ = child.wait();
+            let _ = stderr_handle.join();
+            return Err(SnapshotReadError::Io(error));
+        }
+    };
+    if !stdout_read.complete {
+        terminate_child(&mut child);
     }
-    Ok(output.stdout)
+    let status = child.wait().map_err(SnapshotReadError::Io)?;
+    let stderr = stderr_handle
+        .join()
+        .map_err(|_| SnapshotReadError::Io(std::io::Error::other("stderr reader panicked")))?
+        .map_err(SnapshotReadError::Io)?;
+    Ok(BoundedGitOutput {
+        stdout: stdout_read.bytes,
+        stderr,
+        status_success: status.success(),
+        complete: stdout_read.complete,
+    })
+}
+
+struct BoundedStdoutRead {
+    bytes: Vec<u8>,
+    complete: bool,
+}
+
+struct BoundedNulRead {
+    bytes: Vec<u8>,
+    complete: bool,
+    partial_record: bool,
+}
+
+fn read_filtered_nul_stdout_bounded<R: Read>(
+    mut reader: R,
+    max_bytes: usize,
+    max_records: usize,
+) -> std::io::Result<BoundedNulRead> {
+    let mut retained = Vec::new();
+    let mut record = Vec::new();
+    let mut records = 0_usize;
+    let mut buf = [0_u8; 8192];
+    loop {
+        let read = reader.read(&mut buf)?;
+        if read == 0 {
+            return Ok(BoundedNulRead {
+                bytes: retained,
+                complete: true,
+                partial_record: !record.is_empty(),
+            });
+        }
+        for byte in &buf[..read] {
+            if *byte == 0 {
+                if !record.is_empty() {
+                    records += 1;
+                    if records > max_records {
+                        return Ok(BoundedNulRead {
+                            bytes: retained,
+                            complete: false,
+                            partial_record: false,
+                        });
+                    }
+                    if retained
+                        .len()
+                        .saturating_add(record.len())
+                        .saturating_add(1)
+                        > max_bytes
+                    {
+                        return Ok(BoundedNulRead {
+                            bytes: retained,
+                            complete: false,
+                            partial_record: false,
+                        });
+                    }
+                    retained.extend_from_slice(&record);
+                    retained.push(0);
+                    record.clear();
+                }
+            } else {
+                record.push(*byte);
+                if record.len() > max_bytes
+                    || retained.len().saturating_add(record.len()) > max_bytes
+                {
+                    return Ok(BoundedNulRead {
+                        bytes: retained,
+                        complete: false,
+                        partial_record: true,
+                    });
+                }
+            }
+        }
+    }
+}
+
+fn read_stdout_bounded<R: Read>(
+    mut reader: R,
+    max_bytes: usize,
+    max_nul_records: Option<usize>,
+) -> std::io::Result<BoundedStdoutRead> {
+    let mut retained = Vec::new();
+    let mut buf = [0_u8; 8192];
+    let mut records = 0_usize;
+    loop {
+        let read = reader.read(&mut buf)?;
+        if read == 0 {
+            return Ok(BoundedStdoutRead {
+                bytes: retained,
+                complete: true,
+            });
+        }
+        let mut keep = read;
+        if retained.len().saturating_add(read) > max_bytes {
+            keep = max_bytes.saturating_sub(retained.len());
+        }
+        if let Some(max_records) = max_nul_records {
+            for (index, byte) in buf[..keep].iter().enumerate() {
+                if *byte == 0 {
+                    records += 1;
+                    if records > max_records {
+                        keep = index + 1;
+                        break;
+                    }
+                }
+            }
+        }
+        retained.extend_from_slice(&buf[..keep]);
+        if keep < read
+            || retained.len() >= max_bytes
+            || max_nul_records.is_some_and(|max| records > max)
+        {
+            return Ok(BoundedStdoutRead {
+                bytes: retained,
+                complete: false,
+            });
+        }
+    }
+}
+
+fn read_limited<R: Read>(mut reader: R, limit: usize) -> std::io::Result<Vec<u8>> {
+    let mut retained = Vec::new();
+    let mut buf = [0_u8; 8192];
+    loop {
+        let read = reader.read(&mut buf)?;
+        if read == 0 {
+            return Ok(retained);
+        }
+        let keep = limit.saturating_sub(retained.len()).min(read);
+        retained.extend_from_slice(&buf[..keep]);
+    }
+}
+
+fn terminate_child(child: &mut Child) {
+    match child.try_wait() {
+        Ok(Some(_)) => {}
+        Ok(None) => {
+            let _ = child.kill();
+        }
+        Err(_) => {
+            let _ = child.kill();
+        }
+    }
 }
 
 #[cfg(unix)]
@@ -1453,6 +1692,30 @@ mod tests {
     use super::*;
     use std::fs;
     use std::process::Command;
+
+    #[test]
+    fn nul_record_reader_detects_partial_final_record() {
+        let read = read_filtered_nul_stdout_bounded(&b"complete\0partial"[..], 1024, 10).unwrap();
+        assert!(read.complete);
+        assert!(read.partial_record);
+        assert_eq!(read.bytes, b"complete\0");
+    }
+
+    #[test]
+    fn nul_record_reader_caps_before_retaining_long_record() {
+        let read = read_filtered_nul_stdout_bounded(&b"short\0very-very-long"[..], 8, 10).unwrap();
+        assert!(!read.complete);
+        assert!(read.partial_record);
+        assert_eq!(read.bytes, b"short\0");
+    }
+
+    #[test]
+    fn nul_record_reader_enforces_entry_count_during_read() {
+        let read = read_filtered_nul_stdout_bounded(&b"a\0b\0c\0"[..], 1024, 2).unwrap();
+        assert!(!read.complete);
+        assert!(!read.partial_record);
+        assert_eq!(read.bytes, b"a\0b\0");
+    }
 
     fn run_git(path: &Path, args: &[&str]) -> std::process::Output {
         Command::new("git")
