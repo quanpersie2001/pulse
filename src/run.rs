@@ -16,6 +16,24 @@ pub const RUN_KIND_SINGLE_AGENT_IMPLEMENTATION: &str = "single_agent_implementat
 pub const RUN_INPUT_PROFILE: &str = "phase2_single_agent_run_input_v1";
 pub const RUNNER_PROFILE_SCHEMA_VERSION: u32 = 1;
 pub const PUBLIC_CODEX_ADAPTER: &str = "codex_process_v1";
+pub const RUNNER_PROFILE_MAX_PROFILES: usize = 32;
+pub const RUNNER_PROFILE_MAX_ID_BYTES: usize = 128;
+pub const RUNNER_PROFILE_MAX_EXECUTABLE_BYTES: usize = 4096;
+pub const RUNNER_PROFILE_MAX_FIXED_ARGS: usize = 64;
+pub const RUNNER_PROFILE_MAX_ARG_BYTES: usize = 4096;
+pub const RUNNER_PROFILE_MAX_ENVIRONMENT_ALLOW: usize = 128;
+pub const RUNNER_PROFILE_MAX_ENVIRONMENT_SET: usize = 128;
+pub const RUNNER_PROFILE_MAX_ENVIRONMENT_VALUE_BYTES: usize = 4096;
+pub const RUNNER_PROFILE_MIN_START_TIMEOUT_SECONDS: u64 = 1;
+pub const RUNNER_PROFILE_MAX_START_TIMEOUT_SECONDS: u64 = 300;
+pub const RUNNER_PROFILE_MIN_RUN_TIMEOUT_SECONDS: u64 = 60;
+pub const RUNNER_PROFILE_MAX_RUN_TIMEOUT_SECONDS: u64 = 86_400;
+pub const RUNNER_PROFILE_MIN_CANCEL_GRACE_SECONDS: u64 = 1;
+pub const RUNNER_PROFILE_MAX_CANCEL_GRACE_SECONDS: u64 = 300;
+pub const RUNNER_PROFILE_MIN_FORCE_KILL_AFTER_SECONDS: u64 = 0;
+pub const RUNNER_PROFILE_MAX_FORCE_KILL_AFTER_SECONDS: u64 = 300;
+pub const RUNNER_PROFILE_MIN_LOG_BYTES: u64 = 65_536;
+pub const RUNNER_PROFILE_MAX_LOG_BYTES: u64 = 67_108_864;
 pub const NATIVE_RESUME_STATUS: &str = "not_installed";
 pub const DEFAULT_LOG_REDACTION_STATUS: &str = "not_applied_runtime_private";
 pub const RUN_INPUT_CONFIDENTIALITY: &str = "runtime_private_repository_sensitive";
@@ -69,6 +87,41 @@ pub enum RunnerAdapterV1 {
 #[serde(rename_all = "snake_case")]
 pub enum NativeResumeStatusV1 {
     NotInstalled,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+#[serde(rename_all = "snake_case")]
+pub enum RunnerEnvironmentSourceV1 {
+    Inherited,
+    LiteralNonSecret,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct RunnerEnvironmentSpecEntryV1 {
+    pub name: String,
+    pub source: RunnerEnvironmentSourceV1,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct RunnerExecutableIdentityV1 {
+    pub resolved_path: String,
+    pub identity: String,
+    pub identity_status: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct RunnerProfileSelectionV1 {
+    pub schema_version: u32,
+    pub profile_id: String,
+    pub adapter: RunnerAdapterV1,
+    pub profile_fingerprint: String,
+    pub environment_spec_fingerprint: String,
+    pub executable: RunnerExecutableIdentityV1,
+    pub fixed_args: Vec<String>,
+    pub environment: Vec<RunnerEnvironmentSpecEntryV1>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -557,7 +610,7 @@ impl RunnerProfileRegistryV1 {
                 "runner profile registry schema_version must be 1",
             ));
         }
-        if self.profiles.is_empty() || self.profiles.len() > 32 {
+        if self.profiles.is_empty() || self.profiles.len() > RUNNER_PROFILE_MAX_PROFILES {
             return Err(PulseError::validation(
                 "run_profile_invalid",
                 "runner profile registry must contain 1..32 profiles",
@@ -615,43 +668,85 @@ impl RunnerProfileV1 {
             ));
         }
         validate_executable(&self.executable)?;
-        if self.fixed_args.len() > 64 || self.fixed_args.iter().any(|arg| arg.len() > 4096) {
+        if self.fixed_args.len() > RUNNER_PROFILE_MAX_FIXED_ARGS
+            || self
+                .fixed_args
+                .iter()
+                .any(|arg| arg.len() > RUNNER_PROFILE_MAX_ARG_BYTES || arg.contains('\0'))
+        {
             return Err(PulseError::validation(
                 "run_profile_invalid",
                 "fixed_args exceeds Slice 3 bounds",
             ));
         }
+        if self.environment_allow.len() > RUNNER_PROFILE_MAX_ENVIRONMENT_ALLOW {
+            return Err(PulseError::validation(
+                "run_profile_invalid",
+                "environment_allow exceeds Slice 3 bounds",
+            ));
+        }
         for name in &self.environment_allow {
             validate_env_name(name)?;
         }
+        if self.environment_set.len() > RUNNER_PROFILE_MAX_ENVIRONMENT_SET {
+            return Err(PulseError::validation(
+                "run_profile_invalid",
+                "environment_set exceeds Slice 3 bounds",
+            ));
+        }
         for (name, value) in &self.environment_set {
             validate_env_name(name)?;
-            if !value.is_string() {
+            let Some(value) = value.as_str() else {
                 return Err(PulseError::validation(
                     "run_profile_invalid",
                     "environment_set values must be literal strings",
                 ));
+            };
+            if value.is_empty()
+                || value.len() > RUNNER_PROFILE_MAX_ENVIRONMENT_VALUE_BYTES
+                || value.contains('\0')
+                || looks_like_tracked_secret(name, value)
+            {
+                return Err(PulseError::validation(
+                    "run_profile_invalid",
+                    "tracked literal secret-bearing environment values are disallowed",
+                ));
             }
         }
-        validate_range(self.start_timeout_seconds, 1, 300, "start_timeout_seconds")?;
-        validate_range(self.run_timeout_seconds, 60, 86_400, "run_timeout_seconds")?;
-        validate_range(self.cancel_grace_seconds, 1, 300, "cancel_grace_seconds")?;
+        validate_range(
+            self.start_timeout_seconds,
+            RUNNER_PROFILE_MIN_START_TIMEOUT_SECONDS,
+            RUNNER_PROFILE_MAX_START_TIMEOUT_SECONDS,
+            "start_timeout_seconds",
+        )?;
+        validate_range(
+            self.run_timeout_seconds,
+            RUNNER_PROFILE_MIN_RUN_TIMEOUT_SECONDS,
+            RUNNER_PROFILE_MAX_RUN_TIMEOUT_SECONDS,
+            "run_timeout_seconds",
+        )?;
+        validate_range(
+            self.cancel_grace_seconds,
+            RUNNER_PROFILE_MIN_CANCEL_GRACE_SECONDS,
+            RUNNER_PROFILE_MAX_CANCEL_GRACE_SECONDS,
+            "cancel_grace_seconds",
+        )?;
         validate_range(
             self.force_kill_after_seconds,
-            0,
-            300,
+            RUNNER_PROFILE_MIN_FORCE_KILL_AFTER_SECONDS,
+            RUNNER_PROFILE_MAX_FORCE_KILL_AFTER_SECONDS,
             "force_kill_after_seconds",
         )?;
         validate_range(
             self.max_stdout_bytes,
-            65_536,
-            67_108_864,
+            RUNNER_PROFILE_MIN_LOG_BYTES,
+            RUNNER_PROFILE_MAX_LOG_BYTES,
             "max_stdout_bytes",
         )?;
         validate_range(
             self.max_stderr_bytes,
-            65_536,
-            67_108_864,
+            RUNNER_PROFILE_MIN_LOG_BYTES,
+            RUNNER_PROFILE_MAX_LOG_BYTES,
             "max_stderr_bytes",
         )?;
         Ok(())
@@ -769,10 +864,17 @@ fn validate_profile_id(value: &str) -> Result<()> {
 }
 
 fn validate_executable(value: &str) -> Result<()> {
-    if value.is_empty() || value.len() > 4096 || value.contains('\0') {
+    if value.is_empty() || value.len() > RUNNER_PROFILE_MAX_EXECUTABLE_BYTES || value.contains('\0')
+    {
         return Err(PulseError::validation(
             "run_profile_invalid",
             "executable must be non-empty, bounded, and contain no NUL",
+        ));
+    }
+    if value.chars().any(char::is_whitespace) {
+        return Err(PulseError::validation(
+            "run_profile_invalid",
+            "executable must be a single program path or bare name, not a command blob",
         ));
     }
     if (value.contains('/') || value.contains('\\')) && !value.starts_with('/') {
@@ -782,6 +884,23 @@ fn validate_executable(value: &str) -> Result<()> {
         ));
     }
     Ok(())
+}
+
+fn looks_like_tracked_secret(name: &str, value: &str) -> bool {
+    let upper_name = name.to_ascii_uppercase();
+    if upper_name.contains("SECRET")
+        || upper_name.contains("TOKEN")
+        || upper_name.contains("PASSWORD")
+        || upper_name.contains("PRIVATE_KEY")
+        || upper_name.ends_with("_KEY")
+    {
+        return true;
+    }
+    let upper_value = value.to_ascii_uppercase();
+    upper_value.contains("-----BEGIN ")
+        || upper_value.contains("SECRET=")
+        || upper_value.contains("TOKEN=")
+        || upper_value.contains("PASSWORD=")
 }
 
 fn validate_env_name(value: &str) -> Result<()> {

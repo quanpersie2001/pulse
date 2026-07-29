@@ -847,14 +847,16 @@ fn fixed_args_order_and_duplicates_are_profile_semantics() {
 #[test]
 fn profile_fingerprint_and_environment_spec_do_not_expose_environment_values() {
     let mut registry = profile_registry();
-    registry.profiles[0]
-        .environment_set
-        .insert("TOKEN".to_string(), Value::String("secret-one".to_string()));
+    registry.profiles[0].environment_set.insert(
+        "PULSE_LITERAL".to_string(),
+        Value::String("value-one".to_string()),
+    );
     let first_env = registry.profiles[0].environment_spec_fingerprint().unwrap();
     let first_profile = registry.profiles[0].fingerprint().unwrap();
-    registry.profiles[0]
-        .environment_set
-        .insert("TOKEN".to_string(), Value::String("secret-two".to_string()));
+    registry.profiles[0].environment_set.insert(
+        "PULSE_LITERAL".to_string(),
+        Value::String("value-two".to_string()),
+    );
     let second_env = registry.profiles[0].environment_spec_fingerprint().unwrap();
     let second_profile = registry.profiles[0].fingerprint().unwrap();
     assert_eq!(first_env, second_env);
@@ -864,8 +866,8 @@ fn profile_fingerprint_and_environment_spec_do_not_expose_environment_values() {
     );
     let encoded = String::from_utf8(to_canonical_bytes(&registry).unwrap()).unwrap();
     assert!(
-        encoded.contains("secret-two"),
-        "tracked environment_set remains config, not report output"
+        encoded.contains("value-two"),
+        "tracked non-secret environment_set remains config, not report output"
     );
 
     let model = runner_profile_threat_model();
