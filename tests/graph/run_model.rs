@@ -13,14 +13,15 @@ use pulse::run::{
     RunAttemptInputRefV1, RunAttemptLogsV1, RunAttemptProcessV1, RunAttemptRecordV1,
     RunAttemptStateV1, RunCancelReportV1, RunCancelStateV1, RunExitKindV1, RunExitResultV1,
     RunInputModeV1, RunInputResumeContextV1, RunInputRunnerProfileV1, RunInputV1,
-    RunInstructionsV1, RunLogHashScopeV1, RunLogRefV1, RunRecordV1, RunRecoveryClassificationV1,
-    RunRecoveryReportV1, RunRunnerV1, RunStartReportV1, RunStateV1, RunSubjectV1, RunViewV1,
-    RunWorkspaceBindingV1, RunnerAdapterV1, RunnerProfileRegistryV1, RunnerProfileV1,
-    WorkspaceCleanlinessV1, WorkspaceModeV1, WorkspaceOperationStateV1, WorkspaceSnapshotStatusV1,
-    WorkspaceSnapshotV1, DEFAULT_LOG_REDACTION_STATUS, PUBLIC_CODEX_ADAPTER,
-    RUNNER_PROFILES_SCHEMA, RUN_ATTEMPT_SCHEMA, RUN_CANCEL_REPORT_SCHEMA, RUN_INPUT_PROFILE,
-    RUN_INPUT_SCHEMA, RUN_KIND_SINGLE_AGENT_IMPLEMENTATION, RUN_RECOVERY_REPORT_SCHEMA, RUN_SCHEMA,
-    RUN_SCHEMA_VERSION, RUN_START_REPORT_SCHEMA, WORKSPACE_SNAPSHOT_SCHEMA,
+    RunInstructionsV1, RunListReportV1, RunLogHashScopeV1, RunLogRefV1, RunRecordV1,
+    RunRecoveryClassificationV1, RunRecoveryReportV1, RunRunnerV1, RunStartReportV1, RunStateV1,
+    RunSubjectV1, RunViewV1, RunWorkspaceBindingV1, RunnerAdapterV1, RunnerProfileRegistryV1,
+    RunnerProfileV1, WorkspaceCleanlinessV1, WorkspaceModeV1, WorkspaceOperationStateV1,
+    WorkspaceSnapshotStatusV1, WorkspaceSnapshotV1, DEFAULT_LOG_REDACTION_STATUS,
+    PUBLIC_CODEX_ADAPTER, RUNNER_PROFILES_SCHEMA, RUN_ATTEMPT_SCHEMA, RUN_CANCEL_REPORT_SCHEMA,
+    RUN_INPUT_PROFILE, RUN_INPUT_SCHEMA, RUN_KIND_SINGLE_AGENT_IMPLEMENTATION,
+    RUN_LIST_REPORT_SCHEMA, RUN_RECOVERY_REPORT_SCHEMA, RUN_SCHEMA, RUN_SCHEMA_VERSION,
+    RUN_START_REPORT_SCHEMA, RUN_VIEW_SCHEMA, WORKSPACE_SNAPSHOT_SCHEMA,
 };
 use pulse::work_packet::{
     PacketAssurance, PacketBudget, PacketCapabilities, PacketContext, PacketDecisionFrontier,
@@ -41,9 +42,71 @@ const TWO: &str = "sha256:222222222222222222222222222222222222222222222222222222
 const THREE: &str = "sha256:3333333333333333333333333333333333333333333333333333333333333333";
 const FOUR: &str = "sha256:4444444444444444444444444444444444444444444444444444444444444444";
 
-fn schema_validate(schema: &str, value: &Value) {
+fn run_schema_documents() -> Vec<(&'static str, &'static str)> {
+    vec![
+        (
+            "https://pulse.reboot/schemas/work-packet.schema.json",
+            pulse::work_packet::WORK_PACKET_SCHEMA,
+        ),
+        (
+            "https://pulse.reboot/schemas/prepared-assignment.schema.json",
+            pulse::assignment::PREPARED_ASSIGNMENT_SCHEMA,
+        ),
+        (
+            "https://pulse.reboot/schemas/run/run.schema.json",
+            RUN_SCHEMA,
+        ),
+        (
+            "https://pulse.reboot/schemas/run/run-attempt.schema.json",
+            RUN_ATTEMPT_SCHEMA,
+        ),
+        (
+            "https://pulse.reboot/schemas/run/run-input.schema.json",
+            RUN_INPUT_SCHEMA,
+        ),
+        (
+            "https://pulse.reboot/schemas/run/workspace-snapshot.schema.json",
+            WORKSPACE_SNAPSHOT_SCHEMA,
+        ),
+        (
+            "https://pulse.reboot/schemas/run/runner-profiles.schema.json",
+            RUNNER_PROFILES_SCHEMA,
+        ),
+        (
+            "https://pulse.reboot/schemas/run/run-start-report.schema.json",
+            RUN_START_REPORT_SCHEMA,
+        ),
+        (
+            "https://pulse.reboot/schemas/run/run-cancel-report.schema.json",
+            RUN_CANCEL_REPORT_SCHEMA,
+        ),
+        (
+            "https://pulse.reboot/schemas/run/run-recovery-report.schema.json",
+            RUN_RECOVERY_REPORT_SCHEMA,
+        ),
+        (
+            "https://pulse.reboot/schemas/run/run-view.schema.json",
+            RUN_VIEW_SCHEMA,
+        ),
+        (
+            "https://pulse.reboot/schemas/run/run-list-report.schema.json",
+            RUN_LIST_REPORT_SCHEMA,
+        ),
+    ]
+}
+
+fn compile_schema(schema: &str) -> JSONSchema {
     let schema_json: Value = serde_json::from_str(schema).unwrap();
-    let compiled = JSONSchema::compile(&schema_json).unwrap();
+    let mut options = jsonschema::JSONSchema::options();
+    options.with_draft(jsonschema::Draft::Draft202012);
+    for (id, document) in run_schema_documents() {
+        options.with_document(id.to_string(), serde_json::from_str(document).unwrap());
+    }
+    options.compile(&schema_json).unwrap()
+}
+
+fn schema_validate(schema: &str, value: &Value) {
+    let compiled = compile_schema(schema);
     if !compiled.is_valid(value) {
         let errors = compiled
             .validate(value)
@@ -551,6 +614,14 @@ fn profile_registry() -> RunnerProfileRegistryV1 {
 }
 
 #[test]
+fn all_public_run_schema_artifacts_compile_with_resolver() {
+    for (id, schema) in run_schema_documents() {
+        compile_schema(schema);
+        assert!(schema.contains("\"$id\""), "schema {id} must declare $id");
+    }
+}
+
+#[test]
 fn run_contracts_round_trip_validate_and_use_nullable_optionals() {
     let run = run_record();
     let attempt = attempt_record();
@@ -564,13 +635,7 @@ fn run_contracts_round_trip_validate_and_use_nullable_optionals() {
     assert!(run_value["latest_exit"].is_null());
     assert!(run_value["runner"]["native_thread_id"].is_null());
     schema_validate(RUN_SCHEMA, &run_value);
-    // Attempt schema references the independent snapshot schema by URL; the
-    // full resolver is covered by Cargo compile/include_str, while the DTO and
-    // snapshot schemas validate independently here.
-    assert!(
-        RUN_ATTEMPT_SCHEMA.contains("WorkspaceSnapshotV1")
-            || RUN_ATTEMPT_SCHEMA.contains("workspace-snapshot.schema.json")
-    );
+    schema_validate(RUN_ATTEMPT_SCHEMA, &canonical_value(&attempt));
     schema_validate(RUN_INPUT_SCHEMA, &canonical_value(&input));
     schema_validate(WORKSPACE_SNAPSHOT_SCHEMA, &canonical_value(&snapshot));
     schema_validate(RUNNER_PROFILES_SCHEMA, &canonical_value(&registry));
@@ -585,7 +650,7 @@ fn run_contracts_round_trip_validate_and_use_nullable_optionals() {
     };
     let start_value = canonical_value(&start_report);
     assert_eq!(start_value["handoff_status"], "not_installed");
-    assert!(RUN_START_REPORT_SCHEMA.contains("run.schema.json"));
+    schema_validate(RUN_START_REPORT_SCHEMA, &start_value);
     let cancel_report = RunCancelReportV1 {
         schema_version: 1,
         run_id: run.run_id.clone(),
@@ -611,11 +676,38 @@ fn run_contracts_round_trip_validate_and_use_nullable_optionals() {
         RUN_RECOVERY_REPORT_SCHEMA,
         &canonical_value(&recovery_report),
     );
+
+    let view = RunViewV1 {
+        schema_version: 1,
+        run: Some(run.clone()),
+        current_attempt: Some(attempt.clone()),
+        resume_eligibility: pulse::run::ResumeEligibilityV1::NotEvaluated,
+        resume_blockers: vec![],
+        terminal_observation_pending: false,
+        invalid_reason: None,
+    };
+    schema_validate(RUN_VIEW_SCHEMA, &canonical_value(&view));
+    let list_report = RunListReportV1 {
+        schema_version: 1,
+        runs: vec![view],
+        invalid_records: recovery_report.classifications.clone(),
+    };
+    schema_validate(RUN_LIST_REPORT_SCHEMA, &canonical_value(&list_report));
     drop(start_report);
 
-    let _: RunRecordV1 = serde_json::from_value(run_value).unwrap();
+    let _: RunRecordV1 = serde_json::from_value(run_value.clone()).unwrap();
     let _: RunAttemptRecordV1 = serde_json::from_value(canonical_value(&attempt)).unwrap();
     let _: RunInputV1 = serde_json::from_value(canonical_value(&input)).unwrap();
+
+    let mut missing_nullable = run_value;
+    missing_nullable
+        .as_object_mut()
+        .unwrap()
+        .remove("latest_exit");
+    assert!(serde_json::from_value::<RunRecordV1>(missing_nullable.clone()).is_err());
+    assert!(compile_schema(RUN_SCHEMA)
+        .validate(&missing_nullable)
+        .is_err());
 }
 
 #[test]
@@ -623,15 +715,13 @@ fn serde_and_schemas_reject_unknown_future_transport_fields() {
     let mut value = canonical_value(&run_record());
     value["runner"]["native_mailbox_id"] = json!("mbox_01J");
     assert!(serde_json::from_value::<RunRecordV1>(value.clone()).is_err());
-    let schema_json: Value = serde_json::from_str(RUN_SCHEMA).unwrap();
-    let compiled = JSONSchema::compile(&schema_json).unwrap();
+    let compiled = compile_schema(RUN_SCHEMA);
     assert!(compiled.validate(&value).is_err());
 
     let mut input = canonical_value(&run_input());
     input["handoff_proof"] = json!("not_slice_3");
     assert!(serde_json::from_value::<RunInputV1>(input.clone()).is_err());
-    let schema_json: Value = serde_json::from_str(RUN_INPUT_SCHEMA).unwrap();
-    let compiled = JSONSchema::compile(&schema_json).unwrap();
+    let compiled = compile_schema(RUN_INPUT_SCHEMA);
     assert!(compiled.validate(&input).is_err());
 }
 
@@ -680,12 +770,44 @@ fn normalization_is_deterministic_for_set_like_fields() {
         vec!["--json".to_string(), "exec".to_string(), "exec".to_string()];
     registry.normalize();
     assert_eq!(registry.profiles[0].environment_allow, vec!["HOME", "PATH"]);
-    assert_eq!(registry.profiles[0].fixed_args, vec!["--json", "exec"]);
+    assert_eq!(
+        registry.profiles[0].fixed_args,
+        vec!["--json", "exec", "exec"]
+    );
 
     let mut input = run_input();
     input.instructions.acceptance = vec!["b".to_string(), "a".to_string(), "a".to_string()];
     input.normalize();
     assert_eq!(input.instructions.acceptance, vec!["a", "b"]);
+}
+
+#[test]
+fn fixed_args_order_and_duplicates_are_profile_semantics() {
+    let mut base = profile_registry().profiles.remove(0);
+    let mut reordered = base.clone();
+    reordered.fixed_args = vec!["--json".to_string(), "exec".to_string()];
+    let mut duplicated = base.clone();
+    duplicated.fixed_args = vec![
+        "exec".to_string(),
+        "--json".to_string(),
+        "--json".to_string(),
+    ];
+
+    assert_ne!(
+        base.fingerprint().unwrap(),
+        reordered.fingerprint().unwrap()
+    );
+    assert_ne!(
+        base.fingerprint().unwrap(),
+        duplicated.fingerprint().unwrap()
+    );
+
+    base.environment_allow = vec!["PATH".to_string(), "HOME".to_string()];
+    reordered.environment_allow = vec!["HOME".to_string(), "PATH".to_string()];
+    assert_eq!(
+        base.environment_spec_fingerprint().unwrap(),
+        reordered.environment_spec_fingerprint().unwrap()
+    );
 }
 
 #[test]
@@ -733,7 +855,34 @@ fn public_report_projection_keeps_missing_fields_nullable() {
     assert!(value["run"].is_null());
     assert!(value["current_attempt"].is_null());
     assert!(value["invalid_reason"].is_null());
+    schema_validate(RUN_VIEW_SCHEMA, &value);
     assert_eq!(PUBLIC_CODEX_ADAPTER, "codex_process_v1");
+
+    let missing_run = json!({
+        "schema_version": 1,
+        "current_attempt": null,
+        "resume_eligibility": "not_evaluated",
+        "resume_blockers": [],
+        "terminal_observation_pending": false,
+        "invalid_reason": null
+    });
+    assert!(serde_json::from_value::<RunViewV1>(missing_run.clone()).is_err());
+    assert!(compile_schema(RUN_VIEW_SCHEMA)
+        .validate(&missing_run)
+        .is_err());
+
+    let list = RunListReportV1 {
+        schema_version: 1,
+        runs: vec![view],
+        invalid_records: vec![RunRecoveryClassificationV1 {
+            run_id: None,
+            attempt_id: None,
+            classification: "invalid".to_string(),
+            mutation_available: false,
+            reason_codes: vec!["corrupt_record".to_string()],
+        }],
+    };
+    schema_validate(RUN_LIST_REPORT_SCHEMA, &canonical_value(&list));
 }
 
 #[test]
@@ -757,6 +906,21 @@ fn slice1_and_slice2_fingerprints_are_not_reinterpreted_by_run_input() {
         input.prepared_assignment.dispatch.runner_status,
         RUNNER_STATUS_NOT_STARTED
     );
+
+    let mut nested_unknown = canonical_value(&input);
+    nested_unknown["prepared_assignment"]["packet"]["dispatch"]["future_thread"] =
+        json!("not_allowed");
+    assert!(serde_json::from_value::<RunInputV1>(nested_unknown.clone()).is_err());
+    assert!(compile_schema(RUN_INPUT_SCHEMA)
+        .validate(&nested_unknown)
+        .is_err());
+
+    let mut workspace_unknown = canonical_value(&input);
+    workspace_unknown["workspace"]["future_workspace_field"] = json!(true);
+    assert!(serde_json::from_value::<RunInputV1>(workspace_unknown.clone()).is_err());
+    assert!(compile_schema(RUN_INPUT_SCHEMA)
+        .validate(&workspace_unknown)
+        .is_err());
 }
 
 #[test]

@@ -7,7 +7,7 @@
 use crate::assignment::{AssignmentWorkspaceSummary, PreparedAssignmentV1};
 use crate::canonical_json::{self, hash_bytes, hash_serializable};
 use crate::{PulseError, PulseResult, Result};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{Map, Value};
 use std::collections::HashSet;
 
@@ -30,6 +30,8 @@ pub const RUN_START_REPORT_SCHEMA: &str = include_str!("schema/run/run-start-rep
 pub const RUN_CANCEL_REPORT_SCHEMA: &str = include_str!("schema/run/run-cancel-report.schema.json");
 pub const RUN_RECOVERY_REPORT_SCHEMA: &str =
     include_str!("schema/run/run-recovery-report.schema.json");
+pub const RUN_VIEW_SCHEMA: &str = include_str!("schema/run/run-view.schema.json");
+pub const RUN_LIST_REPORT_SCHEMA: &str = include_str!("schema/run/run-list-report.schema.json");
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -153,8 +155,11 @@ pub struct RunRecordV1 {
     pub created_by: String,
     pub created_at: String,
     pub updated_at: String,
+    #[serde(deserialize_with = "required_option")]
     pub last_heartbeat_at: Option<String>,
+    #[serde(deserialize_with = "required_option")]
     pub latest_exit: Option<RunExitResultV1>,
+    #[serde(deserialize_with = "required_option")]
     pub latest_workspace_snapshot_identity: Option<String>,
     pub reason_codes: Vec<String>,
     pub run_fingerprint: String,
@@ -195,8 +200,10 @@ pub struct RunRunnerV1 {
     pub adapter: RunnerAdapterV1,
     pub profile_id: String,
     pub profile_fingerprint: String,
+    #[serde(deserialize_with = "required_option")]
     pub resolved_executable_identity: Option<String>,
     pub native_resume_status: NativeResumeStatusV1,
+    #[serde(deserialize_with = "required_option")]
     pub native_thread_id: Option<String>,
 }
 
@@ -211,6 +218,7 @@ pub struct RunAttemptRecordV1 {
     pub input: RunAttemptInputRefV1,
     pub process: RunAttemptProcessV1,
     pub workspace_before: WorkspaceSnapshotV1,
+    #[serde(deserialize_with = "required_option")]
     pub workspace_after: Option<WorkspaceSnapshotV1>,
     pub logs: RunAttemptLogsV1,
     pub timeout_seconds: u64,
@@ -233,9 +241,13 @@ pub struct RunAttemptInputRefV1 {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct RunAttemptProcessV1 {
+    #[serde(deserialize_with = "required_option")]
     pub identity: Option<ProcessIdentityV1>,
+    #[serde(deserialize_with = "required_option")]
     pub started_at: Option<String>,
+    #[serde(deserialize_with = "required_option")]
     pub ended_at: Option<String>,
+    #[serde(deserialize_with = "required_option")]
     pub exit: Option<RunExitResultV1>,
 }
 
@@ -244,6 +256,7 @@ pub struct RunAttemptProcessV1 {
 pub struct ProcessIdentityV1 {
     pub supervisor_pid: u64,
     pub child_pid: u64,
+    #[serde(deserialize_with = "required_option")]
     pub process_group_id: Option<u64>,
     pub supervisor_nonce_hash: String,
     pub started_at: String,
@@ -257,7 +270,9 @@ pub struct ProcessIdentityV1 {
 #[serde(deny_unknown_fields)]
 pub struct RunExitResultV1 {
     pub kind: RunExitKindV1,
+    #[serde(deserialize_with = "required_option")]
     pub code: Option<i32>,
+    #[serde(deserialize_with = "required_option")]
     pub signal: Option<i32>,
     pub timed_out: bool,
     pub cancelled: bool,
@@ -275,7 +290,9 @@ pub struct RunAttemptLogsV1 {
 #[serde(deny_unknown_fields)]
 pub struct RunLogRefV1 {
     pub path: String,
+    #[serde(deserialize_with = "required_option")]
     pub retained_prefix_path: Option<String>,
+    #[serde(deserialize_with = "required_option")]
     pub retained_tail_path: Option<String>,
     pub bytes_seen: u64,
     pub bytes_retained: u64,
@@ -289,10 +306,15 @@ pub struct RunLogRefV1 {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct RunCancelStateV1 {
+    #[serde(deserialize_with = "required_option")]
     pub requested_at: Option<String>,
+    #[serde(deserialize_with = "required_option")]
     pub requested_by: Option<String>,
+    #[serde(deserialize_with = "required_option")]
     pub reason: Option<String>,
+    #[serde(deserialize_with = "required_option")]
     pub grace_seconds: Option<u64>,
+    #[serde(deserialize_with = "required_option")]
     pub force_allowed: Option<bool>,
 }
 
@@ -357,9 +379,13 @@ pub struct RunInstructionsV1 {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct RunInputResumeContextV1 {
+    #[serde(deserialize_with = "required_option")]
     pub previous_attempt_id: Option<String>,
+    #[serde(deserialize_with = "required_option")]
     pub workspace_snapshot_identity: Option<String>,
+    #[serde(deserialize_with = "required_option")]
     pub previous_exit_kind: Option<RunExitKindV1>,
+    #[serde(deserialize_with = "required_option")]
     pub redacted_log_tail: Option<String>,
     pub native_resume_status: NativeResumeStatusV1,
 }
@@ -441,7 +467,9 @@ pub struct RunRecoveryReportV1 {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct RunRecoveryClassificationV1 {
+    #[serde(deserialize_with = "required_option")]
     pub run_id: Option<String>,
+    #[serde(deserialize_with = "required_option")]
     pub attempt_id: Option<String>,
     pub classification: String,
     pub mutation_available: bool,
@@ -452,11 +480,14 @@ pub struct RunRecoveryClassificationV1 {
 #[serde(deny_unknown_fields)]
 pub struct RunViewV1 {
     pub schema_version: u32,
+    #[serde(deserialize_with = "required_option")]
     pub run: Option<RunRecordV1>,
+    #[serde(deserialize_with = "required_option")]
     pub current_attempt: Option<RunAttemptRecordV1>,
     pub resume_eligibility: ResumeEligibilityV1,
     pub resume_blockers: Vec<String>,
     pub terminal_observation_pending: bool,
+    #[serde(deserialize_with = "required_option")]
     pub invalid_reason: Option<String>,
 }
 
@@ -573,7 +604,8 @@ impl RunnerProfileRegistryV1 {
 
 impl RunnerProfileV1 {
     pub fn normalize(&mut self) {
-        normalize_strings(&mut self.fixed_args);
+        // fixed_args is an ordered argv segment: order and duplicates are
+        // semantic for both execution and profile fingerprints.
         normalize_strings(&mut self.environment_allow);
     }
 
@@ -679,6 +711,14 @@ pub fn runner_profile_threat_model() -> RunnerProfileThreatModelV1 {
         default_log_redaction_status: DEFAULT_LOG_REDACTION_STATUS.to_string(),
         native_resume_status: NativeResumeStatusV1::NotInstalled,
     }
+}
+
+fn required_option<'de, D, T>(deserializer: D) -> std::result::Result<Option<T>, D::Error>
+where
+    D: Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    Option::<T>::deserialize(deserializer)
 }
 
 fn fingerprint_without_fields<T: Serialize>(value: &T, excluded: &[&str]) -> PulseResult<String> {

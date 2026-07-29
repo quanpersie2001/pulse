@@ -40,35 +40,7 @@
       "pattern": "^pa_[A-Za-z0-9]+$"
     },
     "packet": {
-      "type": "object",
-      "description": "Embedded WorkPacketV1 preview packet. Semantics unchanged: dispatch_authorized=false.",
-      "required": ["dispatch", "capabilities", "workspace"],
-      "properties": {
-        "dispatch": {
-          "type": "object",
-          "required": ["dispatch_authorized", "authorization_status"],
-          "properties": {
-            "dispatch_authorized": { "type": "boolean", "const": false },
-            "authorization_status": { "type": "string", "const": "not_reserved" }
-          }
-        },
-        "capabilities": {
-          "type": "object",
-          "required": ["evaluation_status", "inventory_identity"],
-          "properties": {
-            "evaluation_status": { "type": "string", "const": "not_evaluated" },
-            "inventory_identity": { "type": "null" }
-          }
-        },
-        "workspace": {
-          "type": "object",
-          "required": ["binding_status", "workspace_id"],
-          "properties": {
-            "binding_status": { "type": "string", "const": "not_allocated" },
-            "workspace_id": { "type": "null" }
-          }
-        }
-      }
+      "$ref": "https://pulse.reboot/schemas/work-packet.schema.json"
     },
     "packet_fingerprint": {
       "type": "string",

@@ -7,8 +7,8 @@
   "required": ["schema_version", "run", "attempt", "terminal_observation_pending", "handoff_status", "verification_status"],
   "properties": {
     "schema_version": { "const": 1 },
-    "run": { "$ref": "run.schema.json" },
-    "attempt": { "$ref": "run-attempt.schema.json" },
+    "run": { "$ref": "https://pulse.reboot/schemas/run/run.schema.json" },
+    "attempt": { "$ref": "https://pulse.reboot/schemas/run/run-attempt.schema.json" },
     "terminal_observation_pending": { "type": "boolean" },
     "handoff_status": { "type": "string" },
     "verification_status": { "type": "string" }

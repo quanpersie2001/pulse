@@ -1136,7 +1136,9 @@ mod tests {
                 revalidation_preconditions: vec![],
             },
             budget: PacketBudget::default(),
-            packet_fingerprint: String::new(),
+            packet_fingerprint:
+                "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+                    .to_string(),
             reason_codes: vec![],
         }
     }
@@ -1237,7 +1239,16 @@ mod tests {
     fn schema_validator(schema: &str) -> jsonschema::JSONSchema {
         let schema_value: Value =
             serde_json::from_str(schema).expect("test fixture should be valid");
-        jsonschema::JSONSchema::compile(&schema_value).expect("test fixture should be valid")
+        let mut options = jsonschema::JSONSchema::options();
+        options.with_draft(jsonschema::Draft::Draft202012);
+        options.with_document(
+            "https://pulse.reboot/schemas/work-packet.schema.json".to_string(),
+            serde_json::from_str(crate::work_packet::WORK_PACKET_SCHEMA)
+                .expect("work packet schema should be valid"),
+        );
+        options
+            .compile(&schema_value)
+            .expect("test fixture should be valid")
     }
 
     fn assert_schema_accepts(schema: &str, value: &Value) {

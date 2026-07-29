@@ -40,10 +40,11 @@ use pulse::knowledge::{
 use pulse::policy::AuthorityPolicy;
 use pulse::process::{supervisor_packaging_probe, PLATFORM_SUPPORT};
 use pulse::run::{
-    runner_profile_threat_model, NativeResumeStatusV1, RunAttemptRecordV1, RunInputV1, RunRecordV1,
-    RunStateV1, RunnerAdapterV1, RunnerProfileRegistryV1, WorkspaceSnapshotV1,
-    PUBLIC_CODEX_ADAPTER, RUNNER_PROFILES_SCHEMA, RUN_ATTEMPT_SCHEMA, RUN_INPUT_SCHEMA, RUN_SCHEMA,
-    RUN_SCHEMA_VERSION, RUN_START_REPORT_SCHEMA, WORKSPACE_SNAPSHOT_SCHEMA,
+    runner_profile_threat_model, NativeResumeStatusV1, RunAttemptRecordV1, RunInputV1,
+    RunListReportV1, RunRecordV1, RunStateV1, RunViewV1, RunnerAdapterV1, RunnerProfileRegistryV1,
+    WorkspaceSnapshotV1, PUBLIC_CODEX_ADAPTER, RUNNER_PROFILES_SCHEMA, RUN_ATTEMPT_SCHEMA,
+    RUN_INPUT_SCHEMA, RUN_LIST_REPORT_SCHEMA, RUN_SCHEMA, RUN_SCHEMA_VERSION,
+    RUN_START_REPORT_SCHEMA, RUN_VIEW_SCHEMA, WORKSPACE_SNAPSHOT_SCHEMA,
 };
 use pulse::source::head_commit;
 use pulse::storage::transaction::{recover_prepared_transactions, TransactionFailpoint};
@@ -218,6 +219,8 @@ fn docs_evidence_knowledge_storage_and_identity_public_paths_compile() {
     let _: Option<RunInputV1> = None;
     let _: Option<WorkspaceSnapshotV1> = None;
     let _: Option<RunnerProfileRegistryV1> = None;
+    let _: Option<RunViewV1> = None;
+    let _: Option<RunListReportV1> = None;
     assert_eq!(RUN_SCHEMA_VERSION, 1);
     assert_eq!(RunStateV1::Starting, RunStateV1::Starting);
     assert_eq!(
@@ -230,6 +233,8 @@ fn docs_evidence_knowledge_storage_and_identity_public_paths_compile() {
     assert!(WORKSPACE_SNAPSHOT_SCHEMA.contains("WorkspaceSnapshotV1"));
     assert!(RUNNER_PROFILES_SCHEMA.contains("RunnerProfileRegistryV1"));
     assert!(RUN_START_REPORT_SCHEMA.contains("RunStartReportV1"));
+    assert!(RUN_VIEW_SCHEMA.contains("RunViewV1"));
+    assert!(RUN_LIST_REPORT_SCHEMA.contains("RunListReportV1"));
 
     let error = PulseError::validation("baseline", "baseline");
     assert_eq!(error.code(), "baseline");
