@@ -404,11 +404,8 @@ pub struct RunnerProfileV1 {
     pub profile_id: String,
     pub adapter: RunnerAdapterV1,
     pub executable: String,
-    #[serde(default)]
     pub fixed_args: Vec<String>,
-    #[serde(default)]
     pub environment_allow: Vec<String>,
-    #[serde(default)]
     pub environment_set: Map<String, Value>,
     pub start_timeout_seconds: u64,
     pub run_timeout_seconds: u64,

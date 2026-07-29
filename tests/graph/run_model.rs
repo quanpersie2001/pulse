@@ -711,6 +711,40 @@ fn run_contracts_round_trip_validate_and_use_nullable_optionals() {
 }
 
 #[test]
+fn runner_profile_requires_explicit_empty_collection_fields() {
+    let required_fields = ["fixed_args", "environment_allow", "environment_set"];
+    let registry_value = canonical_value(&profile_registry());
+    for field in required_fields {
+        let mut missing = registry_value.clone();
+        missing["profiles"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove(field);
+        assert!(
+            serde_json::from_value::<RunnerProfileRegistryV1>(missing.clone()).is_err(),
+            "serde must reject omitted runner profile field {field}"
+        );
+        assert!(
+            compile_schema(RUNNER_PROFILES_SCHEMA)
+                .validate(&missing)
+                .is_err(),
+            "schema must reject omitted runner profile field {field}"
+        );
+    }
+
+    let mut explicit_empty = registry_value;
+    explicit_empty["profiles"][0]["fixed_args"] = json!([]);
+    explicit_empty["profiles"][0]["environment_allow"] = json!([]);
+    explicit_empty["profiles"][0]["environment_set"] = json!({});
+    schema_validate(RUNNER_PROFILES_SCHEMA, &explicit_empty);
+    let decoded: RunnerProfileRegistryV1 = serde_json::from_value(explicit_empty).unwrap();
+    decoded.validate().unwrap();
+    assert!(decoded.profiles[0].fixed_args.is_empty());
+    assert!(decoded.profiles[0].environment_allow.is_empty());
+    assert!(decoded.profiles[0].environment_set.is_empty());
+}
+
+#[test]
 fn serde_and_schemas_reject_unknown_future_transport_fields() {
     let mut value = canonical_value(&run_record());
     value["runner"]["native_mailbox_id"] = json!("mbox_01J");
