@@ -877,7 +877,13 @@ fn validate_executable(value: &str) -> Result<()> {
             "executable must be a single program path or bare name, not a command blob",
         ));
     }
-    if (value.contains('/') || value.contains('\\')) && !value.starts_with('/') {
+    if value.contains('\\') {
+        return Err(PulseError::validation(
+            "run_profile_invalid",
+            "runner executable paths must use platform path separators and must not contain backslash",
+        ));
+    }
+    if value.contains('/') && !value.starts_with('/') {
         return Err(PulseError::validation(
             "run_profile_invalid",
             "relative executable paths with separators are deferred in Slice 3",

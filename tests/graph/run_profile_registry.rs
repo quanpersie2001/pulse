@@ -13,7 +13,9 @@ use std::env;
 use std::fs;
 use std::io::Write;
 #[cfg(unix)]
-use std::os::unix::fs::PermissionsExt;
+use std::os::unix::ffi::OsStringExt;
+#[cfg(unix)]
+use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use tempfile::TempDir;
@@ -96,6 +98,20 @@ fn file_with_mode(dir: &Path, name: &str, mode: u32) -> PathBuf {
 
 fn executable_file(dir: &Path, name: &str) -> PathBuf {
     file_with_mode(dir, name, 0o755)
+}
+
+#[cfg(unix)]
+fn canonical_utf8(path: &Path) -> String {
+    fs::canonicalize(path)
+        .unwrap()
+        .to_str()
+        .expect("test temp paths must canonicalize to UTF-8")
+        .to_string()
+}
+
+#[cfg(unix)]
+fn canonical_path(path: &Path) -> PathBuf {
+    fs::canonicalize(path).unwrap()
 }
 
 #[cfg(unix)]
@@ -193,7 +209,7 @@ fn selected_profile_reports_no_environment_values_and_keeps_profile_fingerprint_
     let repo = enrolled_repo();
     let bin_dir = tempfile::tempdir().unwrap();
     let executable = executable_file(bin_dir.path(), "codex-test");
-    let mut registry = registry(executable.to_string_lossy().to_string());
+    let mut registry = registry(canonical_utf8(&executable));
     registry.profiles[0]
         .environment_set
         .insert("PULSE_LITERAL".to_string(), json!("non-secret-literal"));
@@ -205,7 +221,7 @@ fn selected_profile_reports_no_environment_values_and_keeps_profile_fingerprint_
     assert!(selected.executable.identity.starts_with("sha256:"));
     assert_eq!(
         selected.executable.resolved_path,
-        fs::canonicalize(&executable).unwrap().to_string_lossy()
+        canonical_utf8(&executable)
     );
     let rendered = serde_json::to_string(&selected).unwrap();
     assert!(!rendered.contains("non-secret-literal"));
@@ -219,7 +235,7 @@ fn executable_resolution_rejects_absolute_non_executable_file() {
     let bin_dir = tempfile::tempdir().unwrap();
     let executable = non_executable_file(bin_dir.path(), "codex-test");
     let error =
-        select_profile_from_registry(&registry(executable.to_string_lossy()), None).unwrap_err();
+        select_profile_from_registry(&registry(canonical_utf8(&executable)), None).unwrap_err();
     assert_eq!(error.code(), "run_profile_invalid");
 }
 
@@ -230,14 +246,14 @@ fn executable_resolution_rejects_absolute_directory_and_symlink() {
     let directory = bin_dir.path().join("codex-dir");
     fs::create_dir(&directory).unwrap();
     let error =
-        select_profile_from_registry(&registry(directory.to_string_lossy()), None).unwrap_err();
+        select_profile_from_registry(&registry(canonical_utf8(&directory)), None).unwrap_err();
     assert_eq!(error.code(), "run_profile_invalid");
 
     let real = executable_file(bin_dir.path(), "codex-real");
     let symlink = bin_dir.path().join("codex-link");
     std::os::unix::fs::symlink(&real, &symlink).unwrap();
     let error =
-        select_profile_from_registry(&registry(symlink.to_string_lossy()), None).unwrap_err();
+        select_profile_from_registry(&registry(symlink.to_str().unwrap()), None).unwrap_err();
     assert_eq!(error.code(), "run_profile_invalid");
 }
 
@@ -253,15 +269,23 @@ fn bare_name_resolution_skips_unsafe_path_candidates_and_keeps_order() {
     let safe_exe = executable_file(safe_third.path(), "codex-test");
 
     let old_path = env::var_os("PATH");
-    let joined =
-        env::join_paths([unsafe_first.path(), unsafe_second.path(), safe_third.path()]).unwrap();
-    env::set_var("PATH", joined);
+    let unsafe_first_path = canonical_path(unsafe_first.path());
+    let unsafe_second_path = canonical_path(unsafe_second.path());
+    let safe_third_path = canonical_path(safe_third.path());
+    env::set_var(
+        "PATH",
+        path_with_original(
+            [
+                unsafe_first_path.as_path(),
+                unsafe_second_path.as_path(),
+                safe_third_path.as_path(),
+            ],
+            &old_path,
+        ),
+    );
     let selected = select_profile_from_registry(&registry("codex-test"), None).unwrap();
     restore_path(old_path);
-    assert_eq!(
-        selected.executable.resolved_path,
-        fs::canonicalize(safe_exe).unwrap().to_string_lossy()
-    );
+    assert_eq!(selected.executable.resolved_path, canonical_utf8(&safe_exe));
 }
 
 #[test]
@@ -275,14 +299,18 @@ fn bare_name_resolution_skips_symlink_to_executable() {
     let safe_exe = executable_file(safe_dir.path(), "codex-test");
 
     let old_path = env::var_os("PATH");
-    let joined = env::join_paths([symlink_dir.path(), safe_dir.path()]).unwrap();
-    env::set_var("PATH", joined);
+    let symlink_dir_path = canonical_path(symlink_dir.path());
+    let safe_dir_path = canonical_path(safe_dir.path());
+    env::set_var(
+        "PATH",
+        path_with_original(
+            [symlink_dir_path.as_path(), safe_dir_path.as_path()],
+            &old_path,
+        ),
+    );
     let selected = select_profile_from_registry(&registry("codex-test"), None).unwrap();
     restore_path(old_path);
-    assert_eq!(
-        selected.executable.resolved_path,
-        fs::canonicalize(safe_exe).unwrap().to_string_lossy()
-    );
+    assert_eq!(selected.executable.resolved_path, canonical_utf8(&safe_exe));
 }
 
 #[test]
@@ -295,8 +323,12 @@ fn bare_name_resolution_reports_not_found_when_only_unsafe_candidates_exist() {
     fs::create_dir(second.path().join("codex-test")).unwrap();
 
     let old_path = env::var_os("PATH");
-    let joined = env::join_paths([first.path(), second.path()]).unwrap();
-    env::set_var("PATH", joined);
+    let first_path = canonical_path(first.path());
+    let second_path = canonical_path(second.path());
+    env::set_var(
+        "PATH",
+        path_with_original([first_path.as_path(), second_path.as_path()], &old_path),
+    );
     let error = select_profile_from_registry(&registry("codex-test"), None).unwrap_err();
     restore_path(old_path);
     assert_eq!(error.code(), "run_command_not_found");
@@ -311,18 +343,33 @@ fn bare_name_resolution_uses_first_safe_executable_in_path_order() {
     let first_exe = executable_file(first.path(), "codex-test");
     let second_exe = executable_file(second.path(), "codex-test");
     let old_path = env::var_os("PATH");
-    let joined = env::join_paths([first.path(), second.path()]).unwrap();
-    env::set_var("PATH", joined);
+    let first_path = canonical_path(first.path());
+    let second_path = canonical_path(second.path());
+    env::set_var(
+        "PATH",
+        path_with_original([first_path.as_path(), second_path.as_path()], &old_path),
+    );
     let selected = select_profile_from_registry(&registry("codex-test"), None).unwrap();
     restore_path(old_path);
     assert_eq!(
         selected.executable.resolved_path,
-        fs::canonicalize(first_exe).unwrap().to_string_lossy()
+        canonical_utf8(&first_exe)
     );
     assert_ne!(
         selected.executable.resolved_path,
-        fs::canonicalize(second_exe).unwrap().to_string_lossy()
+        canonical_utf8(&second_exe)
     );
+}
+
+fn path_with_original<'a>(
+    entries: impl IntoIterator<Item = &'a Path>,
+    old_path: &Option<std::ffi::OsString>,
+) -> std::ffi::OsString {
+    let mut paths = entries.into_iter().map(PathBuf::from).collect::<Vec<_>>();
+    if let Some(old_path) = old_path {
+        paths.extend(env::split_paths(old_path));
+    }
+    env::join_paths(paths).unwrap()
 }
 
 fn restore_path(old_path: Option<std::ffi::OsString>) {
@@ -331,6 +378,154 @@ fn restore_path(old_path: Option<std::ffi::OsString>) {
     } else {
         env::remove_var("PATH");
     }
+}
+
+#[test]
+fn executable_backslash_is_rejected_by_schema_and_model_even_when_absolute_like() {
+    let mut value = serde_json::to_value(registry("/tmp\\codex")).unwrap();
+    assert!(JSONSchema::options()
+        .with_draft(jsonschema::Draft::Draft202012)
+        .compile(&serde_json::from_str(RUNNER_PROFILES_SCHEMA).unwrap())
+        .unwrap()
+        .validate(&value)
+        .is_err());
+    assert!(
+        serde_json::from_value::<RunnerProfileRegistryV1>(value.clone())
+            .unwrap()
+            .validate()
+            .is_err()
+    );
+
+    value["profiles"][0]["executable"] = json!("C:\\codex");
+    assert!(serde_json::from_value::<RunnerProfileRegistryV1>(value)
+        .unwrap()
+        .validate()
+        .is_err());
+}
+
+#[test]
+#[cfg(unix)]
+fn absolute_executable_rejects_symlink_directory_component() {
+    let base = tempfile::tempdir().unwrap();
+    let real_dir = base.path().join("real-bin");
+    fs::create_dir(&real_dir).unwrap();
+    let executable = executable_file(&real_dir, "codex-test");
+    let link_dir = base.path().join("link-bin");
+    std::os::unix::fs::symlink(&real_dir, &link_dir).unwrap();
+    let via_link = link_dir.join("codex-test");
+
+    assert!(select_profile_from_registry(&registry(canonical_utf8(&executable)), None).is_ok());
+    let error =
+        select_profile_from_registry(&registry(via_link.to_str().unwrap()), None).unwrap_err();
+    assert_eq!(error.code(), "run_profile_invalid");
+}
+
+#[test]
+#[cfg(unix)]
+fn path_resolution_rejects_symlink_path_directory_component() {
+    let _guard = PATH_ENV_LOCK.lock().unwrap();
+    let base = tempfile::tempdir().unwrap();
+    let real_dir = base.path().join("real-bin");
+    fs::create_dir(&real_dir).unwrap();
+    executable_file(&real_dir, "codex-test");
+    let link_dir = base.path().join("link-bin");
+    std::os::unix::fs::symlink(&real_dir, &link_dir).unwrap();
+    let safe_dir = tempfile::tempdir().unwrap();
+    let safe_exe = executable_file(safe_dir.path(), "codex-test");
+
+    let old_path = env::var_os("PATH");
+    let safe_dir_path = canonical_path(safe_dir.path());
+    env::set_var(
+        "PATH",
+        path_with_original([link_dir.as_path(), safe_dir_path.as_path()], &old_path),
+    );
+    let selected = select_profile_from_registry(&registry("codex-test"), None).unwrap();
+    restore_path(old_path);
+    assert_eq!(selected.executable.resolved_path, canonical_utf8(&safe_exe));
+}
+
+#[test]
+#[cfg(unix)]
+fn path_resolution_rejects_non_utf8_path_entries_and_candidate_identity() {
+    let _guard = PATH_ENV_LOCK.lock().unwrap();
+    let base = tempfile::tempdir().unwrap();
+    let non_utf8_dir = base
+        .path()
+        .join(std::ffi::OsString::from_vec(b"bin-\xFF".to_vec()));
+    if fs::create_dir(&non_utf8_dir).is_ok() {
+        let _ = executable_file(&non_utf8_dir, "codex-test");
+    }
+    let safe_dir = tempfile::tempdir().unwrap();
+    let safe_exe = executable_file(safe_dir.path(), "codex-test");
+
+    let old_path = env::var_os("PATH");
+    let safe_dir_path = canonical_path(safe_dir.path());
+    env::set_var(
+        "PATH",
+        path_with_original([non_utf8_dir.as_path(), safe_dir_path.as_path()], &old_path),
+    );
+    let selected = select_profile_from_registry(&registry("codex-test"), None).unwrap();
+    restore_path(old_path);
+    assert_eq!(selected.executable.resolved_path, canonical_utf8(&safe_exe));
+
+    let lossy_configured_executable = base.path().join("bin-�").join("codex-test");
+    let error = select_profile_from_registry(
+        &registry(lossy_configured_executable.to_string_lossy()),
+        None,
+    )
+    .unwrap_err();
+    assert_eq!(error.code(), "run_profile_invalid");
+}
+
+#[test]
+#[cfg(unix)]
+fn effective_permission_rejects_owner_without_owner_execute_even_when_other_execute_is_set() {
+    let bin_dir = tempfile::tempdir().unwrap();
+    let executable = file_with_mode(bin_dir.path(), "codex-test", 0o001);
+    if executable.metadata().unwrap().uid() == unsafe { geteuid() } {
+        let error =
+            select_profile_from_registry(&registry(canonical_utf8(&executable)), None).unwrap_err();
+        assert_eq!(error.code(), "run_profile_invalid");
+    }
+}
+
+#[test]
+#[cfg(unix)]
+fn effective_permission_accepts_owner_execute_and_profile_fingerprint_ignores_local_identity() {
+    let first = tempfile::tempdir().unwrap();
+    let second = tempfile::tempdir().unwrap();
+    let _first_exe = executable_file(first.path(), "codex-test");
+    let _second_exe = executable_file(second.path(), "codex-test");
+    let first_registry = registry("codex-test");
+    let second_registry = registry("codex-test");
+
+    assert_eq!(
+        first_registry.profiles[0].fingerprint().unwrap(),
+        second_registry.profiles[0].fingerprint().unwrap()
+    );
+    let old_path = env::var_os("PATH");
+    let first_path = canonical_path(first.path());
+    env::set_var(
+        "PATH",
+        path_with_original([first_path.as_path()], &old_path),
+    );
+    let first_selected = select_profile_from_registry(&first_registry, None).unwrap();
+    let second_path = canonical_path(second.path());
+    env::set_var(
+        "PATH",
+        path_with_original([second_path.as_path()], &old_path),
+    );
+    let second_selected = select_profile_from_registry(&second_registry, None).unwrap();
+    restore_path(old_path);
+    assert_ne!(
+        first_selected.executable.identity,
+        second_selected.executable.identity
+    );
+}
+
+#[cfg(unix)]
+extern "C" {
+    fn geteuid() -> u32;
 }
 
 #[test]

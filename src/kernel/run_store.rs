@@ -14,7 +14,7 @@ use crate::{PulseError, PulseResult};
 use serde::Serialize;
 use std::env;
 use std::fs;
-use std::path::{Component, Path};
+use std::path::{Component, Path, PathBuf};
 
 #[cfg(unix)]
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
@@ -119,6 +119,13 @@ fn resolve_executable(executable: &str) -> PulseResult<RunnerExecutableIdentityV
         ));
     }
     #[cfg(unix)]
+    if executable.contains('\\') {
+        return Err(PulseError::validation(
+            "run_profile_invalid",
+            "executable must not contain backslash",
+        ));
+    }
+    #[cfg(unix)]
     if Path::new(executable).is_absolute() {
         return resolve_absolute_executable(Path::new(executable));
     }
@@ -137,7 +144,7 @@ fn resolve_executable(executable: &str) -> PulseResult<RunnerExecutableIdentityV
         )
     })?;
     for dir in env::split_paths(&path) {
-        if !dir.is_absolute() {
+        if !is_utf8_path(&dir) || !dir.is_absolute() || path_has_symlink_component(&dir) {
             continue;
         }
         let candidate = dir.join(executable);
@@ -165,65 +172,81 @@ fn resolve_absolute_executable(path: &Path) -> PulseResult<RunnerExecutableIdent
 }
 
 fn safe_executable_candidate(path: &Path) -> PulseResult<Option<RunnerExecutableIdentityV1>> {
-    if !path.is_absolute()
+    if !is_utf8_path(path)
+        || !path.is_absolute()
         || path
             .components()
             .any(|component| matches!(component, Component::ParentDir | Component::CurDir))
+        || path_has_symlink_component(path)
     {
         return Ok(None);
     }
-    let link_metadata = match fs::symlink_metadata(path) {
+    let metadata = match fs::symlink_metadata(path) {
         Ok(metadata) => metadata,
         Err(_) => return Ok(None),
     };
-    if link_metadata.file_type().is_symlink() || !link_metadata.is_file() {
-        return Ok(None);
-    }
-    if !has_conservative_execute_permission(&link_metadata)? {
+    if !metadata.is_file() || !has_effective_execute_permission(&metadata)? {
         return Ok(None);
     }
     let canonical = match fs::canonicalize(path) {
         Ok(canonical) => canonical,
         Err(_) => return Ok(None),
     };
-    if !canonical.is_absolute()
+    if !is_utf8_path(&canonical)
+        || !canonical.is_absolute()
         || canonical
             .components()
             .any(|component| matches!(component, Component::ParentDir | Component::CurDir))
+        || canonical != path
     {
-        return Ok(None);
-    }
-    let metadata = match fs::metadata(&canonical) {
-        Ok(metadata) => metadata,
-        Err(_) => return Ok(None),
-    };
-    if !metadata.is_file() || !has_conservative_execute_permission(&metadata)? {
         return Ok(None);
     }
     let identity = executable_identity_hash(&canonical, &metadata)?;
     Ok(Some(RunnerExecutableIdentityV1 {
-        resolved_path: canonical.to_string_lossy().to_string(),
+        resolved_path: path_to_utf8(&canonical)?.to_string(),
         identity,
         identity_status: executable_identity_status(),
     }))
 }
 
 #[cfg(unix)]
-fn has_conservative_execute_permission(metadata: &fs::Metadata) -> PulseResult<bool> {
-    // Rust 1.78 exposes mode bits through std::os::unix. The conservative
-    // Slice 3 policy accepts a regular file when at least one execute bit is
-    // set; actual execve may still fail later if ACLs, mount flags or a race
-    // intervene, so this identity is explicitly best-effort metadata.
-    Ok(metadata.permissions().mode() & 0o111 != 0)
+fn has_effective_execute_permission(metadata: &fs::Metadata) -> PulseResult<bool> {
+    Ok(effective_execute_allowed(
+        metadata.permissions().mode(),
+        metadata.uid(),
+        metadata.gid(),
+        unix_geteuid(),
+        &effective_groups()?,
+    ))
+}
+
+#[cfg(unix)]
+fn effective_execute_allowed(
+    mode: u32,
+    file_uid: u32,
+    file_gid: u32,
+    effective_uid: u32,
+    effective_groups: &[u32],
+) -> bool {
+    if effective_uid == 0 {
+        return mode & 0o111 != 0;
+    }
+    if effective_uid == file_uid {
+        return mode & 0o100 != 0;
+    }
+    if effective_groups.contains(&file_gid) {
+        return mode & 0o010 != 0;
+    }
+    mode & 0o001 != 0
 }
 
 #[cfg(unix)]
 fn executable_identity_status() -> String {
-    "best_effort_unix_metadata_non_symlink_executable".to_string()
+    "best_effort_unix_metadata_non_symlink_effective_executable".to_string()
 }
 
 #[cfg(not(unix))]
-fn has_conservative_execute_permission(_metadata: &fs::Metadata) -> PulseResult<bool> {
+fn has_effective_execute_permission(_metadata: &fs::Metadata) -> PulseResult<bool> {
     Err(PulseError::validation(
         "run_platform_unsupported",
         "runner executable permission semantics are not implemented on this platform",
@@ -254,9 +277,9 @@ fn executable_identity_hash(canonical: &Path, metadata: &fs::Metadata) -> PulseR
         .ok()
         .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
         .map(|duration| duration.as_secs());
-    let resolved_path = canonical.to_string_lossy();
+    let resolved_path = path_to_utf8(canonical)?;
     let identity = PortableExecutableIdentity {
-        resolved_path: &resolved_path,
+        resolved_path,
         len: metadata.len(),
         readonly: metadata.permissions().readonly(),
         modified_unix_seconds,
@@ -272,6 +295,88 @@ fn executable_identity_hash(canonical: &Path, metadata: &fs::Metadata) -> PulseR
 
 fn has_path_separator(value: &str) -> bool {
     value.contains('/') || value.contains('\\')
+}
+
+fn is_utf8_path(path: &Path) -> bool {
+    path.as_os_str().to_str().is_some()
+}
+
+fn path_to_utf8(path: &Path) -> PulseResult<&str> {
+    path.as_os_str().to_str().ok_or_else(|| {
+        PulseError::validation(
+            "run_profile_invalid",
+            "runner executable paths must be valid UTF-8 and are never rendered lossily",
+        )
+    })
+}
+
+fn path_has_symlink_component(path: &Path) -> bool {
+    let mut current = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::RootDir => current.push(component.as_os_str()),
+            Component::Normal(part) => {
+                current.push(part);
+                match fs::symlink_metadata(&current) {
+                    Ok(metadata) if metadata.file_type().is_symlink() => return true,
+                    Ok(_) => {}
+                    Err(_) => return true,
+                }
+            }
+            Component::CurDir | Component::ParentDir | Component::Prefix(_) => return true,
+        }
+    }
+    false
+}
+
+#[cfg(unix)]
+fn effective_groups() -> PulseResult<Vec<u32>> {
+    let primary_gid = unix_getegid();
+    let count = unix_getgroups_count()?;
+    let mut groups = vec![0_u32; count];
+    if count > 0 {
+        let read = unsafe { getgroups(count as i32, groups.as_mut_ptr()) };
+        if read < 0 {
+            return Err(PulseError::validation(
+                "run_platform_unsupported",
+                "could not inspect effective Unix groups for executable permission validation",
+            ));
+        }
+        groups.truncate(read as usize);
+    }
+    if !groups.contains(&primary_gid) {
+        groups.push(primary_gid);
+    }
+    Ok(groups)
+}
+
+#[cfg(unix)]
+fn unix_getgroups_count() -> PulseResult<usize> {
+    let count = unsafe { getgroups(0, std::ptr::null_mut()) };
+    if count < 0 {
+        return Err(PulseError::validation(
+            "run_platform_unsupported",
+            "could not inspect Unix group count for executable permission validation",
+        ));
+    }
+    Ok(count as usize)
+}
+
+#[cfg(unix)]
+fn unix_geteuid() -> u32 {
+    unsafe { geteuid() }
+}
+
+#[cfg(unix)]
+fn unix_getegid() -> u32 {
+    unsafe { getegid() }
+}
+
+#[cfg(unix)]
+extern "C" {
+    fn geteuid() -> u32;
+    fn getegid() -> u32;
+    fn getgroups(size: i32, list: *mut u32) -> i32;
 }
 
 #[cfg(test)]
@@ -384,6 +489,27 @@ mod tests {
         path
     }
 
+    fn canonical_utf8(path: &Path) -> String {
+        fs::canonicalize(path)
+            .unwrap()
+            .to_str()
+            .expect("test temp paths must canonicalize to UTF-8")
+            .to_string()
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn effective_execute_permission_uses_unix_access_classes() {
+        assert!(effective_execute_allowed(0o100, 10, 20, 10, &[20]));
+        assert!(!effective_execute_allowed(0o010, 10, 20, 10, &[20]));
+        assert!(!effective_execute_allowed(0o001, 10, 20, 10, &[20]));
+        assert!(effective_execute_allowed(0o010, 10, 20, 11, &[20]));
+        assert!(!effective_execute_allowed(0o001, 10, 20, 11, &[20]));
+        assert!(effective_execute_allowed(0o001, 10, 20, 11, &[21]));
+        assert!(effective_execute_allowed(0o001, 10, 20, 0, &[]));
+        assert!(!effective_execute_allowed(0o000, 10, 20, 0, &[]));
+    }
+
     #[test]
     fn missing_registry_is_preserve_only_and_does_not_bootstrap_runtime() {
         let repo = enrolled_repo();
@@ -405,7 +531,7 @@ mod tests {
         let repo = enrolled_repo();
         let bin_dir = tempfile::tempdir().unwrap();
         let executable = executable_file(bin_dir.path(), "codex-test");
-        let mut registry = registry(executable.to_string_lossy().to_string());
+        let mut registry = registry(canonical_utf8(&executable));
         registry.profiles[0]
             .environment_set
             .insert("PULSE_LITERAL".to_string(), serde_json::json!("non-secret"));
@@ -415,7 +541,7 @@ mod tests {
         assert_eq!(selected.profile_id, "codex-local");
         assert_eq!(
             selected.executable.resolved_path,
-            fs::canonicalize(executable).unwrap().to_string_lossy()
+            canonical_utf8(&executable)
         );
         assert!(selected.executable.identity.starts_with("sha256:"));
         assert!(!selected
@@ -434,8 +560,13 @@ mod tests {
         let first_exe = executable_file(first.path(), "codex-test");
         let second_exe = executable_file(second.path(), "codex-test");
         let old_path = env::var_os("PATH");
-        let joined = env::join_paths([second.path(), first.path()]).unwrap();
-        env::set_var("PATH", joined);
+        let first_path = fs::canonicalize(first.path()).unwrap();
+        let second_path = fs::canonicalize(second.path()).unwrap();
+        let mut paths = vec![second_path, first_path];
+        if let Some(old_path) = &old_path {
+            paths.extend(env::split_paths(old_path));
+        }
+        env::set_var("PATH", env::join_paths(paths).unwrap());
         let selected =
             select_profile_from_registry(&registry("codex-test".to_string()), None).unwrap();
         if let Some(old_path) = old_path {
@@ -445,11 +576,11 @@ mod tests {
         }
         assert_eq!(
             selected.executable.resolved_path,
-            fs::canonicalize(second_exe).unwrap().to_string_lossy()
+            canonical_utf8(&second_exe)
         );
         assert_ne!(
             selected.executable.resolved_path,
-            fs::canonicalize(first_exe).unwrap().to_string_lossy()
+            canonical_utf8(&first_exe)
         );
     }
 
