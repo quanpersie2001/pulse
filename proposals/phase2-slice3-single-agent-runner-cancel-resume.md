@@ -170,6 +170,11 @@ If implementation discovers that native Codex task resume, PTY support, handoff
 or verification semantics are required for correctness, they must become a
 follow-up proposal rather than being silently folded into Slice 3.
 
+Implementation may update this proposal while code is being built, but it must
+not flip the proposal to implemented/accepted status or update Phase 2 roadmap
+completion evidence until source changes, tests and independent verification
+land.
+
 ---
 
 ## Key decisions for this proposal
@@ -388,9 +393,12 @@ Rules:
 - PID reuse or unverifiable identity yields `run_process_identity_mismatch` and
   `stale_needs_operator`; Pulse does not kill the process;
 - platform support lives behind one low-level process module;
-- Unix implementation uses a dedicated process group/session and a platform
-  start marker; Windows implementation uses an owned Job Object or reports the
-  adapter unsupported until equivalent identity/cancellation tests pass;
+- Unix implementation uses a dedicated process group/session when supported by
+  the chosen Rust/platform APIs and records a platform start marker available on
+  that OS; macOS and Linux behavior must be tested separately rather than
+  inferred from a generic Unix claim;
+- Windows implementation uses an owned Job Object or reports the adapter
+  unsupported until equivalent identity/cancellation tests pass;
 - unsupported platforms fail before launch with `run_platform_unsupported`, not
   with best-effort unsafe cancellation.
 
@@ -405,7 +413,6 @@ starting
 running
 cancel_requested
 interrupted
-resume_available
 exited
 cancelled
 failed_to_start
@@ -426,11 +433,21 @@ failed_to_start
 stale_needs_operator
 ```
 
+Resume availability is a derived projection field, not a durable run state:
+
+```json
+{
+  "resume_eligibility": "available|not_available|blocked|not_evaluated",
+  "resume_blockers": []
+}
+```
+
 Invariants:
 
 - a run has exactly one `current_attempt_id`;
 - only one attempt may be `starting|running|cancel_requested`;
-- `resume_available` has no live process;
+- resume can be available only when there is no live process and all resume
+  preconditions pass;
 - `exited` records a known process exit and may be success or failure;
 - process exit zero does not mean Ticket done;
 - `interrupted` means the known process is gone or supervisor continuity broke;
@@ -531,7 +548,7 @@ same assignment/workspace. It does not claim to resume a native Codex thread.
 
 Resume eligibility:
 
-- run is `interrupted|resume_available|exited` and policy allows another attempt;
+- run is `interrupted|exited` and policy allows another attempt;
 - no live/unresolved attempt exists;
 - prepared lease, prepared assignment, Ticket active revision, workspace ID and
   repository identity still match;
@@ -573,14 +590,21 @@ Slice 3 introduces `WorkspaceSnapshotV1` for drift detection:
 
 Canonicalization:
 
-- tracked changes hash canonical bytes from `git diff --binary --no-ext-diff`
-  against assignment base/HEAD;
+- tracked changes hash raw bytes from `git diff --binary --no-ext-diff --no-color`
+  against assignment base/HEAD, with stable environment (`LC_ALL=C`, no external
+  diff driver) and with unsupported Git diff features causing
+  `snapshot_status=unsupported` rather than a guessed identity;
 - status identity hashes normalized `git status --porcelain=v1 -z
   --untracked-files=all` bytes;
+- all path lists are parsed as NUL-delimited bytes and rejected as unsupported if
+  they cannot be represented as safe repository-relative UTF-8 managed paths;
 - untracked manifest sorts repository-relative paths and hashes path, file type,
   executable bit, byte length and content digest;
+- regular files are hashed by bytes; invalid UTF-8 file content is allowed;
 - symlinks hash link target bytes and never follow outside workspace;
-- submodule/unsupported special-file changes yield `snapshot_status=unsupported`;
+- executable-bit changes are included for tracked and untracked regular files;
+- submodule, nested repository, named pipe, socket, device and other unsupported
+  special-file changes yield `snapshot_status=unsupported`;
 - each untracked file and total bytes are capped;
 - exceeding caps yields `snapshot_status=bounded_out` and blocks automatic
   resume with `run_workspace_snapshot_unsupported`;
@@ -611,13 +635,18 @@ Rules:
 - `RunLogRefV1` contains path, byte counts, content hash, truncation and
   redaction status;
 - default raw log `redaction_status` is `not_applied_runtime_private`;
-- human/JSON CLI output returns bounded tail only after applying configured
-  literal/regex redaction rules to the rendered output;
+- human/JSON CLI output returns bounded tail only after applying the current
+  explicit redaction profile; if no redaction profile is configured, output is
+  marked `redaction_status=not_applied_runtime_private` and remains bounded;
+- regex redaction rules must be length/time bounded by implementation tests; an
+  unsafe redaction profile fails closed rather than rendering raw output;
 - no raw prompt, environment secret or full log is written into event files;
 - promoting logs to evidence is deferred unless explicit redaction or
   caller-asserted policy is supplied through a later receipt flow;
 - environment values are never serialized; only allowed variable names and an
-  environment-spec fingerprint are recorded.
+  environment-spec fingerprint are recorded; the fingerprint covers variable
+  names, source class (`inherited` or `literal_non_secret`) and tracked profile
+  structure, not the inherited values themselves.
 
 ### P2S3-D15 — Run exit is observation, not handoff or proof
 
@@ -702,7 +731,7 @@ running_process_gone
 exit_observation_pending_commit
 cancel_requested_live
 cancel_requested_process_gone
-resume_available
+resume_available_derived
 terminal
 stale_needs_operator
 invalid
@@ -714,10 +743,13 @@ Safe automatic repairs:
 
 - complete shared transaction recovery;
 - adopt a starting supervisor only with full nonce/process identity proof;
+- adopt a fast-exited starting supervisor only when a verified exit observation
+  proves the same child identity, then complete `run.started` before terminal
+  finalization;
 - mark expired starting-without-process as `failed_to_start`;
 - commit a matching exit observation to `exited|cancelled`;
-- classify a verified-gone running process as `interrupted` and
-  `resume_available` if workspace snapshot succeeds;
+- classify a verified-gone running process as `interrupted` and report derived
+  `resume_eligibility=available` if workspace snapshot succeeds;
 - clean abandoned empty control temp files after state is durable.
 
 Never automatic:
@@ -741,7 +773,7 @@ run.failed_to_start
 run.cancel_requested
 run.cancelled
 run.interrupted
-run.resume_started
+run.resume_starting
 run.exited
 run.recovered
 ```
@@ -926,9 +958,12 @@ Profile rules:
 - cancel grace range 1..300 seconds;
 - force-kill delay range 0..300 seconds;
 - log limit per stream range 65536..67108864 bytes;
-- canonical profile fingerprint covers all semantics except secret values;
-  secret-bearing environment values are disallowed in tracked registry and must
-  come from allowed existing environment or future secret provider.
+- canonical profile fingerprint covers all tracked, non-secret semantics;
+  inherited environment values are deliberately excluded and reported through an
+  environment-spec fingerprint so reports remain reproducible without leaking
+  secrets;
+- secret-bearing environment values are disallowed in tracked registry and must
+  come from allowed existing environment or a future secret provider.
 
 ---
 
@@ -1159,6 +1194,9 @@ nested preview semantics.
 - build `WorkspaceSnapshotV1` before state;
 - build `RunInputV1` and bounded Markdown render;
 - create run/attempt IDs, control nonce/hash and runtime paths;
+- reject if canonical `RunInputV1` or rendered Markdown exceeds configured
+  bounded input budgets; do not silently truncate instructions or embedded
+  packet bytes;
 - commit run + attempt starting records and `run.starting` event in one shared
   multi-target transaction.
 
@@ -1168,8 +1206,12 @@ nested preview semantics.
 - spawn hidden Pulse supervisor with protected control path/nonce;
 - supervisor starts Codex without shell in workspace;
 - supervisor returns verified process identity handshake before start timeout;
-- if timeout/spawn/config/log setup fails, stop any proven process and proceed to
-  failed-start finalization.
+- if the child exits after the verified handshake but before the parent commits
+  `run.started`, the parent/recovery still records the proven `run.started`
+  transition first and then finalizes from the exit observation; it must not
+  collapse a real started process into `failed_to_start`;
+- if timeout/spawn/config/log setup fails before verified child identity exists,
+  stop any proven process and proceed to failed-start finalization.
 
 ### Phase D — started commit under fence
 
@@ -1181,6 +1223,10 @@ nested preview semantics.
 - if cancel requested, do not mark running; request verified cancellation;
 - update run/attempt to `running` with identity and heartbeat;
 - commit exactly one `run.started` event;
+- if a matching exit observation already exists, return a start report that
+  includes `terminal_observation_pending=true`; finalization is performed by the
+  next observer/recover path so the start command keeps one semantic state commit
+  per transaction;
 - return committed `RunStartReportV1`.
 
 ### Phase E — observation
@@ -1212,7 +1258,7 @@ write semantic event or canonical run record files.
 8. require exact identity match with recorded latest snapshot;
 9. build bounded resume `RunInputV1`;
 10. create next attempt with incremented number;
-11. commit run state `starting`, new attempt and `run.resume_started` event;
+11. commit run state `starting`, new attempt and `run.resume_starting` event;
 12. use the same supervisor start handshake;
 13. commit running state;
 14. never change run ID, lease, workspace or Ticket state.
@@ -1240,10 +1286,14 @@ Recovery may adopt only when:
 - run/attempt are still `starting`;
 - control nonce hash matches;
 - heartbeat belongs to same run/attempt;
-- supervisor/child process identity is verified;
+- supervisor/child process identity is verified, or a verified exit observation
+  proves the same child started and then exited;
 - workspace and assignment still match.
 
-Otherwise mark `stale_needs_operator`; do not spawn or kill.
+If an exit observation proves the child started, recovery first completes the
+`run.started` semantic transition and then commits the terminal transition in a
+separate transaction. Otherwise mark `stale_needs_operator`; do not spawn or
+kill.
 
 ### Crash after started targets before event
 
@@ -1288,7 +1338,7 @@ stable `cause_code=<code>` token.
 | `run_ticket_not_active` | Ticket no longer matches claimed active revision |
 | `run_workspace_not_found` | Bound workspace record/path missing |
 | `run_workspace_source_mismatch` | Repository/base/workspace binding changed |
-| `run_workspace_dirty_unexpected` | First attempt workspace is not at expected clean base |
+| `run_workspace_dirty_unexpected` | First attempt workspace differs from bound base/pre-start snapshot policy |
 | `run_already_exists` | Live or unresolved run already owns assignment/workspace |
 | `run_profile_missing` | Profile registry/profile unavailable |
 | `run_profile_invalid` | Runner profile schema/config invalid |
@@ -1301,7 +1351,7 @@ stable `cause_code=<code>` token.
 | Code | Meaning |
 | --- | --- |
 | `run_input_invalid` | Run input cannot be built/validated |
-| `run_input_too_large` | Bounded input budget exceeded |
+| `run_input_too_large` | Bounded input budget exceeded before launch; no silent truncation |
 | `run_supervisor_spawn_failed` | Pulse supervisor could not start |
 | `run_supervisor_handshake_timeout` | No verified startup handshake |
 | `run_command_spawn_failed` | Codex process launch failed |
@@ -1368,9 +1418,10 @@ Proposed modules:
 src/run.rs
   # Public neutral DTOs, enums, normalization, schemas and fingerprints.
 
-src/process.rs
+src/process/
   # Low-level platform process supervisor primitives: spawn, process group/job,
-  # identity, signal, wait, bounded log draining. No graph/policy/assignment.
+  # identity, signal, wait, bounded log draining and hidden-supervisor runtime.
+  # No graph/policy/assignment.
 
 src/kernel/run.rs
   # Cross-domain orchestration: authority, assignment/Ticket/workspace/profile,
@@ -1397,8 +1448,11 @@ Ownership constraints:
 
 - `src/run.rs` may depend on canonical JSON, identity, assignment/work packet
   DTOs and error primitives, not graph store/filesystem/process/policy;
-- `src/process.rs` owns OS process mechanics only and does not know Ticket,
-  lease, workspace records or events;
+- `src/process/` owns OS process mechanics only and does not know Ticket,
+  lease, workspace records or events; any crate added for process groups, job
+  objects or signal handling must be reviewed against current `Cargo.toml`
+  Rust 1.78/MSRV and platform support before the implementation slice claims
+  cross-platform support;
 - `src/kernel/run.rs` owns cross-domain choreography and is the only layer that
   combines run state with assignment, graph, source, workspace, policy and
   events;
@@ -1412,7 +1466,7 @@ Ownership constraints:
 - `src/cli/run.rs` owns no business logic;
 - transaction extensions, if necessary, remain domain-neutral in
   `src/storage/transaction.rs`;
-- hidden supervisor parsing belongs to `src/process.rs`/binary adapter, not CLI
+- hidden supervisor parsing belongs to `src/process/`/binary adapter, not CLI
   public domain semantics;
 - do not add broad `src/runtime/` namespace in this slice.
 
@@ -1423,8 +1477,9 @@ pub mod run;
 pub mod process;
 ```
 
-Only stable DTO/process capability types needed by consumers are public.
-Supervisor internals remain crate-private.
+Only stable DTOs and narrow process capability/status types needed by consumers
+are public. Supervisor internals, hidden command args, control-file formats and
+fixture adapters remain crate-private even if the module itself is exported.
 
 Recommended store API:
 
@@ -1556,11 +1611,12 @@ is absent.
 
 1. Crash after starting intent before targets recovers by storage rules.
 2. Crash after starting commit before spawn becomes failed-to-start after grace.
-3. Crash after supervisor spawn before started commit adopts only with full proof.
+3. Crash after supervisor spawn before started commit adopts only with full
+   proof, including fast-exit proof from a verified exit observation.
 4. Unprovable orphan process becomes stale-needs-operator and blocks duplicate.
 5. Crash after running targets before event completes event.
-6. Process gone without observation becomes interrupted/resume-available only
-   when workspace snapshot succeeds.
+6. Process gone without observation becomes interrupted with derived resume
+   availability only when workspace snapshot succeeds.
 7. Exit observation before terminal commit completes idempotently.
 8. Ambiguous/non-prefix/event mismatch blocks with `run_recovery_failed` and
    lower cause code.
@@ -1569,7 +1625,7 @@ is absent.
 
 ### G. Resume
 
-1. Interrupted run resumes as attempt N+1 under same run ID.
+1. Interrupted or policy-resumable exited run resumes as attempt N+1 under same run ID.
 2. Resume uses same lease/prepared assignment/workspace and active Ticket
    revision.
 3. Current snapshot must equal previous recorded snapshot.
@@ -1712,11 +1768,15 @@ completion evidence. Do not create Pulse self-hosting state.
 This slice advances:
 
 - **#8:** prepared assignment is consumed by an actual single-Agent run;
-- **#12:** interruption and workspace-level resume are implemented;
+- **#12:** interruption and workspace-level resume become implementable for the
+  local single-Agent run path once this slice lands;
 - **#40:** active assignment projection gains runtime run state;
-- **#67 subset:** started work is no longer governed only by prepared lease TTL;
-- **#70 subset:** a local interrupted Worker can be resumed as a new attempt,
-  without typed blocker/mailbox routing;
+- **#67 analogy/subset:** after local process start, prepared-lease TTL no
+  longer governs execution liveness; this does **not** implement Phase 5
+  delivery acknowledgement expiry or automatic return to ready;
+- **#70 analogy/subset:** a local interrupted Worker process can be resumed as a
+  new attempt in the same workspace, without typed blocker/mailbox routing or
+  stable native thread resume;
 - **Core DoD:** “Codex single-agent run dùng bounded context và có thể
   cancel/resume.”
 
@@ -1728,6 +1788,10 @@ It does not complete:
 - proof-driven close gate;
 - native independent Codex task transport;
 - Orchestration v2 scenarios 66–75 as a whole.
+
+Because this proposal remains draft, the roadmap's current Phase 2 status should
+continue to say Slice 3 is the next unimplemented runner/cancel/resume slice
+until implementation and verifier commits exist.
 
 ---
 

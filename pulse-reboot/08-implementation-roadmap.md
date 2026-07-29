@@ -119,7 +119,11 @@ claim-state enriched execution frontier.
 
 Phase 2 as a whole is not complete: Pulse still has no runner/cancel/resume,
 handoff/verification receipts, proof-driven close gate or documentation impact
-promotion. Those remain the next Phase 2 slices.
+promotion. Draft Slice 3 proposal
+[`proposals/phase2-slice3-single-agent-runner-cancel-resume.md`](../proposals/phase2-slice3-single-agent-runner-cancel-resume.md)
+defines the proposed next runner/cancel/resume contract, but it is not accepted
+as implemented behavior until source changes, tests and independent verification
+land. Handoff/verification and close-gate work remain later Phase 2 slices.
 
 - Codex adapter cho một run.
 - Minimal `pulse-shape` path để tạo/review shaping result trước dispatch; đủ cho R0/R1 và làm nền cho capability pack đầy đủ ở Phase 3.
