@@ -12,29 +12,39 @@ Supported platform boundary is explicit:
 
 - Linux: `/proc/<pid>/stat` process group plus start ticks, salted with kernel
   boot ID when readable (`linux_proc_stat_starttime_process_group`).
-- macOS: `ps -o pid=,pgid=,lstart=` start timestamp plus process group
-  (`macos_kinfo_proc_starttime_process_group`). This is a feasibility marker for
-  local conservative cancellation; a later implementation slice may replace it
-  with a direct `proc_pidinfo`/`kinfo_proc` binding if required.
-- All other platforms return `run_platform_unsupported` before launch. Windows
-  remains out of scope until a Job Object design and tests land.
+- macOS: unsupported for cancellation in I0
+  (`unsupported_macos_identity_not_proven`). The earlier `ps ... lstart` probe
+  is intentionally not treated as proof because it is not a strong kernel
+  process creation marker. macOS must keep returning `run_platform_unsupported`
+  until a Rust 1.78-compatible `proc_pidinfo`/`kinfo_proc` or equivalent marker
+  is implemented and tested.
+- All other non-Linux platforms return `run_platform_unsupported` before launch.
+  Windows remains out of scope until a Job Object design and tests land.
 
 Cancellation is process-group scoped and guarded by re-reading the current
 process identity. A mismatched start marker returns
 `run_process_identity_mismatch` and does not signal.
 
 No new process-control dependencies were added; the probe uses Rust 1.78 std plus
-small libc FFI declarations.
+small libc FFI declarations. The package declares `rust-version = "1.78"`, and
+new I0 code avoids Rust 2024-only syntax such as `unsafe extern` blocks.
 
 ## Spike 2 — hidden supervisor packaging
 
-Code evidence: `src/process.rs::supervisor_packaging_probe`.
+Code evidence: `src/process.rs::{supervisor_packaging_probe,
+hidden_supervisor_probe_dispatch}`, `src/cli/process.rs`, and
+`tests/process/run_feasibility.rs`.
 
 The packaging probe resolves `std::env::current_exe()` and records the hidden
-command token `__run-supervisor`. Later public start code can re-exec the same
-installed `pulse` artifact. If the executable path is unavailable or not a file,
-the fallback error is `run_supervisor_spawn_failed`. No daemon or second binary
-artifact is introduced by this spike.
+command token `__run-supervisor`. The binary now has an actual hidden clap
+parse/dispatch path for `pulse __run-supervisor --control <path> --probe`; it is
+absent from public help, rejects control paths outside
+`.pulse/runtime/run/control/*.json`, requires the protected nonce environment,
+and re-execs the same installed `pulse` artifact in tests. This remains an I0
+feasibility probe only and does not implement public `pulse run` behavior. If
+the executable path is unavailable or not a file, the fallback error is
+`run_supervisor_spawn_failed`. No daemon or second binary artifact is introduced
+by this spike.
 
 ## Spike 3 — secure control nonce
 
@@ -54,7 +64,9 @@ Code evidence: `src/process.rs::{drain_to_bounded_logs, BoundedLogRefV1}`.
 
 The retention strategy continuously drains stdout/stderr readers and writes
 separate prefix and tail segment files with create-new semantics. Retention is
-bounded by the per-stream byte budget. `content_hash_semantics` is explicit:
+bounded by the per-stream byte budget. Full-stream `content_hash` is computed by
+incremental SHA-256 updates while draining, not by accumulating the full stream
+in memory. `content_hash_semantics` is explicit:
 `sha256_full_stream_even_when_retention_truncated` for the feasibility helper,
 while retained bytes, total bytes and truncated bytes are recorded separately.
 There is no unbounded flat raw log file.

@@ -4,6 +4,7 @@ mod evidence;
 mod graph;
 mod knowledge;
 pub mod output;
+mod process;
 mod work;
 
 use clap::Parser;
@@ -39,5 +40,6 @@ pub fn run(cli: Cli) -> Result<(), PulseError> {
         args::Command::Graph { command } => graph::handle(&store, command),
         args::Command::Evidence { command } => evidence::handle(&store, command),
         args::Command::Knowledge { command } => knowledge::handle(&store, command),
+        args::Command::RunSupervisor(args) => process::handle_hidden_supervisor(args),
     }
 }

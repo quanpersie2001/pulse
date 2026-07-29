@@ -4,10 +4,13 @@
 //! about Pulse Tickets, assignments, graph state, authority, or public `run`
 //! commands.
 
-use crate::canonical_json::{hash_bytes, hash_serializable};
+#[cfg(target_os = "linux")]
+use crate::canonical_json::hash_serializable;
+use crate::canonical_json::{hash_bytes, SHA256_PREFIX};
 use crate::{PulseError, Result};
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::fs::{self, OpenOptions};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
@@ -21,7 +24,7 @@ use std::os::unix::process::CommandExt;
 #[cfg(target_os = "linux")]
 pub const PLATFORM_SUPPORT: &str = "linux_proc_stat_starttime_process_group";
 #[cfg(target_os = "macos")]
-pub const PLATFORM_SUPPORT: &str = "macos_kinfo_proc_starttime_process_group";
+pub const PLATFORM_SUPPORT: &str = "unsupported_macos_identity_not_proven";
 #[cfg(not(any(target_os = "linux", target_os = "macos")))]
 pub const PLATFORM_SUPPORT: &str = "unsupported";
 
@@ -104,33 +107,91 @@ impl Drop for ControlNoncePlaintext {
 }
 
 pub fn ensure_supported_platform() -> Result<()> {
-    if cfg!(any(target_os = "linux", target_os = "macos")) {
+    if cfg!(target_os = "linux") {
         Ok(())
+    } else if cfg!(target_os = "macos") {
+        Err(PulseError::validation(
+            "run_platform_unsupported",
+            "Slice 3 macOS cancellation is unsupported until a Rust 1.78-compatible kernel process creation marker is proven",
+        ))
     } else {
         Err(PulseError::validation(
             "run_platform_unsupported",
-            "Slice 3 process supervision is only proven for macOS and Linux",
+            "Slice 3 process supervision is only proven for Linux",
         ))
     }
 }
 
+pub const HIDDEN_SUPERVISOR_COMMAND: &str = "__run-supervisor";
+pub const HIDDEN_SUPERVISOR_NONCE_ENV: &str = "PULSE_RUN_SUPERVISOR_NONCE_HEX";
+
 pub fn supervisor_packaging_probe() -> Result<SupervisorPackagingProbeV1> {
     let current_exe =
         std::env::current_exe().map_err(|error| PulseError::io("<current_exe>", error))?;
-    let metadata =
-        fs::metadata(&current_exe).map_err(|error| PulseError::io(&current_exe, error))?;
+    supervisor_packaging_probe_for_exe(&current_exe)
+}
+
+pub fn supervisor_packaging_probe_for_exe(
+    current_exe: &Path,
+) -> Result<SupervisorPackagingProbeV1> {
+    let metadata = fs::metadata(current_exe).map_err(|error| PulseError::io(current_exe, error))?;
     let packaging_status = if metadata.is_file() {
-        "self_reexec_available"
+        "self_reexec_available_hidden_dispatch_required"
     } else {
         "self_reexec_unavailable"
     };
     Ok(SupervisorPackagingProbeV1 {
         schema_version: 1,
         current_exe: current_exe.to_string_lossy().to_string(),
-        hidden_command: "__run-supervisor".to_string(),
+        hidden_command: HIDDEN_SUPERVISOR_COMMAND.to_string(),
         packaging_status: packaging_status.to_string(),
         fallback_error: "run_supervisor_spawn_failed".to_string(),
     })
+}
+
+pub fn validate_hidden_supervisor_control_path(control: &Path) -> Result<()> {
+    if control.is_absolute() {
+        return Err(PulseError::validation(
+            "run_control_record_invalid",
+            "hidden supervisor control path must be repository-relative",
+        ));
+    }
+    let normalized = control.components().collect::<Vec<_>>();
+    if normalized
+        .iter()
+        .any(|component| matches!(component, std::path::Component::ParentDir))
+        || !control.starts_with(".pulse/runtime/run/control")
+        || control.extension().and_then(|value| value.to_str()) != Some("json")
+    {
+        return Err(PulseError::validation(
+            "run_control_record_invalid",
+            "hidden supervisor control path must stay under .pulse/runtime/run/control/*.json",
+        ));
+    }
+    Ok(())
+}
+
+pub fn hidden_supervisor_probe_dispatch(control: &Path) -> Result<SupervisorPackagingProbeV1> {
+    validate_hidden_supervisor_control_path(control)?;
+    let nonce_hex = std::env::var(HIDDEN_SUPERVISOR_NONCE_ENV).map_err(|_| {
+        PulseError::validation(
+            "run_control_record_invalid",
+            "hidden supervisor nonce environment was not provided",
+        )
+    })?;
+    let nonce = hex::decode(nonce_hex).map_err(|_| {
+        PulseError::validation(
+            "run_control_record_invalid",
+            "hidden supervisor nonce environment was not valid hex",
+        )
+    })?;
+    if nonce.len() < 32 {
+        return Err(PulseError::validation(
+            "run_control_record_invalid",
+            "hidden supervisor nonce is below Slice 3 entropy floor",
+        ));
+    }
+    supervisor_packaging_probe()
 }
 
 pub fn spawn_process_group(command: &mut Command) -> Result<Child> {
@@ -226,7 +287,7 @@ fn drain_reader(
     let mut prefix = Vec::with_capacity(prefix_limit);
     let mut tail = Vec::with_capacity(tail_limit);
     let mut total = 0_u64;
-    let mut full_hash_bytes = Vec::new();
+    let mut full_hasher = Sha256::new();
     let mut buffer = [0_u8; 8192];
     loop {
         let read = reader
@@ -236,7 +297,7 @@ fn drain_reader(
             break;
         }
         total += read as u64;
-        full_hash_bytes.extend_from_slice(&buffer[..read]);
+        full_hasher.update(&buffer[..read]);
         append_prefix_tail(
             &buffer[..read],
             prefix_limit,
@@ -254,7 +315,7 @@ fn drain_reader(
         total_bytes_seen: total,
         retained_bytes: retained,
         truncated_bytes: total.saturating_sub(retained),
-        content_hash: hash_bytes(&full_hash_bytes),
+        content_hash: format!("{SHA256_PREFIX}{}", hex::encode(full_hasher.finalize())),
         content_hash_semantics: "sha256_full_stream_even_when_retention_truncated".to_string(),
         redaction_status: "not_applied_runtime_private".to_string(),
     })
@@ -324,36 +385,11 @@ fn platform_process_identity(pid: u32) -> Result<ProcessIdentityV1> {
 }
 
 #[cfg(target_os = "macos")]
-fn platform_process_identity(pid: u32) -> Result<ProcessIdentityV1> {
-    let output = Command::new("ps")
-        .args(["-o", "pid=,pgid=,lstart=", "-p", &pid.to_string()])
-        .output()
-        .map_err(|error| PulseError::io("/bin/ps", error))?;
-    if !output.status.success() {
-        return Err(PulseError::validation(
-            "run_process_identity_unavailable",
-            "ps could not inspect process",
-        ));
-    }
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let line = stdout.trim();
-    let mut parts = line.split_whitespace();
-    let parsed_pid = parts.next().and_then(|value| value.parse::<u32>().ok());
-    let pgid = parts.next().and_then(|value| value.parse::<i64>().ok());
-    let lstart = parts.collect::<Vec<_>>().join(" ");
-    if parsed_pid != Some(pid) || pgid.is_none() || lstart.is_empty() {
-        return Err(PulseError::validation(
-            "run_process_identity_unavailable",
-            "ps output did not include pid, pgid and lstart",
-        ));
-    }
-    Ok(ProcessIdentityV1 {
-        pid,
-        process_group_id: pgid,
-        platform: PLATFORM_SUPPORT.to_string(),
-        platform_start_marker: hash_serializable(&(pid, &lstart))?,
-        identity_status: "verified".to_string(),
-    })
+fn platform_process_identity(_pid: u32) -> Result<ProcessIdentityV1> {
+    Err(PulseError::validation(
+        "run_platform_unsupported",
+        "macOS process identity is not proven by a Rust 1.78-compatible kernel creation marker",
+    ))
 }
 
 #[cfg(not(any(target_os = "linux", target_os = "macos")))]
@@ -370,7 +406,7 @@ fn nonce_transport() -> &'static str {
 
 #[cfg(unix)]
 unsafe fn setpgid_zero() -> i32 {
-    unsafe extern "C" {
+    extern "C" {
         fn setpgid(pid: i32, pgid: i32) -> i32;
     }
     unsafe { setpgid(0, 0) }
@@ -378,7 +414,7 @@ unsafe fn setpgid_zero() -> i32 {
 
 #[cfg(unix)]
 unsafe fn kill_process_group(pgid: i64, signal: i32) -> i32 {
-    unsafe extern "C" {
+    extern "C" {
         fn kill(pid: i32, sig: i32) -> i32;
     }
     unsafe { kill(-(pgid as i32), signal) }

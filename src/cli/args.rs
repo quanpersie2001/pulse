@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 #[cfg(debug_assertions)]
 use crate::storage::transaction::TransactionFailpoint;
-use clap::{Parser, Subcommand, ValueEnum};
+use clap::{Args, Parser, Subcommand, ValueEnum};
 
 #[derive(Parser)]
 #[command(name = "pulse")]
@@ -41,6 +41,16 @@ pub(crate) enum Command {
         #[command(subcommand)]
         command: super::knowledge::KnowledgeCommand,
     },
+    #[command(name = "__run-supervisor", hide = true)]
+    RunSupervisor(HiddenRunSupervisorArgs),
+}
+
+#[derive(Args)]
+pub(crate) struct HiddenRunSupervisorArgs {
+    #[arg(long)]
+    pub(crate) control: PathBuf,
+    #[arg(long, hide = true)]
+    pub(crate) probe: bool,
 }
 
 #[allow(clippy::enum_variant_names)]
