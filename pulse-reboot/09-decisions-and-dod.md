@@ -16,11 +16,11 @@
 | D-05 | Artifact materialize theo risk `R0..R3`, không theo phase cố định | Accept |
 | D-06 | Canonical work, runtime coordination và immutable evidence tách lớp | Accept |
 | D-07 | Deterministic mechanism thuộc kernel; semantic judgment thuộc Agent skills | Accept |
-| D-08 | Codex-first; chỉ extract provider abstraction sau usage thật | Accept |
-| D-09 | Single-agent reliability là Core v1; orchestration là milestone kế tiếp | Accept |
-| D-10 | Multi-agent dùng independent peer Agent tasks/threads, không lấy sub-agent làm unit canonical | Accept |
+| D-08 | Codex-native provider trước; Claude-native và ACP generic thêm sau contract/use thật, không ép lowest-common-denominator | Accept |
+| D-09 | Core, Runtime và Orchestration là ba milestone: Core repository semantics trước, Daemon single-Agent reliability tiếp theo, multi-Agent sau cùng | Accept |
+| D-10 | Multi-agent dùng independent daemon-managed sessions làm orchestration units; runtime parentage không tạo business authority | Accept |
 | D-11 | Orchestrator có user-equivalent transport nhưng bounded authority | Accept |
-| D-12 | Assignment là specific-assignee lease có acknowledgement, revision và TTL | Accept |
+| D-12 | Assignment là Core reservation bind exact Ticket revision/packet và opaque Daemon workspace/session; delivery khác acknowledgement | Accept |
 | D-13 | Worker chỉ submit handoff; Ticket/Story close qua conductor-owned gate | Accept |
 | D-14 | QA là behavioral ledger với typed receipts; Playwright/browser/API chỉ là executors | Accept |
 | D-15 | Priority là input semantic; reconciliation có thể chọn foundation work trước P0 | Accept |
@@ -29,8 +29,8 @@
 | D-18 | Canonical graph là sharded `nodes/*.json` + `edges/*.json`; human-facing work content là Markdown dưới top-level `works/` | Accept |
 | D-19 | Full graph JSON là derived CLI projection/cache, không phải writable tracked truth | Accept |
 | D-20 | Agent/Orchestrator đọc và mutate graph qua CLI/API, không tự search/parse raw graph files | Accept |
-| D-21 | Core v1 không dùng SQLite; local coordination dùng files, locks và atomic replace | Accept |
-| D-22 | Pulse core bằng Rust stable (single binary `pulse`); harness layer (skills/hooks/scripts/MCP adapter) giữ JavaScript/ESM qua CLI boundary. Lý do: multi-process CAS/locking là #1 rủi ro, là chỗ Rust + RAII mạnh nhất. Triển khai fresh; `references/` chỉ tham khảo pattern, không port code | Accept |
+| D-21 | Core canonical correctness không phụ thuộc SQLite; Daemon runtime persistence là implementation decision riêng và không được trở thành work truth | Accept |
+| D-22 | Pulse Core và Pulse Daemon cùng bằng Rust stable trong một executable `pulse`; skills/hooks/repository scripts có thể dùng JavaScript/ESM qua stable boundary | Accept |
 | D-23 | Durable repository documentation là first-class Pulse capability | Accept |
 | D-24 | `docs/`/`AGENTS.md`/`PULSE.md` giữ durable knowledge; work prose, evidence và runtime không phải current docs truth | Accept |
 | D-25 | Human-facing work content nằm ở top-level `works/`; machine graph metadata nằm trong `.pulse/workgraph/` | Accept |
@@ -77,8 +77,24 @@
 | D-66 | Readiness/frontiers là versioned derived projections với narrow relevant-input fingerprint; stale ready bị loại khỏi execution frontier, claim trước lease resolver là `not_evaluated` | Accept |
 | D-67 | Hard-to-reverse Decision reference cần immutable acceptance proof bind contract revision/content và actor có `decision.accept`; existence hoặc shaping mention không đủ | Accept |
 | D-68 | Trước initial Core v1, mỗi persisted/public contract family có một current baseline; Phase/Slice không phải version và internal development state không tạo predecessor/migration support | Accept |
+| D-69 | Session bootstrap là versioned workflow bootstrap với assignment identity/authority; exact Ticket contract đến từ lease-bound Core query, không compile full context vào prompt | Accept |
+| D-70 | Long-lived Rust Daemon, không phải hidden per-run supervisor, sở hữu Project/Workspace/Session/Provider/process/timeline runtime | Accept |
+| D-71 | Linux, macOS và Windows là Tier-1 daemon process-owner targets; platform adapters prove process identity/tree cancellation và fail closed | Accept |
+| D-72 | Workspace là opaque stable container; worktree chỉ là local isolation mode và workspace creation tách session creation | Accept |
+| D-73 | Stable Pulse `session_id` tách provider-native handle; `closed` tách `archived`; cancellation chỉ commit sau provider acknowledgement/terminal event | Accept |
+| D-74 | Runtime timeline dùng live delta cho immediacy và authoritative paged cursor fetch cho correctness; presence không phải delivery gate | Accept |
+| D-75 | Tool catalog thuộc Daemon application layer; native provider tools, MCP, CLI và HTTP/WebSocket là adapters | Accept |
+| D-76 | Core reservation và Daemon provisioning tạo explicit idempotent saga có compensation/recovery; không có distributed transaction giả | Accept |
+| D-77 | Orchestrator dispatch một independent Worker per assignment; multiple Workers chỉ song song khi dependency/lease/workspace/write-scope cho phép, Reviewer/QA là peer sessions trên frozen snapshot với Core gate | Accept |
 
-Khi một quyết định đổi, tạo Decision work item, cập nhật file chủ đề sở hữu và root summary. Không sửa riêng bảng này. D-68 được ghi trong [Decision 0003](../docs/decisions/0003-pre-release-contract-baselines.md).
+Khi một quyết định đổi, tạo Decision work item, cập nhật file chủ đề sở hữu và
+root summary. Không sửa riêng bảng này. D-68 được ghi trong
+[Decision 0003](../docs/decisions/0003-pre-release-contract-baselines.md);
+D-69 trong [Decision 0004](../docs/decisions/0004-cli-mediated-agent-context.md);
+D-70 tới D-76 trong
+[Decision 0005](../docs/decisions/0005-rust-daemon-runtime-control-plane.md);
+D-77 trong
+[Decision 0006](../docs/decisions/0006-peer-agent-assurance-topology.md).
 
 ## Core v1 Definition of Done
 
@@ -93,7 +109,7 @@ Core v1 hoàn thành khi:
 - [x] Pure-Rust lexical BM25+ index (tantivy) search được section-level, offline và không tải model. Verified by Slice 5 search/get/tree and retrieval-eval tests.
 - [x] Lifecycle, deterministic edges, inverse projection, revision CAS, atomic recovery và supersession có unit/integration tests. Verified by Phase 1 graph/storage/process suites.
 - [x] `graph export` rebuild deterministic sau khi xóa cache; SQLite không cần cho correctness/performance target v1. Verified by workgraph projection/cache tests.
-- [ ] Agent nhận `work packet` đầy đủ, gồm required/suggested section refs và read budget, không phải search raw graph files hoặc đọc toàn bộ docs tree để hiểu assignment.
+- [ ] Agent nhận lease-bound committed `work packet` đầy đủ, gồm required/suggested section refs và read budget; bootstrap prompt chỉ mô tả retrieval/workflow/authority và không copy Ticket/docs/QA/knowledge content.
 - [x] Node schema có normal CAS `revision` và semantic `contract_revision`; create/edit/draft flows ghi assessed values hoặc explicit `unassessed` domain value cho risk/materialization khi classification chưa đủ chắc, không fabricate defaults và không derive values từ older on-disk shapes. Verified by Slice 7 commit `677c593`.
 - [x] Ticket role `implementation|decision_work` có typed contract riêng; precise decision work không bị recursive readiness loop. Verified by Slice 7 commit `677c593`.
 - [x] Implementation Ticket ready gate kiểm tra objective/current/target, work surface/anchors, required changes, invariants, acceptance, mode, plan policy, verification/evidence/handoff contract. Verified by Slice 7 commit `677c593`.
@@ -108,8 +124,6 @@ Core v1 hoàn thành khi:
 - [x] Hard-to-reverse Decision cần current immutable acceptance proof; Decision existence hoặc shaping approval không đủ. Verified by Slice 7 commit `677c593`.
 - [x] QA impact `unknown` chặn ready; `none`/`covered_by_story_close` cần rationale/owner và grant tương ứng; `required` không pass giả trước baseline/case resolver. Verified by Slice 7 commit `677c593`; full required-case resolution remains Phase 3.
 - [x] Readiness dùng narrow relevant-input fingerprint; status `ready` bị stale thì không vào execution frontier và read path không tự rewrite canonical node. Verified by Slice 7 commit `677c593`.
-- [ ] Một Ticket standalone đi qua create -> ready -> active -> verifying -> done/rework/blocked.
-- [ ] Codex single-agent run dùng bounded context và có thể cancel/resume.
 - [ ] Risk policy chọn materialization/verification gate đúng.
 - [x] Evidence receipts immutable, source-bound và hash-validated. Verified for current Phase 1 receipt kinds by Slice 3/7 evidence and binding tests; run/handoff/verification/QA receipt kinds remain later phases.
 - [x] Documentation impact hỗ trợ `required`, `none` + rationale và policy-governed `deferred`. Verified by Slice 4 docs-impact model/CLI/policy tests.
@@ -136,21 +150,65 @@ Core v1 hoàn thành khi:
 - [ ] Usage feedback có thể reinforce/revise/retire và repeated failure sau injection được classify retrieval/apply/guardrail gap.
 - [ ] `pulse doctor` tạo actionable findings có proposed work.
 - [ ] Một failure thật được chuyển thành harness improvement + replay eval.
-- [x] Offline vẫn query work, history và evidence metadata. Verified by local graph/event/evidence CLI and store tests; run-history expansion remains Phase 2.
+- [x] Offline vẫn query work, semantic history và evidence metadata. Verified by local graph/event/evidence CLI and store tests.
 - [x] Docs progressive-disclosure đủ để Agent tìm đúng command/policy mà không nạp toàn bộ. Verified at registry/section search/get/tree layer; automatic work-packet routing remains Phase 2.
 - [ ] Brownfield docs migration snapshot trước semantic restructure và không overwrite khi chưa approve.
-- [ ] Core acceptance scenarios 1-65 trong roadmap pass tự động hoặc có receipt hợp lệ.
+- [ ] Các cross-phase acceptance scenarios thuộc Core hiện tại pass tự động
+  hoặc có receipt hợp lệ; Runtime/QA/knowledge scenarios chỉ được claim ở
+  milestone sở hữu.
 
-Core v1 **không cần** nhiều Worker chạy song song. Data contracts của nó phải đủ để Phase 5 không phải phá work/evidence identity.
+Core **không cần daemon để query/mutate repository truth**. Data contracts phải
+đủ để Runtime và Orchestration không phá work/evidence identity.
+
+## Pulse Runtime Definition of Done
+
+Runtime hoàn thành khi:
+
+- [ ] Một executable `pulse` chạy Core commands offline và daemon commands qua
+  local endpoint.
+- [ ] Daemon có versioned handshake, request IDs, idempotency và capability
+  negotiation.
+- [ ] Project Registry dùng stable opaque `project_id`.
+- [ ] Workspace Registry dùng stable opaque `workspace_id`; local/worktree
+  isolation, archive và restore có ownership proof.
+- [ ] Workspace creation tách session creation; một Workspace chứa nhiều
+  sessions/terminals/services.
+- [ ] Session Manager giữ stable `session_id`, provider handle, workspace,
+  parentage, persistence handle và lifecycle.
+- [ ] `initializing|idle|running|error|closed` và orthogonal archive semantics
+  được persist/recover đúng.
+- [ ] Cancel chỉ commit sau provider acknowledgement hoặc terminal event; failed
+  interrupt không tạo false idle.
+- [ ] Provider Registry có Codex-native implementation, capability/catalog
+  contract và không spawn process từ metadata-only refresh.
+- [ ] Daemon ProcessOwner sở hữu process từ spawn, bounded logs, timeout,
+  identity, tree cancellation và managed-process ledger.
+- [ ] Native Linux/macOS/Windows process identity/cancel/recovery suites pass.
+- [ ] Runtime timeline có epochs/sequences, live WebSocket delivery và
+  authoritative paged cursor catch-up.
+- [ ] Web/Desktop/CLI/MCP dùng cùng daemon application/tool behavior.
+- [ ] Core reservation + Daemon workspace/session provisioning là idempotent
+  saga có compensation ở mọi failure boundary.
+- [ ] Worker nhận lease-bound packet qua workflow bootstrap và gửi typed
+  acknowledgement/handoff.
+- [ ] Một Ticket standalone đi qua `ready -> reserved -> active -> verifying ->
+  done|rework|blocked` bằng Core proof gate.
+- [ ] Daemon restart recover registry, process, session, timeline và assignment
+  saga không cần chat memory.
+- [ ] Hidden per-run supervisor và duplicate Core-owned
+  workspace/session/process runtime path đã bị xóa.
+- [ ] Runtime acceptance scenarios trong `04-runtime-harness.md` pass.
 
 ## Orchestration v2 Definition of Done
 
 Orchestration v2 hoàn thành khi:
 
 - [ ] Orchestration Agent, Worker, Reviewer và QA là independent user-visible tasks/threads.
-- [ ] Codex transport hỗ trợ create/resume/send/wait/interrupt/archive có idempotency.
-- [ ] Agent Registry map Pulse identity với native thread/session và presence.
-- [ ] Specific-assignee lease ngăn duplicate exclusive ownership.
+- [ ] Orchestration run có stable identity, control owner và recoverable state.
+- [ ] Runtime ownership tree hỗ trợ parentage, detach, notify-on-finish và
+  cascade archive mà không mutate work truth.
+- [ ] Communication graph default-deny direct peer messaging ngoài typed policy.
+- [ ] Specific-assignee assignment ngăn duplicate exclusive ownership.
 - [ ] Typed mailbox phân biệt delivery, acknowledgement và fallback.
 - [ ] Mỗi implementation Agent có workspace/source/docs-scope binding rõ.
 - [ ] Worker handoff map acceptance sang proof và remaining risks.
@@ -158,9 +216,13 @@ Orchestration v2 hoàn thành khi:
 - [ ] Human có thể observe/takeover mà không tạo hai control loops xung đột.
 - [ ] Worker không vượt acceptance/approved-docs/close/merge/deploy authority.
 - [ ] Reviewer/QA Agent kiểm tra frozen source snapshot độc lập.
+- [ ] Multiple Workers chỉ dispatch song song khi dependency, exclusive lease, workspace và write-scope conflict policy cho phép.
+- [ ] Reviewer, QA và documentation assurance có thể dispatch song song trên cùng frozen read-only snapshot; source đổi làm affected receipts stale.
 - [ ] Reconciliation chạy theo cadence và ghi rationale/graph revision.
 - [ ] Reviewer có thể review durable docs trên frozen source/content snapshot.
 - [ ] Contract docs revision redirect và human takeover không tạo hai control loops xung đột.
+- [ ] R2/R3 deliberation giữ independent proposals, evidence-based challenge,
+  explicit disagreement và human authority khi assessors không hội tụ.
 - [ ] Orchestration acceptance scenarios 66-75 pass (10 scenarios trong roadmap, tiếp sau 65 Core scenarios).
 
 ## Go/no-go trước mỗi phase
@@ -175,7 +237,9 @@ Orchestration v2 hoàn thành khi:
 
 ### Trước Phase 3
 
-- Single-agent cancel/resume và close gate tin cậy.
+- Single-Agent Core-Daemon assignment saga, cancel/resume, timeline recovery và
+  close gate tin cậy.
+- Hidden supervisor/direct provider launch cũ đã bị xóa sau replacement proof.
 - Không còn fixed phase artifact dependency trong kernel.
 
 ### Trước Phase 4
@@ -211,6 +275,14 @@ Orchestration v2 hoàn thành khi:
 18. Knowledge prompt budgets và required-overflow policy nên scale thế nào theo risk/audience?
 19. Usage feedback nào đủ tin cậy để reinforce/retire mà không dựa quá nhiều vào Agent self-report?
 20. Docs và knowledge indexes nên share crate/interface/cache components ở mức nào mà không làm lẫn authority/result semantics?
+21. macOS public libproc/kernel process start marker và boot-session marker nào
+    đủ mạnh cho PID-reuse-safe cancellation trên supported OS versions?
+22. Windows named Job Object/ACL/parent-lifetime design nào vừa giữ whole-tree
+    ownership vừa recover an toàn sau daemon interruption?
+23. Daemon local protocol/store nào đạt crash recovery và operability target
+    mà không đẩy runtime concerns ngược vào Core?
+24. Codex App Server session, interrupt, permission và timeline capabilities
+    nào cần native extension thay vì normalize vào common provider contract?
 
 Các câu hỏi này không làm thay đổi product thesis. Mỗi câu nên có timeboxed spike Ticket và Decision receipt.
 
@@ -222,6 +294,8 @@ Các câu hỏi này không làm thay đổi product thesis. Mỗi câu nên có
 - Orchestrator chỉ là một script sort priority rồi spawn hàng loạt.
 - User không mở hoặc takeover được Worker task.
 - Hai hệ thống cùng sửa status mà không có field ownership.
+- Hidden supervisor và daemon cùng tồn tại như hai launch/lifecycle authorities.
+- Runtime Session/Workspace/Timeline state bị ghi ngược vào canonical work graph.
 - Harness backlog bị giấu khỏi product work graph.
 - Durable knowledge tiếp tục mắc kẹt trong closed work artifacts.
 - Document registry bắt mọi Markdown mang metadata dù không cần routing/authority.

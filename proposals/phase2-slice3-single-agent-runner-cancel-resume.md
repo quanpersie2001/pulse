@@ -1,12 +1,20 @@
 # Phase 2 — Slice 3: Single-Agent Runner + Cancel/Resume
 
-> Trạng thái: **draft implementation proposal for review**. This proposal defines
-> the next Phase 2 implementation contract after Slice 2 atomic reservation and
-> workspace binding. It is not implemented and must not be described as current
-> behavior until source changes, tests and independent verification land. Fresh
-> adversarial re-review after commit `a6cffe0` found implementation blockers;
-> this draft now includes prerequisite spikes and narrower platform/security
-> commitments before coding may claim the runner contract is feasible.
+> **Historical implementation baseline, no longer the target architecture.**
+>
+> This slice implemented and exercised the CLI-owned run/attempt model, hidden
+> per-run supervisor, bounded logs, timeout/cancel, workspace-level resume and
+> conservative recovery. It remains useful evidence for process mechanics and
+> failure cases, but its ownership boundary has been superseded by
+> [Decision 0005](../docs/decisions/0005-rust-daemon-runtime-control-plane.md).
+>
+> New runtime work must follow the
+> [Rust daemon realignment gap](phase2-rust-daemon-realignment-implementation-gap.md).
+> Do not extend this proposal as a compatibility contract. Reuse proven
+> mechanics behind daemon ownership, then delete the hidden supervisor,
+> Core-owned run store and duplicate runner surfaces after replacement tests
+> pass.
+>
 > Tiền đề:
 > [`phase2-slice1-work-packet-dispatch-foundation.md`](phase2-slice1-work-packet-dispatch-foundation.md)
 > and
@@ -48,7 +56,8 @@ single-Agent run:
 ```text
 PreparedAssignmentV1
   + revalidate assignment/lease/Ticket/workspace under repository fence
-  + build deterministic bounded RunInputV1
+  + build deterministic bounded RunInputV1 control envelope
+  + render a small versioned Pulse Worker bootstrap prompt
   + durably record run + first attempt as starting
   + launch one Pulse-owned supervisor and one Codex process adapter
   + capture bounded stdout/stderr runtime logs
@@ -128,23 +137,27 @@ Implement enough single-Agent execution that a caller can:
 1. start exactly one run for a current live prepared assignment;
 2. launch a configured Codex process in the assignment's bound workspace without
    shell interpolation;
-3. receive a durable `RunStartReportV1` after the supervisor/process start
+3. give Codex a small workflow bootstrap that loads the committed assignment
+   through `pulse work packet <ticket-id> --lease <lease-id> --json`, rather than
+   copying the Ticket, docs and knowledge corpus into the process prompt;
+4. receive a durable `RunStartReportV1` after the supervisor/process start
    handshake succeeds;
-4. inspect run and attempt state without mutating repository state;
-5. capture bounded stdout/stderr logs in gitignored runtime storage;
-6. classify process exit, timeout, cancellation and unexpected interruption;
-7. cancel only the process tree proven to belong to the run;
-8. recover after Pulse CLI/supervisor/process interruption without relying on
+5. inspect run and attempt state without mutating repository state;
+6. capture bounded stdout/stderr logs in gitignored runtime storage;
+7. classify process exit, timeout, cancellation and unexpected interruption;
+8. cancel only the process tree proven to belong to the run;
+9. recover after Pulse CLI/supervisor/process interruption without relying on
    chat memory or PID alone;
-9. resume interrupted work as a new attempt in the same workspace only when the
+10. resume interrupted work as a new attempt in the same workspace only when the
    recorded workspace snapshot still matches;
-10. block duplicate start/resume for the same assignment/workspace;
-11. preserve partial source changes and logs across cancel/interruption/recovery;
-12. expose run state as a runtime projection while keeping canonical graph truth
+11. block duplicate start/resume for the same assignment/workspace;
+12. preserve partial source changes and logs across cancel/interruption/recovery;
+13. expose run state as a runtime projection while keeping canonical graph truth
    unchanged;
-13. provide the run result/source/log bindings needed by a later typed handoff
+14. provide the run result/source/log bindings needed by a later typed handoff
    slice;
-14. verify start/cancel/resume/recovery under real subprocess and crash tests.
+15. verify start/cancel/resume/recovery on native Linux, macOS and Windows hosts
+    under real subprocess, process-tree and crash tests.
 
 ---
 
@@ -266,7 +279,8 @@ Minimum profile:
       "cancel_grace_seconds": 10,
       "force_kill_after_seconds": 10,
       "max_stdout_bytes": 16777216,
-      "max_stderr_bytes": 16777216
+      "max_stderr_bytes": 16777216,
+      "log_redaction_patterns": []
     }
   ]
 }
@@ -294,37 +308,60 @@ Rules:
 - non-enrolled or missing profile registry fails without runtime bootstrap;
 - test-only adapters are injected by internal APIs, not by public JSON.
 
-### P2S3-D4 — `RunInputV1` is deterministic and bounded
+### P2S3-D4 — `RunInputV1` is control state; Codex receives a small workflow bootstrap
 
 Slice 3 adds `RunInputV1`, built from the committed prepared assignment and
-current source/workspace preconditions. Treat the rendered prompt and canonical
-input as repository-sensitive runtime data: they may contain Ticket context,
-source paths, docs excerpts, acceptance criteria and operator instructions.
-They are never event payloads, never evidence by default and must be protected
-with the same runtime-private permissions/redaction posture as logs. It
-contains:
+current source/workspace preconditions. The canonical input is the run identity
+source and may embed the exact prepared assignment for recovery. It is not a
+second semantic Ticket contract and its rendered prompt is not a compiled copy
+of the WorkPacket.
+
+`RunInputV1` contains:
 
 - run/attempt IDs;
 - exact prepared assignment ID/fingerprint;
 - embedded exact `WorkPacketV1` preview;
 - lease/workspace binding summary;
 - assignee and actor;
-- execution instructions rendered from packet objective, scope, acceptance,
-  invariants, required evidence/handoff expectations and hard stops;
 - source base and workspace path;
 - adapter profile identity;
 - resume context when starting a later attempt;
+- bootstrap protocol/template version;
+- exact Ticket/lease/run identifiers needed to load committed context;
 - explicit authority boundary: implementation work only, no close/merge/deploy.
 
-The canonical JSON is the identity source. A deterministic bounded Markdown
-render may be passed to Codex stdin for usability, but the run record stores its
-hash, not the full prompt. Full input bytes live only under the protected,
-gitignored run directory. Events never include prompt or repository content.
-CLI `show/list` must not print prompt/input bytes; an explicit later diagnostic
-command may expose bounded redacted input only after a separate policy review.
+The Codex process receives a small versioned bootstrap prompt that tells it to:
+
+```text
+1. Load the committed packet with
+   pulse work packet <ticket-id> --lease <lease-id> --json.
+2. Read every required documentation section returned by the packet through
+   pulse docs get and respect its content hash.
+3. Load applicable prior learning through pulse knowledge applicable for the
+   Worker/execution audience and moment.
+4. Inspect source only after required context is loaded.
+5. Stay inside packet scope and stop on declared hard stops.
+6. Run the packet verification profile and submit the later typed handoff.
+7. Never close, merge, deploy or mutate planning truth.
+```
+
+The prompt carries identifiers and workflow only. It does not inline objective,
+acceptance, invariants, Story/Epic prose, Decision bodies, docs excerpts, QA
+cases or knowledge entries. `pulse work packet --lease` returns the exact packet
+embedded in the prepared assignment and validates Ticket, assignee, lease,
+workspace and packet fingerprint. It does not rebuild a live preview from a
+newer Ticket revision.
+
+The bootstrap prompt and canonical input are repository-sensitive runtime data,
+never semantic event payloads and never evidence by default. The run record
+stores their hashes, while full bytes live only under the protected, gitignored
+run directory. CLI `show/list` must not print prompt/input bytes. An explicit
+later diagnostic command may expose bounded redacted input only after a separate
+policy review.
 
 `RunInputV1` does not mutate the nested `WorkPacketV1` or
-`PreparedAssignmentV1`. It is a new wrapper/input contract.
+`PreparedAssignmentV1`. It is a control wrapper around committed assignment
+identity, not another writable source of Ticket meaning.
 
 ### P2S3-D5 — Public CLI is an explicit `run` namespace
 
@@ -408,18 +445,29 @@ The parent `run start` command durably commits `run.started` only after the
 handshake proves the supervisor and child were created. The supervisor nonce and
 process-start proof prevent PID alone from becoming authority.
 
-### P2S3-D7 — Process identity is platform-owned and PID alone is never sufficient
+### P2S3-D7 — Process ownership is platform-adapted and PID alone is never sufficient
 
-`ProcessIdentityV1` includes:
+The portable supervisor core owns nonce/handshake validation, timeout, bounded
+logs, heartbeat, cancel state and exit observation. Platform adapters own
+executable resolution, isolated process-tree creation, identity, graceful
+termination, force termination, parent-lifetime transport and runtime file
+protection.
+
+Process identity is a tagged platform contract rather than one Unix-shaped set
+of optional fields:
 
 ```json
 {
   "supervisor_pid": 41001,
   "child_pid": 41002,
-  "process_group_id": 41002,
   "supervisor_nonce_hash": "sha256:...",
   "started_at": "2026-07-29T10:00:00Z",
-  "platform_start_marker": "...",
+  "platform": {
+    "kind": "linux_v1",
+    "process_group_id": 41002,
+    "boot_id": "...",
+    "start_ticks": 982341
+  },
   "argv_hash": "sha256:...",
   "executable_identity": "best_effort:...",
   "identity_status": "verified"
@@ -440,17 +488,22 @@ Rules:
 - process group/job ownership is required for tree cancellation;
 - PID reuse or unverifiable identity yields `run_process_identity_mismatch` and
   `stale_needs_operator`; Pulse does not kill the process;
-- platform support lives behind one low-level process module;
-- Slice 3's implementation target is macOS + Linux only after the process
-  identity spike proves Rust 1.78-compatible APIs/crates; do not claim generic
-  Unix support from `cfg(unix)` alone;
-- Windows implementation is explicitly out of scope for this slice and must
-  return `run_platform_unsupported` until an owned Job Object design and tests
-  land in a later proposal;
+- platform support lives behind one low-level `ProcessPlatform` boundary;
+- Linux uses a dedicated process group plus `/proc` boot ID/start ticks;
+- macOS uses a dedicated process group plus a proven public kernel/libproc
+  process start marker, process group and executable identity; `ps` text output
+  is not identity proof;
+- Windows creates the child suspended, assigns it to an owned Job Object before
+  resume, uses process creation time/job membership/executable identity, attempts
+  graceful console-group termination when available and uses the Job Object for
+  forceful whole-tree termination;
+- generic `cfg(unix)` is not platform proof;
 - any crate added for process groups, signals, metadata or job objects must be
   MSRV-audited against Rust 1.78 before coding begins;
-- unsupported platforms fail before launch with `run_platform_unsupported`, not
-  with best-effort unsafe cancellation.
+- Linux, macOS and Windows are required Tier-1 runner targets before Slice 3 is
+  complete;
+- any other or still-unproven platform fails before launch with
+  `run_platform_unsupported`, not with best-effort unsafe cancellation.
 
 ### P2S3-D8 — Run and attempt states are separate
 
@@ -1273,14 +1326,21 @@ schemas, canonical JSON tests and no floats.
     "adapter": "codex_process_v1",
     "profile_fingerprint": "sha256:..."
   },
-  "instructions": {
-    "objective": "...",
-    "acceptance": [],
-    "required_changes": [],
-    "invariants": [],
-    "hard_stops": [],
-    "expected_evidence": [],
-    "expected_handoff": [],
+  "bootstrap": {
+    "protocol": "pulse_worker_v1",
+    "prompt_template_version": 1,
+    "ticket_id": "TK-031",
+    "lease_id": "lease_01J...",
+    "packet_fingerprint": "sha256:...",
+    "packet_command": [
+      "pulse",
+      "work",
+      "packet",
+      "TK-031",
+      "--lease",
+      "lease_01J...",
+      "--json"
+    ],
     "authority_boundary": [
       "do_not_change_acceptance",
       "do_not_close_ticket",
@@ -1299,7 +1359,8 @@ schemas, canonical JSON tests and no floats.
 ```
 
 The embedded prepared assignment is the committed Slice 2 value and retains its
-nested preview semantics.
+nested preview semantics. The bootstrap block is a retrieval protocol, not a
+duplicate of the embedded Ticket contract.
 
 ---
 
@@ -1329,7 +1390,7 @@ nested preview semantics.
 - block any live/unresolved run for lease/workspace/Ticket;
 - revalidate workspace source identity and expected pre-start cleanliness;
 - build `WorkspaceSnapshotV1` before state;
-- build `RunInputV1` and bounded Markdown render;
+- build `RunInputV1` and bounded versioned Worker workflow bootstrap;
 - create run/attempt IDs, control nonce/hash and runtime paths;
 - reject if canonical `RunInputV1` or rendered Markdown exceeds configured
   bounded input budgets; do not silently truncate instructions or embedded
@@ -1562,9 +1623,15 @@ src/run.rs
   # Public neutral DTOs, enums, normalization, schemas and fingerprints.
 
 src/process/
-  # Low-level platform process supervisor primitives: spawn, process group/job,
-  # identity, signal, wait, bounded log draining and hidden-supervisor runtime.
-  # No graph/policy/assignment.
+  mod.rs
+    # Portable supervisor state machine and ProcessPlatform boundary.
+  linux.rs
+    # Linux process group, /proc identity and signal/tree ownership.
+  macos.rs
+    # macOS process group, libproc/kernel identity and signal/tree ownership.
+  windows.rs
+    # Windows suspended spawn, Job Object ownership, creation identity and cancel.
+  # No graph/policy/assignment in any process module.
 
 src/kernel/run.rs
   # Cross-domain orchestration: authority, assignment/Ticket/workspace/profile,
@@ -1679,6 +1746,13 @@ Use internal fixture adapter executables/scripts that:
 - exit with selected code/signal;
 - modify tracked/untracked/symlink workspace content;
 - write a startup marker for crash tests.
+
+Process supervision tests must run natively on `ubuntu-latest`,
+`macos-latest` and `windows-latest`; a Linux container does not prove macOS
+`libproc` behavior or Windows Job Object ownership. Every Tier-1 platform suite
+must cover child/grandchild cancellation, graceful and forced termination,
+identity mismatch, timeout, fast exit, supervisor interruption and concurrent
+runs.
 
 Never require a real Codex installation for normal test suite. A manual/optional
 Codex smoke test may be documented separately and skipped when executable/config
@@ -1819,10 +1893,10 @@ is absent.
 10. Full repo reliability commands pass.
 11. MSRV audit proves every new dependency builds on Rust 1.78 or the dependency
     is rejected.
-12. macOS and Linux platform tests are separate; no generic Unix claim is made
+12. Linux and macOS platform tests are separate; no generic Unix claim is made
     from one platform.
-13. Windows returns `run_platform_unsupported` until a later tested Job Object
-    design lands.
+13. Windows native Job Object tests prove owned tree cancellation and recovery.
+14. Linux, macOS and Windows all pass before Slice 3 completion is claimed.
 
 ---
 
@@ -1834,10 +1908,15 @@ These spikes are part of making the draft implementable. They do not implement
 public runner behavior and should land before claiming P2S3-I5 or later is
 feasible:
 
-1. **Process identity/platform spike:** prove macOS and Linux process-group,
-   start-marker, PID-reuse detection, signal and child-tree cancellation using
-   Rust 1.78-compatible APIs/crates. Record unsupported-platform behavior and
-   keep Windows out of scope unless a Job Object design is added.
+1. **Process identity/platform spikes:** prove the shared `ProcessPlatform`
+   boundary and native adapters for:
+   - Linux process-group ownership and `/proc` boot/start identity;
+   - macOS process-group ownership plus public libproc/kernel start identity;
+   - Windows suspended spawn, owned Job Object, process creation identity,
+     graceful console-group cancellation where available and forceful job-tree
+     termination.
+   Each adapter must prove PID-reuse protection, child-tree cancellation and
+   crash behavior with Rust 1.78-compatible APIs/crates.
 2. **Hidden supervisor packaging spike:** prove the installed `pulse` binary can
    re-exec itself as `__run-supervisor` in development, test and packaged
    contexts without a daemon or second artifact, and define fallback errors.
@@ -1889,15 +1968,19 @@ feasible:
 
 ### P2S3-I5 — Implement low-level process supervisor
 
-- Add platform process group/job, nonce/control handshake, bounded log draining,
+- Add portable supervisor core, nonce/control handshake, bounded log draining,
   heartbeat, timeout, cancel request and exit observation.
-- Add internal fixture adapter and process-tree tests.
-- Add explicit unsupported-platform behavior.
+- Add Linux, macOS and Windows `ProcessPlatform` adapters.
+- Add internal fixture adapter and native process-tree tests per Tier-1 platform.
+- Add explicit unsupported-platform behavior only for targets outside the
+  required Tier-1 matrix or adapters that fail their proof contract.
 
 ### P2S3-I6 — Implement run start starting transaction
 
 - Validate assignment/Ticket/workspace/profile/authority.
-- Build bounded `RunInputV1`.
+- Build bounded `RunInputV1` and versioned workflow bootstrap without copying
+  Ticket/docs/knowledge content into the prompt.
+- Resolve `pulse work packet --lease` against the committed prepared assignment.
 - Commit starting run/attempt/input/snapshot + event.
 - Add duplicate-start and failed-preflight tests.
 
@@ -1984,6 +2067,9 @@ until implementation and verifier commits exist.
 - [ ] Run/attempt/input/snapshot/profile/report DTOs and strict schemas exist.
 - [ ] `WorkPacketV1` and `PreparedAssignmentV1` bytes/semantics remain unchanged.
 - [ ] A live prepared assignment can start exactly one Codex process adapter.
+- [ ] Codex receives a bounded workflow bootstrap and loads the exact committed
+      packet through `pulse work packet --lease`; the prompt does not duplicate
+      Ticket, docs, QA or knowledge content.
 - [ ] Prerequisite spikes prove supervisor packaging, process identity, control
       nonce transport, bounded logs, workspace snapshot and runner profile threat
       model before process implementation claims feasibility.
@@ -1992,6 +2078,8 @@ until implementation and verifier commits exist.
       per state transition.
 - [ ] Supervisor/process identity is stronger than PID alone and separately
       tested on each supported platform.
+- [ ] Linux, macOS and Windows adapters pass native process-tree, identity,
+      timeout, cancellation and recovery suites.
 - [ ] Process tree cancellation is verified and conservative.
 - [ ] Timeout and cancel grace/force policy are bounded and audited.
 - [ ] Runtime logs and run inputs are bounded, gitignored, runtime-private and
@@ -2011,8 +2099,8 @@ until implementation and verifier commits exist.
 - [ ] `run show/list` are read-only and no-bootstrap.
 - [ ] `run recover` applies only safe deterministic repairs.
 - [ ] `work release`/lease recovery refuse live or unresolved runs.
-- [ ] Windows and unproven platforms fail before launch with
-      `run_platform_unsupported`.
+- [ ] Platforms outside Linux/macOS/Windows, and any adapter whose identity proof
+      is unavailable, fail before launch with `run_platform_unsupported`.
 - [ ] Run state is not persisted in graph nodes or pure graph read DTOs.
 - [ ] No handoff/verification/QA/close state is created.
 - [ ] Non-enrolled repositories reject before runtime bootstrap.
@@ -2040,10 +2128,9 @@ The following are deliberately not compatibility promises of Slice 3:
 8. Verification profile execution and `active -> verifying` gate.
 9. Automatic assignment release/requeue after run completion/cancel.
 10. Generic runner adapters beyond proven Codex process usage.
-11. Windows process supervision/cancellation support.
-12. Repository-relative runner executable resolution and secret-provider-backed
+11. Repository-relative runner executable resolution and secret-provider-backed
     environment injection.
-13. Native daemon/service-manager ownership for run supervision.
+12. Native daemon/service-manager ownership for run supervision.
 
 Expected next proposal after Slice 3:
 

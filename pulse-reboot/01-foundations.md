@@ -105,6 +105,42 @@ Symphony minh họa một orchestration service đọc tracker, normalize issue,
 
 Symphony là reference cho orchestration shape, không phải dependency bắt buộc của Pulse.
 
+## Paseo nằm ở đâu
+
+Nguồn chính trong repository:
+[`references/paseo/docs/architecture.md`](../references/paseo/docs/architecture.md),
+[`references/paseo/public-docs/workspaces.md`](../references/paseo/public-docs/workspaces.md),
+[`references/paseo/docs/agent-lifecycle.md`](../references/paseo/docs/agent-lifecycle.md)
+và
+[`references/paseo/docs/timeline-sync.md`](../references/paseo/docs/timeline-sync.md).
+
+Paseo chứng minh một local-first daemon có thể làm runtime authority cho nhiều
+clients và nhiều coding-agent providers. Các pattern Pulse áp dụng:
+
+- daemon quản lý Project, Workspace, Session và Provider lifecycle;
+- Workspace là stable container, worktree chỉ là isolation mode;
+- một Workspace chứa nhiều Agent sessions, terminals và services;
+- stable product session identity tách provider-native persistence handle;
+- native provider adapters và ACP generic cùng nằm sau capability contract;
+- transport-neutral tool catalog được expose qua native tools hoặc MCP;
+- live WebSocket stream phục vụ immediacy, authoritative timeline fetch/cursor
+  phục vụ correctness;
+- cancellation chỉ commit sau provider acknowledgement/terminal event;
+- runtime process/helper ownership có ledger và startup reconciliation.
+
+Pulse không copy Paseo như product hoặc code dependency. Paseo hiện dùng Node.js
+daemon; Pulse implement cùng architectural shape bằng Rust để giữ một toolchain,
+chia sẻ Core contracts và phát hành một executable. Pulse cũng không dùng
+Paseo AgentManager làm work truth: daemon chỉ sở hữu runtime, còn repository
+Core sở hữu Ticket, contracts, evidence và gates.
+
+Một số chi tiết không được copy:
+
+- không dùng `cwd` hoặc provider thread ID làm Pulse workspace/session identity;
+- không để runtime parentage truyền business authority;
+- không để client replica, timeline hoặc daemon registry thay canonical graph;
+- không thêm relay/mobile/browser breadth trước single-Agent vertical slice.
+
 ## Product thesis
 
 > Pulse là local-first harness engineering system giúp coding agent chọn đúng việc, lấy đúng context, dùng đúng capability, tạo proof đáng tin và làm repository dễ vận hành hơn sau mỗi run.
@@ -116,6 +152,8 @@ Symphony là reference cho orchestration shape, không phải dependency bắt b
 - Quản lý công việc lớn và executable work bằng local work graph.
 - Pressure-test critical ambiguity trước execution bằng shaping repo-grounded và risk-adaptive.
 - Chạy một Ticket bằng agent với bounded source/docs context và policy có giới hạn.
+- Quản lý Project, Workspace, Session và Provider qua một local Rust daemon có
+  timeline/recovery rõ ràng.
 - Thu thập typed evidence từ code, test, browser, API và review.
 - Reconcile priority theo dependency, foundation value và supersession.
 - Chuyển failure lặp lại thành harness improvement và eval.
@@ -127,6 +165,7 @@ Symphony là reference cho orchestration shape, không phải dependency bắt b
 - Ép Scrum taxonomy hoặc mọi Ticket phải thuộc Story/Epic.
 - Tạo một universal workflow engine.
 - Che giấu agent runtime sau abstraction quá sớm.
+- Duy trì cả hidden per-run supervisor và daemon như hai runtime authorities.
 - Tối đa concurrency trước khi single-agent flow tin cậy.
 - Cho Orchestration Agent toàn bộ quyền của human chỉ vì nó gửi prompt như user.
 - Dùng conversation history làm durable source of truth.
@@ -145,5 +184,5 @@ Symphony là reference cho orchestration shape, không phải dependency bắt b
 10. **Reliability before concurrency.** Chỉ scale sau khi recovery và verification đủ mạnh.
 11. **Failure feeds the ratchet.** Mỗi failure class phải có đường nâng cấp harness.
 12. **Learning must be retrievable, not merely stored.** Reusable insight cần provenance, typed applicability, lifecycle và bounded recall; current truth vẫn thuộc docs/Decision, stable prevention thuộc checks/evals/policy.
-12. **Resolve critical ambiguity before execution.** Đọc evidence trước khi hỏi, đi qua decision branches theo dependency order và chỉ dispatch khi mỗi nhánh quan trọng đã resolved, delegated, deferred có kiểm soát hoặc blocking; độ sâu và artifact phải theo risk.
-13. **Map the frontier, not the fog.** Khóa destination, materialize chỉ những câu hỏi đã đủ sắc nét, giữ uncertainty chưa thể phát biểu trong `not_yet_specified`, và mở rộng decision graph dần sau mỗi resolution thay vì giả vờ biết toàn bộ upfront.
+13. **Resolve critical ambiguity before execution.** Đọc evidence trước khi hỏi, đi qua decision branches theo dependency order và chỉ dispatch khi mỗi nhánh quan trọng đã resolved, delegated, deferred có kiểm soát hoặc blocking; độ sâu và artifact phải theo risk.
+14. **Map the frontier, not the fog.** Khóa destination, materialize chỉ những câu hỏi đã đủ sắc nét, giữ uncertainty chưa thể phát biểu trong `not_yet_specified`, và mở rộng decision graph dần sau mỗi resolution thay vì giả vờ biết toàn bộ upfront.

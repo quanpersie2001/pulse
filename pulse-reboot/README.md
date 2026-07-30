@@ -28,11 +28,18 @@ Nguyên tắc: L0 chỉ tóm tắt và liên kết. Mỗi quy tắc normative ch
 
 ### Tôi muốn implement Pulse Core
 
-1. [`04-runtime-harness.md`](04-runtime-harness.md)
+1. [`02-work-graph.md`](02-work-graph.md)
 2. [`10-documentation-system.md`](10-documentation-system.md)
-3. [`07-verification-ratchet.md`](07-verification-ratchet.md)
+3. [`11-documentation-retrieval.md`](11-documentation-retrieval.md)
 4. [`12-knowledge-compounding.md`](12-knowledge-compounding.md)
-5. [`08-implementation-roadmap.md`](08-implementation-roadmap.md)
+5. [`07-verification-ratchet.md`](07-verification-ratchet.md)
+
+### Tôi muốn implement Pulse Daemon
+
+1. [`04-runtime-harness.md`](04-runtime-harness.md)
+2. [`05-cross-agent-coordination.md`](05-cross-agent-coordination.md)
+3. [`08-implementation-roadmap.md`](08-implementation-roadmap.md)
+4. [`../proposals/phase2-rust-daemon-realignment-implementation-gap.md`](../proposals/phase2-rust-daemon-realignment-implementation-gap.md)
 
 ### Tôi muốn hiểu self-improvement và memory recall
 
@@ -61,8 +68,8 @@ Nguyên tắc: L0 chỉ tóm tắt và liên kết. Mỗi quy tắc normative ch
 | `01-foundations.md` | Product thesis, goals, non-goals, lessons từ OpenAI và references |
 | `02-work-graph.md` | Work item model, storage, artifacts, lifecycle, dependency và external sync |
 | `03-story-qa.md` | Developer verification boundary, Story test cases, Ticket checkpoint, surface-adaptive executors, receipts và close gate |
-| `04-runtime-harness.md` | Runtime layers, capability taxonomy, CLI, run lifecycle, policy và events |
-| `05-cross-agent-coordination.md` | Peer-agent identity, transport, lease, mailbox, authority và recovery |
+| `04-runtime-harness.md` | Core/Daemon boundary, Project/Workspace/Session/Provider lifecycle, process ownership, timeline, protocol và repository harness |
+| `05-cross-agent-coordination.md` | Roles, ownership/communication graphs, assignment, mailbox, handoff, deliberation, parallel dispatch, authority và recovery |
 | `06-priority-reconciliation.md` | Semantic priority, decision/execution frontier scheduling, supersession và reconcile decisions |
 | `07-verification-ratchet.md` | Verification, review, doctor, eval, failure classification và harness backlog |
 | `08-implementation-roadmap.md` | Technology, brownfield/product migration boundaries, phases, acceptance scenarios và risks |
@@ -95,6 +102,10 @@ Trong target repository, accepted Decision/product contract diễn tả intent; 
 - [Knowledge Base Builder](https://github.com/shivdeepak/knowledge-base-builder) — generated/indexed progressive-disclosure reference
 - [`references/harness-experimental`](../references/harness-experimental)
 - [`references/maestro`](../references/maestro)
+- [`references/paseo`](../references/paseo) — primary runtime-daemon reference
+  cho Project/Workspace/Session/Provider managers, lifecycle, timeline sync và
+  transport-neutral tool catalog; Pulse implement shape này bằng Rust và giữ
+  work/proof semantics trong Core
 - [`references/mattpocock/skills`](../references/mattpocock/skills) — `grilling` reference cho one-question-at-a-time decision pressure-test; `wayfinder` reference cho destination, decision frontier, fog-of-war và progressive reconciliation. Pulse giữ local work graph/owner semantics thay vì copy skill chain, tracker canonicality hoặc artifact layout
 
 ## Quy tắc cập nhật

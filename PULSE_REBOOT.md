@@ -1,131 +1,196 @@
 # Pulse Reboot
 
-> Trạng thái: bản thiết kế để thảo luận, chưa phải compatibility contract.
-> Cập nhật: 2026-07-18.
-> Đọc tiếp: [`pulse-reboot/README.md`](pulse-reboot/README.md).
+> Trạng thái: target design pre-release; không phải compatibility contract.
+> Cập nhật: 2026-07-31.
+> Bản đồ chi tiết: [`pulse-reboot/README.md`](pulse-reboot/README.md).
 
-## Pulse sẽ là gì?
+## Pulse là gì?
 
-Pulse là một **local-first harness engineering system** giúp một repository trở nên dễ hiểu, dễ sửa và dễ kiểm chứng đối với coding agent.
+Pulse là một **local-first harness engineering system** giúp repository trở nên
+dễ hiểu, dễ sửa, dễ chạy, dễ kiểm chứng và tự cải thiện đối với coding agents.
 
-Pulse kết hợp sáu thứ:
+Pulse có hai bounded contexts cùng viết bằng Rust:
 
-1. **Local work graph** lưu Epic, Story, Ticket, Decision và quan hệ giữa chúng.
-2. **Documentation knowledge system** giữ durable repository knowledge có owner, applicability, authority và proof.
-3. **Repository harness** gồm skills, scripts, tools, hooks, policy và evals.
-4. **Evidence loop** biến mỗi lần chạy, verify, review và QA thành bằng chứng có thể kiểm tra lại.
-5. **Knowledge compounding loop** biến success/failure có evidence thành learning có schema, promote guardrail/docs/eval và retrieve đúng lúc cho future work.
-6. **Peer-agent orchestration** cho phép một Orchestration Agent điều phối các Agent độc lập qua task/thread riêng khi single-agent đã đủ tin cậy.
+1. **Pulse Core** quản lý repository semantics: local work graph,
+   documentation/knowledge, readiness, bounded context, policy, evidence và
+   proof-driven gates.
+2. **Pulse Daemon** quản lý agent runtime: projects, workspaces, sessions,
+   providers, processes, permissions, timelines, clients và orchestration.
 
-Pulse không phải Jira thu nhỏ, không phải một fixed phase workflow và không phải một general-purpose agent framework.
+Pulse không phải Jira thu nhỏ, fixed phase workflow, cloud-first service hoặc
+general-purpose agent framework.
 
 ## Product thesis
 
-> Pulse biến repository thành một môi trường mà agent có thể chọn đúng việc, hiểu đủ ngữ cảnh, dùng đúng capability, tạo bằng chứng đáng tin và cải thiện chính harness sau mỗi failure.
+> Pulse biến repository thành một môi trường nơi Agent chọn đúng việc, lấy đúng
+> context, chạy trong đúng workspace, dùng đúng provider capability, tạo proof
+> đáng tin và làm harness tốt hơn sau mỗi failure.
 
-North star không phải là số bước tự động hóa. North star là:
+North star:
 
-> **Agent hoàn thành thay đổi đúng với ít can thiệp của con người hơn, trong khi mọi quyết định và bằng chứng quan trọng vẫn local, inspectable và recoverable.**
+> **Correct completion với ít can thiệp của human hơn, trong khi work truth,
+> runtime state, authority và evidence vẫn local, inspectable và recoverable.**
 
 ## Kiến trúc một trang
 
 ```text
-Human
-  |
-  v
-Local Work Graph <---- decisions / priorities / supersession
-  |
-  +----> Documentation Knowledge System ----> docs / AGENTS.md / PULSE.md
-  |              |                                  |
-  |              + ownership / applicability        + durable repository truth
-  v
-Pulse Kernel -----> Repository Harness -----> Source Repository
-  |                       |                         |
-  |                       + skills/scripts/tools   + tests/app
-  |                       + hooks/policy/evals     + docs/config
-  v
-Run Events + Evidence -----> Verify / Review / QA -----> Close or Requeue
-          |                              |
-          +----> Compound Learnings <----+
-                       |
-                       +----> Docs / Decisions / Skills / Checks / Evals
-                       +----> Applicable recall for future work packets
-
-Optional, sau khi core ổn định:
-Human -> Orchestration Agent -> independent Agent tasks/threads
-                    |                    |
-                    + leases/mailbox     + isolated worktrees
-                    + reconcile          + handoff receipts
+Clients
+  +-- pulse CLI
+  +-- Web/Desktop
+  +-- HTTP + WebSocket
+  `-- Agent-facing MCP
+              |
+              v
+        Pulse Rust Daemon
+  +-----------+------------+----------------+
+  |           |            |                |
+Project    Workspace     Session         Provider
+Registry   Manager       Manager         Registry
+              |            |                |
+          local/worktree timeline        Codex native
+          services       permissions     Claude native
+          terminals      parentage       ACP generic
+              |            |
+              +------ Runtime Store ------+
+                         |
+                 Timeline + PubSub
+                         |
+                         v
+                    Pulse Core
+   Work Graph -> Packet/Policy -> Evidence/Gates
+       |              |                |
+       +-- Docs/Knowledge              +-- Verify/Review/QA
+                         |
+                  Source Repository
 ```
+
+Paseo là reference cho daemon runtime shape: daemon-managed Project/Workspace/
+Session/Provider, transport-neutral tool catalog và timeline sync. Symphony/App
+Server là reference cho dispatch, workspace isolation và native Codex transport.
+Pulse không phụ thuộc các dự án đó và giữ local graph/proof semantics riêng.
 
 ## Các quyết định nền tảng
 
-- Repository là system of record; cloud service chỉ là adapter tùy chọn.
-- Canonical work graph dùng sharded `nodes/*.json` + `edges/*.json`; human-facing work prose nằm ở top-level `works/`, không dùng một tracked JSON monolith hay SQLite.
-- Durable repository knowledge nằm ở `docs/`, `AGENTS.md` và `PULSE.md`; work prose, evidence và runtime state không được giả làm current docs truth.
-- CLI/kernel là query và mutation surface bắt buộc. Agent nhận execution packet gồm applicable docs; `pulse docs search/get` định tuyến section-level context, không tự search raw graph files hoặc đọc toàn bộ docs tree.
-- Ticket là đơn vị executable. Epic và Story giữ outcome, design, approach và behavioral baseline dài hạn.
-- Hierarchy không thay thế dependency graph; priority là tín hiệu, không phải phép sort tuyệt đối.
-- Artifact được materialize theo risk, không ép mọi Ticket đi qua cùng một bộ ceremony.
-- Critical ambiguity phải được resolve trước execution bằng shaping repo-grounded, one-question-at-a-time và risk-adaptive; đây là readiness discipline, không phải fixed brainstorm phase.
-- Readiness/frontiers là derived projections trên typed contracts, receipts, docs, Decisions và policy; semantic freshness dùng `contract_revision` riêng để lifecycle/pointer mutation không tự làm proof stale.
-- Shaping effort lớn khóa destination, quản lý decision frontier và bounded `not_yet_specified`; graph được mở rộng theo evidence sau mỗi resolution thay vì speculative decomposition upfront.
-- Deterministic work thuộc kernel/script; judgment work thuộc agent skill.
-- Developer verification chứng minh implementation Ticket; impact-driven QA checkpoint kiểm tra affected behavior sớm; full Story qualification chứng minh integrated capability vẫn đúng qua nhiều Ticket.
-- Mỗi implementation Ticket có documentation impact posture; public behavior, invariant, architecture hoặc operator procedure thay đổi phải cập nhật, classify hoặc defer durable docs qua gate.
-- Learning record giữ reusable guidance, applicability và provenance; nó không thay current docs/Decision. Compound capture liên tục, synthesize sau cycle, promote selectively và retrieve bằng typed applicability trước lexical ranking.
-- Documentation validation dùng source/content-bound receipts; accepted Decision và product contract diễn tả intent, code divergence có thể là defect chứ không tự động biến docs thành stale.
-- Core docs retrieval dùng generated `_index.md` + disposable section-level BM25 cache; semantic/hybrid retrieval là optional adapter sau khi lexical eval chứng minh cần.
-- Story sở hữu persistent QA baseline; Ticket reference affected cases. QA dùng typed receipts và resolve executor theo surface/capability/environment, gồm Playwright, browser agent/DevTools observation, API, CLI/PTY, data hoặc structured manual adapter.
-- Work graph là nguồn sự thật của trạng thái công việc; message chỉ là transport và coordination evidence.
-- Worker Agent là task/thread độc lập, có danh tính, lease và worktree riêng; không đồng nghĩa với sub-agent.
-- Orchestration Agent hành xử như user ở lớp transport nhưng chỉ có bounded authority ở lớp nghiệp vụ; `PULSE.md` giữ human intent còn enforceable local grants nằm trong default-deny `.pulse/policy/authority.json`.
-- QA impact `unknown` không được ready; `none` và Story-close deferral cần explicit local grants, còn behavior work `required` chờ baseline/case resolver thay vì được bypass.
-- Worker không tự đổi acceptance, đóng Story, merge hoặc deploy nếu chưa được cấp quyền.
-- Ưu tiên single-agent reliability trước, sau đó mới thêm concurrency và peer-agent orchestration.
+- Repository + `.pulse` là system of record cho work, docs, knowledge, policy,
+  semantic events và evidence.
+- Daemon là source of truth cho host-local Project, Workspace, Session,
+  provider process, permissions, timeline và presence.
+- Một field/state chỉ có một writer; Core và Daemon không cùng sở hữu lifecycle.
+- Core và Daemon cùng viết bằng Rust và dùng chung typed library contracts.
+- Một executable `pulse`: Core commands chạy offline; runtime commands kết nối
+  local daemon.
+- Canonical work graph là sharded `nodes/*.json` + `edges/*.json`; work prose ở
+  top-level `works/`.
+- Ticket là executable unit. Epic/Story giữ outcome, approach và behavioral
+  baseline; hierarchy không thay dependency graph.
+- Workspace là stable container; worktree chỉ là isolation mode. Workspace có
+  thể chứa nhiều Worker/Reviewer/QA sessions, terminals và services.
+- Stable Pulse `session_id` khác provider-native thread/session handle.
+- Session parentage, workspace placement và business role là ba relation riêng.
+- Work graph/lease/gate quyết định business authority; conversation/parentage
+  không phải authority.
+- Assignment là Core reservation bind exact Ticket contract revision, committed
+  WorkPacket fingerprint và opaque daemon runtime references.
+- Session prompt chỉ là role-specific workflow bootstrap. Exact contract, docs
+  và knowledge được load qua typed Core query.
+- Daemon trực tiếp sở hữu provider/helper processes. Hidden per-run supervisor
+  không còn là target architecture.
+- Process ownership vẫn fail closed và dùng platform adapters cho Linux,
+  macOS, Windows identity/tree cancellation.
+- Live WebSocket/PubSub phục vụ immediacy; authoritative paged timeline fetch
+  theo cursor phục vụ correctness.
+- Tool catalog thuộc daemon application layer; MCP, CLI, HTTP/WS và native
+  provider tools là adapters.
+- Codex native là provider đầu tiên; Claude native và ACP generic thêm sau khi
+  contract đã được chứng minh.
+- Deterministic mechanism thuộc Core/daemon code; semantic judgment thuộc Agent
+  capabilities.
+- Critical ambiguity phải disposition trước execution bằng shaping
+  repo-grounded và risk-adaptive.
+- Developer verification, independent review, Ticket QA checkpoint và Story
+  qualification là các assurance purposes riêng.
+- Worker submit handoff; Core gate quyết định `done|rework|blocked`.
+- Durable docs/current Decisions không bị runtime timeline hoặc learning record
+  override.
+- Failure có evidence phải đi vào knowledge/harness ratchet.
+- Single-agent Core-Daemon vertical slice và recovery phải pass trước
+  multi-Worker concurrency.
+
+## State ownership
+
+| Plane | Examples | Owner |
+|---|---|---|
+| Durable repository knowledge | `docs/`, `AGENTS.md`, `PULSE.md` | Core/repository |
+| Canonical work | nodes, edges, contracts, Decisions | Core/repository |
+| Runtime control | projects, workspaces, sessions, providers, presence | Daemon |
+| Runtime timeline | messages, tool calls, permissions, turn status | Daemon |
+| Evidence | receipts, diffs, screenshots, verification artifacts | Core/evidence store |
+| Client presentation | tabs, focused session, cached tail | Client replica only |
+
+Session `closed` không làm Ticket `done`. WebSocket disconnect không hủy
+assignment. Message “passed” không thay receipt. Daemon restart không được cần
+chat memory để recover.
 
 ## Bản đồ đọc
 
-| Khi cần hiểu | Tài liệu sở hữu chi tiết |
-| --- | --- |
-| Vì sao reboot, học gì từ OpenAI và các reference | [`01-foundations.md`](pulse-reboot/01-foundations.md) |
-| Epic, Story, Ticket, Decision được lưu và chạy thế nào | [`02-work-graph.md`](pulse-reboot/02-work-graph.md) |
-| QA, Playwright/browser agent và bằng chứng đóng Story | [`03-story-qa.md`](pulse-reboot/03-story-qa.md) |
-| Kernel, skills, scripts, tools, hooks, CLI và events | [`04-runtime-harness.md`](pulse-reboot/04-runtime-harness.md) |
-| Orchestrator điều phối các Agent độc lập thế nào | [`05-cross-agent-coordination.md`](pulse-reboot/05-cross-agent-coordination.md) |
-| Priority, dependency, foundation work và supersession | [`06-priority-reconciliation.md`](pulse-reboot/06-priority-reconciliation.md) |
-| Verify, review, doctor, eval và ratchet loop | [`07-verification-ratchet.md`](pulse-reboot/07-verification-ratchet.md) |
-| Công nghệ, migration, phases, scenarios và risks | [`08-implementation-roadmap.md`](pulse-reboot/08-implementation-roadmap.md) |
-| Quyết định cần khóa và Definition of Done | [`09-decisions-and-dod.md`](pulse-reboot/09-decisions-and-dod.md) |
-| Durable docs, ownership, context routing, validation, promotion và drift | [`10-documentation-system.md`](pulse-reboot/10-documentation-system.md) |
-| Docs index, section search/get, BM25 cache và optional semantic retrieval | [`11-documentation-retrieval.md`](pulse-reboot/11-documentation-retrieval.md) |
-| Learning schema, compounding, promotion, applicable recall và prompt injection | [`12-knowledge-compounding.md`](pulse-reboot/12-knowledge-compounding.md) |
+| Khi cần hiểu | Tài liệu sở hữu |
+|---|---|
+| Product direction và references | [`01-foundations.md`](pulse-reboot/01-foundations.md) |
+| Work graph và lifecycle | [`02-work-graph.md`](pulse-reboot/02-work-graph.md) |
+| Story QA và behavioral proof | [`03-story-qa.md`](pulse-reboot/03-story-qa.md) |
+| Core/Daemon/runtime/provider architecture | [`04-runtime-harness.md`](pulse-reboot/04-runtime-harness.md) |
+| Multi-agent orchestration và deliberation | [`05-cross-agent-coordination.md`](pulse-reboot/05-cross-agent-coordination.md) |
+| Priority và semantic reconciliation | [`06-priority-reconciliation.md`](pulse-reboot/06-priority-reconciliation.md) |
+| Verification, doctor và ratchet | [`07-verification-ratchet.md`](pulse-reboot/07-verification-ratchet.md) |
+| Phases, migration và acceptance | [`08-implementation-roadmap.md`](pulse-reboot/08-implementation-roadmap.md) |
+| Decisions và milestone DoD | [`09-decisions-and-dod.md`](pulse-reboot/09-decisions-and-dod.md) |
+| Documentation system | [`10-documentation-system.md`](pulse-reboot/10-documentation-system.md) |
+| Documentation retrieval | [`11-documentation-retrieval.md`](pulse-reboot/11-documentation-retrieval.md) |
+| Knowledge compounding | [`12-knowledge-compounding.md`](pulse-reboot/12-knowledge-compounding.md) |
 
-## Ranh giới phiên bản
+## Milestone boundary
 
-**Pulse Core v1** phải hoàn thiện local work graph, documentation context/impact, single-agent run, evidence, verification, knowledge compounding/applicable recall và harness ratchet trước.
+### Pulse Core
 
-**Pulse Orchestration v2** bổ sung independent Agent Registry, thread transport, assignment lease, typed mailbox, worktree isolation và reconciliation loop. Thiết kế v2 phải có từ đầu để v1 không khóa sai data model, nhưng không được làm chậm việc chứng minh core.
+Work graph, docs/knowledge, shaping/readiness, packet/reservation, policy,
+evidence và gates.
 
-## Bước tiếp theo
+### Pulse Runtime
 
-Phase 1 local graph, documentation, evidence, knowledge-store và
-shaping/readiness foundations đã được implement qua Slice 1–7. Frontier hiện tại
-là **Phase 2 single-agent run**:
+Rust daemon, local protocol, Project/Workspace/Session managers, Codex provider,
+timeline, permissions, process ownership và single-Agent recovery.
 
-1. assignment lease, workspace binding và `PreparedAssignmentV1` đã được
-   implement tại
-   [`proposals/phase2-slice2-atomic-reservation-workspace-binding.md`](proposals/phase2-slice2-atomic-reservation-workspace-binding.md),
-   trên nền preview `WorkPacketV1` đã verified tại
-   [`proposals/phase2-slice1-work-packet-dispatch-foundation.md`](proposals/phase2-slice1-work-packet-dispatch-foundation.md), mở gated
-   `ready -> active`;
-2. thêm runner, cancel/resume và source/workspace recovery;
-3. thêm typed handoff, verification và proof-driven close gate để một Ticket đi
-   tới `done|rework|blocked`.
+### Pulse Orchestration
 
-Không bắt đầu full Phase 3 QA, Phase 4 compounding hoặc Phase 5 orchestration
-trước khi Phase 2 exit proof pass. Chi tiết sequencing và acceptance thuộc
-[`08-implementation-roadmap.md`](pulse-reboot/08-implementation-roadmap.md);
-Definition of Done hiện hành thuộc
-[`09-decisions-and-dod.md`](pulse-reboot/09-decisions-and-dod.md). Mọi thay đổi
-lớn phải cập nhật đúng tài liệu sở hữu thay vì làm trang L0 này phình trở lại.
+Orchestration Agent, typed mailbox, parentage/communication graphs, Reviewer/QA
+peers, deliberation, multiple Workers, human takeover và semantic
+reconciliation loop.
+
+Thiết kế identities/protocol phải hỗ trợ cả ba từ đầu, nhưng implementation phải
+prove theo thứ tự Core -> Runtime -> Orchestration.
+
+## Frontier hiện tại
+
+Phase 1 Core foundations và phần lớn Phase 2 packet/reservation đã được
+implemented. Phase 2 Slice 3 cũng đã implement một CLI-owned hidden supervisor,
+workspace/run store và Codex process path.
+
+Direction mới thay per-run supervisor bằng long-lived Rust daemon theo
+Project/Workspace/Session/Provider architecture. Những implementation hiện có
+không phải compatibility target; primitive đúng được salvage, ownership sai
+được move/rewrite và obsolete path bị xóa sau replacement proof.
+
+Execution plan duy nhất:
+[`proposals/phase2-rust-daemon-realignment-implementation-gap.md`](proposals/phase2-rust-daemon-realignment-implementation-gap.md).
+
+Không bắt đầu multi-Worker orchestration trước khi vertical slice này pass:
+
+```text
+Core reservation
+  -> Daemon Workspace
+  -> Daemon Codex Session
+  -> timeline + handoff
+  -> Core verification/review gate
+  -> done|rework|blocked
+  -> restart recovery
+```
