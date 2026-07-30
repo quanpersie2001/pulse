@@ -40,15 +40,44 @@ fn snapshot_ignores_pulse_runtime_but_not_canonical_pulse_state() {
     fs::write(tmp.path().join(".pulse/runtime/run/logs/a.log"), b"runtime").unwrap();
     fs::create_dir_all(tmp.path().join(".pulse/cache/docs")).unwrap();
     fs::write(tmp.path().join(".pulse/cache/docs/index"), b"cache").unwrap();
+    fs::create_dir_all(tmp.path().join(".pulse/runtime2/run/logs")).unwrap();
+    fs::write(
+        tmp.path().join(".pulse/runtime2/run/logs/a.log"),
+        b"not runtime",
+    )
+    .unwrap();
+    fs::create_dir_all(tmp.path().join(".pulse/cache2/docs")).unwrap();
+    fs::write(tmp.path().join(".pulse/cache2/docs/index"), b"not cache").unwrap();
     let snapshot = workspace_snapshot(tmp.path(), &options(&base)).unwrap();
     assert_eq!(
         snapshot.snapshot_status,
         WorkspaceSnapshotStatusV1::Complete
     );
+    assert_eq!(snapshot.cleanliness, WorkspaceCleanlinessV1::Dirty);
+
+    fs::remove_dir_all(tmp.path().join(".pulse/runtime2")).unwrap();
+    fs::remove_dir_all(tmp.path().join(".pulse/cache2")).unwrap();
+    let snapshot = workspace_snapshot(tmp.path(), &options(&base)).unwrap();
     assert_eq!(snapshot.cleanliness, WorkspaceCleanlinessV1::Clean);
 
     fs::create_dir_all(tmp.path().join(".pulse/workgraph/nodes")).unwrap();
     fs::write(tmp.path().join(".pulse/workgraph/nodes/TK-1.json"), b"{}").unwrap();
+    let snapshot = workspace_snapshot(tmp.path(), &options(&base)).unwrap();
+    assert_eq!(snapshot.cleanliness, WorkspaceCleanlinessV1::Dirty);
+
+    fs::remove_dir_all(tmp.path().join(".pulse/workgraph")).unwrap();
+    fs::create_dir_all(tmp.path().join(".pulse/events")).unwrap();
+    fs::write(tmp.path().join(".pulse/events/event.json"), b"{}").unwrap();
+    let snapshot = workspace_snapshot(tmp.path(), &options(&base)).unwrap();
+    assert_eq!(snapshot.cleanliness, WorkspaceCleanlinessV1::Dirty);
+
+    fs::remove_dir_all(tmp.path().join(".pulse/events")).unwrap();
+    fs::create_dir_all(tmp.path().join(".pulse/run")).unwrap();
+    fs::write(
+        tmp.path().join(".pulse/run/runner-profiles.json"),
+        b"{\"profiles\":[]}",
+    )
+    .unwrap();
     let snapshot = workspace_snapshot(tmp.path(), &options(&base)).unwrap();
     assert_eq!(snapshot.cleanliness, WorkspaceCleanlinessV1::Dirty);
 }
@@ -260,6 +289,94 @@ fn snapshot_bounds_untracked_listing_before_manifest_buffering() {
         snapshot.untracked_manifest_identity,
         "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
     );
+}
+
+#[test]
+fn runtime_cache_untracked_listing_exclusions_do_not_consume_caps() {
+    let tmp = tempfile::tempdir().unwrap();
+    git::commit_all(tmp.path());
+    let base = git::git(tmp.path(), &["rev-parse", "HEAD"]);
+
+    for (prefix, count) in [(".pulse/runtime/run/logs", 256), (".pulse/cache/docs", 256)] {
+        fs::create_dir_all(tmp.path().join(prefix)).unwrap();
+        for index in 0..count {
+            fs::write(
+                tmp.path().join(prefix).join(format!(
+                    "{}-runtime-cache-generated-file-{index:03}.log",
+                    "x".repeat(80)
+                )),
+                b"generated",
+            )
+            .unwrap();
+        }
+    }
+
+    let mut capped = options(&base);
+    capped.max_status_bytes = 32;
+    capped.max_untracked_entries = 1;
+    let snapshot = workspace_snapshot(tmp.path(), &capped).unwrap();
+    assert_eq!(
+        snapshot.snapshot_status,
+        WorkspaceSnapshotStatusV1::Complete
+    );
+    assert_eq!(snapshot.cleanliness, WorkspaceCleanlinessV1::Clean);
+}
+
+#[test]
+fn runtime_cache_ignored_listing_exclusions_do_not_consume_caps() {
+    let tmp = tempfile::tempdir().unwrap();
+    fs::write(
+        tmp.path().join(".gitignore"),
+        b".pulse/runtime/\n.pulse/cache/\n",
+    )
+    .unwrap();
+    git::commit_all(tmp.path());
+    let base = git::git(tmp.path(), &["rev-parse", "HEAD"]);
+
+    for (prefix, count) in [(".pulse/runtime/run/tmp", 256), (".pulse/cache/index", 256)] {
+        fs::create_dir_all(tmp.path().join(prefix)).unwrap();
+        for index in 0..count {
+            fs::write(
+                tmp.path().join(prefix).join(format!(
+                    "{}-ignored-runtime-cache-file-{index:03}.json",
+                    "y".repeat(80)
+                )),
+                b"ignored generated",
+            )
+            .unwrap();
+        }
+    }
+
+    let mut capped = options(&base);
+    capped.max_status_bytes = 32;
+    capped.max_untracked_entries = 1;
+    let snapshot = workspace_snapshot(tmp.path(), &capped).unwrap();
+    assert_eq!(
+        snapshot.snapshot_status,
+        WorkspaceSnapshotStatusV1::Complete
+    );
+    assert_eq!(snapshot.cleanliness, WorkspaceCleanlinessV1::Clean);
+}
+
+#[test]
+fn giant_excluded_runtime_path_record_is_bounded() {
+    let tmp = tempfile::tempdir().unwrap();
+    git::commit_all(tmp.path());
+    let base = git::git(tmp.path(), &["rev-parse", "HEAD"]);
+
+    let giant_dir = tmp.path().join(".pulse/runtime").join("z".repeat(240));
+    fs::create_dir_all(&giant_dir).unwrap();
+    fs::write(giant_dir.join("leaf.log"), b"generated").unwrap();
+
+    let mut capped = options(&base);
+    capped.max_status_bytes = 8;
+    capped.max_untracked_entries = 1;
+    let snapshot = workspace_snapshot(tmp.path(), &capped).unwrap();
+    assert_eq!(
+        snapshot.snapshot_status,
+        WorkspaceSnapshotStatusV1::Complete
+    );
+    assert_eq!(snapshot.cleanliness, WorkspaceCleanlinessV1::Clean);
 }
 
 #[test]

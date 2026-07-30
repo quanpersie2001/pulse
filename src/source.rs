@@ -32,6 +32,8 @@ use crate::run::{
 };
 
 const EVIDENCE_ONLY_PREFIXES: [&str; 2] = [".pulse/evidence/", ".pulse/events/"];
+const PULSE_RUNTIME_EXCLUDE_PATHS: [&str; 2] =
+    [":(exclude).pulse/runtime/**", ":(exclude).pulse/cache/**"];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SourceBindingStatus {
@@ -610,6 +612,7 @@ fn status_identity(
         validate_snapshot_scope_path(path)?;
         args.push(path);
     }
+    args.extend(PULSE_RUNTIME_EXCLUDE_PATHS);
     let bytes = match git_bytes_bounded(repo_root, &args, options.max_status_bytes) {
         Ok(bytes) => bytes,
         Err(SnapshotReadError::BoundedOut(bytes)) => {
@@ -669,11 +672,13 @@ fn untracked_manifest_identity(
         validate_snapshot_scope_path(path)?;
         args.push(path);
     }
+    args.extend(PULSE_RUNTIME_EXCLUDE_PATHS);
     let output = match git_nul_records_bounded(
         repo_root,
         &args,
         options.max_status_bytes,
         options.max_untracked_entries,
+        Some(is_pulse_runtime_generated_path),
     ) {
         Ok(records) => records,
         Err(SnapshotReadError::BoundedOut(bytes)) => {
@@ -736,7 +741,8 @@ fn untracked_manifest_identity(
                 ));
             }
             let mut directory_budget = options.max_untracked_entries;
-            if let Some(status) = directory_special_status(repo_root, &path, &mut directory_budget)?
+            if let Some(status) =
+                scoped_directory_special_status(repo_root, &path, &[], &mut directory_budget)?
             {
                 return Ok(SnapshotComponent {
                     dirty: true,
@@ -846,7 +852,7 @@ fn scoped_special_status(
     budget: &mut usize,
 ) -> Result<Option<ComponentStatus>> {
     if options.included_paths.is_empty() {
-        return directory_special_status(repo_root, repo_root, budget);
+        return scoped_directory_special_status(repo_root, repo_root, &[], budget);
     }
     for relative in &options.included_paths {
         validate_snapshot_scope_path(relative)?;
@@ -879,7 +885,8 @@ fn scoped_special_status(
                     "nested_repository_unsupported".to_string(),
                 )));
             }
-            if let Some(status) = directory_special_status(repo_root, &scoped, budget)? {
+            if let Some(status) = scoped_directory_special_status(repo_root, &scoped, &[], budget)?
+            {
                 return Ok(Some(status));
             }
         }
@@ -887,9 +894,10 @@ fn scoped_special_status(
     Ok(None)
 }
 
-fn directory_special_status(
+fn scoped_directory_special_status(
     repo_root: &Path,
     path: &Path,
+    excluded_prefixes: &[String],
     budget: &mut usize,
 ) -> Result<Option<ComponentStatus>> {
     if let Some(relative) = repo_relative_utf8(repo_root, path)? {
@@ -903,16 +911,43 @@ fn directory_special_status(
         if entry.file_name() == ".git" {
             continue;
         }
+        let entry_path = entry.path();
+        let relative = repo_relative_utf8(repo_root, &entry_path)?;
+        if let Some(relative) = relative.as_deref() {
+            validate_managed_relative_path(relative)?;
+            if is_pulse_runtime_generated_path(relative)
+                || excluded_prefixes.iter().any(|prefix| {
+                    relative == prefix
+                        || relative
+                            .strip_prefix(prefix)
+                            .is_some_and(|suffix| suffix.starts_with('/'))
+                })
+            {
+                continue;
+            }
+        }
+        let metadata = fs::symlink_metadata(&entry_path)
+            .map_err(|error| PulseError::io(&entry_path, error))?;
+        let file_type = metadata.file_type();
+        if file_type.is_dir() {
+            if entry_path.join(".git").exists() {
+                return Ok(Some(ComponentStatus::Unsupported(
+                    "nested_repository_unsupported".to_string(),
+                )));
+            }
+            if let Some(status) =
+                scoped_directory_special_status(repo_root, &entry_path, excluded_prefixes, budget)?
+            {
+                return Ok(Some(status));
+            }
+            continue;
+        }
         if *budget == 0 {
             return Ok(Some(ComponentStatus::BoundedOut(
                 "untracked_entries_bounded_out".to_string(),
             )));
         }
         *budget -= 1;
-        let entry_path = entry.path();
-        let metadata = fs::symlink_metadata(&entry_path)
-            .map_err(|error| PulseError::io(&entry_path, error))?;
-        let file_type = metadata.file_type();
         #[cfg(unix)]
         {
             use std::os::unix::fs::FileTypeExt;
@@ -924,16 +959,6 @@ fn directory_special_status(
                 return Ok(Some(ComponentStatus::Unsupported(
                     "special_file_unsupported".to_string(),
                 )));
-            }
-        }
-        if file_type.is_dir() {
-            if entry_path.join(".git").exists() {
-                return Ok(Some(ComponentStatus::Unsupported(
-                    "nested_repository_unsupported".to_string(),
-                )));
-            }
-            if let Some(status) = directory_special_status(repo_root, &entry_path, budget)? {
-                return Ok(Some(status));
             }
         }
     }
@@ -960,7 +985,10 @@ fn repo_relative_utf8(repo_root: &Path, path: &Path) -> Result<Option<String>> {
 }
 
 fn is_pulse_runtime_generated_path(path: &str) -> bool {
-    path.starts_with(".pulse/runtime/") || path.starts_with(".pulse/cache/")
+    path == ".pulse/runtime"
+        || path.starts_with(".pulse/runtime/")
+        || path == ".pulse/cache"
+        || path.starts_with(".pulse/cache/")
 }
 
 fn has_ignored_source_paths(repo_root: &Path, options: &WorkspaceSnapshotOptions) -> Result<bool> {
@@ -976,11 +1004,13 @@ fn has_ignored_source_paths(repo_root: &Path, options: &WorkspaceSnapshotOptions
         validate_snapshot_scope_path(path)?;
         args.push(path);
     }
+    args.extend(PULSE_RUNTIME_EXCLUDE_PATHS);
     let output = match git_nul_records_bounded(
         repo_root,
         &args,
         options.max_status_bytes,
         options.max_untracked_entries,
+        Some(is_pulse_runtime_generated_path),
     ) {
         Ok(records) => records,
         Err(SnapshotReadError::BoundedOut(_)) => return Ok(true),
@@ -1160,6 +1190,7 @@ fn git_nul_records_bounded(
     args: &[&str],
     max_stdout_bytes: usize,
     max_entries: usize,
+    exclude_record: Option<fn(&str) -> bool>,
 ) -> std::result::Result<Vec<u8>, SnapshotReadError> {
     let mut child = hardened_git_command(repo_root, args)
         .stdout(Stdio::piped())
@@ -1169,8 +1200,12 @@ fn git_nul_records_bounded(
     let stderr = child.stderr.take().expect("stderr piped");
     let stderr_handle = thread::spawn(move || read_limited(stderr, SNAPSHOT_GIT_STDERR_LIMIT));
     let stdout = child.stdout.take().expect("stdout piped");
-    let stdout_read = match read_filtered_nul_stdout_bounded(stdout, max_stdout_bytes, max_entries)
-    {
+    let stdout_read = match read_filtered_nul_stdout_bounded(
+        stdout,
+        max_stdout_bytes,
+        max_entries,
+        exclude_record,
+    ) {
         Ok(read) => read,
         Err(error) => {
             terminate_child(&mut child);
@@ -1211,6 +1246,7 @@ struct BoundedGitOutput {
 }
 
 const SNAPSHOT_GIT_STDERR_LIMIT: usize = 64 * 1024;
+const SNAPSHOT_GIT_NUL_RECORD_LIMIT: usize = 64 * 1024;
 
 fn run_git_bounded(
     repo_root: &Path,
@@ -1267,10 +1303,16 @@ fn read_filtered_nul_stdout_bounded<R: Read>(
     mut reader: R,
     max_bytes: usize,
     max_records: usize,
+    exclude_record: Option<fn(&str) -> bool>,
 ) -> std::io::Result<BoundedNulRead> {
     let mut retained = Vec::new();
     let mut record = Vec::new();
     let mut records = 0_usize;
+    let raw_record_limit = if exclude_record.is_some() {
+        SNAPSHOT_GIT_NUL_RECORD_LIMIT
+    } else {
+        max_bytes
+    };
     let mut buf = [0_u8; 8192];
     loop {
         let read = reader.read(&mut buf)?;
@@ -1284,6 +1326,17 @@ fn read_filtered_nul_stdout_bounded<R: Read>(
         for byte in &buf[..read] {
             if *byte == 0 {
                 if !record.is_empty() {
+                    let excluded = match exclude_record {
+                        Some(exclude) => match std::str::from_utf8(&record) {
+                            Ok(path) => exclude(path),
+                            Err(_) => false,
+                        },
+                        None => false,
+                    };
+                    if excluded {
+                        record.clear();
+                        continue;
+                    }
                     records += 1;
                     if records > max_records {
                         return Ok(BoundedNulRead {
@@ -1310,9 +1363,7 @@ fn read_filtered_nul_stdout_bounded<R: Read>(
                 }
             } else {
                 record.push(*byte);
-                if record.len() > max_bytes
-                    || retained.len().saturating_add(record.len()) > max_bytes
-                {
+                if record.len() > raw_record_limit {
                     return Ok(BoundedNulRead {
                         bytes: retained,
                         complete: false,
@@ -1695,15 +1746,48 @@ mod tests {
 
     #[test]
     fn nul_record_reader_detects_partial_final_record() {
-        let read = read_filtered_nul_stdout_bounded(&b"complete\0partial"[..], 1024, 10).unwrap();
+        let read =
+            read_filtered_nul_stdout_bounded(&b"complete\0partial"[..], 1024, 10, None).unwrap();
         assert!(read.complete);
         assert!(read.partial_record);
         assert_eq!(read.bytes, b"complete\0");
     }
 
     #[test]
+    fn nul_record_reader_excludes_before_retained_caps_and_entry_count() {
+        fn exclude_runtime(path: &str) -> bool {
+            path.starts_with(".pulse/runtime/")
+        }
+
+        let input = b".pulse/runtime/very-long-generated-record\0.pulse/runtime/another-generated-record\0src/main.rs\0";
+        let read =
+            read_filtered_nul_stdout_bounded(&input[..], 16, 1, Some(exclude_runtime)).unwrap();
+        assert!(read.complete);
+        assert!(!read.partial_record);
+        assert_eq!(read.bytes, b"src/main.rs\0");
+    }
+
+    #[test]
+    fn nul_record_reader_still_bounds_giant_excluded_record() {
+        fn exclude_runtime(path: &str) -> bool {
+            path.starts_with(".pulse/runtime/")
+        }
+
+        let input = format!(
+            ".pulse/runtime/{}\0",
+            "x".repeat(SNAPSHOT_GIT_NUL_RECORD_LIMIT)
+        );
+        let read = read_filtered_nul_stdout_bounded(input.as_bytes(), 8, 1, Some(exclude_runtime))
+            .unwrap();
+        assert!(!read.complete);
+        assert!(read.partial_record);
+        assert!(read.bytes.is_empty());
+    }
+
+    #[test]
     fn nul_record_reader_caps_before_retaining_long_record() {
-        let read = read_filtered_nul_stdout_bounded(&b"short\0very-very-long"[..], 8, 10).unwrap();
+        let read =
+            read_filtered_nul_stdout_bounded(&b"short\0very-very-long"[..], 8, 10, None).unwrap();
         assert!(!read.complete);
         assert!(read.partial_record);
         assert_eq!(read.bytes, b"short\0");
@@ -1711,7 +1795,7 @@ mod tests {
 
     #[test]
     fn nul_record_reader_enforces_entry_count_during_read() {
-        let read = read_filtered_nul_stdout_bounded(&b"a\0b\0c\0"[..], 1024, 2).unwrap();
+        let read = read_filtered_nul_stdout_bounded(&b"a\0b\0c\0"[..], 1024, 2, None).unwrap();
         assert!(!read.complete);
         assert!(!read.partial_record);
         assert_eq!(read.bytes, b"a\0b\0");
