@@ -25,5 +25,7 @@ mod process_concurrency;
 mod process_lifecycle_concurrency;
 #[path = "process/run_feasibility.rs"]
 mod run_feasibility;
+#[path = "process/run_supervisor_process.rs"]
+mod run_supervisor_process;
 #[path = "process/supersession_process_recovery.rs"]
 mod supersession_process_recovery;

@@ -2,6 +2,8 @@ use crate::error::{PulseError, Result};
 use rand::RngCore;
 use std::fs::{self, File, OpenOptions};
 use std::io::Write;
+#[cfg(unix)]
+use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -14,8 +16,24 @@ pub struct AtomicWriteReport {
 }
 
 pub fn atomic_replace(path: &Path, bytes: &[u8]) -> Result<AtomicWriteReport> {
+    atomic_replace_with_mode(path, bytes, None)
+}
+
+pub fn atomic_replace_private(path: &Path, bytes: &[u8]) -> Result<AtomicWriteReport> {
+    atomic_replace_with_mode(path, bytes, Some(0o600))
+}
+
+pub fn atomic_create_new_private(path: &Path, bytes: &[u8]) -> Result<AtomicWriteReport> {
+    atomic_create_new_with_mode(path, bytes, Some(0o600))
+}
+
+fn atomic_replace_with_mode(
+    path: &Path,
+    bytes: &[u8],
+    mode: Option<u32>,
+) -> Result<AtomicWriteReport> {
     let parent = prepare_parent(path)?;
-    let temp_path = write_synced_temp(path, bytes)?;
+    let temp_path = write_synced_temp(path, bytes, mode)?;
 
     let result = replace_file(&temp_path, path);
     if result.is_err() {
@@ -34,8 +52,16 @@ pub fn atomic_replace(path: &Path, bytes: &[u8]) -> Result<AtomicWriteReport> {
 }
 
 pub fn atomic_create_new(path: &Path, bytes: &[u8]) -> Result<AtomicWriteReport> {
+    atomic_create_new_with_mode(path, bytes, None)
+}
+
+fn atomic_create_new_with_mode(
+    path: &Path,
+    bytes: &[u8],
+    mode: Option<u32>,
+) -> Result<AtomicWriteReport> {
     let parent = prepare_parent(path)?;
-    let temp_path = write_synced_temp(path, bytes)?;
+    let temp_path = write_synced_temp(path, bytes, mode)?;
 
     let result = create_file_from_temp(&temp_path, path);
     if result.is_err() {
@@ -65,11 +91,17 @@ fn prepare_parent(path: &Path) -> Result<&Path> {
     Ok(parent)
 }
 
-fn write_synced_temp(path: &Path, bytes: &[u8]) -> Result<PathBuf> {
+fn write_synced_temp(path: &Path, bytes: &[u8], mode: Option<u32>) -> Result<PathBuf> {
     let temp_path = unique_temp_path(path);
-    let mut temp = OpenOptions::new()
-        .write(true)
-        .create_new(true)
+    let mut options = OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    if let Some(mode) = mode {
+        options.mode(mode);
+    }
+    #[cfg(not(unix))]
+    let _ = mode;
+    let mut temp = options
         .open(&temp_path)
         .map_err(|error| PulseError::io(&temp_path, error))?;
 

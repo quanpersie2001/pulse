@@ -760,8 +760,8 @@ fn write_bytes_managed(
     }
     ensure_managed_target_for_write(repo_root, path)?;
     match mode {
-        RunStoreWriteMode::CreateNew => crate::storage::create_new(path, bytes)?,
-        RunStoreWriteMode::Replace => crate::storage::atomic_write(path, bytes)?,
+        RunStoreWriteMode::CreateNew => crate::storage::create_new_private(path, bytes)?,
+        RunStoreWriteMode::Replace => crate::storage::atomic_write_private(path, bytes)?,
     }
     set_runtime_private_file_permissions(path)
 }

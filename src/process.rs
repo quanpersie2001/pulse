@@ -1,25 +1,33 @@
-//! Low-level process feasibility primitives for P2S3-I0.
+//! Low-level process supervisor primitives for P2S3.
 //!
 //! These APIs deliberately stop at platform/process mechanics. They do not know
 //! about Pulse Tickets, assignments, graph state, authority, or public `run`
 //! commands.
 
-#[cfg(target_os = "linux")]
-use crate::canonical_json::hash_serializable;
-use crate::canonical_json::{hash_bytes, SHA256_PREFIX};
+use crate::canonical_json::{hash_bytes, hash_serializable, to_canonical_bytes, SHA256_PREFIX};
+use crate::run::{
+    ProcessIdentityV1 as RunProcessIdentityV1, RunExitKindV1, RunExitResultV1,
+    RunnerEnvironmentSourceV1, RunnerProfileSelectionV1,
+};
 use crate::{PulseError, Result};
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use std::ffi::OsStr;
 use std::fs::{self, OpenOptions};
 use std::io::{Read, Write};
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::{Arc, Mutex};
 use std::thread;
+use std::time::{Duration, Instant};
 
 #[cfg(unix)]
+use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+#[cfg(target_os = "linux")]
 use std::os::unix::process::CommandExt;
+#[cfg(unix)]
+use std::os::unix::process::ExitStatusExt;
 
 #[cfg(target_os = "linux")]
 pub const PLATFORM_SUPPORT: &str = "linux_proc_stat_starttime_process_group";
@@ -29,6 +37,9 @@ pub const PLATFORM_SUPPORT: &str = "unsupported_macos_identity_not_proven";
 pub const PLATFORM_SUPPORT: &str = "unsupported";
 
 const PREFIX_BUDGET_DIVISOR: usize = 2;
+const SUPERVISOR_HEARTBEAT_INTERVAL: Duration = Duration::from_millis(100);
+const SUPERVISOR_POLL_INTERVAL: Duration = Duration::from_millis(25);
+const MANAGED_CONTROL_PREFIX: &str = ".pulse/runtime/run/control";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
@@ -106,6 +117,119 @@ impl Drop for ControlNoncePlaintext {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SupervisorControlDescriptorV1 {
+    pub schema_version: u32,
+    pub run_id: String,
+    pub attempt_id: String,
+    pub nonce_hash: String,
+    pub workspace_path: String,
+    pub executable_path: String,
+    pub executable_identity: String,
+    pub argv: Vec<String>,
+    pub argv_hash: String,
+    pub environment: Vec<SupervisorEnvironmentEntryV1>,
+    pub input_json_path: String,
+    pub stdout_prefix_path: String,
+    pub stdout_tail_path: String,
+    pub stderr_prefix_path: String,
+    pub stderr_tail_path: String,
+    pub heartbeat_path: String,
+    pub cancel_path: String,
+    pub exit_path: String,
+    pub max_stdout_bytes: u64,
+    pub max_stderr_bytes: u64,
+    pub run_timeout_seconds: u64,
+    pub cancel_grace_seconds: u64,
+    pub force_kill_after_seconds: u64,
+    pub force_allowed: bool,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SupervisorEnvironmentEntryV1 {
+    pub name: String,
+    pub source: RunnerEnvironmentSourceV1,
+    pub value: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SupervisorHeartbeatRecordV1 {
+    pub schema_version: u32,
+    pub run_id: String,
+    pub attempt_id: String,
+    pub observed_at: String,
+    pub supervisor_pid: u64,
+    pub child_pid: Option<u64>,
+    pub nonce_hash: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SupervisorCancelRequestV1 {
+    pub schema_version: u32,
+    pub run_id: String,
+    pub attempt_id: String,
+    pub nonce_hash: String,
+    pub requested_at: String,
+    pub requested_by: String,
+    pub reason: String,
+    pub grace_seconds: u64,
+    pub force_allowed: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SupervisorExitObservationV1 {
+    pub schema_version: u32,
+    pub run_id: String,
+    pub attempt_id: String,
+    pub nonce_hash: String,
+    pub process_identity: RunProcessIdentityV1,
+    pub stdout: BoundedLogRefV1,
+    pub stderr: BoundedLogRefV1,
+    pub exit: RunExitResultV1,
+    pub observed_at: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SupervisorStartupHandshakeV1 {
+    pub schema_version: u32,
+    pub run_id: String,
+    pub attempt_id: String,
+    pub nonce_hash: String,
+    pub supervisor_pid: u64,
+    pub child_identity: RunProcessIdentityV1,
+    pub started_at: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SupervisorLaunchConfig {
+    pub repo_root: PathBuf,
+    pub control_relative_path: PathBuf,
+    pub descriptor: SupervisorControlDescriptorV1,
+    pub nonce: Vec<u8>,
+    pub start_timeout: Duration,
+    pub pulse_exe: PathBuf,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SupervisorLaunchReport {
+    pub handshake: SupervisorStartupHandshakeV1,
+    pub supervisor_identity: ProcessIdentityV1,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CancelPolicy {
+    pub grace: Duration,
+    pub force_after: Duration,
+    pub force_allowed: bool,
+}
+
 pub fn ensure_supported_platform() -> Result<()> {
     if cfg!(target_os = "linux") {
         Ok(())
@@ -124,6 +248,7 @@ pub fn ensure_supported_platform() -> Result<()> {
 
 pub const HIDDEN_SUPERVISOR_COMMAND: &str = "__run-supervisor";
 pub const HIDDEN_SUPERVISOR_NONCE_ENV: &str = "PULSE_RUN_SUPERVISOR_NONCE_HEX";
+pub const HIDDEN_SUPERVISOR_HANDSHAKE_ENV: &str = "PULSE_RUN_SUPERVISOR_HANDSHAKE_PATH";
 
 pub fn supervisor_packaging_probe() -> Result<SupervisorPackagingProbeV1> {
     let current_exe =
@@ -156,11 +281,10 @@ pub fn validate_hidden_supervisor_control_path(control: &Path) -> Result<()> {
             "hidden supervisor control path must be repository-relative",
         ));
     }
-    let normalized = control.components().collect::<Vec<_>>();
-    if normalized
-        .iter()
-        .any(|component| matches!(component, std::path::Component::ParentDir))
-        || !control.starts_with(".pulse/runtime/run/control")
+    if control
+        .components()
+        .any(|component| !matches!(component, Component::Normal(_) | Component::CurDir))
+        || !control.starts_with(MANAGED_CONTROL_PREFIX)
         || control.extension().and_then(|value| value.to_str()) != Some("json")
     {
         return Err(PulseError::validation(
@@ -194,9 +318,156 @@ pub fn hidden_supervisor_probe_dispatch(control: &Path) -> Result<SupervisorPack
     supervisor_packaging_probe()
 }
 
+pub fn run_hidden_supervisor(repo_root: &Path, control: &Path) -> Result<()> {
+    ensure_supported_platform()?;
+    validate_hidden_supervisor_control_path(control)?;
+    let nonce = read_nonce_from_environment()?;
+    let control_path = repo_root.join(control);
+    validate_managed_control_file(repo_root, &control_path)?;
+    let descriptor: SupervisorControlDescriptorV1 = read_canonical_json(&control_path)?;
+    validate_descriptor(repo_root, control, &descriptor, &nonce)?;
+    let result = supervisor_main(repo_root, control, descriptor, nonce);
+    match result {
+        Ok(()) => Ok(()),
+        Err(error) => {
+            eprintln!(
+                "{{\"class\":\"run_supervisor_error\",\"code\":\"{}\"}}",
+                error.code()
+            );
+            Err(error)
+        }
+    }
+}
+
+pub fn launch_supervisor(config: SupervisorLaunchConfig) -> Result<SupervisorLaunchReport> {
+    ensure_supported_platform()?;
+    validate_hidden_supervisor_control_path(&config.control_relative_path)?;
+    validate_descriptor(
+        &config.repo_root,
+        &config.control_relative_path,
+        &config.descriptor,
+        &config.nonce,
+    )?;
+    let control_path = config.repo_root.join(&config.control_relative_path);
+    write_json_create_new_private(&control_path, &config.descriptor)?;
+    let handshake_path = control_path.with_extension("handshake.json");
+    if handshake_path.exists() {
+        return Err(PulseError::validation(
+            "run_control_record_invalid",
+            "startup handshake path already exists",
+        ));
+    }
+    let mut child = Command::new(&config.pulse_exe);
+    child
+        .arg("--repo-root")
+        .arg(&config.repo_root)
+        .arg(HIDDEN_SUPERVISOR_COMMAND)
+        .arg("--control")
+        .arg(&config.control_relative_path)
+        .env(HIDDEN_SUPERVISOR_NONCE_ENV, hex::encode(&config.nonce))
+        .env(HIDDEN_SUPERVISOR_HANDSHAKE_ENV, &handshake_path)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    let mut supervisor = child
+        .spawn()
+        .map_err(|error| PulseError::io("<supervisor-spawn>", error))?;
+    let supervisor_identity = match current_process_identity(supervisor.id()) {
+        Ok(identity) => identity,
+        Err(error) => {
+            let _ = supervisor.kill();
+            let _ = supervisor.wait();
+            return Err(error);
+        }
+    };
+    let deadline = Instant::now() + config.start_timeout;
+    loop {
+        if handshake_path.exists() {
+            let handshake: SupervisorStartupHandshakeV1 = read_canonical_json(&handshake_path)?;
+            validate_handshake(&config.descriptor, &handshake)?;
+            return Ok(SupervisorLaunchReport {
+                handshake,
+                supervisor_identity,
+            });
+        }
+        if let Some(status) = supervisor
+            .try_wait()
+            .map_err(|error| PulseError::io("<supervisor-wait>", error))?
+        {
+            return Err(PulseError::validation(
+                "run_supervisor_spawn_failed",
+                format!("supervisor exited before handshake: {status}"),
+            ));
+        }
+        if Instant::now() >= deadline {
+            let _ = supervisor.kill();
+            let _ = supervisor.wait();
+            return Err(PulseError::validation(
+                "run_supervisor_handshake_timeout",
+                "supervisor did not publish verified startup handshake before timeout",
+            ));
+        }
+        thread::sleep(SUPERVISOR_POLL_INTERVAL);
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn build_descriptor_for_selection(
+    repo_root: &Path,
+    run_id: &str,
+    attempt_id: &str,
+    nonce: &ControlNoncePlaintext,
+    workspace_path: &Path,
+    selection: &RunnerProfileSelectionV1,
+    input_json_path: &Path,
+    log_root: &Path,
+    timeout_seconds: u64,
+    cancel_grace_seconds: u64,
+    force_kill_after_seconds: u64,
+    force_allowed: bool,
+    max_stdout_bytes: u64,
+    max_stderr_bytes: u64,
+) -> Result<SupervisorControlDescriptorV1> {
+    let argv = selection.fixed_args.clone();
+    let argv_hash = hash_argv(&selection.executable.resolved_path, &argv)?;
+    let env_entries = build_environment_spec(selection)?;
+    let control_root = repo_root.join(MANAGED_CONTROL_PREFIX);
+    Ok(SupervisorControlDescriptorV1 {
+        schema_version: 1,
+        run_id: run_id.to_string(),
+        attempt_id: attempt_id.to_string(),
+        nonce_hash: nonce.record().nonce_hash.clone(),
+        workspace_path: path_to_string(workspace_path)?,
+        executable_path: selection.executable.resolved_path.clone(),
+        executable_identity: selection.executable.identity.clone(),
+        argv,
+        argv_hash,
+        environment: env_entries,
+        input_json_path: path_to_string(input_json_path)?,
+        stdout_prefix_path: path_to_string(
+            &log_root.join(format!("{attempt_id}.stdout.prefix.log")),
+        )?,
+        stdout_tail_path: path_to_string(&log_root.join(format!("{attempt_id}.stdout.tail.log")))?,
+        stderr_prefix_path: path_to_string(
+            &log_root.join(format!("{attempt_id}.stderr.prefix.log")),
+        )?,
+        stderr_tail_path: path_to_string(&log_root.join(format!("{attempt_id}.stderr.tail.log")))?,
+        heartbeat_path: path_to_string(&control_root.join(format!("{run_id}.heartbeat.json")))?,
+        cancel_path: path_to_string(&control_root.join(format!("{run_id}.cancel.json")))?,
+        exit_path: path_to_string(&control_root.join(format!("{run_id}.exit.json")))?,
+        max_stdout_bytes,
+        max_stderr_bytes,
+        run_timeout_seconds: timeout_seconds,
+        cancel_grace_seconds,
+        force_kill_after_seconds,
+        force_allowed,
+        created_at: now_rfc3339(),
+    })
+}
+
 pub fn spawn_process_group(command: &mut Command) -> Result<Child> {
     ensure_supported_platform()?;
-    #[cfg(unix)]
+    #[cfg(target_os = "linux")]
     unsafe {
         command.pre_exec(|| {
             let rc = setpgid_zero();
@@ -225,6 +496,10 @@ pub fn process_identity_matches(expected: &ProcessIdentityV1) -> Result<bool> {
 }
 
 pub fn terminate_process_group(identity: &ProcessIdentityV1) -> Result<()> {
+    signal_process_group(identity, 15)
+}
+
+pub fn signal_process_group(identity: &ProcessIdentityV1, signal: i32) -> Result<()> {
     if !process_identity_matches(identity)? {
         return Err(PulseError::validation(
             "run_process_identity_mismatch",
@@ -237,22 +512,61 @@ pub fn terminate_process_group(identity: &ProcessIdentityV1) -> Result<()> {
             "process group id is unavailable",
         ));
     };
-    #[cfg(unix)]
+    #[cfg(target_os = "linux")]
     unsafe {
-        if kill_process_group(pgid, 15) != 0 {
+        if kill_process_group(pgid, signal) != 0 {
             return Err(PulseError::validation(
                 "run_cancel_signal_failed",
                 std::io::Error::last_os_error().to_string(),
             ));
         }
     }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = (pgid, signal);
+    }
     Ok(())
+}
+
+pub fn cancel_verified_process_tree(
+    identity: &RunProcessIdentityV1,
+    policy: CancelPolicy,
+) -> Result<()> {
+    let low = low_level_identity_from_run(identity)?;
+    signal_process_group(&low, 15)?;
+    let grace_deadline = Instant::now() + policy.grace;
+    while Instant::now() < grace_deadline {
+        if !process_identity_matches(&low).unwrap_or(false) {
+            return Ok(());
+        }
+        thread::sleep(SUPERVISOR_POLL_INTERVAL);
+    }
+    if !policy.force_allowed {
+        return Err(PulseError::validation(
+            "run_force_kill_disallowed",
+            "process did not stop during grace and force was disabled",
+        ));
+    }
+    if !process_identity_matches(&low)? {
+        return Ok(());
+    }
+    signal_process_group(&low, 9)?;
+    let force_deadline = Instant::now() + policy.force_after;
+    while Instant::now() < force_deadline {
+        if !process_identity_matches(&low).unwrap_or(false) {
+            return Ok(());
+        }
+        thread::sleep(SUPERVISOR_POLL_INTERVAL);
+    }
+    Err(PulseError::validation(
+        "run_cancel_timeout",
+        "verified process tree did not stop within policy bounds",
+    ))
 }
 
 pub fn wait_status_code(status: ExitStatus) -> (Option<i32>, Option<i32>) {
     #[cfg(unix)]
     {
-        use std::os::unix::process::ExitStatusExt;
         (status.code(), status.signal())
     }
     #[cfg(not(unix))]
@@ -306,8 +620,8 @@ fn drain_reader(
             &mut tail,
         );
     }
-    write_create_new(prefix_path, &prefix)?;
-    write_create_new(tail_path, &tail)?;
+    write_private_create_new(prefix_path, &prefix)?;
+    write_private_create_new(tail_path, &tail)?;
     let retained = (prefix.len() + tail.len()) as u64;
     Ok(BoundedLogRefV1 {
         prefix_path: prefix_path.to_string_lossy().to_string(),
@@ -341,17 +655,778 @@ fn append_prefix_tail(
     }
 }
 
-fn write_create_new(path: &Path, bytes: &[u8]) -> Result<()> {
+pub type LogDrainHandle = thread::JoinHandle<Result<BoundedLogRefV1>>;
+
+pub struct SpawnedWithDrainedLogs {
+    pub child: Child,
+    pub stdout_log: LogDrainHandle,
+    pub stderr_log: LogDrainHandle,
+}
+
+pub fn spawn_with_drained_logs(
+    command: &mut Command,
+    stdout_prefix: PathBuf,
+    stdout_tail: PathBuf,
+    stderr_prefix: PathBuf,
+    stderr_tail: PathBuf,
+    max_bytes_per_stream: usize,
+) -> Result<SpawnedWithDrainedLogs> {
+    command.stdout(Stdio::piped()).stderr(Stdio::piped());
+    let mut child = spawn_process_group(command)?;
+    let stdout = child.stdout.take().ok_or_else(|| {
+        PulseError::validation("run_log_open_failed", "child stdout pipe was unavailable")
+    })?;
+    let stderr = child.stderr.take().ok_or_else(|| {
+        PulseError::validation("run_log_open_failed", "child stderr pipe was unavailable")
+    })?;
+    let stdout_log =
+        drain_to_bounded_logs(stdout, stdout_prefix, stdout_tail, max_bytes_per_stream);
+    let stderr_log =
+        drain_to_bounded_logs(stderr, stderr_prefix, stderr_tail, max_bytes_per_stream);
+    Ok(SpawnedWithDrainedLogs {
+        child,
+        stdout_log,
+        stderr_log,
+    })
+}
+
+pub fn write_nonce_record_without_plaintext(
+    path: &Path,
+    nonce: &ControlNoncePlaintext,
+) -> Result<()> {
+    let bytes = serde_json::to_vec_pretty(nonce.record()).map_err(crate::PulseError::from)?;
+    let text = String::from_utf8_lossy(&bytes);
+    let plaintext_hex = hex::encode(nonce.plaintext_for_spawn_only());
+    if text.contains(&plaintext_hex) {
+        return Err(PulseError::validation(
+            "run_control_record_invalid",
+            "nonce plaintext would be persisted",
+        ));
+    }
+    write_private_create_new(path, &bytes)
+}
+
+pub fn shared_vec_reader(bytes: Vec<u8>) -> impl Read + Send + 'static {
+    struct Reader {
+        inner: Arc<Mutex<std::io::Cursor<Vec<u8>>>>,
+    }
+    impl Read for Reader {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            self.inner.lock().expect("reader mutex poisoned").read(buf)
+        }
+    }
+    Reader {
+        inner: Arc::new(Mutex::new(std::io::Cursor::new(bytes))),
+    }
+}
+
+fn supervisor_main(
+    repo_root: &Path,
+    control_relative: &Path,
+    descriptor: SupervisorControlDescriptorV1,
+    nonce: Vec<u8>,
+) -> Result<()> {
+    let mut command = build_child_command(&descriptor)?;
+    command
+        .current_dir(&descriptor.workspace_path)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut child = match spawn_process_group(&mut command) {
+        Ok(child) => child,
+        Err(error) => {
+            write_failed_start_observation(repo_root, &descriptor, &nonce, error.code())?;
+            return Err(error);
+        }
+    };
+    let child_identity_low = match current_process_identity(child.id()) {
+        Ok(identity) => identity,
+        Err(error) => {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(error);
+        }
+    };
+    let started_at = now_rfc3339();
+    let child_identity = run_identity_from_low_level(
+        &descriptor,
+        std::process::id() as u64,
+        &child_identity_low,
+        &started_at,
+    );
+    write_startup_handshake(&descriptor, &child_identity)?;
+    write_heartbeat(&descriptor, Some(child.id() as u64))?;
+
+    let stdout = child.stdout.take().ok_or_else(|| {
+        PulseError::validation("run_log_open_failed", "child stdout pipe was unavailable")
+    })?;
+    let stderr = child.stderr.take().ok_or_else(|| {
+        PulseError::validation("run_log_open_failed", "child stderr pipe was unavailable")
+    })?;
+    let stdout_log = drain_to_bounded_logs(
+        stdout,
+        PathBuf::from(&descriptor.stdout_prefix_path),
+        PathBuf::from(&descriptor.stdout_tail_path),
+        descriptor.max_stdout_bytes as usize,
+    );
+    let stderr_log = drain_to_bounded_logs(
+        stderr,
+        PathBuf::from(&descriptor.stderr_prefix_path),
+        PathBuf::from(&descriptor.stderr_tail_path),
+        descriptor.max_stderr_bytes as usize,
+    );
+
+    let started = Instant::now();
+    let mut cancel_requested = false;
+    let mut timed_out = false;
+    let exit_status = loop {
+        if let Some(exit) = child
+            .try_wait()
+            .map_err(|error| PulseError::io("<child-wait>", error))?
+        {
+            break exit;
+        }
+        if !cancel_requested
+            && started.elapsed() >= Duration::from_secs(descriptor.run_timeout_seconds)
+        {
+            timed_out = true;
+            cancel_requested = true;
+            request_signal_policy(&child_identity, descriptor.cancel_grace_seconds, true)?;
+        }
+        if !cancel_requested && Path::new(&descriptor.cancel_path).exists() {
+            let request: SupervisorCancelRequestV1 =
+                read_canonical_json(Path::new(&descriptor.cancel_path))?;
+            validate_cancel_request(&descriptor, &request)?;
+            cancel_requested = true;
+            request_signal_policy(
+                &child_identity,
+                request.grace_seconds,
+                request.force_allowed && descriptor.force_allowed,
+            )?;
+        }
+        if cancel_requested {
+            let grace = Duration::from_secs(descriptor.cancel_grace_seconds);
+            let force = Duration::from_secs(descriptor.force_kill_after_seconds);
+            let policy = CancelPolicy {
+                grace,
+                force_after: force,
+                force_allowed: descriptor.force_allowed,
+            };
+            if let Some(exit) = wait_for_cancelled(&mut child, &child_identity, policy)? {
+                break exit;
+            }
+        }
+        write_heartbeat(&descriptor, Some(child.id() as u64))?;
+        thread::sleep(SUPERVISOR_HEARTBEAT_INTERVAL);
+    };
+    let stdout = join_log(stdout_log)?;
+    let stderr = join_log(stderr_log)?;
+    let exit = run_exit_result(exit_status, timed_out, cancel_requested);
+    let observation = SupervisorExitObservationV1 {
+        schema_version: 1,
+        run_id: descriptor.run_id.clone(),
+        attempt_id: descriptor.attempt_id.clone(),
+        nonce_hash: hash_bytes(&nonce),
+        process_identity: child_identity,
+        stdout,
+        stderr,
+        observed_at: now_rfc3339(),
+        exit,
+    };
+    write_json_create_new_private(Path::new(&descriptor.exit_path), &observation)?;
+    let _ = fs::remove_file(
+        repo_root
+            .join(control_relative)
+            .with_extension("handshake.json"),
+    );
+    Ok(())
+}
+
+fn build_child_command(descriptor: &SupervisorControlDescriptorV1) -> Result<Command> {
+    let executable = PathBuf::from(&descriptor.executable_path);
+    revalidate_executable_identity(&executable, &descriptor.executable_identity)?;
+    let actual_argv_hash = hash_argv(&descriptor.executable_path, &descriptor.argv)?;
+    if actual_argv_hash != descriptor.argv_hash {
+        return Err(PulseError::validation(
+            "run_control_record_invalid",
+            "descriptor argv hash mismatch",
+        ));
+    }
+    let mut command = Command::new(&executable);
+    command.args(&descriptor.argv);
+    command.env_clear();
+    for entry in &descriptor.environment {
+        match entry.source {
+            RunnerEnvironmentSourceV1::Inherited => {
+                if let Some(value) = std::env::var_os(&entry.name) {
+                    command.env(&entry.name, value);
+                }
+            }
+            RunnerEnvironmentSourceV1::LiteralNonSecret => {
+                let value = entry.value.as_ref().ok_or_else(|| {
+                    PulseError::validation(
+                        "run_control_record_invalid",
+                        "literal environment entry missing value",
+                    )
+                })?;
+                command.env(&entry.name, value);
+            }
+        }
+    }
+    Ok(command)
+}
+
+fn request_signal_policy(
+    identity: &RunProcessIdentityV1,
+    grace_seconds: u64,
+    force_allowed: bool,
+) -> Result<()> {
+    let policy = CancelPolicy {
+        grace: Duration::from_secs(grace_seconds),
+        force_after: Duration::from_secs(1),
+        force_allowed,
+    };
+    let _ = cancel_verified_process_tree(identity, policy);
+    Ok(())
+}
+
+fn wait_for_cancelled(
+    child: &mut Child,
+    identity: &RunProcessIdentityV1,
+    policy: CancelPolicy,
+) -> Result<Option<ExitStatus>> {
+    if let Some(status) = child
+        .try_wait()
+        .map_err(|error| PulseError::io("<child-wait>", error))?
+    {
+        return Ok(Some(status));
+    }
+    let low = low_level_identity_from_run(identity)?;
+    let grace_deadline = Instant::now() + policy.grace;
+    while Instant::now() < grace_deadline {
+        if let Some(status) = child
+            .try_wait()
+            .map_err(|error| PulseError::io("<child-wait>", error))?
+        {
+            return Ok(Some(status));
+        }
+        thread::sleep(SUPERVISOR_POLL_INTERVAL);
+    }
+    if !policy.force_allowed {
+        return Ok(None);
+    }
+    if process_identity_matches(&low)? {
+        signal_process_group(&low, 9)?;
+    }
+    let deadline = Instant::now() + policy.force_after;
+    while Instant::now() < deadline {
+        if let Some(status) = child
+            .try_wait()
+            .map_err(|error| PulseError::io("<child-wait>", error))?
+        {
+            return Ok(Some(status));
+        }
+        thread::sleep(SUPERVISOR_POLL_INTERVAL);
+    }
+    Ok(None)
+}
+
+fn write_failed_start_observation(
+    _repo_root: &Path,
+    descriptor: &SupervisorControlDescriptorV1,
+    nonce: &[u8],
+    cause: &str,
+) -> Result<()> {
+    let now = now_rfc3339();
+    let identity = RunProcessIdentityV1 {
+        supervisor_pid: std::process::id() as u64,
+        child_pid: 0,
+        process_group_id: None,
+        supervisor_nonce_hash: hash_bytes(nonce),
+        started_at: now.clone(),
+        platform_start_marker: "unavailable_before_spawn".to_string(),
+        argv_hash: descriptor.argv_hash.clone(),
+        executable_identity: descriptor.executable_identity.clone(),
+        identity_status: "failed_to_start".to_string(),
+    };
+    let observation = SupervisorExitObservationV1 {
+        schema_version: 1,
+        run_id: descriptor.run_id.clone(),
+        attempt_id: descriptor.attempt_id.clone(),
+        nonce_hash: hash_bytes(nonce),
+        process_identity: identity,
+        stdout: empty_log_ref(&descriptor.stdout_prefix_path, &descriptor.stdout_tail_path),
+        stderr: empty_log_ref(&descriptor.stderr_prefix_path, &descriptor.stderr_tail_path),
+        exit: RunExitResultV1 {
+            kind: RunExitKindV1::FailedToStart,
+            code: None,
+            signal: None,
+            timed_out: false,
+            cancelled: false,
+            observed_at: now.clone(),
+        },
+        observed_at: format!("{now}:cause_code={cause}"),
+    };
+    write_json_create_new_private(Path::new(&descriptor.exit_path), &observation)
+}
+
+fn write_startup_handshake(
+    descriptor: &SupervisorControlDescriptorV1,
+    identity: &RunProcessIdentityV1,
+) -> Result<()> {
+    let path = std::env::var_os(HIDDEN_SUPERVISOR_HANDSHAKE_ENV)
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            PathBuf::from(&descriptor.heartbeat_path).with_extension("handshake.json")
+        });
+    let handshake = SupervisorStartupHandshakeV1 {
+        schema_version: 1,
+        run_id: descriptor.run_id.clone(),
+        attempt_id: descriptor.attempt_id.clone(),
+        nonce_hash: descriptor.nonce_hash.clone(),
+        supervisor_pid: std::process::id() as u64,
+        child_identity: identity.clone(),
+        started_at: identity.started_at.clone(),
+    };
+    write_json_create_new_private(&path, &handshake)
+}
+
+fn write_heartbeat(
+    descriptor: &SupervisorControlDescriptorV1,
+    child_pid: Option<u64>,
+) -> Result<()> {
+    let heartbeat = SupervisorHeartbeatRecordV1 {
+        schema_version: 1,
+        run_id: descriptor.run_id.clone(),
+        attempt_id: descriptor.attempt_id.clone(),
+        observed_at: now_rfc3339(),
+        supervisor_pid: std::process::id() as u64,
+        child_pid,
+        nonce_hash: descriptor.nonce_hash.clone(),
+    };
+    write_json_replace_private(Path::new(&descriptor.heartbeat_path), &heartbeat)
+}
+
+fn validate_descriptor(
+    repo_root: &Path,
+    control_relative: &Path,
+    descriptor: &SupervisorControlDescriptorV1,
+    nonce: &[u8],
+) -> Result<()> {
+    if descriptor.schema_version != 1 {
+        return Err(PulseError::validation(
+            "run_control_record_invalid",
+            "supervisor descriptor schema_version must be 1",
+        ));
+    }
+    if descriptor.nonce_hash != hash_bytes(nonce) {
+        return Err(PulseError::validation(
+            "run_control_record_invalid",
+            "supervisor nonce hash mismatch",
+        ));
+    }
+    validate_id("run", &descriptor.run_id, "run_")?;
+    validate_id("attempt", &descriptor.attempt_id, "attempt_")?;
+    let expected_name = format!("{}.json", descriptor.run_id);
+    if control_relative.file_name().and_then(OsStr::to_str) != Some(expected_name.as_str()) {
+        return Err(PulseError::validation(
+            "run_control_record_invalid",
+            "control path filename must match run id",
+        ));
+    }
+    for path in [
+        &descriptor.input_json_path,
+        &descriptor.stdout_prefix_path,
+        &descriptor.stdout_tail_path,
+        &descriptor.stderr_prefix_path,
+        &descriptor.stderr_tail_path,
+        &descriptor.heartbeat_path,
+        &descriptor.cancel_path,
+        &descriptor.exit_path,
+    ] {
+        validate_managed_absolute_path(repo_root, Path::new(path))?;
+    }
+    if descriptor.max_stdout_bytes == 0 || descriptor.max_stderr_bytes == 0 {
+        return Err(PulseError::validation(
+            "run_profile_invalid",
+            "log byte limits must be positive",
+        ));
+    }
+    let workspace = Path::new(&descriptor.workspace_path);
+    if !workspace.is_absolute() || !workspace.is_dir() {
+        return Err(PulseError::validation(
+            "run_workspace_not_found",
+            "supervisor workspace must be an existing absolute directory",
+        ));
+    }
+    let executable = Path::new(&descriptor.executable_path);
+    revalidate_executable_identity(executable, &descriptor.executable_identity)?;
+    let argv_hash = hash_argv(&descriptor.executable_path, &descriptor.argv)?;
+    if argv_hash != descriptor.argv_hash {
+        return Err(PulseError::validation(
+            "run_control_record_invalid",
+            "argv hash does not match descriptor argv",
+        ));
+    }
+    for arg in &descriptor.argv {
+        if arg.contains('\0') {
+            return Err(PulseError::validation(
+                "run_control_record_invalid",
+                "argv contains NUL",
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn validate_handshake(
+    descriptor: &SupervisorControlDescriptorV1,
+    handshake: &SupervisorStartupHandshakeV1,
+) -> Result<()> {
+    if handshake.schema_version != 1
+        || handshake.run_id != descriptor.run_id
+        || handshake.attempt_id != descriptor.attempt_id
+        || handshake.nonce_hash != descriptor.nonce_hash
+        || handshake.child_identity.supervisor_nonce_hash != descriptor.nonce_hash
+        || handshake.child_identity.argv_hash != descriptor.argv_hash
+        || handshake.child_identity.executable_identity != descriptor.executable_identity
+        || handshake.child_identity.identity_status != "verified"
+    {
+        return Err(PulseError::validation(
+            "run_control_record_invalid",
+            "startup handshake does not match supervisor descriptor",
+        ));
+    }
+    let current = low_level_identity_from_run(&handshake.child_identity)?;
+    if !process_identity_matches(&current)? {
+        return Err(PulseError::validation(
+            "run_process_identity_mismatch",
+            "startup child identity is no longer current",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_cancel_request(
+    descriptor: &SupervisorControlDescriptorV1,
+    request: &SupervisorCancelRequestV1,
+) -> Result<()> {
+    if request.schema_version != 1
+        || request.run_id != descriptor.run_id
+        || request.attempt_id != descriptor.attempt_id
+        || request.nonce_hash != descriptor.nonce_hash
+    {
+        return Err(PulseError::validation(
+            "run_control_record_invalid",
+            "cancel request does not match supervisor descriptor",
+        ));
+    }
+    Ok(())
+}
+
+fn read_nonce_from_environment() -> Result<Vec<u8>> {
+    let nonce_hex = std::env::var(HIDDEN_SUPERVISOR_NONCE_ENV).map_err(|_| {
+        PulseError::validation(
+            "run_control_record_invalid",
+            "hidden supervisor nonce environment was not provided",
+        )
+    })?;
+    let nonce = hex::decode(nonce_hex).map_err(|_| {
+        PulseError::validation(
+            "run_control_record_invalid",
+            "hidden supervisor nonce environment was not valid hex",
+        )
+    })?;
+    if nonce.len() < 32 {
+        return Err(PulseError::validation(
+            "run_control_record_invalid",
+            "hidden supervisor nonce is below Slice 3 entropy floor",
+        ));
+    }
+    Ok(nonce)
+}
+
+fn read_canonical_json<T: for<'de> Deserialize<'de>>(path: &Path) -> Result<T> {
+    let bytes = fs::read(path).map_err(|error| PulseError::io(path, error))?;
+    serde_json::from_slice(&bytes).map_err(|error| PulseError::json(path, error))
+}
+
+fn join_log(handle: LogDrainHandle) -> Result<BoundedLogRefV1> {
+    match handle.join() {
+        Ok(result) => result,
+        Err(_) => Err(PulseError::validation(
+            "run_log_open_failed",
+            "log drain thread panicked",
+        )),
+    }
+}
+
+fn run_exit_result(status: ExitStatus, timed_out: bool, cancelled: bool) -> RunExitResultV1 {
+    let (code, signal) = wait_status_code(status);
+    let kind = if timed_out {
+        RunExitKindV1::TimedOut
+    } else if cancelled {
+        RunExitKindV1::Cancelled
+    } else {
+        RunExitKindV1::Exited
+    };
+    RunExitResultV1 {
+        kind,
+        code,
+        signal,
+        timed_out,
+        cancelled,
+        observed_at: now_rfc3339(),
+    }
+}
+
+fn run_identity_from_low_level(
+    descriptor: &SupervisorControlDescriptorV1,
+    supervisor_pid: u64,
+    low: &ProcessIdentityV1,
+    started_at: &str,
+) -> RunProcessIdentityV1 {
+    RunProcessIdentityV1 {
+        supervisor_pid,
+        child_pid: low.pid as u64,
+        process_group_id: low.process_group_id.map(|value| value as u64),
+        supervisor_nonce_hash: descriptor.nonce_hash.clone(),
+        started_at: started_at.to_string(),
+        platform_start_marker: format!("{}:{}", low.platform, low.platform_start_marker),
+        argv_hash: descriptor.argv_hash.clone(),
+        executable_identity: descriptor.executable_identity.clone(),
+        identity_status: low.identity_status.clone(),
+    }
+}
+
+fn low_level_identity_from_run(identity: &RunProcessIdentityV1) -> Result<ProcessIdentityV1> {
+    let Some((platform, marker)) = identity.platform_start_marker.split_once(':') else {
+        return Err(PulseError::validation(
+            "run_process_identity_unavailable",
+            "run process identity marker is malformed",
+        ));
+    };
+    Ok(ProcessIdentityV1 {
+        pid: u32::try_from(identity.child_pid).map_err(|_| {
+            PulseError::validation("run_process_identity_unavailable", "pid exceeds u32 range")
+        })?,
+        process_group_id: identity.process_group_id.map(|value| value as i64),
+        platform: platform.to_string(),
+        platform_start_marker: marker.to_string(),
+        identity_status: identity.identity_status.clone(),
+    })
+}
+
+fn empty_log_ref(prefix: &str, tail: &str) -> BoundedLogRefV1 {
+    BoundedLogRefV1 {
+        prefix_path: prefix.to_string(),
+        tail_path: tail.to_string(),
+        total_bytes_seen: 0,
+        retained_bytes: 0,
+        truncated_bytes: 0,
+        content_hash: hash_bytes(&[]),
+        content_hash_semantics: "sha256_full_stream_even_when_retention_truncated".to_string(),
+        redaction_status: "not_applied_runtime_private".to_string(),
+    }
+}
+
+fn build_environment_spec(
+    selection: &RunnerProfileSelectionV1,
+) -> Result<Vec<SupervisorEnvironmentEntryV1>> {
+    let mut entries = Vec::new();
+    for env in &selection.environment {
+        entries.push(SupervisorEnvironmentEntryV1 {
+            name: env.name.clone(),
+            source: env.source.clone(),
+            value: None,
+        });
+    }
+    Ok(entries)
+}
+
+fn hash_argv(executable: &str, argv: &[String]) -> Result<String> {
+    hash_serializable(&(executable, argv))
+}
+
+fn revalidate_executable_identity(path: &Path, expected_identity: &str) -> Result<()> {
+    let metadata = fs::metadata(path).map_err(|error| PulseError::io(path, error))?;
+    if !metadata.is_file() {
+        return Err(PulseError::validation(
+            "run_command_not_found",
+            "resolved executable is not a regular file",
+        ));
+    }
+    #[cfg(unix)]
+    if metadata.permissions().mode() & 0o111 == 0 {
+        return Err(PulseError::validation(
+            "run_command_not_found",
+            "resolved executable is not executable",
+        ));
+    }
+    let identity = executable_identity_hash(path, &metadata)?;
+    if identity != expected_identity {
+        return Err(PulseError::validation(
+            "run_process_identity_mismatch",
+            "resolved executable identity changed before spawn",
+        ));
+    }
+    Ok(())
+}
+
+fn executable_identity_hash(path: &Path, metadata: &fs::Metadata) -> Result<String> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        let canonical = path
+            .canonicalize()
+            .map_err(|error| PulseError::io(path, error))?;
+        let canonical = path_to_string(&canonical)?;
+        hash_serializable(&(
+            canonical,
+            metadata.dev(),
+            metadata.ino(),
+            metadata.len(),
+            metadata.mtime(),
+            metadata.mode() & 0o777,
+        ))
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = metadata;
+        let canonical = path
+            .canonicalize()
+            .map_err(|error| PulseError::io(path, error))?;
+        hash_serializable(&path_to_string(&canonical)?)
+    }
+}
+
+fn validate_managed_control_file(repo_root: &Path, path: &Path) -> Result<()> {
+    validate_managed_absolute_path(repo_root, path)?;
+    if path.extension().and_then(OsStr::to_str) != Some("json") {
+        return Err(PulseError::validation(
+            "run_control_record_invalid",
+            "managed control file must be json",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_managed_absolute_path(repo_root: &Path, path: &Path) -> Result<()> {
+    if !path.is_absolute() {
+        return Err(PulseError::validation(
+            "run_control_record_invalid",
+            "managed runtime path must be absolute",
+        ));
+    }
+    if !path.starts_with(repo_root.join(".pulse/runtime/run")) {
+        return Err(PulseError::validation(
+            "run_control_record_invalid",
+            "managed runtime path escapes .pulse/runtime/run",
+        ));
+    }
+    if path_has_parent(path) {
+        return Err(PulseError::validation(
+            "run_control_record_invalid",
+            "managed runtime path contains traversal",
+        ));
+    }
+    Ok(())
+}
+
+fn path_has_parent(path: &Path) -> bool {
+    path.components()
+        .any(|component| matches!(component, Component::ParentDir))
+}
+
+fn validate_id(kind: &'static str, value: &str, prefix: &str) -> Result<()> {
+    if !value.starts_with(prefix)
+        || value.len() <= prefix.len()
+        || !value
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-'))
+    {
+        return Err(PulseError::validation(
+            "run_control_record_invalid",
+            format!("invalid {kind} id"),
+        ));
+    }
+    Ok(())
+}
+
+fn path_to_string(path: &Path) -> Result<String> {
+    path.to_str()
+        .map(ToString::to_string)
+        .ok_or_else(|| PulseError::validation("run_control_record_invalid", "path is not UTF-8"))
+}
+
+fn write_json_create_new_private<T: Serialize>(path: &Path, value: &T) -> Result<()> {
+    let bytes = to_canonical_bytes(value)?;
+    write_private_create_new(path, &bytes)
+}
+
+fn write_json_replace_private<T: Serialize>(path: &Path, value: &T) -> Result<()> {
+    let bytes = to_canonical_bytes(value)?;
+    write_private_replace(path, &bytes)
+}
+
+fn write_private_create_new(path: &Path, bytes: &[u8]) -> Result<()> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|error| PulseError::io(parent, error))?;
+        set_private_dir_permissions(parent)?;
     }
-    let mut file = OpenOptions::new()
-        .write(true)
-        .create_new(true)
+    let mut options = OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    options.mode(0o600);
+    let mut file = options
         .open(path)
         .map_err(|error| PulseError::io(path, error))?;
-    file.write_all(bytes)
-        .map_err(|error| PulseError::io(path, error))
+    let result = (|| -> Result<()> {
+        file.write_all(bytes)
+            .map_err(|error| PulseError::io(path, error))?;
+        file.flush().map_err(|error| PulseError::io(path, error))?;
+        file.sync_all()
+            .map_err(|error| PulseError::io(path, error))?;
+        Ok(())
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(path);
+    }
+    result
+}
+
+fn write_private_replace(path: &Path, bytes: &[u8]) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|error| PulseError::io(parent, error))?;
+        set_private_dir_permissions(parent)?;
+    }
+    let temp = unique_private_temp(path);
+    write_private_create_new(&temp, bytes)?;
+    if let Err(error) = fs::rename(&temp, path).map_err(|error| PulseError::io(path, error)) {
+        let _ = fs::remove_file(&temp);
+        return Err(error);
+    }
+    Ok(())
+}
+
+fn unique_private_temp(path: &Path) -> PathBuf {
+    let mut random = [0_u8; 8];
+    rand::thread_rng().fill_bytes(&mut random);
+    let file = path.file_name().and_then(OsStr::to_str).unwrap_or("record");
+    path.with_file_name(format!(".{file}.pulse-tmp-{}", hex::encode(random)))
+}
+
+fn set_private_dir_permissions(path: &Path) -> Result<()> {
+    #[cfg(unix)]
+    {
+        fs::set_permissions(path, fs::Permissions::from_mode(0o700))
+            .map_err(|error| PulseError::io(path, error))?;
+    }
+    Ok(())
+}
+
+fn now_rfc3339() -> String {
+    chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
 }
 
 #[cfg(target_os = "linux")]
@@ -404,7 +1479,7 @@ fn nonce_transport() -> &'static str {
     "protected_environment_fallback_descriptor_preferred"
 }
 
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
 unsafe fn setpgid_zero() -> i32 {
     extern "C" {
         fn setpgid(pid: i32, pgid: i32) -> i32;
@@ -412,77 +1487,12 @@ unsafe fn setpgid_zero() -> i32 {
     unsafe { setpgid(0, 0) }
 }
 
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
 unsafe fn kill_process_group(pgid: i64, signal: i32) -> i32 {
     extern "C" {
         fn kill(pid: i32, sig: i32) -> i32;
     }
     unsafe { kill(-(pgid as i32), signal) }
-}
-
-pub type LogDrainHandle = thread::JoinHandle<Result<BoundedLogRefV1>>;
-
-pub struct SpawnedWithDrainedLogs {
-    pub child: Child,
-    pub stdout_log: LogDrainHandle,
-    pub stderr_log: LogDrainHandle,
-}
-
-pub fn spawn_with_drained_logs(
-    command: &mut Command,
-    stdout_prefix: PathBuf,
-    stdout_tail: PathBuf,
-    stderr_prefix: PathBuf,
-    stderr_tail: PathBuf,
-    max_bytes_per_stream: usize,
-) -> Result<SpawnedWithDrainedLogs> {
-    command.stdout(Stdio::piped()).stderr(Stdio::piped());
-    let mut child = spawn_process_group(command)?;
-    let stdout = child.stdout.take().ok_or_else(|| {
-        PulseError::validation("run_log_open_failed", "child stdout pipe was unavailable")
-    })?;
-    let stderr = child.stderr.take().ok_or_else(|| {
-        PulseError::validation("run_log_open_failed", "child stderr pipe was unavailable")
-    })?;
-    let stdout_log =
-        drain_to_bounded_logs(stdout, stdout_prefix, stdout_tail, max_bytes_per_stream);
-    let stderr_log =
-        drain_to_bounded_logs(stderr, stderr_prefix, stderr_tail, max_bytes_per_stream);
-    Ok(SpawnedWithDrainedLogs {
-        child,
-        stdout_log,
-        stderr_log,
-    })
-}
-
-pub fn write_nonce_record_without_plaintext(
-    path: &Path,
-    nonce: &ControlNoncePlaintext,
-) -> Result<()> {
-    let bytes = serde_json::to_vec_pretty(nonce.record()).map_err(crate::PulseError::from)?;
-    let text = String::from_utf8_lossy(&bytes);
-    let plaintext_hex = hex::encode(nonce.plaintext_for_spawn_only());
-    if text.contains(&plaintext_hex) {
-        return Err(PulseError::validation(
-            "run_control_record_invalid",
-            "nonce plaintext would be persisted",
-        ));
-    }
-    write_create_new(path, &bytes)
-}
-
-pub fn shared_vec_reader(bytes: Vec<u8>) -> impl Read + Send + 'static {
-    struct Reader {
-        inner: Arc<Mutex<std::io::Cursor<Vec<u8>>>>,
-    }
-    impl Read for Reader {
-        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-            self.inner.lock().expect("reader mutex poisoned").read(buf)
-        }
-    }
-    Reader {
-        inner: Arc::new(Mutex::new(std::io::Cursor::new(bytes))),
-    }
 }
 
 #[cfg(test)]
