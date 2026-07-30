@@ -125,6 +125,7 @@ pub fn serve(store: StateStore) -> Result<()> {
             Err(error) => return Err(PulseError::io("<daemon-accept>", error)),
         }
     }
+    application.shutdown_cleanup();
     let _ = fs::remove_file(store.endpoint_path());
     Ok(())
 }

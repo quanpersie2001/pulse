@@ -48,7 +48,6 @@ impl JsonGraphStore {
             let guard = WriteGuard::acquire(&self.repo_root)?;
             recover_prepared_transactions(&self.repo_root)?;
             if let Ok(existing) = load_reservation(&self.repo_root, &lease_id) {
-                let packet = load_packet(&self.repo_root, &lease_id)?;
                 if existing.idempotency_key_hash != hash_bytes(args.idempotency_key.as_bytes())
                     || existing.subject.ticket_id != args.ticket_id
                 {
@@ -57,10 +56,21 @@ impl JsonGraphStore {
                         "reservation idempotency key is bound to different inputs",
                     ));
                 }
-                return Ok(ReserveWorkOutcome {
-                    reservation: existing,
-                    packet,
-                });
+                // A Released/Expired/StaleNeedsOperator reservation is not
+                // live — the caller (daemon saga recovery) must get a fresh
+                // lease rather than a dead one.
+                if matches!(
+                    existing.state,
+                    ReservationState::Reserved
+                        | ReservationState::Acknowledged
+                        | ReservationState::Active
+                ) {
+                    let packet = load_packet(&self.repo_root, &lease_id)?;
+                    return Ok(ReserveWorkOutcome {
+                        reservation: existing,
+                        packet,
+                    });
+                }
             }
             match self.reserve_work_under_fence(&args, &inventory, &lease_id) {
                 Ok(outcome) => return Ok(outcome),

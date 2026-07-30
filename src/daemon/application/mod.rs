@@ -76,6 +76,49 @@ impl DaemonApplication {
             .map_err(protocol_error_from_pulse)
     }
 
+    /// Gracefully tear down managed processes and persist state before the
+    /// transport loop exits.  Idempotent — safe to call more than once.
+    pub fn shutdown_cleanup(&self) {
+        if !self.shutdown.load(Ordering::SeqCst) {
+            self.shutdown.store(true, Ordering::SeqCst);
+        }
+        // Snapshot process IDs before iterating (we remove entries during
+        // termination).
+        let process_ids = match self.store.with_state(false, |state| {
+            Ok(state.processes.keys().cloned().collect::<Vec<_>>())
+        }) {
+            Ok(ids) => ids,
+            Err(_) => return,
+        };
+        for process_id in &process_ids {
+            let _ = self.process_owner.terminate(process_id);
+        }
+        // Mark sessions that were not already closed as Error.
+        if let Ok(()) = self.store.with_state(true, |state| {
+            for session in state.sessions.values_mut() {
+                if session.lifecycle != crate::daemon::session::SessionLifecycle::Closed {
+                    session.lifecycle = crate::daemon::session::SessionLifecycle::Error;
+                    session.last_error =
+                        Some("daemon shut down; managed processes were terminated".to_string());
+                    session.updated_at = chrono::Utc::now().to_rfc3339();
+                }
+            }
+            for process in state.processes.values_mut() {
+                process.state = crate::daemon::process::ManagedProcessState::Exited;
+                process.updated_at = chrono::Utc::now().to_rfc3339();
+            }
+            append_event(
+                state,
+                "daemon.shutdown",
+                None,
+                None,
+                None,
+                json!({"pid": self.pid}),
+            );
+            Ok(())
+        }) {}
+    }
+
     fn handle_inner(
         &self,
         principal: &RuntimePrincipal,
@@ -118,7 +161,7 @@ impl DaemonApplication {
             },
             DaemonRequest::Status => self.status()?,
             DaemonRequest::Shutdown => {
-                self.shutdown.store(true, Ordering::SeqCst);
+                self.shutdown_cleanup();
                 DaemonResponse::ShuttingDown
             }
             DaemonRequest::ProjectOpen { root } => self.project_open(root)?,
@@ -167,6 +210,20 @@ impl DaemonApplication {
             DaemonRequest::SessionShow { session_id } => self.session_show(session_id)?,
             DaemonRequest::SessionSend { session_id, input } => {
                 self.session_send(session_id, input)?
+            }
+            DaemonRequest::SessionAttach {
+                session_id,
+                provider_id,
+                provider_options,
+            } => {
+                self.session_reattach(session_id, provider_id, provider_options, idempotency_key)?
+            }
+            DaemonRequest::SessionResume {
+                session_id,
+                provider_id,
+                provider_options,
+            } => {
+                self.session_reattach(session_id, provider_id, provider_options, idempotency_key)?
             }
             DaemonRequest::SessionInterrupt { session_id } => self.session_interrupt(session_id)?,
             DaemonRequest::SessionClose { session_id } => self.session_close(session_id)?,
@@ -795,6 +852,172 @@ impl DaemonApplication {
         result
     }
 
+    fn session_reattach(
+        &self,
+        session_id: &str,
+        provider_id: &str,
+        provider_options: &Value,
+        _idempotency_key: &str,
+    ) -> Result<DaemonResponse> {
+        let provider = self.providers.get(provider_id)?;
+        provider.availability()?;
+        let launch = provider.launch(provider_options)?;
+
+        // Snapshot the session record to get workspace/project context.
+        let session_snapshot =
+            self.store.with_state(false, |state| {
+                let session = state.sessions.get(session_id).cloned().ok_or_else(|| {
+                    PulseError::NotFound {
+                        subject: format!("session {session_id}"),
+                    }
+                })?;
+                Ok(session)
+            })?;
+
+        // Only allow attach/resume on sessions that are not actively running
+        // or already open for turns.
+        if !matches!(
+            session_snapshot.lifecycle,
+            SessionLifecycle::Error | SessionLifecycle::Closed | SessionLifecycle::Initializing
+        ) {
+            return Err(PulseError::validation(
+                "session_attach_not_required",
+                "session is already usable and does not need reattachment",
+            ));
+        }
+        if session_snapshot.archived_at.is_some() {
+            return Err(PulseError::validation(
+                "session_archived",
+                "archived sessions cannot be resumed",
+            ));
+        }
+
+        let workspace = self.store.with_state(false, |state| {
+            state
+                .workspaces
+                .get(&session_snapshot.workspace_id)
+                .cloned()
+                .ok_or_else(|| PulseError::NotFound {
+                    subject: format!("workspace {}", session_snapshot.workspace_id),
+                })
+        })?;
+        if workspace.lifecycle != WorkspaceLifecycle::Open {
+            return Err(PulseError::validation(
+                "workspace_not_open",
+                "session resumption requires an open workspace",
+            ));
+        }
+
+        // Terminate the old managed process if it still has a handle.
+        if let Some(old_process_id) = session_snapshot.managed_process_id.as_deref() {
+            if self.store.with_state(false, |state| {
+                Ok(state.processes.contains_key(old_process_id))
+            })? {
+                let _ = self.process_owner.terminate(old_process_id);
+            }
+        }
+
+        // Spawn a new provider process.
+        let process = self.process_owner.spawn(SpawnRequest {
+            owner_kind: "session",
+            owner_id: session_id,
+            provider_id,
+            executable: &launch.executable,
+            args: &launch.args,
+            cwd: Path::new(&workspace.root),
+            log_root: &self.store.root().join("logs"),
+            max_log_bytes: 4 * 1024 * 1024,
+        })?;
+        let new_process_id = process.process_id.clone();
+
+        // Negotiate native protocol session handle if applicable.
+        let provider_session_result = (|| -> Result<(Option<String>, Vec<Value>)> {
+            if !launch.native_protocol {
+                return Ok((None, Vec::new()));
+            }
+            let initialize = provider.initialize_request()?;
+            let (_, mut notifications) = self.process_owner.request_json(
+                &new_process_id,
+                &initialize.request_id,
+                &initialize.message,
+                Duration::from_secs(10),
+            )?;
+            self.process_owner
+                .send_line(&new_process_id, &provider.initialized_notification()?)?;
+            let create = provider.create_session_request(&workspace.root, provider_options)?;
+            let (response, create_notifications) = self.process_owner.request_json(
+                &new_process_id,
+                &create.request_id,
+                &create.message,
+                Duration::from_secs(30),
+            )?;
+            notifications.extend(create_notifications);
+            Ok((
+                Some(provider.parse_session_handle(&response)?),
+                notifications,
+            ))
+        })();
+        let (provider_handle, provider_notifications) = match provider_session_result {
+            Ok(result) => result,
+            Err(error) => {
+                let _ = self.process_owner.terminate(&new_process_id);
+                return Err(error);
+            }
+        };
+
+        let result = self.store.with_state(true, |state| {
+            // Remove old process record; insert new one.
+            if let Some(old_process_id) = session_snapshot.managed_process_id.as_deref() {
+                state.processes.remove(old_process_id);
+            }
+            state.processes.insert(new_process_id.clone(), process);
+
+            let session =
+                state
+                    .sessions
+                    .get_mut(session_id)
+                    .ok_or_else(|| PulseError::NotFound {
+                        subject: format!("session {session_id}"),
+                    })?;
+            session.provider_id = provider_id.to_string();
+            session.provider_handle = provider_handle.clone();
+            session.managed_process_id = Some(new_process_id.clone());
+            session.lifecycle = SessionLifecycle::Idle;
+            session.active_turn_id = None;
+            session.last_error = None;
+            session.updated_at = chrono::Utc::now().to_rfc3339();
+            let session = session.clone();
+
+            for notification in provider_notifications {
+                append_event(
+                    state,
+                    "provider.notification",
+                    Some(&session.project_id),
+                    Some(&session.workspace_id),
+                    Some(session_id),
+                    notification,
+                );
+            }
+            append_event(
+                state,
+                "session.reattached",
+                Some(&session.project_id),
+                Some(&session.workspace_id),
+                Some(session_id),
+                json!({
+                    "provider_id": provider_id,
+                    "new_process_id": new_process_id,
+                    "old_process_id": session_snapshot.managed_process_id,
+                }),
+            );
+            Ok(DaemonResponse::Session { session })
+        });
+        if result.is_err() {
+            let _ = self.process_owner.terminate(&new_process_id);
+        }
+        result
+    }
+
     fn session_list(
         &self,
         workspace_id: Option<&str>,
@@ -1399,7 +1622,9 @@ impl DaemonApplication {
         idempotency_key: &str,
     ) -> Result<DaemonResponse> {
         let saga_id = deterministic_id("saga", idempotency_key);
-        if let Some(existing) = self.store.with_state(false, |state| {
+
+        // ── Phase 0: ensure a saga record exists ──────────────────────
+        let _is_recoverable = if let Some(existing) = self.store.with_state(false, |state| {
             Ok(state.assignment_sagas.get(&saga_id).cloned())
         })? {
             if matches!(
@@ -1408,8 +1633,10 @@ impl DaemonApplication {
                     | AssignmentSagaState::Acknowledged
                     | AssignmentSagaState::Activated
             ) {
+                // Fast path: already provisioned — idempotent return.
                 return Ok(DaemonResponse::Assignment { saga: existing });
             }
+            existing.state == AssignmentSagaState::Recoverable
         } else {
             let project = self.store.with_state(false, |state| {
                 state
@@ -1447,8 +1674,10 @@ impl DaemonApplication {
                 state.assignment_sagas.insert(saga_id.clone(), saga);
                 Ok(())
             })?;
-        }
+            false
+        };
 
+        // ── Phase 1: reserve (or reuse existing) Core lease ───────────
         let project = self.store.with_state(false, |state| {
             state
                 .projects
@@ -1492,6 +1721,7 @@ impl DaemonApplication {
             Ok(())
         })?;
 
+        // ── Phase 2: provision or recover workspace ───────────────────
         let workspace = match self.workspace_create(
             project_id,
             &format!("assignment-{ticket_id}"),
@@ -1511,6 +1741,10 @@ impl DaemonApplication {
                 return Err(error);
             }
         };
+        // If this is a recovery retry, the workspace may be archived.
+        if workspace.lifecycle == crate::daemon::workspace::WorkspaceLifecycle::Archived {
+            let _ = self.workspace_restore(&workspace.workspace_id);
+        }
         self.store.with_state(true, |state| {
             let saga = state
                 .assignment_sagas
@@ -1522,6 +1756,12 @@ impl DaemonApplication {
             Ok(())
         })?;
 
+        // ── Phase 3: provision or recover session ─────────────────────
+        // On recovery the session may be in Error/Closed state. We attempt
+        // session_create first (it is deterministic and returns the
+        // existing session). If the returned session is not Idle we
+        // re-attach a fresh provider process under the same Pulse
+        // session_id.
         let session = match self.session_create(
             &workspace.workspace_id,
             provider_id,
@@ -1542,6 +1782,35 @@ impl DaemonApplication {
                 return Err(error);
             }
         };
+        // If the deterministic session is not in a usable (Idle) state
+        // we must re-attach a new provider process.
+        let session = if session.lifecycle != SessionLifecycle::Idle {
+            // Close the unusable session's old process if any.
+            if let Some(process_id) = session.managed_process_id.as_deref() {
+                let _ = self.process_owner.terminate(process_id);
+            }
+            match self.session_reattach(
+                &session.session_id,
+                provider_id,
+                provider_options,
+                &format!("{idempotency_key}:reattach"),
+            ) {
+                Ok(DaemonResponse::Session { session }) => session,
+                Ok(_) => unreachable!("session_reattach response kind"),
+                Err(error) => {
+                    let _ = self.workspace_archive(&workspace.workspace_id);
+                    let _ = core.release_reservation(
+                        &reservation.reservation.lease_id,
+                        actor,
+                        "session reattach failed",
+                    );
+                    self.mark_saga_error(&saga_id, AssignmentSagaState::Recoverable, &error)?;
+                    return Err(error);
+                }
+            }
+        } else {
+            session
+        };
         self.store.with_state(true, |state| {
             let saga = state
                 .assignment_sagas
@@ -1553,6 +1822,7 @@ impl DaemonApplication {
             Ok(())
         })?;
 
+        // ── Phase 4: deliver bootstrap ────────────────────────────────
         let delivery_id = deterministic_id("delivery", idempotency_key);
         let bootstrap = format!(
             "Pulse assignment {ticket_id}\nlease={}\npacket_fingerprint={}\nload: pulse work packet {ticket_id} --lease {} --json\nAuthority: implement only the exact lease-bound contract. Submit typed handoff evidence; process exit is not completion.",

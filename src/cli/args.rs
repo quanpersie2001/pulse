@@ -9,6 +9,13 @@ use clap::{Parser, Subcommand, ValueEnum};
 pub struct Cli {
     #[arg(long, global = true)]
     pub(crate) repo_root: Option<PathBuf>,
+    /// Stable idempotency key for mutating daemon commands.
+    /// When provided, the command uses this key instead of generating a
+    /// fresh one. Replaying the same key is safe — the daemon enforces
+    /// idempotency and returns the original response.  Default: a
+    /// randomised key that guarantees a fresh operation.
+    #[arg(long, global = true, default_value = None)]
+    pub(crate) idempotency_key: Option<String>,
     #[cfg(any(test, debug_assertions))]
     #[arg(long, global = true, hide = true, value_enum)]
     pub(crate) test_failpoint: Option<FailpointArg>,

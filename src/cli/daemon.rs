@@ -246,7 +246,7 @@ pub(crate) fn handle_daemon(command: DaemonCommand) -> Result<()> {
     }
 }
 
-pub(crate) fn handle_project(command: ProjectCommand) -> Result<()> {
+pub(crate) fn handle_project(command: ProjectCommand, explicit_key: Option<&str>) -> Result<()> {
     let request = match command {
         ProjectCommand::Open(args) => DaemonRequest::ProjectOpen { root: args.root },
         ProjectCommand::List { all } => DaemonRequest::ProjectList {
@@ -254,10 +254,13 @@ pub(crate) fn handle_project(command: ProjectCommand) -> Result<()> {
         },
         ProjectCommand::Archive { project_id } => DaemonRequest::ProjectArchive { project_id },
     };
-    dispatch(request, "project")
+    dispatch_with(request, "project", explicit_key)
 }
 
-pub(crate) fn handle_workspace(command: WorkspaceCommand) -> Result<()> {
+pub(crate) fn handle_workspace(
+    command: WorkspaceCommand,
+    explicit_key: Option<&str>,
+) -> Result<()> {
     let request = match command {
         WorkspaceCommand::Create(args) => DaemonRequest::WorkspaceCreate {
             project_id: args.project_id,
@@ -279,10 +282,10 @@ pub(crate) fn handle_workspace(command: WorkspaceCommand) -> Result<()> {
             DaemonRequest::WorkspaceRestore { workspace_id }
         }
     };
-    dispatch(request, "workspace")
+    dispatch_with(request, "workspace", explicit_key)
 }
 
-pub(crate) fn handle_session(command: SessionCommand) -> Result<()> {
+pub(crate) fn handle_session(command: SessionCommand, explicit_key: Option<&str>) -> Result<()> {
     let request = match command {
         SessionCommand::Assign(args) => DaemonRequest::AssignmentStart {
             project_id: args.project_id,
@@ -379,16 +382,20 @@ pub(crate) fn handle_session(command: SessionCommand) -> Result<()> {
             }
         }
     };
-    dispatch(request, "session")
+    dispatch_with(request, "session", explicit_key)
 }
 
-fn dispatch(request_value: DaemonRequest, prefix: &str) -> Result<()> {
+fn dispatch_with(
+    request_value: DaemonRequest,
+    prefix: &str,
+    explicit_key: Option<&str>,
+) -> Result<()> {
     let store = StateStore::discover()?;
     let is_mutating = request_value.is_mutating();
-    let key = if is_mutating {
-        fresh_key(prefix)
-    } else {
-        String::new()
+    let key = match (is_mutating, explicit_key) {
+        (true, Some(key)) if !key.trim().is_empty() => key.to_string(),
+        (true, _) => fresh_key(prefix),
+        (false, _) => String::new(),
     };
     print_response(request(&store, request_value, key)?)
 }

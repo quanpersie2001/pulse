@@ -23,6 +23,7 @@ pub const DAEMON_CAPABILITIES: &[&str] = &[
     "timeline_subscription_v1",
     "assignment_saga_v1",
     "session_mailbox_v1",
+    "session_attach_v1",
     "mcp_tool_adapter_v1",
 ];
 
@@ -108,6 +109,16 @@ pub enum DaemonRequest {
     SessionClose {
         session_id: String,
     },
+    SessionAttach {
+        session_id: String,
+        provider_id: String,
+        provider_options: Value,
+    },
+    SessionResume {
+        session_id: String,
+        provider_id: String,
+        provider_options: Value,
+    },
     SessionArchive {
         session_id: String,
     },
@@ -191,6 +202,7 @@ impl DaemonRequest {
             Self::Shutdown
             | Self::ProjectArchive { .. }
             | Self::SessionCommunicationGrant { .. } => "runtime.admin",
+            Self::SessionAttach { .. } | Self::SessionResume { .. } => "runtime.admin",
             Self::Handshake { .. }
             | Self::Status
             | Self::ProjectList { .. }

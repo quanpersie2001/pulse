@@ -34,6 +34,7 @@ pub fn run(cli: Cli) -> Result<(), PulseError> {
     #[cfg(not(any(test, debug_assertions)))]
     let store = JsonGraphStore::new(repo_root);
 
+    let explicit_key = cli.idempotency_key.as_deref();
     match cli.command {
         args::Command::Work { command } => work::handle(&store, command),
         args::Command::Docs { command } => docs::handle(&store, command),
@@ -41,8 +42,8 @@ pub fn run(cli: Cli) -> Result<(), PulseError> {
         args::Command::Evidence { command } => evidence::handle(&store, command),
         args::Command::Knowledge { command } => knowledge::handle(&store, command),
         args::Command::Daemon { command } => daemon::handle_daemon(command),
-        args::Command::Project { command } => daemon::handle_project(command),
-        args::Command::Workspace { command } => daemon::handle_workspace(command),
-        args::Command::Session { command } => daemon::handle_session(command),
+        args::Command::Project { command } => daemon::handle_project(command, explicit_key),
+        args::Command::Workspace { command } => daemon::handle_workspace(command, explicit_key),
+        args::Command::Session { command } => daemon::handle_session(command, explicit_key),
     }
 }

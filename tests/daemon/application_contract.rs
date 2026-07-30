@@ -504,6 +504,304 @@ fn timeline_subscription_catches_up_after_a_live_event() {
     assert_eq!(page.events[0].event_type, "workspace.created");
 }
 
+#[cfg(unix)]
+#[test]
+fn session_reattach_replaces_provider_handle_while_preserving_session_id() {
+    let (_home, project_root, app) = application();
+    let project_id = open_project(&app, project_root.path());
+    let workspace_id = create_workspace(&app, &project_id);
+
+    // Create a session
+    let session = match handle(
+        &app,
+        DaemonRequest::SessionCreate {
+            workspace_id: workspace_id.clone(),
+            provider_id: "codex".to_string(),
+            parent_session_id: None,
+            provider_options: provider_options(),
+        },
+        "reattach-session",
+    ) {
+        DaemonResponse::Session { session } => session,
+        other => panic!("unexpected response: {other:?}"),
+    };
+    assert_eq!(session.lifecycle, SessionLifecycle::Idle);
+    assert!(session.managed_process_id.is_some());
+    let original_process_id = session.managed_process_id.clone().unwrap();
+    let original_session_id = session.session_id.clone();
+
+    // Close the session to put it in a state that allows reattach.
+    handle(
+        &app,
+        DaemonRequest::SessionClose {
+            session_id: original_session_id.clone(),
+        },
+        "close-for-reattach",
+    );
+
+    // Reattach with a new provider process.
+    let attached = match handle(
+        &app,
+        DaemonRequest::SessionAttach {
+            session_id: original_session_id.clone(),
+            provider_id: "codex".to_string(),
+            provider_options: provider_options(),
+        },
+        "reattach-attach",
+    ) {
+        DaemonResponse::Session { session } => session,
+        other => panic!("unexpected response: {other:?}"),
+    };
+
+    // Session ID is stable.
+    assert_eq!(attached.session_id, original_session_id);
+    // Provider handle and process changed.
+    assert_ne!(
+        attached.managed_process_id.as_deref(),
+        Some(original_process_id.as_str())
+    );
+    // Session is now Idle and usable.
+    assert_eq!(attached.lifecycle, SessionLifecycle::Idle);
+    assert!(attached.last_error.is_none());
+
+    // Timeline shows the reattach event.
+    let timeline = handle(
+        &app,
+        DaemonRequest::TimelineList {
+            cursor: None,
+            limit: 100,
+            session_id: Some(original_session_id.clone()),
+        },
+        "",
+    );
+    match timeline {
+        DaemonResponse::Timeline { page } => {
+            assert!(
+                page.events
+                    .iter()
+                    .any(|event| event.event_type == "session.reattached"),
+                "timeline should contain session.reattached event"
+            );
+        }
+        other => panic!("unexpected response: {other:?}"),
+    }
+
+    // Cleanup.
+    handle(
+        &app,
+        DaemonRequest::SessionClose {
+            session_id: original_session_id,
+        },
+        "close-after-reattach",
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn session_resume_recovers_after_error_lifecycle() {
+    let (_home, project_root, app) = application();
+    let project_id = open_project(&app, project_root.path());
+    let workspace_id = create_workspace(&app, &project_id);
+
+    let session = match handle(
+        &app,
+        DaemonRequest::SessionCreate {
+            workspace_id: workspace_id.clone(),
+            provider_id: "codex".to_string(),
+            parent_session_id: None,
+            provider_options: provider_options(),
+        },
+        "resume-session",
+    ) {
+        DaemonResponse::Session { session } => session,
+        other => panic!("unexpected response: {other:?}"),
+    };
+    let session_id = session.session_id.clone();
+
+    // Close the session to produce a non-idle lifecycle.
+    handle(
+        &app,
+        DaemonRequest::SessionClose {
+            session_id: session_id.clone(),
+        },
+        "close-for-resume",
+    );
+
+    // SessionResume reattaches just like SessionAttach.
+    let resumed = match handle(
+        &app,
+        DaemonRequest::SessionResume {
+            session_id: session_id.clone(),
+            provider_id: "codex".to_string(),
+            provider_options: provider_options(),
+        },
+        "resume-reattach",
+    ) {
+        DaemonResponse::Session { session } => session,
+        other => panic!("unexpected response: {other:?}"),
+    };
+    assert_eq!(resumed.session_id, session_id);
+    assert_eq!(resumed.lifecycle, SessionLifecycle::Idle);
+
+    handle(
+        &app,
+        DaemonRequest::SessionClose {
+            session_id: session_id.clone(),
+        },
+        "close-after-resume",
+    );
+}
+
+#[test]
+fn shutdown_cleanup_marks_processes_and_sessions_as_exited() {
+    let (_home, project_root, app) = application();
+    let project_id = open_project(&app, project_root.path());
+    let workspace_id = create_workspace(&app, &project_id);
+
+    // Create a session to get a managed process.
+    let response = handle(
+        &app,
+        DaemonRequest::SessionCreate {
+            workspace_id: workspace_id.clone(),
+            provider_id: "codex".to_string(),
+            parent_session_id: None,
+            provider_options: provider_options(),
+        },
+        "shutdown-session",
+    );
+    let session_id = match &response {
+        DaemonResponse::Session { session } => session.session_id.clone(),
+        other => panic!("unexpected response: {other:?}"),
+    };
+
+    // Call shutdown cleanup directly (not via Shutdown which also disconnects).
+    app.shutdown_cleanup();
+
+    // Check the daemon state:
+    let state = app.store().load().unwrap();
+    // Processes are Exited.
+    for process in state.processes.values() {
+        assert!(
+            matches!(
+                process.state,
+                pulse::daemon::process::ManagedProcessState::Exited
+            ),
+            "process {} should be Exited after shutdown_cleanup",
+            process.process_id
+        );
+    }
+    // Sessions are Error (since they weren't gracefully closed).
+    let session = state
+        .sessions
+        .get(&session_id)
+        .expect("session should exist");
+    assert!(
+        matches!(session.lifecycle, SessionLifecycle::Error),
+        "session should be Error after shutdown_cleanup, got {:?}",
+        session.lifecycle
+    );
+    // Timeline contains shutdown event.
+    assert!(
+        state
+            .timeline
+            .iter()
+            .any(|event| event.event_type == "daemon.shutdown"),
+        "timeline should contain daemon.shutdown event"
+    );
+}
+
+#[test]
+fn assign_idempotency_key_contract_allows_retry_after_recoverable_failure() {
+    // Verify that calling assignment_start with the same idempotency key
+    // after a Recoverable error properly re-provisions.
+    //
+    // This test exercises the retry path without a full daemon restart:
+    // we pre-create a saga with Recoverable state, then call
+    // assignment_start with the original key to prove the retry flow.
+    let (_home, project_root, app) = application();
+    let project_id = open_project(&app, project_root.path());
+    let original_key = "recoverable-retry-contract";
+    let saga_id = format!(
+        "saga_{}",
+        pulse::canonical_json::hash_bytes(original_key.as_bytes())
+            .trim_start_matches("sha256:")
+            .chars()
+            .take(26)
+            .collect::<String>()
+    );
+
+    // Manually insert a Recoverable saga (simulating a crashed daemon).
+    let now = chrono::Utc::now().to_rfc3339();
+    let saga = pulse::daemon::assignment::AssignmentSagaRecord {
+        schema_version: 1,
+        saga_id: saga_id.clone(),
+        idempotency_key: original_key.to_string(),
+        project_id: project_id.clone(),
+        ticket_id: "ticket_fake".to_string(),
+        actor: "agent:tester".to_string(),
+        assignee: "agent:codex-local".to_string(),
+        ticket_revision: 0,
+        packet_fingerprint: String::new(),
+        lease_id: None,
+        workspace_id: None,
+        session_id: None,
+        delivery_id: None,
+        acknowledgement_id: None,
+        handoff_id: None,
+        verification_id: None,
+        state: pulse::daemon::assignment::AssignmentSagaState::Recoverable,
+        last_error: Some("simulated daemon crash".to_string()),
+        created_at: now.clone(),
+        updated_at: now,
+    };
+    app.store()
+        .with_state(true, |state| {
+            state.assignment_sagas.insert(saga_id.clone(), saga);
+            Ok(())
+        })
+        .unwrap();
+
+    // Now retry assignment_start — it should fail on actual core reservation
+    // since the ticket doesn't exist in a real enrolled repo, but the important
+    // contract below is that it does *not* return a duplicate-active-ownership
+    // error or a stale state — it falls through to real provisioning.
+    let result = app.handle(
+        &DaemonRequest::AssignmentStart {
+            project_id: project_id.clone(),
+            ticket_id: "ticket_fake".to_string(),
+            actor: "agent:tester".to_string(),
+            assignee: "agent:codex-local".to_string(),
+            capabilities: vec!["source.read".to_string()],
+            isolation: IsolationMode::Local,
+            provider_id: "codex".to_string(),
+            provider_options: json!({
+                "executable": "/bin/sh",
+                "args": ["-c", "cat"],
+                "protocol_mode": "opaque_test",
+            }),
+            ttl_seconds: 1800,
+        },
+        original_key,
+    );
+    // Expected: either a provisioning error (no enrolled repo) or a graceful
+    // hand-off. The key contract: no "assignment_live_lease_exists" or
+    // "reservation_idempotency_conflict".
+    if let Err(error) = &result {
+        assert_ne!(
+            error.code, "assignment_live_lease_exists",
+            "retry should not reject with live-lease conflict"
+        );
+        assert_ne!(
+            error.code, "reservation_idempotency_conflict",
+            "retry should not reject with idempotency conflict"
+        );
+        assert_ne!(
+            error.code, "reservation_not_activatable",
+            "retry should not reject with stale reservation"
+        );
+    }
+}
+
 #[test]
 fn mcp_adapter_shares_semantics_and_enforces_runtime_permissions() {
     let (_home, project_root, app) = application();
