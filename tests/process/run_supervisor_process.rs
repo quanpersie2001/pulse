@@ -15,13 +15,90 @@ use std::fs;
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::{Mutex, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant};
 
 fn pulse_bin() -> PathBuf {
-    std::env::var_os("PULSE_TEST_BIN")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from(crate::common_bin::bin()))
+    crate::common_bin::resolve_pulse_bin()
+}
+
+fn read_all_files(root: &Path) -> Vec<(PathBuf, Vec<u8>)> {
+    fn walk(dir: &Path, out: &mut Vec<(PathBuf, Vec<u8>)>) {
+        for entry in fs::read_dir(dir).unwrap() {
+            let entry = entry.unwrap();
+            let path = entry.path();
+            let metadata = fs::symlink_metadata(&path).unwrap();
+            if metadata.is_dir() {
+                walk(&path, out);
+            } else if metadata.is_file() {
+                out.push((path.clone(), fs::read(&path).unwrap()));
+            }
+        }
+    }
+    let mut files = Vec::new();
+    walk(root, &mut files);
+    files
+}
+
+fn assert_runtime_does_not_contain(repo: &Path, marker: &str) {
+    for (path, bytes) in read_all_files(&repo.join(".pulse/runtime/run")) {
+        let text = String::from_utf8_lossy(&bytes);
+        assert!(
+            !text.contains(marker),
+            "runtime file leaked marker in {}",
+            path.display()
+        );
+    }
+}
+
+fn process_exists(pid: u64) -> bool {
+    let stat = PathBuf::from(format!("/proc/{pid}/stat"));
+    let Ok(text) = fs::read_to_string(stat) else {
+        return false;
+    };
+    let Some(after_name) = text.rsplit_once(") ").map(|(_, rest)| rest) else {
+        return true;
+    };
+    !after_name.starts_with("Z ")
+}
+
+static TEST_ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+
+struct EnvGuard {
+    old: Vec<(&'static str, Option<std::ffi::OsString>)>,
+    _guard: std::sync::MutexGuard<'static, ()>,
+}
+
+impl EnvGuard {
+    fn set(key: &'static str, value: &str) -> Self {
+        Self::set_many(&[(key, value)])
+    }
+
+    fn set_many(values: &[(&'static str, &str)]) -> Self {
+        let guard = TEST_ENV_LOCK
+            .get_or_init(|| Mutex::new(()))
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut old = Vec::new();
+        for (key, value) in values {
+            old.push((*key, std::env::var_os(key)));
+            std::env::set_var(key, value);
+        }
+        Self { old, _guard: guard }
+    }
+}
+
+impl Drop for EnvGuard {
+    fn drop(&mut self) {
+        for (key, old) in self.old.iter().rev() {
+            if let Some(old) = old {
+                std::env::set_var(key, old);
+            } else {
+                std::env::remove_var(key);
+            }
+        }
+    }
 }
 
 fn private_repo() -> tempfile::TempDir {
@@ -101,6 +178,34 @@ fn selection(executable: &Path, args: Vec<String>) -> RunnerProfileSelectionV1 {
     }
 }
 
+fn run_hidden_supervisor_with_env(
+    repo: &Path,
+    control: &Path,
+    nonce: &ControlNoncePlaintext,
+) -> pulse::Result<()> {
+    run_hidden_supervisor_with_extra_env(repo, control, nonce, &[])
+}
+
+fn run_hidden_supervisor_with_extra_env(
+    repo: &Path,
+    control: &Path,
+    nonce: &ControlNoncePlaintext,
+    extra: &[(&'static str, &str)],
+) -> pulse::Result<()> {
+    let nonce_hex = hex::encode(nonce.plaintext_for_spawn_only());
+    let literal_hex = hex::encode(b"literal-value");
+    let mut env = vec![
+        (HIDDEN_SUPERVISOR_NONCE_ENV, nonce_hex.as_str()),
+        (
+            "PULSE_RUN_SUPERVISOR_LITERAL_ENV_HEX_PULSE_LITERAL_ENV",
+            literal_hex.as_str(),
+        ),
+    ];
+    env.extend_from_slice(extra);
+    let _env = EnvGuard::set_many(&env);
+    run_hidden_supervisor(repo, control)
+}
+
 fn descriptor(
     repo: &Path,
     workspace: &Path,
@@ -150,7 +255,6 @@ fn hidden_supervisor_executes_fixture_and_records_exit() {
         workspace.path(),
         "#!/bin/sh\npwd > cwd.txt\nprintf '%s' \"$1\" > argv.txt\nprintf '%s' \"$PULSE_SUPERVISOR_TEST_ENV\" > env.txt\nprintf '%s' \"$PULSE_LITERAL_ENV\" > literal-env.txt\nprintf 'hello-stdout'\nprintf 'hello-stderr' >&2\nexit 0\n",
     );
-    std::env::set_var("PULSE_SUPERVISOR_TEST_ENV", "allowed-value");
     let (nonce, desc, control) = descriptor(
         repo.path(),
         workspace.path(),
@@ -161,11 +265,13 @@ fn hidden_supervisor_executes_fixture_and_records_exit() {
     );
     let control_abs = repo.path().join(&control);
     fs::write(&control_abs, to_canonical_bytes(&desc).unwrap()).unwrap();
-    std::env::set_var(
-        HIDDEN_SUPERVISOR_NONCE_ENV,
-        hex::encode(nonce.plaintext_for_spawn_only()),
-    );
-    run_hidden_supervisor(repo.path(), &control).unwrap();
+    run_hidden_supervisor_with_extra_env(
+        repo.path(),
+        &control,
+        &nonce,
+        &[("PULSE_SUPERVISOR_TEST_ENV", "allowed-value")],
+    )
+    .unwrap();
 
     assert_eq!(
         fs::read_to_string(workspace.path().join("argv.txt")).unwrap(),
@@ -179,6 +285,10 @@ fn hidden_supervisor_executes_fixture_and_records_exit() {
         fs::read_to_string(workspace.path().join("literal-env.txt")).unwrap(),
         "literal-value"
     );
+    let descriptor_json = fs::read_to_string(&control_abs).unwrap();
+    assert!(!descriptor_json.contains("literal-value"));
+    assert!(!descriptor_json.contains("private_literal_environment_values"));
+    assert_runtime_does_not_contain(repo.path(), "literal-value");
     let exit = fs::read_to_string(
         repo.path()
             .join(".pulse/runtime/run/control/run_TEST.exit.json"),
@@ -250,11 +360,7 @@ fn large_stdout_and_stderr_are_bounded_and_truncated() {
         to_canonical_bytes(&desc).unwrap(),
     )
     .unwrap();
-    std::env::set_var(
-        HIDDEN_SUPERVISOR_NONCE_ENV,
-        hex::encode(nonce.plaintext_for_spawn_only()),
-    );
-    run_hidden_supervisor(repo.path(), &control).unwrap();
+    run_hidden_supervisor_with_env(repo.path(), &control, &nonce).unwrap();
     let exit = fs::read_to_string(
         repo.path()
             .join(".pulse/runtime/run/control/run_TEST.exit.json"),
@@ -281,11 +387,7 @@ fn nonzero_signal_timeout_and_no_force_paths_are_observed() {
         to_canonical_bytes(&desc).unwrap(),
     )
     .unwrap();
-    std::env::set_var(
-        HIDDEN_SUPERVISOR_NONCE_ENV,
-        hex::encode(nonce.plaintext_for_spawn_only()),
-    );
-    run_hidden_supervisor(repo.path(), &control).unwrap();
+    run_hidden_supervisor_with_env(repo.path(), &control, &nonce).unwrap();
     let exit = fs::read_to_string(
         repo.path()
             .join(".pulse/runtime/run/control/run_TEST.exit.json"),
@@ -303,11 +405,7 @@ fn nonzero_signal_timeout_and_no_force_paths_are_observed() {
         to_canonical_bytes(&desc).unwrap(),
     )
     .unwrap();
-    std::env::set_var(
-        HIDDEN_SUPERVISOR_NONCE_ENV,
-        hex::encode(nonce.plaintext_for_spawn_only()),
-    );
-    run_hidden_supervisor(repo.path(), &control).unwrap();
+    run_hidden_supervisor_with_env(repo.path(), &control, &nonce).unwrap();
     let exit = fs::read_to_string(
         repo.path()
             .join(".pulse/runtime/run/control/run_TEST.exit.json"),
@@ -325,11 +423,7 @@ fn nonzero_signal_timeout_and_no_force_paths_are_observed() {
         to_canonical_bytes(&desc).unwrap(),
     )
     .unwrap();
-    std::env::set_var(
-        HIDDEN_SUPERVISOR_NONCE_ENV,
-        hex::encode(nonce.plaintext_for_spawn_only()),
-    );
-    run_hidden_supervisor(repo.path(), &control).unwrap();
+    run_hidden_supervisor_with_env(repo.path(), &control, &nonce).unwrap();
     let exit = fs::read_to_string(
         repo.path()
             .join(".pulse/runtime/run/control/run_TEST.exit.json"),
@@ -354,7 +448,9 @@ fn nonce_mismatch_and_identity_change_fail_closed() {
     )
     .unwrap();
     let wrong = ControlNoncePlaintext::generate();
-    let error = run_hidden_supervisor(repo.path(), &control).err().unwrap();
+    let error = run_hidden_supervisor_with_env(repo.path(), &control, &wrong)
+        .err()
+        .unwrap();
     assert_eq!(error.code(), "run_control_record_invalid");
     assert!(!repo
         .path()
@@ -484,7 +580,7 @@ fn descriptor_rejects_alias_collision_and_wrong_layout_paths() {
         to_canonical_bytes(&desc).unwrap(),
     )
     .unwrap();
-    let error = run_hidden_supervisor(repo.path(), &control).unwrap_err();
+    let error = run_hidden_supervisor_with_env(repo.path(), &control, &nonce).unwrap_err();
     assert_eq!(error.code(), "run_control_record_invalid");
 
     let (_nonce2, mut desc, control) =
@@ -500,7 +596,7 @@ fn descriptor_rejects_alias_collision_and_wrong_layout_paths() {
         to_canonical_bytes(&desc).unwrap(),
     )
     .unwrap();
-    let error = run_hidden_supervisor(repo.path(), &control).unwrap_err();
+    let error = run_hidden_supervisor_with_env(repo.path(), &control, &_nonce2).unwrap_err();
     assert_eq!(error.code(), "run_control_record_invalid");
     assert!(!repo
         .path()
@@ -531,7 +627,7 @@ fn descriptor_rejects_symlink_component_in_managed_path() {
         to_canonical_bytes(&desc).unwrap(),
     )
     .unwrap();
-    let error = run_hidden_supervisor(repo.path(), &control).unwrap_err();
+    let error = run_hidden_supervisor_with_env(repo.path(), &control, &_nonce).unwrap_err();
     assert_eq!(error.code(), "run_control_record_invalid");
 }
 
@@ -653,7 +749,7 @@ fn final_spawn_rejects_symlinked_executable_after_selection() {
         to_canonical_bytes(&desc).unwrap(),
     )
     .unwrap();
-    let error = run_hidden_supervisor(repo.path(), &control).unwrap_err();
+    let error = run_hidden_supervisor_with_env(repo.path(), &control, &nonce).unwrap_err();
     assert!(matches!(
         error.code(),
         "run_command_not_found" | "run_control_record_invalid"
@@ -663,6 +759,69 @@ fn final_spawn_rejects_symlinked_executable_after_selection() {
         .join(".pulse/runtime/run/control/run_TEST.exit.json")
         .exists());
     assert_eq!(nonce.record().nonce_hash, desc.nonce_hash);
+}
+
+#[test]
+fn launch_timeout_before_handshake_cleans_child_process_tree() {
+    if !cfg!(target_os = "linux") {
+        return;
+    }
+    let _env = EnvGuard::set("PULSE_RUN_SUPERVISOR_TEST_DELAY_HANDSHAKE_MS", "1500");
+    let repo = private_repo();
+    let workspace = tempfile::tempdir().unwrap();
+    let child_pid_file = workspace.path().join("child.pid");
+    let grandchild_pid_file = workspace.path().join("grandchild.pid");
+    let script = fixture_script(
+        workspace.path(),
+        &format!(
+            "#!/bin/sh\necho $$ > {child}\n(sh -c 'echo $$ > {grand}; trap \"\" TERM; while true; do sleep 1; done') &\ntrap \"\" TERM\nwhile true; do sleep 1; done\n",
+            child = child_pid_file.display(),
+            grand = grandchild_pid_file.display(),
+        ),
+    );
+    let (nonce, desc, control) =
+        descriptor(repo.path(), workspace.path(), &script, vec![], 60, true);
+    let launch_error = launch_supervisor(SupervisorLaunchConfig {
+        repo_root: repo.path().to_path_buf(),
+        control_relative_path: control,
+        descriptor: desc,
+        nonce: nonce.plaintext_for_spawn_only().to_vec(),
+        start_timeout: Duration::from_millis(250),
+        pulse_exe: pulse_bin(),
+    })
+    .unwrap_err();
+    assert_eq!(launch_error.code(), "run_supervisor_handshake_timeout");
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !child_pid_file.exists() || !grandchild_pid_file.exists() {
+        assert!(
+            Instant::now() < deadline,
+            "child/grandchild pid markers not written"
+        );
+        thread::sleep(Duration::from_millis(25));
+    }
+    let child_pid: u64 = fs::read_to_string(&child_pid_file)
+        .unwrap()
+        .trim()
+        .parse()
+        .unwrap();
+    let grandchild_pid: u64 = fs::read_to_string(&grandchild_pid_file)
+        .unwrap()
+        .trim()
+        .parse()
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while process_exists(child_pid) || process_exists(grandchild_pid) {
+        if Instant::now() >= deadline {
+            panic!(
+                "startup timeout left process tree orphaned: child={} grandchild={}",
+                fs::read_to_string(format!("/proc/{child_pid}/stat"))
+                    .unwrap_or_else(|_| "missing".to_string()),
+                fs::read_to_string(format!("/proc/{grandchild_pid}/stat"))
+                    .unwrap_or_else(|_| "missing".to_string())
+            );
+        }
+        thread::sleep(Duration::from_millis(25));
+    }
 }
 
 #[test]

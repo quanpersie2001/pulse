@@ -19,13 +19,21 @@ use std::fs::{self, OpenOptions};
 use std::io::{Read, Write};
 use std::path::{Component, Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
-use std::sync::{Arc, Mutex};
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc, Mutex,
+};
 use std::thread;
 use std::time::{Duration, Instant};
 
 #[cfg(unix)]
+use std::os::fd::{AsRawFd, FromRawFd, RawFd};
+#[cfg(unix)]
+use std::os::unix::net::UnixStream;
+
+#[cfg(unix)]
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 use std::os::unix::process::CommandExt;
 #[cfg(unix)]
 use std::os::unix::process::ExitStatusExt;
@@ -41,6 +49,12 @@ const PREFIX_BUDGET_DIVISOR: usize = 2;
 const SUPERVISOR_HEARTBEAT_INTERVAL: Duration = Duration::from_millis(100);
 const SUPERVISOR_POLL_INTERVAL: Duration = Duration::from_millis(25);
 const MANAGED_CONTROL_PREFIX: &str = ".pulse/runtime/run/control";
+#[cfg(target_os = "linux")]
+const F_GETFD: i32 = 1;
+#[cfg(target_os = "linux")]
+const F_SETFD: i32 = 2;
+#[cfg(target_os = "linux")]
+const FD_CLOEXEC: i32 = 1;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
@@ -131,6 +145,9 @@ pub struct SupervisorControlDescriptorV1 {
     pub argv: Vec<String>,
     pub argv_hash: String,
     pub environment: Vec<SupervisorEnvironmentEntryV1>,
+    pub environment_spec_fingerprint: String,
+    #[serde(default, skip_serializing)]
+    pub private_literal_environment_values: BTreeMap<String, String>,
     pub input_json_path: String,
     pub stdout_prefix_path: String,
     pub stdout_tail_path: String,
@@ -153,7 +170,6 @@ pub struct SupervisorControlDescriptorV1 {
 pub struct SupervisorEnvironmentEntryV1 {
     pub name: String,
     pub source: RunnerEnvironmentSourceV1,
-    pub value: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -250,6 +266,10 @@ pub fn ensure_supported_platform() -> Result<()> {
 pub const HIDDEN_SUPERVISOR_COMMAND: &str = "__run-supervisor";
 pub const HIDDEN_SUPERVISOR_NONCE_ENV: &str = "PULSE_RUN_SUPERVISOR_NONCE_HEX";
 pub const HIDDEN_SUPERVISOR_HANDSHAKE_ENV: &str = "PULSE_RUN_SUPERVISOR_HANDSHAKE_PATH";
+pub const HIDDEN_SUPERVISOR_PARENT_FD_ENV: &str = "PULSE_RUN_SUPERVISOR_PARENT_FD";
+pub const HIDDEN_SUPERVISOR_LITERAL_ENV_PREFIX: &str = "PULSE_RUN_SUPERVISOR_LITERAL_ENV_HEX_";
+const HIDDEN_SUPERVISOR_TEST_DELAY_HANDSHAKE_MS_ENV: &str =
+    "PULSE_RUN_SUPERVISOR_TEST_DELAY_HANDSHAKE_MS";
 
 pub fn supervisor_packaging_probe() -> Result<SupervisorPackagingProbeV1> {
     let current_exe =
@@ -304,6 +324,7 @@ pub fn hidden_supervisor_probe_dispatch(control: &Path) -> Result<SupervisorPack
             "hidden supervisor nonce environment was not provided",
         )
     })?;
+    std::env::remove_var(HIDDEN_SUPERVISOR_NONCE_ENV);
     let nonce = hex::decode(nonce_hex).map_err(|_| {
         PulseError::validation(
             "run_control_record_invalid",
@@ -323,11 +344,14 @@ pub fn run_hidden_supervisor(repo_root: &Path, control: &Path) -> Result<()> {
     ensure_supported_platform()?;
     validate_hidden_supervisor_control_path(control)?;
     let nonce = read_nonce_from_environment()?;
+    let parent_lifetime = take_parent_lifetime_pipe()?;
     let control_path = repo_root.join(control);
     validate_managed_control_file(repo_root, &control_path)?;
-    let descriptor: SupervisorControlDescriptorV1 = read_canonical_json(&control_path)?;
+    let mut descriptor: SupervisorControlDescriptorV1 = read_canonical_json(&control_path)?;
+    descriptor.private_literal_environment_values =
+        read_private_literal_environment_values(&descriptor)?;
     validate_descriptor(repo_root, control, &descriptor, &nonce)?;
-    let result = supervisor_main(repo_root, control, descriptor, nonce);
+    let result = supervisor_main(repo_root, control, descriptor, nonce, parent_lifetime);
     match result {
         Ok(()) => Ok(()),
         Err(error) => {
@@ -340,9 +364,128 @@ pub fn run_hidden_supervisor(repo_root: &Path, control: &Path) -> Result<()> {
     }
 }
 
-pub fn launch_supervisor(config: SupervisorLaunchConfig) -> Result<SupervisorLaunchReport> {
+#[cfg(unix)]
+fn parent_lifetime_pipe() -> Result<(UnixStream, UnixStream)> {
+    UnixStream::pair().map_err(|error| PulseError::io("<supervisor-parent-pipe>", error))
+}
+
+#[cfg(unix)]
+fn spawn_supervisor_with_inherited_fd(mut command: Command, keep_fd: RawFd) -> Result<Child> {
+    unsafe {
+        command.pre_exec(move || {
+            clear_cloexec(keep_fd);
+            Ok(())
+        });
+    }
+    command
+        .spawn()
+        .map_err(|error| PulseError::io("<supervisor-spawn>", error))
+}
+
+#[cfg(unix)]
+fn take_parent_lifetime_pipe() -> Result<Option<UnixStream>> {
+    let Some(fd_raw) = std::env::var_os(HIDDEN_SUPERVISOR_PARENT_FD_ENV) else {
+        return Ok(None);
+    };
+    std::env::remove_var(HIDDEN_SUPERVISOR_PARENT_FD_ENV);
+    let fd_text = fd_raw.to_str().ok_or_else(|| {
+        PulseError::validation(
+            "run_control_record_invalid",
+            "supervisor parent pipe fd was not UTF-8",
+        )
+    })?;
+    let fd: RawFd = fd_text.parse().map_err(|_| {
+        PulseError::validation(
+            "run_control_record_invalid",
+            "supervisor parent pipe fd was not an integer",
+        )
+    })?;
+    if fd < 0 {
+        return Err(PulseError::validation(
+            "run_control_record_invalid",
+            "supervisor parent pipe fd was invalid",
+        ));
+    }
+    let stream = unsafe { UnixStream::from_raw_fd(fd) };
+    set_cloexec(stream.as_raw_fd());
+    stream
+        .set_nonblocking(true)
+        .map_err(|error| PulseError::io("<supervisor-parent-pipe>", error))?;
+    Ok(Some(stream))
+}
+
+#[cfg(unix)]
+fn add_private_literal_environment(
+    command: &mut Command,
+    descriptor: &SupervisorControlDescriptorV1,
+) -> Result<()> {
+    for (name, value) in &descriptor.private_literal_environment_values {
+        command.env(
+            literal_transport_env_name(name)?,
+            hex::encode(value.as_bytes()),
+        );
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn read_private_literal_environment_values(
+    descriptor: &SupervisorControlDescriptorV1,
+) -> Result<BTreeMap<String, String>> {
+    let mut values = BTreeMap::new();
+    for entry in &descriptor.environment {
+        if entry.source != RunnerEnvironmentSourceV1::LiteralNonSecret {
+            continue;
+        }
+        let transport_name = literal_transport_env_name(&entry.name)?;
+        let encoded = std::env::var(&transport_name).map_err(|_| {
+            PulseError::validation(
+                "run_control_record_invalid",
+                "literal environment private transport was missing",
+            )
+        })?;
+        std::env::remove_var(&transport_name);
+        let bytes = hex::decode(encoded).map_err(|_| {
+            PulseError::validation(
+                "run_control_record_invalid",
+                "literal environment private transport was not valid hex",
+            )
+        })?;
+        let value = String::from_utf8(bytes).map_err(|_| {
+            PulseError::validation(
+                "run_control_record_invalid",
+                "literal environment private transport was not UTF-8",
+            )
+        })?;
+        values.insert(entry.name.clone(), value);
+    }
+    Ok(values)
+}
+
+fn literal_transport_env_name(name: &str) -> Result<String> {
+    if !valid_env_name(name) {
+        return Err(PulseError::validation(
+            "run_control_record_invalid",
+            "literal environment name is invalid",
+        ));
+    }
+    Ok(format!("{HIDDEN_SUPERVISOR_LITERAL_ENV_PREFIX}{name}"))
+}
+
+fn valid_env_name(name: &str) -> bool {
+    let mut chars = name.chars();
+    match chars.next() {
+        Some(first) if first == '_' || first.is_ascii_uppercase() => {}
+        _ => return false,
+    }
+    chars.all(|c| c == '_' || c.is_ascii_uppercase() || c.is_ascii_digit())
+}
+
+pub fn launch_supervisor(mut config: SupervisorLaunchConfig) -> Result<SupervisorLaunchReport> {
     ensure_supported_platform()?;
     validate_hidden_supervisor_control_path(&config.control_relative_path)?;
+    let private_literal_environment_values =
+        std::mem::take(&mut config.descriptor.private_literal_environment_values);
     validate_descriptor(
         &config.repo_root,
         &config.control_relative_path,
@@ -351,6 +494,7 @@ pub fn launch_supervisor(config: SupervisorLaunchConfig) -> Result<SupervisorLau
     )?;
     let control_path = config.repo_root.join(&config.control_relative_path);
     write_json_create_new_private(&control_path, &config.descriptor)?;
+    config.descriptor.private_literal_environment_values = private_literal_environment_values;
     let handshake_path = control_path.with_extension("handshake.json");
     if handshake_path.exists() {
         return Err(PulseError::validation(
@@ -358,6 +502,7 @@ pub fn launch_supervisor(config: SupervisorLaunchConfig) -> Result<SupervisorLau
             "startup handshake path already exists",
         ));
     }
+    let (parent_pipe, child_pipe) = parent_lifetime_pipe()?;
     let mut child = Command::new(&config.pulse_exe);
     child
         .arg("--repo-root")
@@ -367,12 +512,16 @@ pub fn launch_supervisor(config: SupervisorLaunchConfig) -> Result<SupervisorLau
         .arg(&config.control_relative_path)
         .env(HIDDEN_SUPERVISOR_NONCE_ENV, hex::encode(&config.nonce))
         .env(HIDDEN_SUPERVISOR_HANDSHAKE_ENV, &handshake_path)
+        .env(
+            HIDDEN_SUPERVISOR_PARENT_FD_ENV,
+            child_pipe.as_raw_fd().to_string(),
+        )
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
-    let mut supervisor = child
-        .spawn()
-        .map_err(|error| PulseError::io("<supervisor-spawn>", error))?;
+    add_private_literal_environment(&mut child, &config.descriptor)?;
+    let mut supervisor = spawn_supervisor_with_inherited_fd(child, child_pipe.as_raw_fd())?;
+    drop(child_pipe);
     let supervisor_identity =
         current_process_identity(supervisor.id()).unwrap_or_else(|_| ProcessIdentityV1 {
             pid: supervisor.id(),
@@ -397,6 +546,7 @@ pub fn launch_supervisor(config: SupervisorLaunchConfig) -> Result<SupervisorLau
                     });
                 }
                 Err(error) => {
+                    drop(parent_pipe);
                     cleanup_supervisor_after_start_failure(&mut supervisor, &handshake_path);
                     return Err(error);
                 }
@@ -412,6 +562,7 @@ pub fn launch_supervisor(config: SupervisorLaunchConfig) -> Result<SupervisorLau
             ));
         }
         if Instant::now() >= deadline {
+            drop(parent_pipe);
             cleanup_supervisor_after_start_failure(&mut supervisor, &handshake_path);
             return Err(PulseError::validation(
                 "run_supervisor_handshake_timeout",
@@ -434,6 +585,13 @@ fn cleanup_supervisor_after_start_failure(supervisor: &mut Child, handshake_path
                 }
             }
         }
+    }
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while Instant::now() < deadline {
+        if supervisor.try_wait().ok().flatten().is_some() {
+            return;
+        }
+        thread::sleep(SUPERVISOR_POLL_INTERVAL);
     }
     let _ = supervisor.kill();
     let _ = supervisor.wait();
@@ -471,6 +629,8 @@ pub fn build_descriptor_for_selection(
         argv,
         argv_hash,
         environment: env_entries,
+        environment_spec_fingerprint: selection.environment_spec_fingerprint.clone(),
+        private_literal_environment_values: literal_environment_values(selection)?,
         input_json_path: path_to_string(input_json_path)?,
         stdout_prefix_path: path_to_string(
             &log_root.join(format!("{attempt_id}.stdout.prefix.log")),
@@ -753,6 +913,7 @@ fn supervisor_main(
     control_relative: &Path,
     descriptor: SupervisorControlDescriptorV1,
     nonce: Vec<u8>,
+    parent_lifetime: Option<UnixStream>,
 ) -> Result<()> {
     let mut command = build_child_command(&descriptor)?;
     command
@@ -760,10 +921,31 @@ fn supervisor_main(
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    let parent_closed = Arc::new(AtomicBool::new(false));
+    let parent_watch_active = Arc::new(AtomicBool::new(true));
+    let parent_watcher = parent_lifetime.map(|stream| {
+        watch_parent_lifetime(
+            stream,
+            Arc::clone(&parent_closed),
+            Arc::clone(&parent_watch_active),
+        )
+    });
+    if parent_closed.load(Ordering::SeqCst) {
+        parent_watch_active.store(false, Ordering::SeqCst);
+        drop(parent_closed);
+        join_parent_watcher(parent_watcher);
+        return Err(PulseError::validation(
+            "run_supervisor_parent_closed",
+            "launching parent closed startup channel before child spawn",
+        ));
+    }
     let mut child = match spawn_process_group(&mut command) {
         Ok(child) => child,
         Err(error) => {
             write_failed_start_observation(repo_root, &descriptor, &nonce, error.code())?;
+            parent_watch_active.store(false, Ordering::SeqCst);
+            drop(parent_closed);
+            join_parent_watcher(parent_watcher);
             return Err(error);
         }
     };
@@ -815,12 +997,31 @@ fn supervisor_main(
         descriptor.max_stderr_bytes as usize,
     );
 
+    maybe_delay_startup_handshake_for_tests(&parent_closed);
+    if parent_closed.load(Ordering::SeqCst) {
+        cleanup_spawned_child(
+            &mut child,
+            Some(&child_identity_low),
+            Some((stdout_log, stderr_log)),
+        );
+        parent_watch_active.store(false, Ordering::SeqCst);
+        drop(parent_closed);
+        join_parent_watcher(parent_watcher);
+        return Err(PulseError::validation(
+            "run_supervisor_parent_closed",
+            "launching parent closed startup channel before handshake",
+        ));
+    }
+
     if let Err(error) = write_startup_handshake(&descriptor, &child_identity) {
         cleanup_spawned_child(
             &mut child,
             Some(&child_identity_low),
             Some((stdout_log, stderr_log)),
         );
+        parent_watch_active.store(false, Ordering::SeqCst);
+        drop(parent_closed);
+        join_parent_watcher(parent_watcher);
         return Err(error);
     }
     if let Err(error) = write_heartbeat(&descriptor, Some(child.id() as u64)) {
@@ -829,6 +1030,9 @@ fn supervisor_main(
             Some(&child_identity_low),
             Some((stdout_log, stderr_log)),
         );
+        parent_watch_active.store(false, Ordering::SeqCst);
+        drop(parent_closed);
+        join_parent_watcher(parent_watcher);
         return Err(error);
     }
 
@@ -841,6 +1045,10 @@ fn supervisor_main(
             .map_err(|error| PulseError::io("<child-wait>", error))?
         {
             break exit;
+        }
+        if parent_closed.load(Ordering::SeqCst) && !cancel_requested {
+            cancel_requested = true;
+            request_signal_policy(&child_identity, descriptor_timeout_policy(&descriptor))?;
         }
         if !cancel_requested
             && started.elapsed() >= Duration::from_secs(descriptor.run_timeout_seconds)
@@ -893,6 +1101,51 @@ fn supervisor_main(
     Ok(())
 }
 
+#[cfg(unix)]
+fn watch_parent_lifetime(
+    stream: UnixStream,
+    closed: Arc<AtomicBool>,
+    active: Arc<AtomicBool>,
+) -> thread::JoinHandle<()> {
+    thread::spawn(move || {
+        let mut byte = [0_u8; 1];
+        while active.load(Ordering::SeqCst) {
+            match (&stream).read(&mut byte) {
+                Ok(0) => {
+                    closed.store(true, Ordering::SeqCst);
+                    break;
+                }
+                Ok(_) => continue,
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    thread::sleep(SUPERVISOR_POLL_INTERVAL);
+                }
+                Err(_) => {
+                    closed.store(true, Ordering::SeqCst);
+                    break;
+                }
+            }
+        }
+    })
+}
+
+#[cfg(unix)]
+fn join_parent_watcher(handle: Option<thread::JoinHandle<()>>) {
+    if let Some(handle) = handle {
+        let _ = handle.join();
+    }
+}
+
+fn maybe_delay_startup_handshake_for_tests(parent_closed: &AtomicBool) {
+    if let Ok(value) = std::env::var(HIDDEN_SUPERVISOR_TEST_DELAY_HANDSHAKE_MS_ENV) {
+        if let Ok(ms) = value.parse::<u64>() {
+            let deadline = Instant::now() + Duration::from_millis(ms);
+            while Instant::now() < deadline && !parent_closed.load(Ordering::SeqCst) {
+                thread::sleep(SUPERVISOR_POLL_INTERVAL);
+            }
+        }
+    }
+}
+
 fn build_child_command(descriptor: &SupervisorControlDescriptorV1) -> Result<Command> {
     let executable = PathBuf::from(&descriptor.executable_path);
     revalidate_executable_identity(&executable, &descriptor.executable_identity)?;
@@ -914,12 +1167,15 @@ fn build_child_command(descriptor: &SupervisorControlDescriptorV1) -> Result<Com
                 }
             }
             RunnerEnvironmentSourceV1::LiteralNonSecret => {
-                let value = entry.value.as_ref().ok_or_else(|| {
-                    PulseError::validation(
-                        "run_control_record_invalid",
-                        "literal environment entry missing value",
-                    )
-                })?;
+                let value = descriptor
+                    .private_literal_environment_values
+                    .get(&entry.name)
+                    .ok_or_else(|| {
+                        PulseError::validation(
+                            "run_control_record_invalid",
+                            "literal environment entry missing private transport value",
+                        )
+                    })?;
                 command.env(&entry.name, value);
             }
         }
@@ -962,18 +1218,26 @@ fn cleanup_spawned_child(
         if process_identity_matches(identity).unwrap_or(false) {
             let _ = signal_process_group(identity, 15);
             let deadline = Instant::now() + Duration::from_millis(500);
+            let mut child_exited = false;
             while Instant::now() < deadline {
                 if child.try_wait().ok().flatten().is_some() {
-                    if let Some((stdout, stderr)) = logs {
-                        let _ = join_log(stdout);
-                        let _ = join_log(stderr);
-                    }
-                    return;
+                    child_exited = true;
+                    break;
                 }
                 thread::sleep(SUPERVISOR_POLL_INTERVAL);
             }
-            if process_identity_matches(identity).unwrap_or(false) {
+            if let Some(_pgid) = identity.process_group_id {
+                #[cfg(target_os = "linux")]
+                {
+                    let _ = kill_process_group(_pgid, 9);
+                }
+            } else if process_identity_matches(identity).unwrap_or(false) {
                 let _ = signal_process_group(identity, 9);
+            }
+            if child_exited {
+                // The direct child may have exited on TERM while grandchildren in
+                // its process group ignored TERM. Keep falling through to join
+                // log drainers after the best-effort group KILL above.
             }
         }
     } else {
@@ -1440,32 +1704,47 @@ fn empty_log_ref(prefix: &str, tail: &str) -> BoundedLogRefV1 {
 fn build_environment_spec(
     selection: &RunnerProfileSelectionV1,
 ) -> Result<Vec<SupervisorEnvironmentEntryV1>> {
-    let mut literal_values = selection.literal_environment_values.clone();
+    let literal_values = literal_environment_values(selection)?;
     let mut entries = Vec::new();
     for env in &selection.environment {
-        let value = match env.source {
-            RunnerEnvironmentSourceV1::Inherited => None,
-            RunnerEnvironmentSourceV1::LiteralNonSecret => {
-                let value = literal_values.remove(&env.name).ok_or_else(|| {
-                    PulseError::validation(
-                        "run_profile_invalid",
-                        "literal environment spec is missing its private value",
-                    )
-                })?;
-                let Some(value) = value.as_str() else {
-                    return Err(PulseError::validation(
-                        "run_profile_invalid",
-                        "literal environment values must be strings",
-                    ));
-                };
-                Some(value.to_string())
-            }
-        };
+        if env.source == RunnerEnvironmentSourceV1::LiteralNonSecret
+            && !literal_values.contains_key(&env.name)
+        {
+            return Err(PulseError::validation(
+                "run_profile_invalid",
+                "literal environment spec is missing its private value",
+            ));
+        }
         entries.push(SupervisorEnvironmentEntryV1 {
             name: env.name.clone(),
             source: env.source.clone(),
-            value,
         });
+    }
+    Ok(entries)
+}
+
+fn literal_environment_values(
+    selection: &RunnerProfileSelectionV1,
+) -> Result<BTreeMap<String, String>> {
+    let mut literal_values = selection.literal_environment_values.clone();
+    let mut values = BTreeMap::new();
+    for env in &selection.environment {
+        if env.source != RunnerEnvironmentSourceV1::LiteralNonSecret {
+            continue;
+        }
+        let value = literal_values.remove(&env.name).ok_or_else(|| {
+            PulseError::validation(
+                "run_profile_invalid",
+                "literal environment spec is missing its private value",
+            )
+        })?;
+        let Some(value) = value.as_str() else {
+            return Err(PulseError::validation(
+                "run_profile_invalid",
+                "literal environment values must be strings",
+            ));
+        };
+        values.insert(env.name.clone(), value.to_string());
     }
     if !literal_values.is_empty() {
         return Err(PulseError::validation(
@@ -1473,7 +1752,7 @@ fn build_environment_spec(
             "literal environment value without matching environment spec",
         ));
     }
-    Ok(entries)
+    Ok(values)
 }
 
 fn hash_argv(executable: &str, argv: &[String]) -> Result<String> {
@@ -1891,6 +2170,37 @@ extern "C" {
 }
 
 #[cfg(target_os = "linux")]
+fn clear_cloexec(fd: RawFd) {
+    update_cloexec(fd, false);
+}
+
+#[cfg(target_os = "linux")]
+fn set_cloexec(fd: RawFd) {
+    update_cloexec(fd, true);
+}
+
+#[cfg(target_os = "linux")]
+fn update_cloexec(fd: RawFd, enabled: bool) {
+    unsafe {
+        let flags = fcntl(fd, F_GETFD);
+        if flags >= 0 {
+            let updated = if enabled {
+                flags | FD_CLOEXEC
+            } else {
+                flags & !FD_CLOEXEC
+            };
+            let _ = fcntl(fd, F_SETFD, updated);
+        }
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn clear_cloexec(_fd: RawFd) {}
+
+#[cfg(not(target_os = "linux"))]
+fn set_cloexec(_fd: RawFd) {}
+
+#[cfg(target_os = "linux")]
 fn setpgid_zero() -> i32 {
     unsafe { setpgid(0, 0) }
 }
@@ -1904,6 +2214,7 @@ fn kill_process_group(pgid: i64, signal: i32) -> i32 {
 extern "C" {
     fn setpgid(pid: i32, pgid: i32) -> i32;
     fn kill(pid: i32, sig: i32) -> i32;
+    fn fcntl(fd: i32, cmd: i32, ...) -> i32;
 }
 
 #[cfg(test)]
