@@ -122,6 +122,8 @@ pub struct RunnerProfileSelectionV1 {
     pub executable: RunnerExecutableIdentityV1,
     pub fixed_args: Vec<String>,
     pub environment: Vec<RunnerEnvironmentSpecEntryV1>,
+    #[serde(default, skip_serializing)]
+    pub literal_environment_values: Map<String, Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

@@ -1574,6 +1574,7 @@ pub fn select_profile_from_registry(
         executable,
         fixed_args: profile.fixed_args.clone(),
         environment,
+        literal_environment_values: profile.environment_set.clone(),
     })
 }
 

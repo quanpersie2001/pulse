@@ -13,6 +13,7 @@ use crate::{PulseError, Result};
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use std::collections::BTreeMap;
 use std::ffi::OsStr;
 use std::fs::{self, OpenOptions};
 use std::io::{Read, Write};
@@ -23,7 +24,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 #[cfg(unix)]
-use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
 #[cfg(target_os = "linux")]
 use std::os::unix::process::CommandExt;
 #[cfg(unix)]
@@ -372,23 +373,34 @@ pub fn launch_supervisor(config: SupervisorLaunchConfig) -> Result<SupervisorLau
     let mut supervisor = child
         .spawn()
         .map_err(|error| PulseError::io("<supervisor-spawn>", error))?;
-    let supervisor_identity = match current_process_identity(supervisor.id()) {
-        Ok(identity) => identity,
-        Err(error) => {
-            let _ = supervisor.kill();
-            let _ = supervisor.wait();
-            return Err(error);
-        }
-    };
+    let supervisor_identity =
+        current_process_identity(supervisor.id()).unwrap_or_else(|_| ProcessIdentityV1 {
+            pid: supervisor.id(),
+            process_group_id: None,
+            platform: PLATFORM_SUPPORT.to_string(),
+            platform_start_marker: "supervisor_fast_exit_identity_unavailable".to_string(),
+            identity_status: "startup_observation_only".to_string(),
+        });
     let deadline = Instant::now() + config.start_timeout;
     loop {
         if handshake_path.exists() {
-            let handshake: SupervisorStartupHandshakeV1 = read_canonical_json(&handshake_path)?;
-            validate_handshake(&config.descriptor, &handshake)?;
-            return Ok(SupervisorLaunchReport {
-                handshake,
-                supervisor_identity,
-            });
+            let handshake_result = (|| -> Result<SupervisorStartupHandshakeV1> {
+                let handshake: SupervisorStartupHandshakeV1 = read_canonical_json(&handshake_path)?;
+                validate_handshake(&config.descriptor, &handshake)?;
+                Ok(handshake)
+            })();
+            match handshake_result {
+                Ok(handshake) => {
+                    return Ok(SupervisorLaunchReport {
+                        handshake,
+                        supervisor_identity,
+                    });
+                }
+                Err(error) => {
+                    cleanup_supervisor_after_start_failure(&mut supervisor, &handshake_path);
+                    return Err(error);
+                }
+            }
         }
         if let Some(status) = supervisor
             .try_wait()
@@ -400,8 +412,7 @@ pub fn launch_supervisor(config: SupervisorLaunchConfig) -> Result<SupervisorLau
             ));
         }
         if Instant::now() >= deadline {
-            let _ = supervisor.kill();
-            let _ = supervisor.wait();
+            cleanup_supervisor_after_start_failure(&mut supervisor, &handshake_path);
             return Err(PulseError::validation(
                 "run_supervisor_handshake_timeout",
                 "supervisor did not publish verified startup handshake before timeout",
@@ -409,6 +420,23 @@ pub fn launch_supervisor(config: SupervisorLaunchConfig) -> Result<SupervisorLau
         }
         thread::sleep(SUPERVISOR_POLL_INTERVAL);
     }
+}
+
+fn cleanup_supervisor_after_start_failure(supervisor: &mut Child, handshake_path: &Path) {
+    if let Ok(handshake) = read_canonical_json::<SupervisorStartupHandshakeV1>(handshake_path) {
+        let low = low_level_identity_from_run(&handshake.child_identity).ok();
+        if let Some(identity) = low.as_ref() {
+            if process_identity_matches(identity).unwrap_or(false) {
+                let _ = signal_process_group(identity, 15);
+                thread::sleep(Duration::from_millis(100));
+                if process_identity_matches(identity).unwrap_or(false) {
+                    let _ = signal_process_group(identity, 9);
+                }
+            }
+        }
+    }
+    let _ = supervisor.kill();
+    let _ = supervisor.wait();
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -513,7 +541,7 @@ pub fn signal_process_group(identity: &ProcessIdentityV1, signal: i32) -> Result
         ));
     };
     #[cfg(target_os = "linux")]
-    unsafe {
+    {
         if kill_process_group(pgid, signal) != 0 {
             return Err(PulseError::validation(
                 "run_cancel_signal_failed",
@@ -742,8 +770,7 @@ fn supervisor_main(
     let child_identity_low = match current_process_identity(child.id()) {
         Ok(identity) => identity,
         Err(error) => {
-            let _ = child.kill();
-            let _ = child.wait();
+            cleanup_spawned_child(&mut child, None, None);
             return Err(error);
         }
     };
@@ -754,15 +781,27 @@ fn supervisor_main(
         &child_identity_low,
         &started_at,
     );
-    write_startup_handshake(&descriptor, &child_identity)?;
-    write_heartbeat(&descriptor, Some(child.id() as u64))?;
 
-    let stdout = child.stdout.take().ok_or_else(|| {
-        PulseError::validation("run_log_open_failed", "child stdout pipe was unavailable")
-    })?;
-    let stderr = child.stderr.take().ok_or_else(|| {
-        PulseError::validation("run_log_open_failed", "child stderr pipe was unavailable")
-    })?;
+    let stdout = match child.stdout.take() {
+        Some(stdout) => stdout,
+        None => {
+            cleanup_spawned_child(&mut child, Some(&child_identity_low), None);
+            return Err(PulseError::validation(
+                "run_log_open_failed",
+                "child stdout pipe was unavailable",
+            ));
+        }
+    };
+    let stderr = match child.stderr.take() {
+        Some(stderr) => stderr,
+        None => {
+            cleanup_spawned_child(&mut child, Some(&child_identity_low), None);
+            return Err(PulseError::validation(
+                "run_log_open_failed",
+                "child stderr pipe was unavailable",
+            ));
+        }
+    };
     let stdout_log = drain_to_bounded_logs(
         stdout,
         PathBuf::from(&descriptor.stdout_prefix_path),
@@ -775,6 +814,23 @@ fn supervisor_main(
         PathBuf::from(&descriptor.stderr_tail_path),
         descriptor.max_stderr_bytes as usize,
     );
+
+    if let Err(error) = write_startup_handshake(&descriptor, &child_identity) {
+        cleanup_spawned_child(
+            &mut child,
+            Some(&child_identity_low),
+            Some((stdout_log, stderr_log)),
+        );
+        return Err(error);
+    }
+    if let Err(error) = write_heartbeat(&descriptor, Some(child.id() as u64)) {
+        cleanup_spawned_child(
+            &mut child,
+            Some(&child_identity_low),
+            Some((stdout_log, stderr_log)),
+        );
+        return Err(error);
+    }
 
     let started = Instant::now();
     let mut cancel_requested = false;
@@ -791,26 +847,25 @@ fn supervisor_main(
         {
             timed_out = true;
             cancel_requested = true;
-            request_signal_policy(&child_identity, descriptor.cancel_grace_seconds, true)?;
+            let policy = descriptor_timeout_policy(&descriptor);
+            request_signal_policy(&child_identity, policy)?;
         }
         if !cancel_requested && Path::new(&descriptor.cancel_path).exists() {
             let request: SupervisorCancelRequestV1 =
                 read_canonical_json(Path::new(&descriptor.cancel_path))?;
             validate_cancel_request(&descriptor, &request)?;
             cancel_requested = true;
-            request_signal_policy(
-                &child_identity,
-                request.grace_seconds,
-                request.force_allowed && descriptor.force_allowed,
-            )?;
+            let policy = effective_cancel_policy(&descriptor, &request);
+            request_signal_policy(&child_identity, policy)?;
         }
         if cancel_requested {
-            let grace = Duration::from_secs(descriptor.cancel_grace_seconds);
-            let force = Duration::from_secs(descriptor.force_kill_after_seconds);
-            let policy = CancelPolicy {
-                grace,
-                force_after: force,
-                force_allowed: descriptor.force_allowed,
+            let policy = if Path::new(&descriptor.cancel_path).exists() {
+                let request: SupervisorCancelRequestV1 =
+                    read_canonical_json(Path::new(&descriptor.cancel_path))?;
+                validate_cancel_request(&descriptor, &request)?;
+                effective_cancel_policy(&descriptor, &request)
+            } else {
+                descriptor_timeout_policy(&descriptor)
             };
             if let Some(exit) = wait_for_cancelled(&mut child, &child_identity, policy)? {
                 break exit;
@@ -834,11 +889,7 @@ fn supervisor_main(
         exit,
     };
     write_json_create_new_private(Path::new(&descriptor.exit_path), &observation)?;
-    let _ = fs::remove_file(
-        repo_root
-            .join(control_relative)
-            .with_extension("handshake.json"),
-    );
+    let _ = (repo_root, control_relative);
     Ok(())
 }
 
@@ -876,18 +927,63 @@ fn build_child_command(descriptor: &SupervisorControlDescriptorV1) -> Result<Com
     Ok(command)
 }
 
-fn request_signal_policy(
-    identity: &RunProcessIdentityV1,
-    grace_seconds: u64,
-    force_allowed: bool,
-) -> Result<()> {
-    let policy = CancelPolicy {
-        grace: Duration::from_secs(grace_seconds),
-        force_after: Duration::from_secs(1),
-        force_allowed,
-    };
-    let _ = cancel_verified_process_tree(identity, policy);
-    Ok(())
+fn request_signal_policy(identity: &RunProcessIdentityV1, _policy: CancelPolicy) -> Result<()> {
+    let low = low_level_identity_from_run(identity)?;
+    signal_process_group(&low, 15)
+}
+
+fn descriptor_timeout_policy(descriptor: &SupervisorControlDescriptorV1) -> CancelPolicy {
+    CancelPolicy {
+        grace: Duration::from_secs(descriptor.cancel_grace_seconds),
+        force_after: Duration::from_secs(descriptor.force_kill_after_seconds),
+        force_allowed: descriptor.force_allowed,
+    }
+}
+
+fn effective_cancel_policy(
+    descriptor: &SupervisorControlDescriptorV1,
+    request: &SupervisorCancelRequestV1,
+) -> CancelPolicy {
+    let descriptor_grace = Duration::from_secs(descriptor.cancel_grace_seconds);
+    let request_grace = Duration::from_secs(request.grace_seconds);
+    CancelPolicy {
+        grace: std::cmp::min(descriptor_grace, request_grace),
+        force_after: Duration::from_secs(descriptor.force_kill_after_seconds),
+        force_allowed: descriptor.force_allowed && request.force_allowed,
+    }
+}
+
+fn cleanup_spawned_child(
+    child: &mut Child,
+    identity: Option<&ProcessIdentityV1>,
+    logs: Option<(LogDrainHandle, LogDrainHandle)>,
+) {
+    if let Some(identity) = identity {
+        if process_identity_matches(identity).unwrap_or(false) {
+            let _ = signal_process_group(identity, 15);
+            let deadline = Instant::now() + Duration::from_millis(500);
+            while Instant::now() < deadline {
+                if child.try_wait().ok().flatten().is_some() {
+                    if let Some((stdout, stderr)) = logs {
+                        let _ = join_log(stdout);
+                        let _ = join_log(stderr);
+                    }
+                    return;
+                }
+                thread::sleep(SUPERVISOR_POLL_INTERVAL);
+            }
+            if process_identity_matches(identity).unwrap_or(false) {
+                let _ = signal_process_group(identity, 9);
+            }
+        }
+    } else {
+        let _ = child.kill();
+    }
+    let _ = child.wait();
+    if let Some((stdout, stderr)) = logs {
+        let _ = join_log(stdout);
+        let _ = join_log(stderr);
+    }
 }
 
 fn wait_for_cancelled(
@@ -1027,25 +1123,15 @@ fn validate_descriptor(
     }
     validate_id("run", &descriptor.run_id, "run_")?;
     validate_id("attempt", &descriptor.attempt_id, "attempt_")?;
-    let expected_name = format!("{}.json", descriptor.run_id);
-    if control_relative.file_name().and_then(OsStr::to_str) != Some(expected_name.as_str()) {
+    let expected_control =
+        PathBuf::from(MANAGED_CONTROL_PREFIX).join(format!("{}.json", descriptor.run_id));
+    if control_relative != expected_control {
         return Err(PulseError::validation(
             "run_control_record_invalid",
-            "control path filename must match run id",
+            "control path must be exact .pulse/runtime/run/control/<run_id>.json",
         ));
     }
-    for path in [
-        &descriptor.input_json_path,
-        &descriptor.stdout_prefix_path,
-        &descriptor.stdout_tail_path,
-        &descriptor.stderr_prefix_path,
-        &descriptor.stderr_tail_path,
-        &descriptor.heartbeat_path,
-        &descriptor.cancel_path,
-        &descriptor.exit_path,
-    ] {
-        validate_managed_absolute_path(repo_root, Path::new(path))?;
-    }
+    validate_descriptor_paths(repo_root, descriptor)?;
     if descriptor.max_stdout_bytes == 0 || descriptor.max_stderr_bytes == 0 {
         return Err(PulseError::validation(
             "run_profile_invalid",
@@ -1079,6 +1165,104 @@ fn validate_descriptor(
     Ok(())
 }
 
+fn validate_descriptor_paths(
+    repo_root: &Path,
+    descriptor: &SupervisorControlDescriptorV1,
+) -> Result<()> {
+    let expected = BTreeMap::from([
+        (
+            "input_json_path",
+            repo_root.join(format!(
+                ".pulse/runtime/run/inputs/{}.{}.json",
+                descriptor.run_id, descriptor.attempt_id
+            )),
+        ),
+        (
+            "stdout_prefix_path",
+            repo_root.join(format!(
+                ".pulse/runtime/run/logs/{}/{}.stdout.prefix.log",
+                descriptor.run_id, descriptor.attempt_id
+            )),
+        ),
+        (
+            "stdout_tail_path",
+            repo_root.join(format!(
+                ".pulse/runtime/run/logs/{}/{}.stdout.tail.log",
+                descriptor.run_id, descriptor.attempt_id
+            )),
+        ),
+        (
+            "stderr_prefix_path",
+            repo_root.join(format!(
+                ".pulse/runtime/run/logs/{}/{}.stderr.prefix.log",
+                descriptor.run_id, descriptor.attempt_id
+            )),
+        ),
+        (
+            "stderr_tail_path",
+            repo_root.join(format!(
+                ".pulse/runtime/run/logs/{}/{}.stderr.tail.log",
+                descriptor.run_id, descriptor.attempt_id
+            )),
+        ),
+        (
+            "heartbeat_path",
+            repo_root.join(format!(
+                ".pulse/runtime/run/control/{}.heartbeat.json",
+                descriptor.run_id
+            )),
+        ),
+        (
+            "cancel_path",
+            repo_root.join(format!(
+                ".pulse/runtime/run/control/{}.cancel.json",
+                descriptor.run_id
+            )),
+        ),
+        (
+            "exit_path",
+            repo_root.join(format!(
+                ".pulse/runtime/run/control/{}.exit.json",
+                descriptor.run_id
+            )),
+        ),
+    ]);
+    let actual = BTreeMap::from([
+        ("input_json_path", Path::new(&descriptor.input_json_path)),
+        (
+            "stdout_prefix_path",
+            Path::new(&descriptor.stdout_prefix_path),
+        ),
+        ("stdout_tail_path", Path::new(&descriptor.stdout_tail_path)),
+        (
+            "stderr_prefix_path",
+            Path::new(&descriptor.stderr_prefix_path),
+        ),
+        ("stderr_tail_path", Path::new(&descriptor.stderr_tail_path)),
+        ("heartbeat_path", Path::new(&descriptor.heartbeat_path)),
+        ("cancel_path", Path::new(&descriptor.cancel_path)),
+        ("exit_path", Path::new(&descriptor.exit_path)),
+    ]);
+    let mut seen = std::collections::BTreeSet::new();
+    for (field, expected_path) in expected {
+        let path = actual.get(field).expect("descriptor path field listed");
+        validate_managed_absolute_path(repo_root, path)?;
+        if *path != expected_path.as_path() {
+            return Err(PulseError::validation(
+                "run_control_record_invalid",
+                format!("descriptor {field} does not match exact managed layout"),
+            ));
+        }
+        if !seen.insert((*path).to_path_buf()) {
+            return Err(PulseError::validation(
+                "run_control_record_invalid",
+                "descriptor managed paths collide",
+            ));
+        }
+    }
+    Ok(())
+}
+
 fn validate_handshake(
     descriptor: &SupervisorControlDescriptorV1,
     handshake: &SupervisorStartupHandshakeV1,
@@ -1098,13 +1282,36 @@ fn validate_handshake(
         ));
     }
     let current = low_level_identity_from_run(&handshake.child_identity)?;
-    if !process_identity_matches(&current)? {
-        return Err(PulseError::validation(
+    match process_identity_matches(&current) {
+        Ok(true) => Ok(()),
+        Ok(false) => Err(PulseError::validation(
             "run_process_identity_mismatch",
             "startup child identity is no longer current",
-        ));
+        )),
+        Err(error) => {
+            if fast_exit_observation_matches_handshake(descriptor, handshake).unwrap_or(false) {
+                Ok(())
+            } else {
+                Err(error)
+            }
+        }
     }
-    Ok(())
+}
+
+fn fast_exit_observation_matches_handshake(
+    descriptor: &SupervisorControlDescriptorV1,
+    handshake: &SupervisorStartupHandshakeV1,
+) -> Result<bool> {
+    let exit_path = Path::new(&descriptor.exit_path);
+    if !exit_path.exists() {
+        return Ok(false);
+    }
+    let observation: SupervisorExitObservationV1 = read_canonical_json(exit_path)?;
+    Ok(observation.schema_version == 1
+        && observation.run_id == descriptor.run_id
+        && observation.attempt_id == descriptor.attempt_id
+        && observation.nonce_hash == descriptor.nonce_hash
+        && observation.process_identity == handshake.child_identity)
 }
 
 fn validate_cancel_request(
@@ -1233,13 +1440,38 @@ fn empty_log_ref(prefix: &str, tail: &str) -> BoundedLogRefV1 {
 fn build_environment_spec(
     selection: &RunnerProfileSelectionV1,
 ) -> Result<Vec<SupervisorEnvironmentEntryV1>> {
+    let mut literal_values = selection.literal_environment_values.clone();
     let mut entries = Vec::new();
     for env in &selection.environment {
+        let value = match env.source {
+            RunnerEnvironmentSourceV1::Inherited => None,
+            RunnerEnvironmentSourceV1::LiteralNonSecret => {
+                let value = literal_values.remove(&env.name).ok_or_else(|| {
+                    PulseError::validation(
+                        "run_profile_invalid",
+                        "literal environment spec is missing its private value",
+                    )
+                })?;
+                let Some(value) = value.as_str() else {
+                    return Err(PulseError::validation(
+                        "run_profile_invalid",
+                        "literal environment values must be strings",
+                    ));
+                };
+                Some(value.to_string())
+            }
+        };
         entries.push(SupervisorEnvironmentEntryV1 {
             name: env.name.clone(),
             source: env.source.clone(),
-            value: None,
+            value,
         });
+    }
+    if !literal_values.is_empty() {
+        return Err(PulseError::validation(
+            "run_profile_invalid",
+            "literal environment value without matching environment spec",
+        ));
     }
     Ok(entries)
 }
@@ -1249,21 +1481,33 @@ fn hash_argv(executable: &str, argv: &[String]) -> Result<String> {
 }
 
 fn revalidate_executable_identity(path: &Path, expected_identity: &str) -> Result<()> {
-    let metadata = fs::metadata(path).map_err(|error| PulseError::io(path, error))?;
+    if !path_is_safe_utf8_absolute_normalized(path) || path_has_symlink_component(path) {
+        return Err(PulseError::validation(
+            "run_command_not_found",
+            "resolved executable path is not a normalized absolute non-symlink UTF-8 path",
+        ));
+    }
+    let metadata = fs::symlink_metadata(path).map_err(|error| PulseError::io(path, error))?;
     if !metadata.is_file() {
         return Err(PulseError::validation(
             "run_command_not_found",
             "resolved executable is not a regular file",
         ));
     }
-    #[cfg(unix)]
-    if metadata.permissions().mode() & 0o111 == 0 {
+    if !has_effective_execute_permission(&metadata)? {
         return Err(PulseError::validation(
             "run_command_not_found",
-            "resolved executable is not executable",
+            "resolved executable is not executable by the effective user",
         ));
     }
-    let identity = executable_identity_hash(path, &metadata)?;
+    let canonical = fs::canonicalize(path).map_err(|error| PulseError::io(path, error))?;
+    if canonical != path || !path_is_safe_utf8_absolute_normalized(&canonical) {
+        return Err(PulseError::validation(
+            "run_command_not_found",
+            "resolved executable canonical path changed before spawn",
+        ));
+    }
+    let identity = executable_identity_hash(&canonical, &metadata)?;
     if identity != expected_identity {
         return Err(PulseError::validation(
             "run_process_identity_mismatch",
@@ -1273,31 +1517,39 @@ fn revalidate_executable_identity(path: &Path, expected_identity: &str) -> Resul
     Ok(())
 }
 
-fn executable_identity_hash(path: &Path, metadata: &fs::Metadata) -> Result<String> {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::MetadataExt;
-        let canonical = path
-            .canonicalize()
-            .map_err(|error| PulseError::io(path, error))?;
-        let canonical = path_to_string(&canonical)?;
-        hash_serializable(&(
-            canonical,
-            metadata.dev(),
-            metadata.ino(),
-            metadata.len(),
-            metadata.mtime(),
-            metadata.mode() & 0o777,
-        ))
+fn executable_identity_hash(canonical: &Path, metadata: &fs::Metadata) -> Result<String> {
+    #[derive(Serialize)]
+    struct PortableExecutableIdentity<'a> {
+        resolved_path: &'a str,
+        len: u64,
+        readonly: bool,
+        modified_unix_seconds: Option<u64>,
+        #[cfg(unix)]
+        unix_dev: u64,
+        #[cfg(unix)]
+        unix_ino: u64,
+        #[cfg(unix)]
+        unix_mode: u32,
     }
-    #[cfg(not(unix))]
-    {
-        let _ = metadata;
-        let canonical = path
-            .canonicalize()
-            .map_err(|error| PulseError::io(path, error))?;
-        hash_serializable(&path_to_string(&canonical)?)
-    }
+    let modified_unix_seconds = metadata
+        .modified()
+        .ok()
+        .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|duration| duration.as_secs());
+    let resolved_path = path_to_string(canonical)?;
+    let identity = PortableExecutableIdentity {
+        resolved_path: &resolved_path,
+        len: metadata.len(),
+        readonly: metadata.permissions().readonly(),
+        modified_unix_seconds,
+        #[cfg(unix)]
+        unix_dev: metadata.dev(),
+        #[cfg(unix)]
+        unix_ino: metadata.ino(),
+        #[cfg(unix)]
+        unix_mode: metadata.mode(),
+    };
+    hash_serializable(&identity)
 }
 
 fn validate_managed_control_file(repo_root: &Path, path: &Path) -> Result<()> {
@@ -1318,24 +1570,102 @@ fn validate_managed_absolute_path(repo_root: &Path, path: &Path) -> Result<()> {
             "managed runtime path must be absolute",
         ));
     }
+    if !path_is_safe_utf8_absolute_normalized(path) {
+        return Err(PulseError::validation(
+            "run_control_record_invalid",
+            "managed runtime path must be normalized UTF-8 without traversal or backslash",
+        ));
+    }
     if !path.starts_with(repo_root.join(".pulse/runtime/run")) {
         return Err(PulseError::validation(
             "run_control_record_invalid",
             "managed runtime path escapes .pulse/runtime/run",
         ));
     }
-    if path_has_parent(path) {
-        return Err(PulseError::validation(
-            "run_control_record_invalid",
-            "managed runtime path contains traversal",
-        ));
-    }
+    ensure_no_symlink_component_except_missing_final(repo_root, path)?;
     Ok(())
 }
 
-fn path_has_parent(path: &Path) -> bool {
-    path.components()
-        .any(|component| matches!(component, Component::ParentDir))
+fn path_is_safe_utf8_absolute_normalized(path: &Path) -> bool {
+    path.is_absolute()
+        && path
+            .as_os_str()
+            .to_str()
+            .map(|value| !value.contains('\\'))
+            .unwrap_or(false)
+        && path
+            .components()
+            .all(|component| matches!(component, Component::RootDir | Component::Normal(_)))
+}
+
+fn path_has_symlink_component(path: &Path) -> bool {
+    let mut current = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::RootDir => current.push(component.as_os_str()),
+            Component::Normal(part) => {
+                current.push(part);
+                match fs::symlink_metadata(&current) {
+                    Ok(metadata) if metadata.file_type().is_symlink() => return true,
+                    Ok(_) => {}
+                    Err(_) => return true,
+                }
+            }
+            Component::CurDir | Component::ParentDir | Component::Prefix(_) => return true,
+        }
+    }
+    false
+}
+
+fn ensure_no_symlink_component_except_missing_final(repo_root: &Path, path: &Path) -> Result<()> {
+    let managed_root = repo_root.join(".pulse/runtime/run");
+    let mut current = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::RootDir => current.push(component.as_os_str()),
+            Component::Normal(part) => {
+                current.push(part);
+                match fs::symlink_metadata(&current) {
+                    Ok(metadata) if metadata.file_type().is_symlink() => {
+                        return Err(PulseError::validation(
+                            "run_control_record_invalid",
+                            "managed runtime path contains symlink component",
+                        ));
+                    }
+                    Ok(metadata) if metadata.is_dir() || metadata.is_file() => {}
+                    Ok(_) => {
+                        return Err(PulseError::validation(
+                            "run_control_record_invalid",
+                            "managed runtime path contains unsupported file type",
+                        ));
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                        if current == path {
+                            break;
+                        }
+                        if current.starts_with(&managed_root) {
+                            fs::create_dir_all(&current)
+                                .map_err(|error| PulseError::io(&current, error))?;
+                            set_private_dir_permissions(&current)?;
+                        } else {
+                            return Err(PulseError::validation(
+                                "run_control_record_invalid",
+                                "managed runtime parent is missing outside runtime root",
+                            ));
+                        }
+                    }
+                    Err(error) => return Err(PulseError::io(&current, error)),
+                }
+            }
+            Component::CurDir | Component::ParentDir | Component::Prefix(_) => {
+                return Err(PulseError::validation(
+                    "run_control_record_invalid",
+                    "managed runtime path contains traversal",
+                ));
+            }
+        }
+    }
+    Ok(())
 }
 
 fn validate_id(kind: &'static str, value: &str, prefix: &str) -> Result<()> {
@@ -1479,20 +1809,101 @@ fn nonce_transport() -> &'static str {
     "protected_environment_fallback_descriptor_preferred"
 }
 
-#[cfg(target_os = "linux")]
-unsafe fn setpgid_zero() -> i32 {
-    extern "C" {
-        fn setpgid(pid: i32, pgid: i32) -> i32;
+#[cfg(unix)]
+fn has_effective_execute_permission(metadata: &fs::Metadata) -> Result<bool> {
+    Ok(effective_execute_allowed(
+        metadata.permissions().mode(),
+        metadata.uid(),
+        metadata.gid(),
+        unix_geteuid(),
+        &effective_groups()?,
+    ))
+}
+
+#[cfg(unix)]
+fn effective_execute_allowed(
+    mode: u32,
+    file_uid: u32,
+    file_gid: u32,
+    effective_uid: u32,
+    effective_groups: &[u32],
+) -> bool {
+    if effective_uid == 0 {
+        return mode & 0o111 != 0;
     }
+    if effective_uid == file_uid {
+        return mode & 0o100 != 0;
+    }
+    if effective_groups.contains(&file_gid) {
+        return mode & 0o010 != 0;
+    }
+    mode & 0o001 != 0
+}
+
+#[cfg(unix)]
+fn effective_groups() -> Result<Vec<u32>> {
+    let primary_gid = unix_getegid();
+    let count = unix_getgroups_count()?;
+    let mut groups = vec![0_u32; count];
+    if count > 0 {
+        let read = unsafe { getgroups(count as i32, groups.as_mut_ptr()) };
+        if read < 0 {
+            return Err(PulseError::validation(
+                "run_platform_unsupported",
+                "could not inspect effective Unix groups for executable permission validation",
+            ));
+        }
+        groups.truncate(read as usize);
+    }
+    if !groups.contains(&primary_gid) {
+        groups.push(primary_gid);
+    }
+    Ok(groups)
+}
+
+#[cfg(unix)]
+fn unix_getgroups_count() -> Result<usize> {
+    let count = unsafe { getgroups(0, std::ptr::null_mut()) };
+    if count < 0 {
+        return Err(PulseError::validation(
+            "run_platform_unsupported",
+            "could not inspect Unix group count for executable permission validation",
+        ));
+    }
+    Ok(count as usize)
+}
+
+#[cfg(unix)]
+fn unix_geteuid() -> u32 {
+    unsafe { geteuid() }
+}
+
+#[cfg(unix)]
+fn unix_getegid() -> u32 {
+    unsafe { getegid() }
+}
+
+#[cfg(unix)]
+extern "C" {
+    fn geteuid() -> u32;
+    fn getegid() -> u32;
+    fn getgroups(size: i32, list: *mut u32) -> i32;
+}
+
+#[cfg(target_os = "linux")]
+fn setpgid_zero() -> i32 {
     unsafe { setpgid(0, 0) }
 }
 
 #[cfg(target_os = "linux")]
-unsafe fn kill_process_group(pgid: i64, signal: i32) -> i32 {
-    extern "C" {
-        fn kill(pid: i32, sig: i32) -> i32;
-    }
+fn kill_process_group(pgid: i64, signal: i32) -> i32 {
     unsafe { kill(-(pgid as i32), signal) }
+}
+
+#[cfg(target_os = "linux")]
+extern "C" {
+    fn setpgid(pid: i32, pgid: i32) -> i32;
+    fn kill(pid: i32, sig: i32) -> i32;
 }
 
 #[cfg(test)]
