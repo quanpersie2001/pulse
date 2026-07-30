@@ -59,6 +59,109 @@ fn graph_store_facade_sources() -> String {
 }
 
 #[test]
+fn daemon_is_the_only_runtime_lifecycle_authority() {
+    for path in [
+        "src/daemon/application/mod.rs",
+        "src/daemon/assignment/mod.rs",
+        "src/daemon/permissions/mod.rs",
+        "src/daemon/persistence/mod.rs",
+        "src/daemon/process/mod.rs",
+        "src/daemon/process/native.rs",
+        "src/daemon/project/mod.rs",
+        "src/daemon/protocol/mod.rs",
+        "src/daemon/provider/codex.rs",
+        "src/daemon/session/mod.rs",
+        "src/daemon/timeline/mod.rs",
+        "src/daemon/transport/local.rs",
+        "src/daemon/transport/mcp.rs",
+        "src/daemon/workspace/mod.rs",
+    ] {
+        assert!(
+            repo_root().join(path).is_file(),
+            "missing daemon owner {path}"
+        );
+    }
+    for obsolete in [
+        "src/process.rs",
+        "src/run.rs",
+        "src/workspace.rs",
+        "src/assignment.rs",
+        "src/cli/process.rs",
+        "src/cli/run.rs",
+        "src/kernel/assignment.rs",
+        "src/kernel/assignment_store.rs",
+        "src/kernel/run_store.rs",
+        "src/kernel/runner.rs",
+        "src/schema/run",
+        "src/schema/assignment-workspace.schema.json",
+        "src/schema/prepared-assignment.schema.json",
+    ] {
+        assert!(
+            !repo_root().join(obsolete).exists(),
+            "obsolete runtime authority still exists at {obsolete}"
+        );
+    }
+    let library = source("src/lib.rs");
+    for obsolete in [
+        "pub mod run;",
+        "pub mod process;",
+        "pub mod workspace;",
+        "pub mod assignment;",
+    ] {
+        assert!(
+            !library.contains(obsolete),
+            "obsolete public runtime contract remains: {obsolete}"
+        );
+    }
+}
+
+#[test]
+fn core_domains_do_not_depend_on_daemon_runtime() {
+    for root in [
+        "src/docs",
+        "src/evidence",
+        "src/graph",
+        "src/kernel",
+        "src/knowledge",
+        "src/storage",
+    ] {
+        for (path, body) in rust_sources(root) {
+            assert!(
+                !body.contains("crate::daemon"),
+                "{} must not import daemon runtime ownership",
+                path.display()
+            );
+        }
+    }
+}
+
+#[test]
+fn provider_launch_is_owned_by_daemon_process_owner() {
+    let provider = combined_sources(&["src/daemon/provider"]);
+    assert!(
+        !provider.contains("Command::new") && !provider.contains(".spawn()"),
+        "providers must describe launch requests rather than spawn processes"
+    );
+    let cli = combined_sources(&["src/cli"]);
+    for forbidden in [
+        "PULSE_CODEX_EXECUTABLE",
+        "\"app-server\"",
+        "__run-supervisor",
+        "RunRecordV1",
+        "RunnerProfile",
+    ] {
+        assert!(
+            !cli.contains(forbidden),
+            "CLI must not contain a direct provider/runtime path: {forbidden}"
+        );
+    }
+    assert!(
+        source("src/daemon/process/mod.rs").contains("Command::new(request.executable)"),
+        "ProcessOwner must remain the provider/helper launch boundary"
+    );
+}
+
+#[test]
 fn cli_binary_remains_thin_adapter_over_public_library_paths() {
     let binary = source("src/bin/pulse.rs");
 

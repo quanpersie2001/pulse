@@ -122,17 +122,18 @@ thành.
 **Current implementation inventory:**
 
 - Slice 1 `WorkPacketV1` preview đã implement/verify.
-- Slice 2 reservation, prepared assignment, capability matching, workspace
-  binding và gated `ready -> active` đã implement/verify.
-- Slice 3 đã implement public run CLI, run/attempt store, hidden supervisor,
-  bounded logs, timeout/cancel, workspace-level resume và recovery; verification
-  native Windows còn thiếu.
-- Handoff/verification/proof-driven close chưa hoàn thành.
+- Core reservation giữ exact Ticket revision/packet và chỉ activate sau typed
+  daemon Session acknowledgement.
+- Rust daemon đã own Project/Workspace/Session/Provider/ProcessOwner/timeline,
+  local protocol, MCP tool adapter và provisioning saga.
+- Codex provider dùng App Server `initialize`, `thread/start`, `turn/start` và
+  `turn/interrupt`; Pulse Session ID tách khỏi provider thread handle.
+- Typed handoff và independent verification điều khiển
+  `active -> verifying -> done|rework|blocked`; process exit không close Ticket.
+- Hidden supervisor, runner profiles, Core run store, assignment-owned
+  Workspace records và public run/attempt contracts đã bị xóa một chiều.
 
-Direction mới giữ packet, reservation, CAS, fingerprints, process identity,
-bounded logs và recovery learnings nhưng chuyển runtime ownership sang daemon.
-Current Slice 2/3 implementation không phải compatibility target. Gap và
-migration sequence thuộc
+Implementation và acceptance evidence được giữ tại
 [`phase2-rust-daemon-realignment-implementation-gap.md`](../proposals/phase2-rust-daemon-realignment-implementation-gap.md).
 
 #### Phase 2A - Core/Daemon realignment

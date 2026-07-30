@@ -305,7 +305,7 @@ fn public_cli_ticket_create_requires_explicit_assessed_classification() {
 }
 
 #[test]
-fn cli_ready_to_active_public_transition_rejects_with_prepared_assignment_required() {
+fn cli_ready_to_active_public_transition_requires_reservation_activation() {
     let repo = tempfile::tempdir().unwrap();
     let created = run_ok(
         &repo,
@@ -354,8 +354,8 @@ fn cli_ready_to_active_public_transition_rejects_with_prepared_assignment_requir
         ],
     );
     assert_eq!(
-        err["code"], "prepared_assignment_required",
-        "CLI transition Ready->Active must report prepared_assignment_required not {:?}",
+        err["code"], "reservation_activation_required",
+        "CLI transition Ready->Active must report reservation_activation_required not {:?}",
         err["code"]
     );
 

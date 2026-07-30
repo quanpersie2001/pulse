@@ -1067,6 +1067,7 @@ fn multi_target_prepare_rejects_hash_mismatch_and_remove_payload() {
                 revision: 1,
             },
             after: FileState::Absent,
+            private: false,
             after_bytes_base64: Some(base64::Engine::encode(
                 &base64::prelude::BASE64_STANDARD,
                 b"unexpected",

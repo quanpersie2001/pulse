@@ -1,6 +1,8 @@
 # Phase 2: Rust Daemon Realignment Implementation Gap
 
-> **Status:** accepted implementation plan.
+> **Status:** Phase 2 realignment acceptance implemented and verified. G9
+> HTTP/WebSocket and desktop adapters remain explicitly later client work; the
+> shared MCP adapter and policy-gated session mailbox are implemented.
 >
 > **Purpose:** reconcile the implemented Phase 2 runner prototype with the
 > accepted Core + Rust Daemon architecture.
@@ -326,16 +328,16 @@ multi-Agent work does not weaken Core authority or evidence gates.
 
 G8 is not complete until all items are true:
 
-- [ ] no hidden supervisor subcommand remains;
-- [ ] no CLI path spawns Codex/provider directly;
-- [ ] no Core module owns Session/process lifecycle;
-- [ ] no runner-profile schema is public or loaded;
-- [ ] no assignment workspace record acts as stable Workspace identity;
-- [ ] no run/attempt record is the canonical Agent-session contract;
-- [ ] no runtime event store competes with the daemon timeline;
-- [ ] no tests exercise obsolete behavior except explicitly archived fixtures;
-- [ ] no docs describe the prototype as normative;
-- [ ] no compatibility flags, dual writes or legacy schema translators remain.
+- [x] no hidden supervisor subcommand remains;
+- [x] no CLI path spawns Codex/provider directly;
+- [x] no Core module owns Session/process lifecycle;
+- [x] no runner-profile schema is public or loaded;
+- [x] no assignment workspace record acts as stable Workspace identity;
+- [x] no run/attempt record is the canonical Agent-session contract;
+- [x] no runtime event store competes with the daemon timeline;
+- [x] no tests exercise obsolete behavior except explicitly archived fixtures;
+- [x] no docs describe the prototype as normative;
+- [x] no compatibility flags, dual writes or legacy schema translators remain.
 
 ## 10. Verification bar
 

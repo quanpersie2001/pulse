@@ -226,20 +226,20 @@ fn l6_transition_clears_stale_reason_when_target_does_not_require_it() {
 }
 
 #[test]
-fn l7_ready_to_active_has_installed_prepared_assignment_gate() {
+fn l7_ready_to_active_has_installed_reservation_activation_gate() {
     use pulse::graph::lifecycle::{installed_gate, GateProfile};
-    // The prepared-assignment gate is now installed for Ready -> Active.
+    // The reservation-activation gate is installed for Ready -> Active.
     // validate_transition must pass (was transition_gate_unavailable before).
     let exp = validate_transition(NodeStatus::Ready, NodeStatus::Active, None).unwrap();
     assert_eq!(exp.policy, TransitionPolicy::Gated);
     assert_eq!(
         installed_gate(NodeStatus::Ready, NodeStatus::Active),
-        Some(GateProfile::PreparedAssignment)
+        Some(GateProfile::ReservationActivation)
     );
 }
 
 #[test]
-fn l8_ready_to_active_public_transition_rejects_with_prepared_assignment_required() {
+fn l8_ready_to_active_public_transition_requires_reservation_activation() {
     let (_dir, store) = repo();
     // Create a ticket at Ready status
     let mut tk = store
@@ -255,22 +255,22 @@ fn l8_ready_to_active_public_transition_rejects_with_prepared_assignment_require
     )
     .unwrap();
 
-    // Public transition must reject with prepared_assignment_required, NOT
+    // Public transition must reject with reservation_activation_required, NOT
     // transition_gate_unavailable.
     let err = store
         .transition_node_with_context(&tk.id, NodeStatus::Active, 1, None, ctx(2))
         .unwrap_err();
     assert_eq!(
         err.code(),
-        "prepared_assignment_required",
-        "expected prepared_assignment_required but got {:?}",
+        "reservation_activation_required",
+        "expected reservation_activation_required but got {:?}",
         err
     );
 }
 
 #[test]
 fn l9_ready_to_active_reject_is_not_transition_gate_unavailable() {
-    // Verify the exact error code is prepared_assignment_required, not
+    // Verify the exact error code is reservation_activation_required, not
     // transition_gate_unavailable. This is a pure model-level assertion.
     use pulse::graph::lifecycle::{validate_transition, GateProfile, TransitionPolicy};
     // validate_transition must succeed because the gate is installed.
@@ -278,13 +278,13 @@ fn l9_ready_to_active_reject_is_not_transition_gate_unavailable() {
     assert_eq!(exp.policy, TransitionPolicy::Gated);
     assert_ne!(exp.policy, TransitionPolicy::Supported);
     assert_ne!(exp.policy, TransitionPolicy::Illegal);
-    // Installed gate must be PreparedAssignment.
+    // Installed gate must be ReservationActivation.
     assert_eq!(
         pulse::graph::lifecycle::installed_gate(
             pulse::graph::node::NodeStatus::Ready,
             pulse::graph::node::NodeStatus::Active
         ),
-        Some(GateProfile::PreparedAssignment)
+        Some(GateProfile::ReservationActivation)
     );
 }
 

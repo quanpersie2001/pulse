@@ -12,7 +12,7 @@ use crate::graph::projection::GraphProjection;
 use crate::graph::readiness::{evaluate as evaluate_readiness, EvalProfile, ReadinessReport};
 use crate::graph::store::JsonGraphStore;
 use crate::id::WorkKind;
-use crate::kernel::assignment_store;
+use crate::reservation::ReservationState;
 use crate::storage::transaction::recover_prepared_transactions;
 use crate::storage::WriteGuard;
 use crate::{PulseError, PulseResult};
@@ -49,7 +49,6 @@ pub struct EnrichedFrontierItem {
     pub frontier_eligible: bool,
     pub claim_state: FrontierClaimState,
     pub lease_id: Option<String>,
-    pub prepared_assignment_id: Option<String>,
     pub assignee: Option<String>,
     pub expires_at: Option<String>,
     pub reason_codes: Vec<String>,
@@ -62,12 +61,13 @@ pub struct ActiveAssignmentEntry {
     pub ticket_id: String,
     pub ticket_revision: u64,
     pub lease_id: Option<String>,
-    pub prepared_assignment_id: Option<String>,
     pub assignee: Option<String>,
     pub issued_by: Option<String>,
     pub expires_at: Option<String>,
+    pub project_id: Option<String>,
     pub workspace_id: Option<String>,
-    pub workspace_mode: Option<String>,
+    pub session_id: Option<String>,
+    pub provider_id: Option<String>,
     pub claim_state: FrontierClaimState,
 }
 
@@ -257,17 +257,7 @@ impl JsonGraphStore {
             FrontierReport::Execution(exec) => exec,
         };
 
-        let runtime_report = assignment_store::classify_assignment_recovery_state(&self.repo_root)
-            .unwrap_or_else(|_| assignment_store::AssignmentRecoveryReport {
-                entries: vec![],
-                live_count: 0,
-                expired_count: 0,
-                tombstoned_count: 0,
-                ambiguous_count: 0,
-                invalid_count: 0,
-                orphan_workspace_ids: vec![],
-            });
-        let lookup_by_subject = build_lease_lookup_by_subject(&self.repo_root, &runtime_report);
+        let lookup_by_subject = build_lease_lookup_by_subject(&self.repo_root);
 
         let mut enriched_items: Vec<EnrichedFrontierItem> = Vec::new();
         for item in &report.items {
@@ -284,8 +274,6 @@ impl JsonGraphStore {
                 frontier_eligible: item.frontier_eligible,
                 claim_state,
                 lease_id: lookup.map(|entry| entry.lease_id.clone()),
-                prepared_assignment_id: lookup
-                    .and_then(|entry| entry.prepared_assignment_id.clone()),
                 assignee: lookup.and_then(|entry| entry.assignee.clone()),
                 expires_at: lookup.and_then(|entry| entry.expires_at.clone()),
                 reason_codes: item.reason_codes.clone(),
@@ -304,12 +292,13 @@ impl JsonGraphStore {
                     ticket_id: node.id.clone(),
                     ticket_revision: node.revision,
                     lease_id: None,
-                    prepared_assignment_id: None,
                     assignee: None,
                     issued_by: None,
                     expires_at: None,
+                    project_id: None,
                     workspace_id: None,
-                    workspace_mode: None,
+                    session_id: None,
+                    provider_id: None,
                     claim_state: FrontierClaimState::Ambiguous,
                 },
             };
@@ -334,56 +323,43 @@ impl JsonGraphStore {
 #[derive(Debug, Clone)]
 struct LeaseLookup {
     lease_id: String,
-    prepared_assignment_id: Option<String>,
     assignee: Option<String>,
     issued_by: Option<String>,
     expires_at: Option<String>,
+    project_id: Option<String>,
     workspace_id: Option<String>,
-    workspace_mode: Option<String>,
-    classification: assignment_store::LeaseClassification,
+    session_id: Option<String>,
+    provider_id: Option<String>,
+    state: ReservationState,
 }
 
-fn build_lease_lookup_by_subject(
-    repo_root: &std::path::Path,
-    report: &assignment_store::AssignmentRecoveryReport,
-) -> BTreeMap<String, LeaseLookup> {
+fn build_lease_lookup_by_subject(repo_root: &std::path::Path) -> BTreeMap<String, LeaseLookup> {
     let mut by_subject = BTreeMap::new();
-    for entry in &report.entries {
-        if entry.subject_id.is_empty() {
-            continue;
-        }
-        let lease = assignment_store::load_lease(repo_root, &entry.lease_id).ok();
-        let workspace = lease.as_ref().and_then(|lease| {
-            assignment_store::load_workspace(repo_root, &lease.workspace_id).ok()
-        });
+    let reservations = crate::kernel::reservation::list_reservations(repo_root).unwrap_or_default();
+    for reservation in reservations {
+        let binding = reservation.runtime_binding.as_ref();
         let lookup = LeaseLookup {
-            lease_id: entry.lease_id.clone(),
-            prepared_assignment_id: lease
-                .as_ref()
-                .map(|lease| lease.prepared_assignment_id.clone()),
-            assignee: lease.as_ref().map(|lease| lease.assignee.principal.clone()),
-            issued_by: lease.as_ref().map(|lease| lease.issued_by.clone()),
-            expires_at: lease.as_ref().map(|lease| lease.expires_at.clone()),
-            workspace_id: if entry.workspace_id.is_empty() {
-                lease.as_ref().map(|lease| lease.workspace_id.clone())
-            } else {
-                Some(entry.workspace_id.clone())
-            },
-            workspace_mode: workspace.map(|workspace| workspace.mode),
-            classification: entry.classification.clone(),
+            lease_id: reservation.lease_id,
+            assignee: Some(reservation.assignee),
+            issued_by: Some(reservation.issued_by),
+            expires_at: Some(reservation.expires_at),
+            project_id: binding.map(|binding| binding.project_id.clone()),
+            workspace_id: binding.map(|binding| binding.workspace_id.clone()),
+            session_id: binding.map(|binding| binding.session_id.clone()),
+            provider_id: binding.map(|binding| binding.provider_id.clone()),
+            state: reservation.state,
         };
         by_subject
-            .entry(entry.subject_id.clone())
+            .entry(reservation.subject.ticket_id)
             .and_modify(|existing: &mut LeaseLookup| {
-                existing.classification = assignment_store::LeaseClassification::Ambiguous(
-                    "multiple runtime lease entries for subject".to_string(),
-                );
-                existing.prepared_assignment_id = None;
+                existing.state = ReservationState::StaleNeedsOperator;
                 existing.assignee = None;
                 existing.issued_by = None;
                 existing.expires_at = None;
+                existing.project_id = None;
                 existing.workspace_id = None;
-                existing.workspace_mode = None;
+                existing.session_id = None;
+                existing.provider_id = None;
             })
             .or_insert(lookup);
     }
@@ -391,22 +367,23 @@ fn build_lease_lookup_by_subject(
 }
 
 fn ready_claim_state(lookup: &LeaseLookup) -> FrontierClaimState {
-    match lookup.classification {
-        assignment_store::LeaseClassification::Live => FrontierClaimState::BlockedByLiveLease,
-        assignment_store::LeaseClassification::Expired
-        | assignment_store::LeaseClassification::Tombstoned => FrontierClaimState::Stale,
-        assignment_store::LeaseClassification::Ambiguous(_)
-        | assignment_store::LeaseClassification::Invalid(_) => FrontierClaimState::Ambiguous,
+    match lookup.state {
+        ReservationState::Reserved | ReservationState::Acknowledged | ReservationState::Active => {
+            FrontierClaimState::BlockedByLiveLease
+        }
+        ReservationState::Released | ReservationState::Expired => FrontierClaimState::Stale,
+        ReservationState::StaleNeedsOperator => FrontierClaimState::Ambiguous,
     }
 }
 
 fn active_claim_state(lookup: &LeaseLookup) -> FrontierClaimState {
-    match lookup.classification {
-        assignment_store::LeaseClassification::Live => FrontierClaimState::Prepared,
-        assignment_store::LeaseClassification::Expired
-        | assignment_store::LeaseClassification::Tombstoned => FrontierClaimState::Stale,
-        assignment_store::LeaseClassification::Ambiguous(_)
-        | assignment_store::LeaseClassification::Invalid(_) => FrontierClaimState::Ambiguous,
+    match lookup.state {
+        ReservationState::Active => FrontierClaimState::Prepared,
+        ReservationState::Reserved | ReservationState::Acknowledged => {
+            FrontierClaimState::BlockedByLiveLease
+        }
+        ReservationState::Released | ReservationState::Expired => FrontierClaimState::Stale,
+        ReservationState::StaleNeedsOperator => FrontierClaimState::Ambiguous,
     }
 }
 
@@ -415,12 +392,13 @@ fn active_assignment_from_lookup(node: &Node, lookup: &LeaseLookup) -> ActiveAss
         ticket_id: node.id.clone(),
         ticket_revision: node.revision,
         lease_id: Some(lookup.lease_id.clone()),
-        prepared_assignment_id: lookup.prepared_assignment_id.clone(),
         assignee: lookup.assignee.clone(),
         issued_by: lookup.issued_by.clone(),
         expires_at: lookup.expires_at.clone(),
+        project_id: lookup.project_id.clone(),
         workspace_id: lookup.workspace_id.clone(),
-        workspace_mode: lookup.workspace_mode.clone(),
+        session_id: lookup.session_id.clone(),
+        provider_id: lookup.provider_id.clone(),
         claim_state: active_claim_state(lookup),
     }
 }

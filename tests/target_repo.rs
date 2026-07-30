@@ -7,9 +7,10 @@
 
 #[path = "common/mod.rs"]
 mod common;
+#[allow(dead_code)]
+#[path = "common/bin.rs"]
+mod common_bin;
 
-#[path = "target_repo/assignment_workspace.rs"]
-mod assignment_workspace;
 #[path = "target_repo/run_workspace_snapshot.rs"]
 mod run_workspace_snapshot;
 #[path = "target_repo/target_repo_fixture.rs"]

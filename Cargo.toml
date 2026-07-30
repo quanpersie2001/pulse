@@ -24,14 +24,27 @@ fs2 = "0.4"
 hex = "0.4"
 once_cell = "1.20"
 rand = "0.8"
+regex = "1"
+regex-syntax = "0.8"
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
 sha2 = "0.10"
 thiserror = "1"
 tantivy = "0.22.1"
 jsonschema = { version = "0.17", features = ["draft202012"] }
+libc = "0.2"
 ulid = "1"
 uuid = { version = "1", features = ["v4", "serde"] }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.52", features = [
+  "Win32_Foundation",
+  "Win32_Security",
+  "Win32_System_Console",
+  "Win32_System_Diagnostics_ToolHelp",
+  "Win32_System_JobObjects",
+  "Win32_System_Threading",
+] }
 
 [dev-dependencies]
 tempfile = "3"

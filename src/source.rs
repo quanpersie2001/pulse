@@ -26,11 +26,6 @@ use std::path::Path;
 use std::process::{Child, Command, Stdio};
 use std::thread;
 
-use crate::run::{
-    WorkspaceCleanlinessV1, WorkspaceModeV1, WorkspaceOperationStateV1, WorkspaceSnapshotStatusV1,
-    WorkspaceSnapshotV1,
-};
-
 const EVIDENCE_ONLY_PREFIXES: [&str; 2] = [".pulse/evidence/", ".pulse/events/"];
 const PULSE_RUNTIME_EXCLUDE_PATHS: [&str; 2] =
     [":(exclude).pulse/runtime/**", ":(exclude).pulse/cache/**"];
@@ -41,6 +36,76 @@ pub enum SourceBindingStatus {
     Stale,
     DirtyUnsupported,
     Unsupported,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkspaceModeV1 {
+    InPlace,
+    IsolatedWorktree,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkspaceOperationStateV1 {
+    None,
+    Merge,
+    Rebase,
+    CherryPick,
+    Revert,
+    Bisect,
+    Unknown,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkspaceCleanlinessV1 {
+    Clean,
+    Dirty,
+    Unknown,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkspaceSnapshotStatusV1 {
+    Complete,
+    Unsupported,
+    BoundedOut,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct WorkspaceSnapshotV1 {
+    pub schema_version: u32,
+    pub repository_id: String,
+    pub workspace_id: String,
+    pub workspace_mode: WorkspaceModeV1,
+    pub base_commit: String,
+    pub head_commit: String,
+    pub diff_base_commit: String,
+    pub operation_state: WorkspaceOperationStateV1,
+    pub cleanliness: WorkspaceCleanlinessV1,
+    pub tracked_diff_identity: String,
+    pub untracked_manifest_identity: String,
+    pub status_identity: String,
+    pub snapshot_status: WorkspaceSnapshotStatusV1,
+    pub captured_at: String,
+    pub snapshot_identity: String,
+}
+
+impl WorkspaceSnapshotV1 {
+    pub fn compute_identity(&self) -> Result<String> {
+        let mut projection = serde_json::to_value(self)?;
+        let object = projection.as_object_mut().ok_or_else(|| {
+            PulseError::validation(
+                "workspace_snapshot_invalid",
+                "workspace snapshot projection must be an object",
+            )
+        })?;
+        object.remove("snapshot_identity");
+        object.remove("captured_at");
+        hash_serializable(&projection)
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -119,7 +184,7 @@ impl RepositoryOperationState {
 }
 
 /// P2S3 workspace snapshot result used by I0 feasibility callers. The full
-/// contract is `crate::run::WorkspaceSnapshotV1`; this compatibility wrapper
+/// contract is [`WorkspaceSnapshotV1`]; this compatibility wrapper
 /// omits volatile `captured_at` and `snapshot_identity` fields for older tests.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]

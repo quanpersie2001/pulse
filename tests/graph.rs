@@ -26,10 +26,10 @@ mod common_git;
 
 #[path = "graph/architecture_guards.rs"]
 mod architecture_guards;
+#[path = "graph/assignment_fixture.rs"]
+mod assignment_fixture;
 #[path = "graph/authority_policy.rs"]
 mod authority_policy;
-#[path = "graph/claim.rs"]
-mod claim;
 #[path = "graph/cli_lifecycle_contract.rs"]
 mod cli_lifecycle_contract;
 #[path = "graph/decision_acceptance.rs"]
@@ -48,12 +48,8 @@ mod public_api_paths;
 mod readiness;
 #[path = "graph/readiness_cli_contract.rs"]
 mod readiness_cli_contract;
-#[path = "graph/run_feasibility_contract.rs"]
-mod run_feasibility_contract;
-#[path = "graph/run_model.rs"]
-mod run_model;
-#[path = "graph/run_profile_registry.rs"]
-mod run_profile_registry;
+#[path = "graph/reservation.rs"]
+mod reservation;
 #[path = "graph/shaping_cli_contract.rs"]
 mod shaping_cli_contract;
 #[path = "graph/shaping_contract.rs"]

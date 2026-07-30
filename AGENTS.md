@@ -283,8 +283,14 @@ is orientation.
   delegates entirely to the `pulse::cli` facade. It wires no domains and must
   not include production modules with `#[path]`.
 - `src/cli/` is thin transport/renderer grouped by command domain (`work`,
-  `docs`, `graph`, `evidence`, `knowledge`) plus `args` and `output`. It
-  translates CLI input/output to library calls and owns no domain semantics.
+  `docs`, `graph`, `evidence`, `knowledge`, `daemon`) plus `args` and `output`.
+  Offline Core commands call library services; runtime commands use the local
+  daemon protocol. CLI owns no provider or domain semantics.
+- `src/daemon/` is the sole runtime lifecycle authority. Its application layer
+  composes daemon-owned Project/Workspace/Session/Provider/ProcessOwner/
+  timeline state with narrow public Core reservation and proof APIs. Local and
+  MCP transports share the same versioned envelopes, authorization and
+  idempotency behavior. Core modules must never import `daemon`.
 - `src/kernel/` is the concrete cross-domain composition layer (no trait
   abstractions): it assembles typed inputs from the graph store, documentation,
   evidence, policy and source checks to build readiness, shaping, lifecycle-gate
@@ -362,8 +368,8 @@ Integration tests are organized as one Cargo integration crate per domain:
 - No legacy Node/`.test.mjs` behavioral runners remain in the active test tree
   (they were removed during the reboot). Do not reintroduce them.
 
-The current domain crates are: `docs`, `evidence`, `graph`, `knowledge`,
-`process`, `storage`, `target_repo`. The `process` crate isolates the
+The current domain crates are: `daemon`, `docs`, `evidence`, `graph`,
+`knowledge`, `process`, `storage`, `target_repo`. The `process` crate isolates the
 subprocess-spawning, timing-sensitive suites (multi-process CAS, failpoint
 crash recovery, supersession process recovery) so per-crate parallelism stays
 bounded; keep timing-sensitive suites there rather than in `graph`.

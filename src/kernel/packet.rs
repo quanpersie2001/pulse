@@ -156,6 +156,11 @@ impl JsonGraphStore {
         Ok(packet)
     }
 
+    /// Load the immutable packet committed atomically with a Core reservation.
+    pub fn work_packet_for_lease(&self, id: &str, lease_id: &str) -> PulseResult<WorkPacketV1> {
+        self.work_packet_for_reservation(id, lease_id)
+    }
+
     #[allow(dead_code)]
     /// Build a work packet assuming the repository fence is already held by
     /// the caller (P2S2-I6).

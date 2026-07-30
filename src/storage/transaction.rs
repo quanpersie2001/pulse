@@ -76,6 +76,8 @@ pub struct TransactionTarget {
     pub path: PathBuf,
     pub before: FileState,
     pub after: FileState,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub private: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub after_bytes_base64: Option<String>,
 }
@@ -91,8 +93,20 @@ impl TransactionTarget {
             path,
             before,
             after,
+            private: false,
             after_bytes_base64,
         }
+    }
+
+    pub fn new_private(
+        path: PathBuf,
+        before: FileState,
+        after: FileState,
+        after_bytes: &[u8],
+    ) -> Self {
+        let mut target = Self::new(path, before, after, after_bytes);
+        target.private = true;
+        target
     }
 
     pub fn after_bytes(&self) -> Result<Vec<u8>> {
@@ -167,6 +181,7 @@ impl TransactionIntent {
                 path: target_path,
                 before,
                 after,
+                private: false,
                 after_bytes_base64: None,
             }],
             event_path,
@@ -387,7 +402,13 @@ pub fn commit_prepared_transaction(
     }
 
     let target = single_target(&prepared.intent)?;
-    write_target_respecting_before(&target.path, &target.before, &target.after, canonical_bytes)?;
+    write_target_respecting_before(
+        &target.path,
+        &target.before,
+        &target.after,
+        canonical_bytes,
+        target.private,
+    )?;
     #[cfg(debug_assertions)]
     if failpoint == Some(TransactionFailpoint::AfterCanonical) {
         trigger_failpoint("after_canonical")?;
@@ -417,6 +438,7 @@ pub fn commit_prepared_multi_target_transaction(
             &target.before,
             &target.after,
             &target_after_bytes(target)?,
+            target.private,
         )?;
         #[cfg(debug_assertions)]
         if index == 0 && failpoint == Some(TransactionFailpoint::AfterMultiTargetFirst) {
@@ -545,6 +567,7 @@ fn recover_one_multi_target(
                     &target.before,
                     &target.after,
                     &target_after_bytes(target)?,
+                    target.private,
                 )?;
             }
             write_event_create_new_multi(intent)?;
@@ -633,6 +656,7 @@ fn write_target_respecting_before(
     before: &FileState,
     after: &FileState,
     bytes: &[u8],
+    private: bool,
 ) -> Result<()> {
     let observed = observed_target_state(path, before, after)?;
     match (before, &observed, after) {
@@ -643,7 +667,13 @@ fn write_target_respecting_before(
             }
             Ok(())
         }
+        (FileState::Absent, ObservedTarget::Before, _) if private => {
+            crate::storage::create_new_private(path, bytes)
+        }
         (FileState::Absent, ObservedTarget::Before, _) => crate::storage::create_new(path, bytes),
+        (_, ObservedTarget::Before, _) if private => {
+            atomic::atomic_replace_private(path, bytes).map(|_| ())
+        }
         (_, ObservedTarget::Before, _) => atomic::atomic_replace(path, bytes).map(|_| ()),
         (_, ObservedTarget::After, _) => Ok(()),
         (_, ObservedTarget::Other, _) => Err(PulseError::AmbiguousTransaction {

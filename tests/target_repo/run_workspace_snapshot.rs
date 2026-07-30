@@ -1,5 +1,9 @@
-use pulse::run::{WorkspaceCleanlinessV1, WorkspaceOperationStateV1, WorkspaceSnapshotStatusV1};
-use pulse::source::{workspace_snapshot, workspace_snapshot_feasibility, WorkspaceSnapshotOptions};
+#![cfg(unix)]
+
+use pulse::source::{
+    workspace_snapshot, workspace_snapshot_feasibility, WorkspaceCleanlinessV1,
+    WorkspaceOperationStateV1, WorkspaceSnapshotOptions, WorkspaceSnapshotStatusV1,
+};
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::process::Command;
@@ -68,16 +72,6 @@ fn snapshot_ignores_pulse_runtime_but_not_canonical_pulse_state() {
     fs::remove_dir_all(tmp.path().join(".pulse/workgraph")).unwrap();
     fs::create_dir_all(tmp.path().join(".pulse/events")).unwrap();
     fs::write(tmp.path().join(".pulse/events/event.json"), b"{}").unwrap();
-    let snapshot = workspace_snapshot(tmp.path(), &options(&base)).unwrap();
-    assert_eq!(snapshot.cleanliness, WorkspaceCleanlinessV1::Dirty);
-
-    fs::remove_dir_all(tmp.path().join(".pulse/events")).unwrap();
-    fs::create_dir_all(tmp.path().join(".pulse/run")).unwrap();
-    fs::write(
-        tmp.path().join(".pulse/run/runner-profiles.json"),
-        b"{\"profiles\":[]}",
-    )
-    .unwrap();
     let snapshot = workspace_snapshot(tmp.path(), &options(&base)).unwrap();
     assert_eq!(snapshot.cleanliness, WorkspaceCleanlinessV1::Dirty);
 }

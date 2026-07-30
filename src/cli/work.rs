@@ -131,93 +131,9 @@ pub(crate) enum WorkCommand {
     Packet {
         /// Ticket ID (must be an implementation Ticket with lifecycle ready).
         id: String,
-        /// Output as JSON.
+        /// Load the exact packet committed for this Core reservation lease.
         #[arg(long)]
-        json: bool,
-    },
-    /// Atomically claim a ready implementation Ticket, acquire an exclusive
-    /// lease, bind a workspace, match capabilities and transition ready ->
-    /// active.
-    ///
-    /// Returns a PreparedAssignmentV1 wrapper with dispatch_authorized=true.
-    /// This does not start a runner, send prompts or create handoff state.
-    Claim {
-        /// Ticket ID (must be an implementation Ticket with lifecycle ready).
-        ticket_id: String,
-        /// Authorized principal performing the Pulse mutation.
-        #[arg(long)]
-        actor: String,
-        /// Local principal string that will own the lease.
-        #[arg(long)]
-        assignee: String,
-        /// Path to capability inventory JSON file.
-        #[arg(long)]
-        capabilities: PathBuf,
-        /// TTL for the lease in seconds (default 1800, min 60, max 86400).
-        #[arg(long)]
-        ttl_seconds: Option<u64>,
-        /// Workspace mode override: auto, in_place, or isolated_worktree.
-        #[arg(long)]
-        workspace_mode: Option<String>,
-        /// Output as JSON.
-        #[arg(long)]
-        json: bool,
-    },
-    /// Release a prepared/no-run assignment (P2S2-I9).
-    ///
-    /// Removes the live lease, writes a terminal tombstone, transitions the
-    /// Ticket from active back to ready, and marks the workspace released.
-    /// Requires `work.assignment.release` authority.
-    Release {
-        /// Ticket ID whose lease to release.
-        ticket_id: String,
-        /// Lease ID to release.
-        #[arg(long)]
-        lease: String,
-        /// Expected active revision of the Ticket node.
-        #[arg(long)]
-        expected_revision: u64,
-        /// Human-readable reason for release.
-        #[arg(long)]
-        reason: String,
-        /// Authorized principal performing the release.
-        #[arg(long)]
-        actor: String,
-        /// Output as JSON.
-        #[arg(long)]
-        json: bool,
-    },
-    /// List runtime assignment leases (P2S2-I9, read-only).
-    ///
-    /// Default: read-only listing of runtime assignment leases joined
-    /// with graph node state.  Use `work leases recover` to safely
-    /// release expired prepared assignments.
-    ///
-    /// This is a pure read operation that never creates runtime directories
-    /// or acquires the repository lock.
-    Leases {
-        /// Optional ticket ID filter (list only).
-        #[arg(long)]
-        ticket: Option<String>,
-        /// Output as JSON (list only).
-        #[arg(long)]
-        json: bool,
-        #[command(subcommand)]
-        command: Option<LeasesCommand>,
-    },
-}
-
-#[derive(Subcommand)]
-pub(crate) enum LeasesCommand {
-    /// Safe recovery of expired/no-run runtime assignments.
-    ///
-    /// Expired prepared leases are requeued (active -> ready) when
-    /// safe, or preserved for operator review when workspace is dirty.
-    /// Ambiguous/invalid/orphan state is reported without mutation.
-    Recover {
-        /// Authorized principal performing recovery.
-        #[arg(long)]
-        actor: String,
+        lease: Option<String>,
         /// Output as JSON.
         #[arg(long)]
         json: bool,
@@ -786,103 +702,11 @@ pub(crate) fn handle(store: &JsonGraphStore, command: WorkCommand) -> Result<(),
                 render(json, &out, format!("{} {}", out.code, owner_id))
             }
         },
-        WorkCommand::Claim {
-            ticket_id,
-            actor,
-            assignee,
-            capabilities,
-            ttl_seconds,
-            workspace_mode,
-            json,
-        } => {
-            let cap_bytes = std::fs::read(&capabilities).map_err(|error| {
-                PulseError::validation(
-                    crate::assignment::ERR_CAP_INVENTORY_MISSING,
-                    format!(
-                        "capability inventory {} is missing or unreadable: {error}",
-                        capabilities.display()
-                    ),
-                )
-            })?;
-            let outcome = store.claim_work(crate::graph::store::ClaimArgs {
-                ticket_id,
-                actor,
-                assignee,
-                capability_inventory_bytes: cap_bytes,
-                ttl_seconds: ttl_seconds.unwrap_or(crate::assignment::DEFAULT_TTL_SECONDS),
-                workspace_mode,
-            })?;
-            let human = format!(
-                "{} prepared for {}\nlease: {}\nworkspace: {} ({})\nsource: {}\ncapabilities: all required matched\nstatus: active\nprepared assignment: {}\ndispatch authorized: yes (runner not started)",
-                outcome.prepared_assignment.subject.id,
-                outcome.prepared_assignment.lease.assignee,
-                outcome.prepared_assignment.lease.lease_id,
-                outcome.prepared_assignment.workspace.workspace_id,
-                outcome.prepared_assignment.workspace.mode,
-                outcome.prepared_assignment.revalidated_snapshot.source_commit,
-                outcome.prepared_assignment.prepared_assignment_id,
-            );
-            render(json, &outcome.prepared_assignment, human)
-        }
-        WorkCommand::Release {
-            ticket_id,
-            lease,
-            expected_revision,
-            reason,
-            actor,
-            json,
-        } => {
-            let outcome = store.release_work(crate::kernel::assignment::ReleaseArgs {
-                ticket_id,
-                lease_id: lease,
-                expected_revision,
-                reason,
-                actor,
-            })?;
-            let human = format!(
-                "released {} (lease {}, workspace {})\nnew revision: {}\nworkspace state: {}\ncleanup: {}",
-                outcome.ticket_id,
-                outcome.lease_id,
-                outcome.workspace_id,
-                outcome.new_revision,
-                outcome.workspace_final_state,
-                if outcome.workspace_cleaned_up {
-                    "worktree removed"
-                } else {
-                    "preserved"
-                },
-            );
-            render(json, &outcome, human)
-        }
-        WorkCommand::Leases {
-            ticket,
-            json,
-            command,
-        } => match command {
-            None => {
-                // Default: read-only listing.
-                let report = store.list_leases(ticket.as_deref())?;
-                let human = format!(
-                    "{} leases ({} live, {} tombstoned, {} expired)",
-                    report.count, report.live_count, report.tombstoned_count, report.expired_count
-                );
-                render(json, &report, human)
-            }
-            Some(LeasesCommand::Recover { actor, json }) => {
-                let outcome = store.recover_leases(&actor)?;
-                let human = format!(
-                    "lease recovery complete: {} expired, {} requeued, {} stale, {} ambiguous, {} invalid",
-                    outcome.expired_count,
-                    outcome.requeued_count,
-                    outcome.stale_count,
-                    outcome.ambiguous_count,
-                    outcome.invalid_count,
-                );
-                render(json, &outcome, human)
-            }
-        },
-        WorkCommand::Packet { id, json } => {
-            let packet = store.work_packet(&id)?;
+        WorkCommand::Packet { id, lease, json } => {
+            let packet = match lease {
+                Some(lease_id) => store.work_packet_for_lease(&id, &lease_id)?,
+                None => store.work_packet(&id)?,
+            };
             packet.validate_schema_contract()?;
             let human = packet_human(&packet);
             render(json, &packet, human)

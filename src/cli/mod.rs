@@ -1,10 +1,10 @@
 mod args;
+mod daemon;
 mod docs;
 mod evidence;
 mod graph;
 mod knowledge;
 pub mod output;
-mod process;
 mod work;
 
 use clap::Parser;
@@ -40,8 +40,9 @@ pub fn run(cli: Cli) -> Result<(), PulseError> {
         args::Command::Graph { command } => graph::handle(&store, command),
         args::Command::Evidence { command } => evidence::handle(&store, command),
         args::Command::Knowledge { command } => knowledge::handle(&store, command),
-        args::Command::RunSupervisor(args) => {
-            process::handle_hidden_supervisor(store.repo_root(), args)
-        }
+        args::Command::Daemon { command } => daemon::handle_daemon(command),
+        args::Command::Project { command } => daemon::handle_project(command),
+        args::Command::Workspace { command } => daemon::handle_workspace(command),
+        args::Command::Session { command } => daemon::handle_session(command),
     }
 }
