@@ -3,7 +3,7 @@
 [Trang vào](../PULSE_REBOOT.md) | [Bản đồ tài liệu](README.md) | [Work graph](02-work-graph.md) | [Runtime harness](04-runtime-harness.md) | [Verification ratchet](07-verification-ratchet.md) | [Documentation system](10-documentation-system.md) | [Documentation retrieval](11-documentation-retrieval.md)
 
 **Đọc khi:** cần biết Pulse capture bài học sau execution/review/QA thế nào, learning record có schema gì, được promote về đâu, search/apply vào future work ra sao và tránh memory noise/staleness bằng cách nào.
-**Sở hữu:** compounding lifecycle, learning taxonomy/schema/store, provenance, applicability, confidence, promotion, knowledge search/get/applicable, bounded prompt injection, feedback, contradiction, freshness và retirement.
+**Sở hữu:** compounding lifecycle, learning taxonomy/schema/store, provenance, applicability, confidence, promotion, knowledge search/get/applicable, bounded context routing, feedback, contradiction, freshness và retirement.
 
 ## Khẳng định thiết kế
 
@@ -623,13 +623,14 @@ Không cộng raw scores từ incompatible systems thành public semantics. Resu
 
 Agent không tự nâng suggested thành required trong canonical packet; có thể request retrieval/escalation hoặc đề xuất work update.
 
-## Bounded prompt injection
+## Bounded context routing
 
-Không inject raw memory corpus. Work packet dùng progressive disclosure:
+Không inject raw memory corpus hoặc compile knowledge vào runner bootstrap prompt.
+Work packet và `pulse knowledge applicable` dùng progressive disclosure:
 
 ```text
-required knowledge summaries
-  -> recommended summaries trong token budget
+required knowledge refs/summaries
+  -> recommended refs/summaries trong context budget
   -> explicit `knowledge get` khi Agent cần detail
   -> linked evidence/docs/eval chỉ khi cần inspect
 ```
@@ -645,7 +646,7 @@ required knowledge summaries
 | Review | known architecture/security/compatibility failure patterns |
 | Orchestrate | coordination/recovery/scheduling learnings |
 
-### Prompt entry contract
+### Context entry contract
 
 ```json
 {
@@ -666,7 +667,7 @@ Budget/policy:
 
 - Required entries luôn nằm trước recommended.
 - Deduplicate guidance đã có nguyên văn trong applicable authoritative docs; giữ link/provenance thay vì copy.
-- Limit entry count và summary tokens theo audience/risk.
+- Limit entry count và summary tokens theo audience/risk/context budget.
 - Nếu required entries vượt budget, packet fail/advisory theo policy thay vì truncate silent.
 - Full evidence không inline mặc định.
 - Candidate/disputed/stale entries không auto-inject.
@@ -681,9 +682,13 @@ Budget/policy:
 - Required ratchet checks.
 - Promoted docs/Decision/eval targets.
 - Exclusion/contradiction advisories khi relevant.
-- Prompt token budget và omitted count.
+- Context token budget và omitted count.
 
-Planning/shaping packet có thể rộng hơn execution packet. Worker không tự scan `.pulse/knowledge/entries`; nó dùng CLI refs và bounded packet.
+Planning/shaping packet có thể rộng hơn execution packet. Worker không tự scan
+`.pulse/knowledge/entries`; bootstrap yêu cầu nó load lease-bound WorkPacket rồi
+gọi `pulse knowledge applicable --work <id> --audience <role> --moment <moment>`
+hoặc `knowledge get` theo refs. Knowledge content không được copy vào runner
+prompt.
 
 Nếu a required learning references stale/missing promotion target hoặc conflicts với accepted Decision/current docs, readiness/packet generation tạo actionable finding thay vì chọn một bên.
 
@@ -930,7 +935,7 @@ Rules:
 13. Same failure không tái diễn trên distinct applicable work và required checks pass tạo reinforcement evidence nhưng không tự đổi authority.
 14. Superseded/retired learning không xuất hiện default search/applicable packet; history vẫn query explicit.
 15. Xóa knowledge search cache rồi rebuild giữ eligible set, fingerprint semantics và stable tie-break behavior.
-16. Critical entries vượt prompt budget làm explicit packet finding/failure theo policy, không truncate silent.
+16. Critical entries vượt context budget làm explicit packet finding/failure theo policy, không truncate silent.
 17. Raw secret hoặc untrusted prompt text trong candidate bị redaction/review gate chặn trước publish/index.
 18. R3 incident required compound nhưng bị bỏ qua làm gate/defer finding theo policy; normal low-risk work có thể hợp lệ với `no_reusable_learning`.
 19. Work artifact chứa durable invariant nhưng compound chỉ lưu learning, chưa promote docs/Decision, vẫn bị documentation gate chặn.

@@ -609,7 +609,10 @@ Budget là guidance/policy, không thay thế required docs. Nếu required cont
 
 ## Work packet integration
 
-`pulse work packet TK-031` resolve hai tầng:
+`pulse work packet TK-031` resolve hai tầng. Trước reservation đây là current preview;
+trong một Worker Session, `pulse work packet TK-031 --lease <lease-id> --json`
+trả packet đã commit cùng Core reservation và không silently rebuild từ Ticket
+revision mới.
 
 ### Deterministic required context
 
@@ -659,13 +662,19 @@ Packet chỉ trả top section suggestions:
 Agent flow:
 
 ```text
-read required sections
+load committed packet by Ticket + lease
+  -> read required sections with expected refs/hashes
   -> inspect suggested summaries/snippets
   -> get selected sections
   -> search again only when needed
 ```
 
 Work packet generation không fail chỉ vì suggested search không có hit, nhưng required explicit/applicable docs missing hoặc stale theo hard policy vẫn fail.
+
+Runner prompt chỉ mô tả workflow load này cùng Ticket/lease identity; nó không
+inline section contents. Nếu required document hash đã đổi sau reservation, Worker
+nhận actionable stale-context finding và phải acknowledge redirect/re-shape hoặc
+dừng, không âm thầm đọc contract mới.
 
 ## Retrieval evaluation
 

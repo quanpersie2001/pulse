@@ -43,10 +43,7 @@ Rules:
    owning `pulse-reboot/` documents, source/tests and Git history. Do not create
    canonical Pulse Story/Ticket/Decision nodes for the work unless the
    maintainer explicitly approves a separate self-hosting migration.
-5. CLI examples below describe the product contract for an explicitly enrolled
-   target repository or a temporary test fixture. They are not instructions to
-   apply those commands to this repository itself.
-6. Self-hosting requires an explicit maintainer request and accepted design
+5. Self-hosting requires an explicit maintainer request and accepted design
    decision covering migration, ownership and rollback. Never infer consent from
    the presence of `.pulse/` files.
 
@@ -89,164 +86,21 @@ Rules:
 6. Manual smoke tests follow the same rule: copy/create a target under `mktemp`
    and point `target/debug/pulse` there. Never use `--repo-root .`.
 
-## Core Principle
-
-The repository is the system of record. Important state, decisions, evidence and durable knowledge must be local, inspectable and recoverable.
-
-Message history is not source-of-truth. Runtime state is not durable docs truth. Work prose is not a substitute for evidence or documentation receipts.
-
-## Architecture Map
-
-```text
-Human / Agent
-  -> Pulse CLI / kernel
-  -> Local Work Graph + Documentation System + Evidence Store
-  -> Repository Harness + Source Repository
-  -> Verify / Review / QA / Compound Learnings
-```
-
-Key planes:
-
-1. **Work graph** — `.pulse/workgraph/nodes/*.json`, `.pulse/workgraph/edges/*.json`, projections/cache.
-2. **Work content** — `works/` prose/artifacts owned by Epics, Stories, Tickets and Decisions.
-3. **Documentation knowledge** — `docs/`, `AGENTS.md`, future `PULSE.md`, registry and generated navigation.
-4. **Evidence** — `.pulse/evidence/` receipts, artifacts and validation bindings.
-5. **Runtime** — `.pulse/runtime/` locks, transactions, cache and ephemeral coordination state.
-6. **Repository harness** — scripts, tests, skills, policies, evals and verification profiles.
-
-## Current Kernel / CLI Surface
-
-Use the local Rust CLI/kernel, not the legacy `pulse:workflow` skill router,
-when implementing or testing Pulse against explicit fixtures/target repositories.
-The self-hosting boundary above takes precedence: do not point these commands at
-this repository root unless the maintainer explicitly requests it.
-
-Common work graph commands:
-
-```bash
-pulse --repo-root <repo> work create --kind ticket --title "..." --json
-pulse --repo-root <repo> work show <id> --json
-pulse --repo-root <repo> work list --json
-pulse --repo-root <repo> work edit <id> --expected-revision <n> ... --json
-pulse --repo-root <repo> work transition <id> --to <status> --expected-revision <n> --actor <actor> --json
-pulse --repo-root <repo> work supersede <old-id> --by <new-id> --expected-revision <n> --reason "..." --reconciliation-receipt <receipt-id> --actor <actor> --json
-pulse --repo-root <repo> work executability <id> --json
-pulse --repo-root <repo> work rollup <id> --json
-pulse --repo-root <repo> graph export --json
-pulse --repo-root <repo> graph validate --json
-pulse --repo-root <repo> graph recover --json
-pulse --repo-root <repo> graph neighborhood <id> --json
-pulse --repo-root <repo> graph affected-by <id> --json
-```
-
-Evidence commands:
-
-```bash
-pulse --repo-root <repo> evidence artifact put <path> --json
-pulse --repo-root <repo> evidence artifact verify <hash> --json
-pulse --repo-root <repo> evidence receipt record <receipt-file> --json
-pulse --repo-root <repo> evidence receipt verify <receipt-id> --json
-pulse --repo-root <repo> evidence receipt show <receipt-id> --json
-```
-
-Documentation commands:
-
-```bash
-pulse --repo-root <repo> docs register ... --json
-pulse --repo-root <repo> docs edit <doc-id> ... --json
-pulse --repo-root <repo> docs retire <doc-id> ... --json
-pulse --repo-root <repo> docs supersede <old-doc-id> <new-doc-id> ... --json
-pulse --repo-root <repo> docs list --json
-pulse --repo-root <repo> docs show <doc-id> --json
-pulse --repo-root <repo> docs validate --json
-pulse --repo-root <repo> docs applicable --work <work-id> --json
-pulse --repo-root <repo> docs impact <ticket-id> --expected-revision <n> --posture <required|none|deferred> ... --json
-pulse --repo-root <repo> docs index --json
-pulse --repo-root <repo> docs index --check --json
-pulse --repo-root <repo> docs status --json
-pulse --repo-root <repo> docs search "query" [--work <work-id>] [--limit <n>] [--json]
-pulse --repo-root <repo> docs get <doc-id|section-ref|chunk-ref|path:start-end> --json
-pulse --repo-root <repo> docs tree [path] --json
-```
-
-Prefer `--json` for agent consumption. Treat CLI error codes as the stable contract.
-
-## Work Graph Rules
-
-These rules govern Pulse-managed target repositories and test fixtures; they do
-not enroll this development repository into Pulse.
-
-- Ticket is the executable unit.
-- Epic/Story hold durable outcome, behavior baseline and design/approach context.
-- Decisions capture accepted hard-to-reverse choices.
-- Hierarchy is not dependency. Use edges/dependencies explicitly.
-- Priority is a signal, not an absolute sorting law.
-- All mutations use CAS via `expected_revision` and emit immutable events.
-- Never manually edit canonical graph JSON unless doing deliberate repair with tests/recovery context.
-- Run `graph validate` after broad graph mutations.
-
-## Documentation Rules
-
-Durable repository knowledge belongs in:
-
-- `docs/`
-- `AGENTS.md`
-- future `PULSE.md`
-- accepted Decisions / work artifacts when they own the knowledge
-
-Documentation registry controls identity, lifecycle, authority, scope and retrieval policy.
-
-Rules:
-
-1. Public behavior, invariant, architecture or operator procedure changes must update, classify or defer docs through `docs impact`.
-2. Generated `_index.md` navigation files are derived; do not hand-edit generated Pulse markers.
-3. Section retrieval uses `docs index/search/get/tree`; do not bypass it by raw-scanning the entire docs tree unless debugging the retrieval system itself.
-4. `AGENTS.md` is operator guidance. It must not become a long design doc; link to owning reboot docs.
-5. Treat stale/retired/superseded docs as historical, not current truth.
-
-Relevant design owners:
-
-- [`pulse-reboot/10-documentation-system.md`](pulse-reboot/10-documentation-system.md)
-- [`pulse-reboot/11-documentation-retrieval.md`](pulse-reboot/11-documentation-retrieval.md)
-
-## Evidence And Verification Rules
-
-- Verification claims should be backed by receipts, test output or committed evidence.
-- Receipt validation has integrity, binding, registry/policy and authorization dimensions.
-- Authorization may remain explicitly unresolved; do not turn structural checks into human approval.
-- Supersession through the CLI is receipt-first: use `--reconciliation-receipt`, not inline `--assertion`.
-- Source/content-bound receipts are the durable proof boundary for documentation and review claims.
-
-Relevant owner: [`pulse-reboot/07-verification-ratchet.md`](pulse-reboot/07-verification-ratchet.md).
-
-## Shaping / Readiness Discipline
-
-Pulse is not a fixed phase workflow, but it requires readiness discipline:
-
-- Ground before asking: read work context, applicable docs, decisions, code and evidence.
-- Ask humans only across authority boundaries: intent, irreversible trade-offs, risk appetite and approval.
-- Turn sharp uncertainty into Decision, Discovery/Spike or enabling Ticket.
-- Keep bounded fog in `not_yet_specified`; do not invent speculative tickets upfront.
-- If execution discovers critical ambiguity outside implementation freedom, stop and re-shape/requeue.
-
-Owner: [`pulse-reboot/04-runtime-harness.md`](pulse-reboot/04-runtime-harness.md).
-
 ## Agent Operating Rules
 
 1. Start by orienting from repository artifacts, not conversation memory.
-2. In this Pulse development repository, edit source/design docs and use tests or
-   temporary fixtures. Use the Pulse CLI/kernel for canonical reads and
-   mutations only in an explicitly enrolled target repository or fixture; never
-   infer that this repository is enrolled.
-3. Respect CAS revisions in Pulse-managed target repositories; on conflict,
-   reload current state before retrying.
-4. Keep runtime transactions recoverable; if interrupted, run/read `graph recover` before continuing graph work.
-5. Prefer small, evidence-backed commits.
-6. Do not mark work complete unless tests/verification prove the affected behavior.
-7. Use sub-agents/isolated worktrees for parallelizable investigation or implementation, then verify and merge deliberately.
-8. Do not let sub-agent summaries substitute for checking actual diffs and tests.
-9. Keep generated/cache/runtime outputs out of durable source unless explicitly tracked by design.
-10. When context exceeds about 65%, write a handoff with branch, commits, tests run, open blockers and next action.
+2. Work on this repository directly through its source, design documents, tests
+   and Git history. Do not use Pulse to plan, track, coordinate or execute work
+   on Pulse itself.
+3. Use the Pulse CLI only when a test explicitly exercises it against a
+   temporary target-repository fixture.
+4. Prefer small, evidence-backed changes.
+5. Do not mark work complete unless tests or focused verification prove the
+   affected behavior.
+6. Keep generated, cache and runtime outputs out of durable source unless the
+   repository design explicitly tracks them.
+7. When handing work off, record the branch, relevant changes, tests run, open
+   blockers and next action.
 
 ## Repository Layout Quick Reference
 
@@ -412,9 +266,6 @@ Before ending a substantial work chunk:
 2. Run the relevant validation commands and record them in the final response.
 3. Commit coherent changes.
 4. Note branch, commits, remaining risks and next action.
-5. If operating on Pulse work items in an explicitly enrolled target repository,
-   update their status or leave a clear handoff. Do not create such items in this
-   development repository without explicit self-hosting approval.
 
 ## Optional Memory Tools
 

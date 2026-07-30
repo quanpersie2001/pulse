@@ -24,7 +24,6 @@
     "./skills/dev-note-distil",
     "./skills/prompt-leverage"
   ],
-  "hooks": "./hooks/codex-hooks.json",
   "mcpServers": "./.mcp.json",
   "interface": {
     "displayName": "Pulse",

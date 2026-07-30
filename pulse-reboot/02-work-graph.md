@@ -441,9 +441,9 @@ pulse graph export --json
 - Expected evidence và handoff.
 - Required/optional/write-candidate durable docs với content hashes và exclusion reasons.
 - Ranked section refs/snippets theo retrieval budget; không inline toàn bộ applicable documents.
-- Required/recommended/suggested learning refs, applicability explanation, required ratchet checks và knowledge prompt budget theo [`12-knowledge-compounding.md`](12-knowledge-compounding.md).
+- Required/recommended/suggested learning refs, applicability explanation, required ratchet checks và knowledge context budget theo [`12-knowledge-compounding.md`](12-knowledge-compounding.md).
 
-Machine output luôn có `schema_version`, stable field names và non-zero exit code khi graph invalid. Prompt builder dùng packet này; Agent không phải tìm Ticket bằng filesystem search.
+Machine output luôn có `schema_version`, stable field names và non-zero exit code khi graph invalid. Trước dispatch đây là current preview; trong run, `pulse work packet <ticket-id> --lease <lease-id> --json` resolve exact packet đã commit cùng Core reservation. Runner prompt chỉ bootstrap workflow load packet/docs/knowledge; Agent không phải tìm Ticket bằng filesystem search hoặc nhận full contract/docs được copy vào prompt.
 
 ## Full graph projection và cache
 

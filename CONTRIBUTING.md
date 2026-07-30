@@ -22,7 +22,6 @@ This repository is a root-scoped packaged plugin repo.
 
 - Codex manifest: [`.codex-plugin/plugin.json`](.codex-plugin/plugin.json)
 - Claude manifest: [`.claude-plugin/plugin.json`](.claude-plugin/plugin.json)
-- Shared packaged hook sources: [`hooks/`](hooks/)
 - Marketplace metadata: [`.agents/plugins/marketplace.json`](.agents/plugins/marketplace.json)
 
 Packaged public-surface discovery is rooted at `skills/workflow/` as declared in manifests.
@@ -114,7 +113,8 @@ Use `{{pulse_command}}` for status, readiness, and reservations, for example:
    - [`README.md`](README.md)
    - [`CONTRIBUTING.md`](CONTRIBUTING.md)
    - [`AGENTS.md`](AGENTS.md)
-   - [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)
+   - [`PULSE_REBOOT.md`](PULSE_REBOOT.md)
+   - [`pulse-reboot/`](pulse-reboot/)
 5. Run checks and tests.
 
 ## Testing Changes

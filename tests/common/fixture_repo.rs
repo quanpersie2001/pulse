@@ -129,9 +129,7 @@ fn assert_valid_fixture_name(name: &str) {
 }
 
 fn pulse_binary() -> PathBuf {
-    std::env::var_os("CARGO_BIN_EXE_pulse")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| development_repo_root().join("target/debug/pulse"))
+    crate::common_bin::resolve_pulse_bin()
 }
 
 fn initialize_git_baseline(root: &Path) {

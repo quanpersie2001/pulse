@@ -755,7 +755,40 @@ QA có thể là một Agent độc lập với:
 Independence là risk-adaptive:
 
 - Low-risk checkpoint có thể do same Worker chạy nếu policy cho phép và receipt vẫn source-bound.
-- Story close cho R2/R3 hoặc critical behavior nên dùng independent QA actor/task.
+- Behavior-changing/high-risk checkpoint dùng independent QA actor/task theo policy.
+- Story close cho R2/R3 hoặc critical behavior dùng independent QA actor/task.
 - Security, destructive migration hoặc production qualification có thể cần human/specialist gate ngoài agent QA.
+
+Default actor policy:
+
+| Assurance | Actor mặc định |
+|---|---|
+| Build/unit/integration/focused regression | Worker |
+| Self-review | Worker |
+| Independent code review | Reviewer Agent |
+| Low-risk Ticket checkpoint | Worker hoặc QA Agent theo policy |
+| Behavior-changing/high-risk checkpoint | Independent QA Agent |
+| R2/R3 Story qualification | Independent QA Agent |
+| Security/destructive/production gate | Specialist hoặc human |
+
+QA Agent nhận một workflow bootstrap và assignment identity, không nhận full QA
+baseline/docs dưới dạng prompt. Nó dùng Pulse CLI để load frozen source/artifact,
+Story baseline revision, selected cases, required docs, applicable historical
+knowledge, environment profile và executor requirements. Prompt chỉ yêu cầu:
+
+```text
+load exact QA assignment and baseline through Pulse CLI
+  -> read required docs
+  -> start/healthcheck environment
+  -> reset fixtures
+  -> execute selected cases
+  -> collect observations/artifacts
+  -> submit immutable receipts/findings
+  -> never modify source, acceptance or Decisions
+```
+
+Reviewer và QA Agent có thể chạy song song trên cùng frozen read-only snapshot.
+Nếu Worker tạo source revision mới sau finding, receipt cũ chỉ còn hợp lệ khi
+ancestor/impact policy cho phép; mặc định affected review/QA phải chạy lại.
 
 Điều phối QA Agent tuân theo [`05-cross-agent-coordination.md`](05-cross-agent-coordination.md).

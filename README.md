@@ -83,8 +83,8 @@ Start with **`pulse:workflow use`** in the target repo to initialize `.pulse/run
 
 | Read this when you want... | Link |
 | --- | --- |
-| The architecture and runtime model | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) |
-| A concrete walkthrough | [docs/examples/golden-path.md](docs/examples/golden-path.md) |
+| The product direction and architecture | [PULSE_REBOOT.md](PULSE_REBOOT.md) |
+| The detailed design ownership map | [pulse-reboot/README.md](pulse-reboot/README.md) |
 
 ## Maintainer Notes
 
