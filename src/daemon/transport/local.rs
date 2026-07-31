@@ -115,6 +115,14 @@ pub fn serve(store: StateStore) -> Result<()> {
     while !shutdown.load(Ordering::SeqCst) {
         match listener.accept() {
             Ok((stream, _)) => {
+                // The listener is non-blocking for poll-style accept, but
+                // accepted connections are served with blocking I/O. On
+                // macOS/BSD an accepted socket inherits the listener's
+                // `O_NONBLOCK`; reset it so the worker's blocking
+                // `read_line`/`write_all` do not fail with `EAGAIN` under
+                // timing races (which surfaced as sporadic client-side
+                // `ConnectionReset` under load).
+                let _ = stream.set_nonblocking(false);
                 let application = Arc::clone(&application);
                 let auth_token = endpoint.auth_token.clone();
                 workers.push(thread::spawn(move || {
