@@ -94,9 +94,28 @@ pub enum ProcessIdentityStatus {
     Mismatch,
 }
 
+/// Decide whether the process currently owning `expected.pid` is the same
+/// incarnation we recorded, or whether the pid is now absent / a different
+/// (reused) incarnation.
+///
+/// Identity is authoritative on `(pid, platform, start-marker,
+/// process-group)`: the high-resolution process start timestamp uniquely
+/// identifies a process incarnation per boot, so a reused pid always carries a
+/// different start-marker and is rejected. `pid_reuse_identity_mismatch_refuses_cancellation`
+/// pins that contract.
+///
+/// The executable path is deliberately NOT part of this decision. On macOS
+/// `proc_pidpath` is observably non-deterministic for a process launched as
+/// `/bin/sh` (which is GNU bash 3.2 in sh mode): the same live process can
+/// report `/bin/sh` at one instant and `/bin/bash` at another, so an exact
+/// executable-path comparison produces false mismatches that would refuse to
+/// cancel a process we own (a correctness bug). The start-marker already
+/// subsumes the anti-PID-reuse role the executable check played, so dropping it
+/// is strictly more reliable. `expected_executable` is retained only for caller
+/// symmetry.
 pub fn process_identity_status(
     expected: &NativeProcessIdentity,
-    expected_executable: &Path,
+    _expected_executable: &Path,
 ) -> Result<ProcessIdentityStatus> {
     let current = match current_process_identity(expected.pid) {
         Ok(current) => current,
@@ -105,17 +124,10 @@ pub fn process_identity_status(
         }
         Err(error) => return Err(error),
     };
-    if current.platform != expected.platform
-        || current.platform_start_marker != expected.platform_start_marker
-        || current.process_group_id != expected.process_group_id
+    if current.platform == expected.platform
+        && current.platform_start_marker == expected.platform_start_marker
+        && current.process_group_id == expected.process_group_id
     {
-        return Ok(ProcessIdentityStatus::Mismatch);
-    }
-    let observed = process_executable(expected.pid)?;
-    let expected = expected_executable
-        .canonicalize()
-        .map_err(|error| PulseError::io(expected_executable, error))?;
-    if observed == expected {
         Ok(ProcessIdentityStatus::Match)
     } else {
         Ok(ProcessIdentityStatus::Mismatch)

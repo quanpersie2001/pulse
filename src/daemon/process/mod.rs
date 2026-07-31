@@ -304,15 +304,11 @@ impl ProcessOwner {
                 .is_none()
             {
                 if !native::process_identity_matches(&child.identity, &child.executable)? {
-                    let observed = native::current_process_executable(child.identity.pid)
-                        .map(|path| path.to_string_lossy().into_owned())
-                        .unwrap_or_else(|error| format!("<unavailable: {}>", error.code()));
                     return Err(PulseError::validation(
                         "managed_process_identity_mismatch",
-                        format!(
-                            "recorded PID/start/process-group/executable identity no longer matches; expected executable {}, observed {observed}; refusing cancellation",
-                            child.executable.display()
-                        ),
+                        "recorded PID/start/process-group identity no longer matches; the managed \
+                         process may have exited and its pid may have been reused; refusing \
+                         cancellation",
                     ));
                 }
                 native::terminate_process_group(&child.identity, &child.executable)?;
