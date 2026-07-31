@@ -102,6 +102,7 @@ pub(crate) enum SessionCommand {
     Close {
         session_id: String,
     },
+    Resume(SessionResumeArgs),
     Archive {
         session_id: String,
     },
@@ -183,7 +184,14 @@ pub(crate) struct SessionCreateArgs {
     pub(crate) provider_options: String,
 }
 
-pub(crate) fn handle_daemon(command: DaemonCommand) -> Result<()> {
+#[derive(Args)]
+pub(crate) struct SessionResumeArgs {
+    pub(crate) session_id: String,
+    #[arg(long, default_value = "{}")]
+    pub(crate) provider_options: String,
+}
+
+pub(crate) fn handle_daemon(command: DaemonCommand, explicit_key: Option<&str>) -> Result<()> {
     let store = StateStore::discover()?;
     match command {
         DaemonCommand::Serve => local::serve(store),
@@ -217,11 +225,9 @@ pub(crate) fn handle_daemon(command: DaemonCommand) -> Result<()> {
             DaemonRequest::Status,
             fresh_key("daemon_status"),
         )?),
-        DaemonCommand::Stop => print_response(request(
-            &store,
-            DaemonRequest::Shutdown,
-            fresh_key("daemon_stop"),
-        )?),
+        DaemonCommand::Stop => {
+            dispatch_with_store(&store, DaemonRequest::Shutdown, "daemon_stop", explicit_key)
+        }
         DaemonCommand::Doctor => {
             let state = store.load()?;
             let endpoint = LocalClient::discover(&store)?;
@@ -356,6 +362,10 @@ pub(crate) fn handle_session(command: SessionCommand, explicit_key: Option<&str>
         }
         SessionCommand::Interrupt { session_id } => DaemonRequest::SessionInterrupt { session_id },
         SessionCommand::Close { session_id } => DaemonRequest::SessionClose { session_id },
+        SessionCommand::Resume(args) => DaemonRequest::SessionResume {
+            session_id: args.session_id,
+            provider_options: serde_json::from_str::<Value>(&args.provider_options)?,
+        },
         SessionCommand::Archive { session_id } => DaemonRequest::SessionArchive { session_id },
         SessionCommand::Timeline {
             session,
@@ -391,13 +401,35 @@ fn dispatch_with(
     explicit_key: Option<&str>,
 ) -> Result<()> {
     let store = StateStore::discover()?;
-    let is_mutating = request_value.is_mutating();
-    let key = match (is_mutating, explicit_key) {
-        (true, Some(key)) if !key.trim().is_empty() => key.to_string(),
-        (true, _) => fresh_key(prefix),
-        (false, _) => String::new(),
-    };
-    print_response(request(&store, request_value, key)?)
+    dispatch_with_store(&store, request_value, prefix, explicit_key)
+}
+
+fn dispatch_with_store(
+    store: &StateStore,
+    request_value: DaemonRequest,
+    prefix: &str,
+    explicit_key: Option<&str>,
+) -> Result<()> {
+    let key = selected_idempotency_key(request_value.is_mutating(), explicit_key, prefix)?;
+    print_response(request(store, request_value, key)?)
+}
+
+fn selected_idempotency_key(
+    is_mutating: bool,
+    explicit_key: Option<&str>,
+    prefix: &str,
+) -> Result<String> {
+    match (is_mutating, explicit_key) {
+        (true, Some(key)) if key.trim().is_empty() || key.trim() != key => {
+            Err(PulseError::validation(
+                "idempotency_key_invalid",
+                "explicit idempotency key must be non-empty and have no surrounding whitespace",
+            ))
+        }
+        (true, Some(key)) => Ok(key.to_string()),
+        (true, None) => Ok(fresh_key(prefix)),
+        (false, _) => Ok(String::new()),
+    }
 }
 
 fn request(
@@ -431,4 +463,58 @@ fn print_response(response: crate::daemon::protocol::DaemonResponse) -> Result<(
 
 fn fresh_key(prefix: &str) -> String {
     format!("{prefix}_{}", ulid::Ulid::new())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::Parser;
+
+    #[test]
+    fn cli_parses_session_resume_and_global_idempotency_key() {
+        let cli = match crate::cli::Cli::try_parse_from([
+            "pulse",
+            "--idempotency-key",
+            "stable-resume",
+            "session",
+            "resume",
+            "ses_test",
+            "--provider-options",
+            "{}",
+        ]) {
+            Ok(cli) => cli,
+            Err(error) => panic!("session resume CLI should parse: {error}"),
+        };
+        assert_eq!(cli.idempotency_key.as_deref(), Some("stable-resume"));
+        assert!(matches!(
+            cli.command,
+            crate::cli::args::Command::Session {
+                command: SessionCommand::Resume(SessionResumeArgs { session_id, .. })
+            } if session_id == "ses_test"
+        ));
+    }
+
+    #[test]
+    fn explicit_idempotency_key_validation_matches_daemon_contract() {
+        assert_eq!(
+            selected_idempotency_key(true, Some("stable"), "session").unwrap(),
+            "stable"
+        );
+        assert_eq!(
+            selected_idempotency_key(false, Some("ignored"), "session").unwrap(),
+            ""
+        );
+        assert_eq!(
+            selected_idempotency_key(true, Some("  "), "session")
+                .unwrap_err()
+                .code(),
+            "idempotency_key_invalid"
+        );
+        assert_eq!(
+            selected_idempotency_key(true, Some(" padded "), "session")
+                .unwrap_err()
+                .code(),
+            "idempotency_key_invalid"
+        );
+    }
 }

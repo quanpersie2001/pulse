@@ -12,7 +12,7 @@ use crate::execution::{
     HandoffReceiptV1, VerificationCheck, VerificationDisposition, VerificationReceiptV1,
 };
 
-pub const PROTOCOL_VERSION: u32 = 1;
+pub const PROTOCOL_VERSION: u32 = 2;
 pub const DAEMON_CAPABILITIES: &[&str] = &[
     "project_registry_v1",
     "workspace_manager_v1",
@@ -23,7 +23,7 @@ pub const DAEMON_CAPABILITIES: &[&str] = &[
     "timeline_subscription_v1",
     "assignment_saga_v1",
     "session_mailbox_v1",
-    "session_attach_v1",
+    "session_resume_v1",
     "mcp_tool_adapter_v1",
 ];
 
@@ -109,14 +109,8 @@ pub enum DaemonRequest {
     SessionClose {
         session_id: String,
     },
-    SessionAttach {
-        session_id: String,
-        provider_id: String,
-        provider_options: Value,
-    },
     SessionResume {
         session_id: String,
-        provider_id: String,
         provider_options: Value,
     },
     SessionArchive {
@@ -202,7 +196,7 @@ impl DaemonRequest {
             Self::Shutdown
             | Self::ProjectArchive { .. }
             | Self::SessionCommunicationGrant { .. } => "runtime.admin",
-            Self::SessionAttach { .. } | Self::SessionResume { .. } => "runtime.admin",
+            Self::SessionResume { .. } => "runtime.admin",
             Self::Handshake { .. }
             | Self::Status
             | Self::ProjectList { .. }

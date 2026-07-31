@@ -139,6 +139,41 @@ fn add_reviewer_policy(root: &std::path::Path) {
 }
 
 #[test]
+fn terminal_reservation_retry_allocates_a_fresh_immutable_lease() {
+    let repo = TestRepo::from_fixture("minimal-service");
+    let store = JsonGraphStore::new(repo.path());
+    bootstrap_repo(&repo, &store);
+    write_policy(repo.path(), &["work.assignment.release"]);
+    let ticket_id = setup_ready_ticket(repo.path(), &store);
+
+    let first = reserve(&store, &ticket_id, "reservation-generation");
+    let first_path = repo
+        .path()
+        .join(".pulse/runtime/assignment/reservations")
+        .join(format!("{}.json", first.reservation.lease_id));
+    let first_bytes = std::fs::read(&first_path).unwrap();
+    let released = store
+        .release_reservation(
+            &first.reservation.lease_id,
+            "agent:tester",
+            "retry generation test",
+        )
+        .unwrap();
+    assert_eq!(released.state, ReservationState::Released);
+    let released_bytes = std::fs::read(&first_path).unwrap();
+
+    let second = reserve(&store, &ticket_id, "reservation-generation");
+    assert_ne!(second.reservation.lease_id, first.reservation.lease_id);
+    assert!(second.reservation.lease_id.ends_with("_g000002"));
+    assert_eq!(second.reservation.state, ReservationState::Reserved);
+    assert_eq!(std::fs::read(&first_path).unwrap(), released_bytes);
+    assert_ne!(first_bytes, released_bytes);
+
+    let replay = reserve(&store, &ticket_id, "reservation-generation");
+    assert_eq!(replay, second);
+}
+
+#[test]
 fn changed_ticket_revision_rejects_activation_and_compensation_releases() {
     let repo = TestRepo::from_fixture("minimal-service");
     let store = JsonGraphStore::new(repo.path());
@@ -189,6 +224,264 @@ fn changed_ticket_revision_rejects_activation_and_compensation_releases() {
         )
         .unwrap();
     assert_eq!(released.state, ReservationState::Released);
+}
+
+#[cfg(unix)]
+#[test]
+fn assignment_retry_restores_archived_workspace_and_resumes_closed_session() {
+    use pulse::daemon::application::DaemonApplication;
+    use pulse::daemon::assignment::AssignmentSagaState;
+    use pulse::daemon::persistence::StateStore;
+    use pulse::daemon::protocol::{DaemonRequest, DaemonResponse};
+    use pulse::daemon::workspace::IsolationMode;
+
+    let repo = TestRepo::from_fixture("minimal-service");
+    let store = JsonGraphStore::new(repo.path());
+    bootstrap_repo(&repo, &store);
+    write_policy(repo.path(), &["work.assignment.release"]);
+    let ticket_id = setup_ready_ticket(repo.path(), &store);
+    let daemon_home = tempfile::tempdir().unwrap();
+    let daemon = DaemonApplication::new(StateStore::new(daemon_home.path()), "test").unwrap();
+    let project_id = match daemon
+        .handle(
+            &DaemonRequest::ProjectOpen {
+                root: repo.path().to_string_lossy().to_string(),
+            },
+            "recovery-project",
+        )
+        .unwrap()
+    {
+        DaemonResponse::Project { project } => project.project_id,
+        other => panic!("unexpected response: {other:?}"),
+    };
+    let script = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/fake_codex_provider.mjs");
+    let provider_options = serde_json::json!({
+        "executable": std::env::var("NODE").unwrap_or_else(|_| "node".to_string()),
+        "args": [script.to_string_lossy()],
+    });
+    let request = DaemonRequest::AssignmentStart {
+        project_id: project_id.clone(),
+        ticket_id: ticket_id.clone(),
+        actor: "agent:tester".to_string(),
+        assignee: "agent:codex-local".to_string(),
+        capabilities: vec![
+            "repository.inspect".to_string(),
+            "source.read".to_string(),
+            "source.write".to_string(),
+            "test.run".to_string(),
+            "workspace.worktree".to_string(),
+        ],
+        isolation: IsolationMode::Local,
+        provider_id: "codex".to_string(),
+        provider_options: provider_options.clone(),
+        ttl_seconds: 1800,
+    };
+    let first = match daemon
+        .handle(&request, "recover-original-assignment-key")
+        .unwrap()
+    {
+        DaemonResponse::Assignment { saga } => saga,
+        other => panic!("unexpected response: {other:?}"),
+    };
+    assert_eq!(first.state, AssignmentSagaState::BootstrapDelivered);
+    let first_lease = first.lease_id.clone().unwrap();
+    let workspace_id = first.workspace_id.clone().unwrap();
+    let session_id = first.session_id.clone().unwrap();
+    let old_process_id = daemon.store().load().unwrap().sessions[&session_id]
+        .managed_process_id
+        .clone()
+        .unwrap();
+    daemon
+        .handle(
+            &DaemonRequest::SessionClose {
+                session_id: session_id.clone(),
+            },
+            "recover-close-session",
+        )
+        .unwrap();
+    daemon
+        .handle(
+            &DaemonRequest::WorkspaceArchive {
+                workspace_id: workspace_id.clone(),
+            },
+            "recover-archive-workspace",
+        )
+        .unwrap();
+    store
+        .release_reservation(&first_lease, "agent:tester", "simulate compensation")
+        .unwrap();
+    daemon
+        .store()
+        .with_state(true, |state| {
+            let saga = state.assignment_sagas.get_mut(&first.saga_id).unwrap();
+            saga.state = AssignmentSagaState::Recoverable;
+            saga.last_error = Some("simulated recoverable boundary".to_string());
+            Ok(())
+        })
+        .unwrap();
+    drop(daemon);
+
+    let restarted =
+        DaemonApplication::new(StateStore::new(daemon_home.path()), "test-restarted").unwrap();
+    let recovered = match restarted
+        .handle(&request, "recover-original-assignment-key")
+        .unwrap()
+    {
+        DaemonResponse::Assignment { saga } => saga,
+        other => panic!("unexpected response: {other:?}"),
+    };
+    assert_eq!(recovered.state, AssignmentSagaState::BootstrapDelivered);
+    assert_eq!(
+        recovered.workspace_id.as_deref(),
+        Some(workspace_id.as_str())
+    );
+    assert_eq!(recovered.session_id.as_deref(), Some(session_id.as_str()));
+    assert_ne!(recovered.lease_id.as_deref(), Some(first_lease.as_str()));
+    let state = restarted.store().load().unwrap();
+    assert_eq!(
+        state.workspaces[&workspace_id].lifecycle,
+        pulse::daemon::workspace::WorkspaceLifecycle::Open
+    );
+    let session = &state.sessions[&session_id];
+    assert_eq!(
+        session.lifecycle,
+        pulse::daemon::session::SessionLifecycle::Running
+    );
+    assert_ne!(
+        session.managed_process_id.as_deref(),
+        Some(old_process_id.as_str())
+    );
+    assert_eq!(
+        state
+            .processes
+            .values()
+            .filter(|process| {
+                process.owner_id == session_id
+                    && process.state == pulse::daemon::process::ManagedProcessState::Running
+            })
+            .count(),
+        1
+    );
+    assert_eq!(
+        state
+            .timeline
+            .iter()
+            .filter(|event| event.event_type == "session.resumed")
+            .count(),
+        1
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn zero_exit_provider_without_handoff_does_not_complete_ticket() {
+    use pulse::daemon::application::DaemonApplication;
+    use pulse::daemon::assignment::AssignmentSagaState;
+    use pulse::daemon::persistence::StateStore;
+    use pulse::daemon::protocol::{DaemonRequest, DaemonResponse};
+    use pulse::daemon::workspace::IsolationMode;
+
+    let repo = TestRepo::from_fixture("minimal-service");
+    let store = JsonGraphStore::new(repo.path());
+    bootstrap_repo(&repo, &store);
+    write_policy(repo.path(), &["work.assignment.release"]);
+    let ticket_id = setup_ready_ticket(repo.path(), &store);
+    let daemon_home = tempfile::tempdir().unwrap();
+    let daemon = DaemonApplication::new(StateStore::new(daemon_home.path()), "test").unwrap();
+    let project_id = match daemon
+        .handle(
+            &DaemonRequest::ProjectOpen {
+                root: repo.path().to_string_lossy().to_string(),
+            },
+            "zero-exit-project",
+        )
+        .unwrap()
+    {
+        DaemonResponse::Project { project } => project.project_id,
+        other => panic!("unexpected response: {other:?}"),
+    };
+    let script = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/fake_codex_exit_zero.mjs");
+    let saga = match daemon
+        .handle(
+            &DaemonRequest::AssignmentStart {
+                project_id,
+                ticket_id: ticket_id.clone(),
+                actor: "agent:tester".to_string(),
+                assignee: "agent:codex-local".to_string(),
+                capabilities: vec![
+                    "repository.inspect".to_string(),
+                    "source.read".to_string(),
+                    "source.write".to_string(),
+                    "test.run".to_string(),
+                    "workspace.worktree".to_string(),
+                ],
+                isolation: IsolationMode::Local,
+                provider_id: "codex".to_string(),
+                provider_options: serde_json::json!({
+                    "executable": std::env::var("NODE").unwrap_or_else(|_| "node".to_string()),
+                    "args": [script.to_string_lossy()],
+                }),
+                ttl_seconds: 1800,
+            },
+            "zero-exit-assignment",
+        )
+        .unwrap()
+    {
+        DaemonResponse::Assignment { saga } => saga,
+        other => panic!("unexpected response: {other:?}"),
+    };
+    assert_eq!(saga.state, AssignmentSagaState::BootstrapDelivered);
+    let activated = match daemon
+        .handle(
+            &DaemonRequest::AssignmentAcknowledge {
+                saga_id: saga.saga_id,
+                acknowledgement_id: "zero-exit-ack".to_string(),
+            },
+            "zero-exit-acknowledge",
+        )
+        .unwrap()
+    {
+        DaemonResponse::Assignment { saga } => saga,
+        other => panic!("unexpected response: {other:?}"),
+    };
+    assert_eq!(activated.state, AssignmentSagaState::Activated);
+    assert_eq!(
+        store.show_node(&ticket_id).unwrap().status,
+        NodeStatus::Active
+    );
+
+    let session_id = activated.session_id.as_deref().unwrap();
+    let session = daemon.store().load().unwrap().sessions[session_id].clone();
+    let process_id = session.managed_process_id.as_deref().unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    while daemon.managed_process_is_alive(process_id).unwrap()
+        && std::time::Instant::now() < deadline
+    {
+        std::thread::yield_now();
+    }
+    assert!(!daemon.managed_process_is_alive(process_id).unwrap());
+    drop(daemon);
+    let restarted =
+        DaemonApplication::new(StateStore::new(daemon_home.path()), "test-restarted").unwrap();
+    let recovered = match restarted
+        .handle(
+            &DaemonRequest::AssignmentInspect {
+                saga_id: activated.saga_id,
+            },
+            "",
+        )
+        .unwrap()
+    {
+        DaemonResponse::Assignment { saga } => saga,
+        other => panic!("unexpected response: {other:?}"),
+    };
+    assert_eq!(recovered.state, AssignmentSagaState::Activated);
+    assert_eq!(
+        store.show_node(&ticket_id).unwrap().status,
+        NodeStatus::Active
+    );
 }
 
 #[cfg(unix)]

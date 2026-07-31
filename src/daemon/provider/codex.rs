@@ -17,7 +17,7 @@ impl AgentProvider for CodexNativeProvider {
     fn capabilities(&self) -> ProviderCapabilities {
         ProviderCapabilities {
             create: true,
-            attach: true,
+            resume: true,
             send: true,
             observe: true,
             interrupt: true,
@@ -119,6 +119,31 @@ impl AgentProvider for CodexNativeProvider {
         encode_request("pulse-thread-start", "thread/start", params)
     }
 
+    fn resume_session_request(
+        &self,
+        provider_handle: &str,
+        cwd: &str,
+        options: &Value,
+    ) -> Result<ProviderRequest> {
+        let mut params = json!({
+            "threadId": provider_handle,
+            "cwd": cwd,
+        });
+        for field in [
+            "approvalPolicy",
+            "baseInstructions",
+            "developerInstructions",
+            "model",
+            "sandbox",
+            "serviceTier",
+        ] {
+            if let Some(value) = options.get(field) {
+                params[field] = value.clone();
+            }
+        }
+        encode_request("pulse-thread-resume", "thread/resume", params)
+    }
+
     fn parse_session_handle(&self, response: &Value) -> Result<String> {
         response
             .pointer("/result/thread/id")
@@ -207,6 +232,14 @@ mod tests {
         let create: Value = serde_json::from_str(&create.message).unwrap();
         assert_eq!(create["method"], "thread/start");
         assert_eq!(create["params"]["cwd"], "/tmp/project");
+
+        let resume = provider
+            .resume_session_request("thread-1", "/tmp/project", &json!({}))
+            .unwrap();
+        let resume: Value = serde_json::from_str(&resume.message).unwrap();
+        assert_eq!(resume["method"], "thread/resume");
+        assert_eq!(resume["params"]["threadId"], "thread-1");
+        assert_eq!(resume["params"]["cwd"], "/tmp/project");
 
         let send = provider.encode_send("thread-1", "hello").unwrap();
         let send: Value = serde_json::from_str(&send.message).unwrap();

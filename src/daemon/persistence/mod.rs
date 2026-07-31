@@ -34,6 +34,7 @@ pub struct DaemonState {
     pub processes: BTreeMap<String, ManagedProcessRecord>,
     pub assignment_sagas: BTreeMap<String, AssignmentSagaRecord>,
     pub timeline: Vec<TimelineEvent>,
+    #[serde(default)]
     pub idempotency_results: BTreeMap<String, IdempotencyRecord>,
 }
 

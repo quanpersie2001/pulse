@@ -8,7 +8,7 @@ use pulse::daemon::session::SessionLifecycle;
 use pulse::daemon::transport::mcp::McpToolAdapter;
 use pulse::daemon::workspace::IsolationMode;
 use serde_json::json;
-use std::sync::Arc;
+use std::sync::{Arc, Barrier};
 #[cfg(unix)]
 use std::time::{Duration, Instant};
 
@@ -58,9 +58,18 @@ fn create_workspace(app: &DaemonApplication, project_id: &str) -> String {
 #[cfg(unix)]
 fn provider_options() -> serde_json::Value {
     json!({
-        "executable": "/bin/sh",
-        "args": ["-c", "cat"],
+        "executable": "/bin/cat",
+        "args": [],
         "protocol_mode": "opaque_test"
+    })
+}
+
+fn resumable_provider_options() -> serde_json::Value {
+    let script = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/fake_codex_provider.mjs");
+    json!({
+        "executable": std::env::var("NODE").unwrap_or_else(|_| "node".to_string()),
+        "args": [script.to_string_lossy()]
     })
 }
 
@@ -506,7 +515,7 @@ fn timeline_subscription_catches_up_after_a_live_event() {
 
 #[cfg(unix)]
 #[test]
-fn session_reattach_replaces_provider_handle_while_preserving_session_id() {
+fn session_resume_replaces_transport_while_preserving_session_and_provider_handle() {
     let (_home, project_root, app) = application();
     let project_id = open_project(&app, project_root.path());
     let workspace_id = create_workspace(&app, &project_id);
@@ -518,19 +527,23 @@ fn session_reattach_replaces_provider_handle_while_preserving_session_id() {
             workspace_id: workspace_id.clone(),
             provider_id: "codex".to_string(),
             parent_session_id: None,
-            provider_options: provider_options(),
+            provider_options: resumable_provider_options(),
         },
-        "reattach-session",
+        "resume-session-create",
     ) {
         DaemonResponse::Session { session } => session,
         other => panic!("unexpected response: {other:?}"),
     };
     assert_eq!(session.lifecycle, SessionLifecycle::Idle);
-    assert!(session.managed_process_id.is_some());
+    assert_eq!(
+        session.provider_handle.as_deref(),
+        Some("thread-pulse-test")
+    );
     let original_process_id = session.managed_process_id.clone().unwrap();
     let original_session_id = session.session_id.clone();
+    let original_provider_handle = session.provider_handle.clone();
 
-    // Close the session to put it in a state that allows reattach.
+    // Close the session to put it in a state that allows resume.
     handle(
         &app,
         DaemonRequest::SessionClose {
@@ -539,32 +552,28 @@ fn session_reattach_replaces_provider_handle_while_preserving_session_id() {
         "close-for-reattach",
     );
 
-    // Reattach with a new provider process.
-    let attached = match handle(
+    let resumed = match handle(
         &app,
-        DaemonRequest::SessionAttach {
+        DaemonRequest::SessionResume {
             session_id: original_session_id.clone(),
-            provider_id: "codex".to_string(),
-            provider_options: provider_options(),
+            provider_options: resumable_provider_options(),
         },
-        "reattach-attach",
+        "resume-session",
     ) {
         DaemonResponse::Session { session } => session,
         other => panic!("unexpected response: {other:?}"),
     };
 
-    // Session ID is stable.
-    assert_eq!(attached.session_id, original_session_id);
-    // Provider handle and process changed.
+    assert_eq!(resumed.session_id, original_session_id);
+    assert_eq!(resumed.provider_handle, original_provider_handle);
     assert_ne!(
-        attached.managed_process_id.as_deref(),
+        resumed.managed_process_id.as_deref(),
         Some(original_process_id.as_str())
     );
-    // Session is now Idle and usable.
-    assert_eq!(attached.lifecycle, SessionLifecycle::Idle);
-    assert!(attached.last_error.is_none());
+    assert_eq!(resumed.lifecycle, SessionLifecycle::Idle);
+    assert!(resumed.last_error.is_none());
 
-    // Timeline shows the reattach event.
+    // Timeline shows the resume event.
     let timeline = handle(
         &app,
         DaemonRequest::TimelineList {
@@ -579,8 +588,8 @@ fn session_reattach_replaces_provider_handle_while_preserving_session_id() {
             assert!(
                 page.events
                     .iter()
-                    .any(|event| event.event_type == "session.reattached"),
-                "timeline should contain session.reattached event"
+                    .any(|event| event.event_type == "session.resumed"),
+                "timeline should contain session.resumed event"
             );
         }
         other => panic!("unexpected response: {other:?}"),
@@ -598,6 +607,83 @@ fn session_reattach_replaces_provider_handle_while_preserving_session_id() {
 
 #[cfg(unix)]
 #[test]
+fn concurrent_session_resume_creates_one_replacement_process() {
+    let (_home, project_root, app) = application();
+    let project_id = open_project(&app, project_root.path());
+    let workspace_id = create_workspace(&app, &project_id);
+    let session = match handle(
+        &app,
+        DaemonRequest::SessionCreate {
+            workspace_id,
+            provider_id: "codex".to_string(),
+            parent_session_id: None,
+            provider_options: resumable_provider_options(),
+        },
+        "concurrent-resume-session",
+    ) {
+        DaemonResponse::Session { session } => session,
+        other => panic!("unexpected response: {other:?}"),
+    };
+    handle(
+        &app,
+        DaemonRequest::SessionClose {
+            session_id: session.session_id.clone(),
+        },
+        "concurrent-resume-close",
+    );
+
+    let barrier = Arc::new(Barrier::new(3));
+    let spawn_resume = |key: &'static str| {
+        let app = Arc::clone(&app);
+        let barrier = Arc::clone(&barrier);
+        let session_id = session.session_id.clone();
+        std::thread::spawn(move || {
+            barrier.wait();
+            app.handle(
+                &DaemonRequest::SessionResume {
+                    session_id,
+                    provider_options: resumable_provider_options(),
+                },
+                key,
+            )
+        })
+    };
+    let first = spawn_resume("concurrent-resume-one");
+    let second = spawn_resume("concurrent-resume-two");
+    barrier.wait();
+    let outcomes = [first.join().unwrap(), second.join().unwrap()];
+    assert_eq!(outcomes.iter().filter(|outcome| outcome.is_ok()).count(), 1);
+    assert!(outcomes.iter().any(|outcome| {
+        outcome
+            .as_ref()
+            .is_err_and(|error| error.code == "session_resume_not_required")
+    }));
+    let state = app.store().load().unwrap();
+    let current = state.sessions.get(&session.session_id).unwrap();
+    let current_process_id = current.managed_process_id.as_deref().unwrap();
+    assert_eq!(
+        state
+            .processes
+            .values()
+            .filter(|process| {
+                process.owner_id == session.session_id
+                    && process.state == pulse::daemon::process::ManagedProcessState::Running
+            })
+            .count(),
+        1
+    );
+    assert!(state.processes.contains_key(current_process_id));
+    handle(
+        &app,
+        DaemonRequest::SessionClose {
+            session_id: session.session_id,
+        },
+        "concurrent-resume-cleanup",
+    );
+}
+
+#[cfg(unix)]
+#[test]
 fn session_resume_recovers_after_error_lifecycle() {
     let (_home, project_root, app) = application();
     let project_id = open_project(&app, project_root.path());
@@ -609,9 +695,9 @@ fn session_resume_recovers_after_error_lifecycle() {
             workspace_id: workspace_id.clone(),
             provider_id: "codex".to_string(),
             parent_session_id: None,
-            provider_options: provider_options(),
+            provider_options: resumable_provider_options(),
         },
-        "resume-session",
+        "resume-error-session",
     ) {
         DaemonResponse::Session { session } => session,
         other => panic!("unexpected response: {other:?}"),
@@ -627,15 +713,13 @@ fn session_resume_recovers_after_error_lifecycle() {
         "close-for-resume",
     );
 
-    // SessionResume reattaches just like SessionAttach.
     let resumed = match handle(
         &app,
         DaemonRequest::SessionResume {
             session_id: session_id.clone(),
-            provider_id: "codex".to_string(),
-            provider_options: provider_options(),
+            provider_options: resumable_provider_options(),
         },
-        "resume-reattach",
+        "resume-error-session-retry",
     ) {
         DaemonResponse::Session { session } => session,
         other => panic!("unexpected response: {other:?}"),
@@ -650,6 +734,131 @@ fn session_resume_recovers_after_error_lifecycle() {
         },
         "close-after-resume",
     );
+}
+
+#[cfg(unix)]
+#[test]
+fn daemon_restart_with_live_process_fails_closed_and_terminates_matching_identity() {
+    let (home, project_root, app) = application();
+    let project_id = open_project(&app, project_root.path());
+    let workspace_id = create_workspace(&app, &project_id);
+    let session = match handle(
+        &app,
+        DaemonRequest::SessionCreate {
+            workspace_id,
+            provider_id: "codex".to_string(),
+            parent_session_id: None,
+            provider_options: provider_options(),
+        },
+        "restart-live-process",
+    ) {
+        DaemonResponse::Session { session } => session,
+        other => panic!("unexpected response: {other:?}"),
+    };
+    let process_id = session.managed_process_id.clone().unwrap();
+    assert!(app.managed_process_is_alive(&process_id).unwrap());
+    drop(app);
+
+    let restarted = DaemonApplication::new(StateStore::new(home.path()), "test-restarted").unwrap();
+    let state = restarted.store().load().unwrap();
+    assert_eq!(
+        state.processes[&process_id].state,
+        pulse::daemon::process::ManagedProcessState::Exited
+    );
+    let recovered_session = &state.sessions[&session.session_id];
+    assert_eq!(recovered_session.lifecycle, SessionLifecycle::Error);
+    assert!(recovered_session
+        .last_error
+        .as_deref()
+        .is_some_and(|error| error.contains("daemon restarted")));
+}
+
+#[cfg(unix)]
+#[test]
+fn pid_reuse_identity_mismatch_refuses_cancellation() {
+    let home = tempfile::tempdir().unwrap();
+    let owner = ProcessOwner::default();
+    let args = vec!["30".to_string()];
+    let record = owner
+        .spawn(SpawnRequest {
+            owner_kind: "test",
+            owner_id: "pid-reuse",
+            provider_id: "fixture",
+            executable: std::path::Path::new("/bin/sleep"),
+            args: &args,
+            cwd: home.path(),
+            log_root: home.path(),
+            max_log_bytes: 1024,
+        })
+        .unwrap();
+    let mut mismatched = record.clone();
+    mismatched.platform_start_marker = "sha256:reused-pid-marker".to_string();
+    let error = owner.terminate_record(&mismatched).unwrap_err();
+    assert_eq!(error.code(), "managed_process_identity_mismatch");
+    assert_eq!(
+        owner.classify_recovery(&record).unwrap(),
+        pulse::daemon::process::ManagedProcessState::StaleNeedsOperator
+    );
+    owner.terminate(&record.process_id).unwrap();
+}
+
+#[test]
+fn workspace_worktree_create_archive_and_restore_uses_external_git_repo() {
+    let repo = crate::common_fixture_repo::TestRepo::from_fixture("minimal-service");
+    let home = tempfile::tempdir().unwrap();
+    let app = DaemonApplication::new(StateStore::new(home.path()), "test").unwrap();
+    let project_id = open_project(&app, repo.path());
+    let workspace = match handle(
+        &app,
+        DaemonRequest::WorkspaceCreate {
+            project_id,
+            name: "isolated".to_string(),
+            isolation: IsolationMode::Worktree,
+            base_commit: Some(repo.git_head()),
+        },
+        "worktree-create",
+    ) {
+        DaemonResponse::Workspace { workspace } => workspace,
+        other => panic!("unexpected response: {other:?}"),
+    };
+    let root = std::path::PathBuf::from(&workspace.root);
+    assert!(root.is_dir());
+    assert!(root.join(".git").is_file());
+    let head = repo.git_head();
+    assert_eq!(workspace.base_commit.as_deref(), Some(head.as_str()));
+    let archived = handle(
+        &app,
+        DaemonRequest::WorkspaceArchive {
+            workspace_id: workspace.workspace_id.clone(),
+        },
+        "worktree-archive",
+    );
+    assert!(matches!(
+        archived,
+        DaemonResponse::Workspace {
+            workspace: pulse::daemon::workspace::WorkspaceRecord {
+                lifecycle: pulse::daemon::workspace::WorkspaceLifecycle::Archived,
+                ..
+            }
+        }
+    ));
+    let workspace_id = workspace.workspace_id.clone();
+    drop(app);
+    let restarted = DaemonApplication::new(StateStore::new(home.path()), "test-restarted").unwrap();
+    let restored = handle(
+        &restarted,
+        DaemonRequest::WorkspaceRestore { workspace_id },
+        "worktree-restore",
+    );
+    assert!(matches!(
+        restored,
+        DaemonResponse::Workspace {
+            workspace: pulse::daemon::workspace::WorkspaceRecord {
+                lifecycle: pulse::daemon::workspace::WorkspaceLifecycle::Open,
+                ..
+            }
+        }
+    ));
 }
 
 #[test]
@@ -675,7 +884,7 @@ fn shutdown_cleanup_marks_processes_and_sessions_as_exited() {
     };
 
     // Call shutdown cleanup directly (not via Shutdown which also disconnects).
-    app.shutdown_cleanup();
+    app.shutdown_cleanup().unwrap();
 
     // Check the daemon state:
     let state = app.store().load().unwrap();
@@ -711,6 +920,140 @@ fn shutdown_cleanup_marks_processes_and_sessions_as_exited() {
 }
 
 #[test]
+fn assignment_retry_with_changed_inputs_is_rejected_before_core_mutation() {
+    let (_home, project_root, app) = application();
+    let project_id = open_project(&app, project_root.path());
+    let key = "recoverable-input-conflict";
+    let saga_id = format!(
+        "saga_{}",
+        pulse::canonical_json::hash_bytes(key.as_bytes())
+            .trim_start_matches("sha256:")
+            .chars()
+            .take(26)
+            .collect::<String>()
+    );
+    let now = chrono::Utc::now().to_rfc3339();
+    app.store()
+        .with_state(true, |state| {
+            state.assignment_sagas.insert(
+                saga_id.clone(),
+                pulse::daemon::assignment::AssignmentSagaRecord {
+                    schema_version: 1,
+                    saga_id,
+                    idempotency_key: key.to_string(),
+                    request_fingerprint: String::new(),
+                    project_id: project_id.clone(),
+                    ticket_id: "ticket-original".to_string(),
+                    actor: "agent:tester".to_string(),
+                    assignee: "agent:codex-local".to_string(),
+                    ticket_revision: 0,
+                    packet_fingerprint: String::new(),
+                    lease_id: None,
+                    workspace_id: None,
+                    session_id: None,
+                    delivery_id: None,
+                    acknowledgement_id: None,
+                    handoff_id: None,
+                    verification_id: None,
+                    state: pulse::daemon::assignment::AssignmentSagaState::Recoverable,
+                    last_error: None,
+                    created_at: now.clone(),
+                    updated_at: now.clone(),
+                },
+            );
+            Ok(())
+        })
+        .unwrap();
+    let error = app
+        .handle(
+            &DaemonRequest::AssignmentStart {
+                project_id,
+                ticket_id: "ticket-changed".to_string(),
+                actor: "agent:tester".to_string(),
+                assignee: "agent:codex-local".to_string(),
+                capabilities: vec!["source.read".to_string()],
+                isolation: IsolationMode::Local,
+                provider_id: "codex".to_string(),
+                provider_options: provider_options(),
+                ttl_seconds: 1800,
+            },
+            key,
+        )
+        .unwrap_err();
+    assert_eq!(error.code, "assignment_idempotency_conflict");
+}
+
+#[test]
+fn legacy_recoverable_saga_pins_full_request_fingerprint_on_first_retry() {
+    let (_home, project_root, app) = application();
+    let project_id = open_project(&app, project_root.path());
+    let key = "legacy-fingerprint-pin";
+    let saga_id = format!(
+        "saga_{}",
+        pulse::canonical_json::hash_bytes(key.as_bytes())
+            .trim_start_matches("sha256:")
+            .chars()
+            .take(26)
+            .collect::<String>()
+    );
+    let now = chrono::Utc::now().to_rfc3339();
+    app.store()
+        .with_state(true, |state| {
+            state.assignment_sagas.insert(
+                saga_id.clone(),
+                pulse::daemon::assignment::AssignmentSagaRecord {
+                    schema_version: 1,
+                    saga_id: saga_id.clone(),
+                    idempotency_key: key.to_string(),
+                    request_fingerprint: String::new(),
+                    project_id: project_id.clone(),
+                    ticket_id: "ticket-legacy".to_string(),
+                    actor: "agent:tester".to_string(),
+                    assignee: "agent:codex-local".to_string(),
+                    ticket_revision: 0,
+                    packet_fingerprint: String::new(),
+                    lease_id: None,
+                    workspace_id: None,
+                    session_id: None,
+                    delivery_id: None,
+                    acknowledgement_id: None,
+                    handoff_id: None,
+                    verification_id: None,
+                    state: pulse::daemon::assignment::AssignmentSagaState::Recoverable,
+                    last_error: None,
+                    created_at: now.clone(),
+                    updated_at: now.clone(),
+                },
+            );
+            Ok(())
+        })
+        .unwrap();
+    let request = DaemonRequest::AssignmentStart {
+        project_id,
+        ticket_id: "ticket-legacy".to_string(),
+        actor: "agent:tester".to_string(),
+        assignee: "agent:codex-local".to_string(),
+        capabilities: vec!["source.read".to_string()],
+        isolation: IsolationMode::Local,
+        provider_id: "codex".to_string(),
+        provider_options: provider_options(),
+        ttl_seconds: 1800,
+    };
+    assert!(app.handle(&request, key).is_err());
+    let pinned = app.store().load().unwrap().assignment_sagas[&saga_id]
+        .request_fingerprint
+        .clone();
+    assert!(!pinned.is_empty());
+
+    let mut changed = request;
+    if let DaemonRequest::AssignmentStart { capabilities, .. } = &mut changed {
+        capabilities.push("test.run".to_string());
+    }
+    let error = app.handle(&changed, key).unwrap_err();
+    assert_eq!(error.code, "assignment_idempotency_conflict");
+}
+
+#[test]
 fn assign_idempotency_key_contract_allows_retry_after_recoverable_failure() {
     // Verify that calling assignment_start with the same idempotency key
     // after a Recoverable error properly re-provisions.
@@ -736,6 +1079,7 @@ fn assign_idempotency_key_contract_allows_retry_after_recoverable_failure() {
         schema_version: 1,
         saga_id: saga_id.clone(),
         idempotency_key: original_key.to_string(),
+        request_fingerprint: String::new(),
         project_id: project_id.clone(),
         ticket_id: "ticket_fake".to_string(),
         actor: "agent:tester".to_string(),
@@ -774,11 +1118,7 @@ fn assign_idempotency_key_contract_allows_retry_after_recoverable_failure() {
             capabilities: vec!["source.read".to_string()],
             isolation: IsolationMode::Local,
             provider_id: "codex".to_string(),
-            provider_options: json!({
-                "executable": "/bin/sh",
-                "args": ["-c", "cat"],
-                "protocol_mode": "opaque_test",
-            }),
+            provider_options: provider_options(),
             ttl_seconds: 1800,
         },
         original_key,
@@ -803,19 +1143,36 @@ fn assign_idempotency_key_contract_allows_retry_after_recoverable_failure() {
 }
 
 #[test]
-fn mcp_adapter_shares_semantics_and_enforces_runtime_permissions() {
+fn mcp_adapter_shares_mutation_idempotency_and_enforces_runtime_permissions() {
     let (_home, project_root, app) = application();
-    open_project(&app, project_root.path());
-    let request = DaemonRequest::ProjectList {
-        include_archived: false,
+    let project_id = open_project(&app, project_root.path());
+    let request = DaemonRequest::WorkspaceCreate {
+        project_id,
+        name: "mcp-parity".to_string(),
+        isolation: IsolationMode::Local,
+        base_commit: None,
     };
-    let direct = handle(&app, request.clone(), "");
+    let direct = handle(&app, request.clone(), "mcp-parity-key");
     let adapter = McpToolAdapter::new(&app, RuntimePrincipal::local_cli());
     let via_tool = adapter
-        .invoke(RequestEnvelope::new(request, ""))
+        .invoke(RequestEnvelope::new(request, "mcp-parity-key"))
         .response
         .unwrap();
     assert_eq!(direct, via_tool);
+    assert_eq!(app.store().load().unwrap().workspaces.len(), 1);
+    let conflict = adapter.invoke(RequestEnvelope::new(
+        DaemonRequest::WorkspaceCreate {
+            project_id: "prj_different".to_string(),
+            name: "different".to_string(),
+            isolation: IsolationMode::Local,
+            base_commit: None,
+        },
+        "mcp-parity-key",
+    ));
+    assert_eq!(
+        conflict.response.unwrap_err().code,
+        "idempotency_key_conflict"
+    );
 
     let read_only = RuntimePrincipal {
         principal_id: "tool:reader".to_string(),

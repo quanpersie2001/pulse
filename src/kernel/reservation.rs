@@ -43,35 +43,41 @@ impl JsonGraphStore {
             ));
         }
         let inventory = CapabilityInventoryV1::from_json_bytes(&args.capability_inventory_bytes)?;
-        let lease_id = deterministic_lease_id(&args.idempotency_key);
+        let key_hash = hash_bytes(args.idempotency_key.as_bytes());
         for _ in 0..2 {
             let guard = WriteGuard::acquire(&self.repo_root)?;
             recover_prepared_transactions(&self.repo_root)?;
-            if let Ok(existing) = load_reservation(&self.repo_root, &lease_id) {
-                if existing.idempotency_key_hash != hash_bytes(args.idempotency_key.as_bytes())
-                    || existing.subject.ticket_id != args.ticket_id
-                {
-                    return Err(PulseError::validation(
-                        "reservation_idempotency_conflict",
-                        "reservation idempotency key is bound to different inputs",
-                    ));
-                }
-                // A Released/Expired/StaleNeedsOperator reservation is not
-                // live — the caller (daemon saga recovery) must get a fresh
-                // lease rather than a dead one.
-                if matches!(
-                    existing.state,
+            let mut matching = list_reservations(&self.repo_root)?
+                .into_iter()
+                .filter(|reservation| reservation.idempotency_key_hash == key_hash)
+                .collect::<Vec<_>>();
+            matching.sort_by(|left, right| {
+                reservation_generation(&left.lease_id).cmp(&reservation_generation(&right.lease_id))
+            });
+            if matching
+                .iter()
+                .any(|reservation| reservation.subject.ticket_id != args.ticket_id)
+            {
+                return Err(PulseError::validation(
+                    "reservation_idempotency_conflict",
+                    "reservation idempotency key is bound to different inputs",
+                ));
+            }
+            if let Some(existing) = matching.iter().rev().find(|reservation| {
+                matches!(
+                    reservation.state,
                     ReservationState::Reserved
                         | ReservationState::Acknowledged
                         | ReservationState::Active
-                ) {
-                    let packet = load_packet(&self.repo_root, &lease_id)?;
-                    return Ok(ReserveWorkOutcome {
-                        reservation: existing,
-                        packet,
-                    });
-                }
+                )
+            }) {
+                let packet = load_packet(&self.repo_root, &existing.lease_id)?;
+                return Ok(ReserveWorkOutcome {
+                    reservation: existing.clone(),
+                    packet,
+                });
             }
+            let lease_id = deterministic_lease_id(&args.idempotency_key, matching.len() + 1);
             match self.reserve_work_under_fence(&args, &inventory, &lease_id) {
                 Ok(outcome) => return Ok(outcome),
                 Err(error) if error.code() == "work_packet_docs_cache_needs_refresh" => {
@@ -500,16 +506,28 @@ fn check_enrolled(repo_root: &Path) -> Result<()> {
     Ok(())
 }
 
-fn deterministic_lease_id(key: &str) -> String {
+fn reservation_generation(lease_id: &str) -> usize {
+    lease_id
+        .rsplit_once("_g")
+        .and_then(|(_, generation)| generation.parse().ok())
+        .unwrap_or(1)
+}
+
+fn deterministic_lease_id(key: &str, generation: usize) -> String {
     let digest = hash_bytes(key.as_bytes());
-    format!(
+    let base = format!(
         "lease_{}",
         digest
             .trim_start_matches("sha256:")
             .chars()
             .take(26)
             .collect::<String>()
-    )
+    );
+    if generation <= 1 {
+        base
+    } else {
+        format!("{base}_g{generation:06}")
+    }
 }
 
 fn reservation_path(repo_root: &Path, lease_id: &str) -> PathBuf {

@@ -104,21 +104,44 @@ impl ProcessOwner {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
         let mut child = native::spawn_process_group(&mut command)?;
-        thread::sleep(Duration::from_millis(20));
-        let identity = match native::current_process_identity(child.id()) {
-            Ok(identity) => identity,
-            Err(error) => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return Err(error);
-            }
-        };
-        let observed_executable = match native::current_process_executable(child.id()) {
-            Ok(executable) => executable,
-            Err(error) => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return Err(error);
+        let (identity, observed_executable) = {
+            let deadline = Instant::now() + Duration::from_secs(1);
+            let mut previous = None;
+            loop {
+                if child
+                    .try_wait()
+                    .map_err(|error| PulseError::io("<managed-process-wait>", error))?
+                    .is_some()
+                {
+                    return Err(PulseError::validation(
+                        "managed_process_exited_during_startup",
+                        "managed process exited before its identity stabilized",
+                    ));
+                }
+                let current = (
+                    native::current_process_identity(child.id()),
+                    native::current_process_executable(child.id()),
+                );
+                if let (Ok(identity), Ok(executable)) = current {
+                    let stable = previous.as_ref().is_some_and(
+                        |(previous_identity, previous_executable)| {
+                            previous_identity == &identity && previous_executable == &executable
+                        },
+                    );
+                    if stable {
+                        break (identity, executable);
+                    }
+                    previous = Some((identity, executable));
+                }
+                if Instant::now() >= deadline {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Err(PulseError::validation(
+                        "managed_process_identity_unavailable",
+                        "managed process identity did not stabilize after spawn",
+                    ));
+                }
+                thread::sleep(Duration::from_millis(10));
             }
         };
         let stdout = child.stdout.take().ok_or_else(|| {
@@ -264,42 +287,75 @@ impl ProcessOwner {
             .children
             .lock()
             .map_err(|_| lock_poisoned())?
-            .remove(process_id);
+            .get(process_id)
+            .cloned();
         let Some(owned) = owned else {
             return Err(PulseError::validation(
                 "managed_process_not_owned",
                 "daemon does not own a live handle for the managed process",
             ));
         };
-        let mut owned = owned.lock().map_err(|_| lock_poisoned())?;
-        if !native::process_identity_matches(&owned.identity, &owned.executable)? {
-            return Err(PulseError::validation(
-                "managed_process_identity_mismatch",
-                "recorded process identity no longer matches; refusing cancellation",
-            ));
-        }
-        native::terminate_process_group(&owned.identity, &owned.executable)?;
-        let deadline = Instant::now() + Duration::from_secs(2);
-        loop {
-            if owned
+        {
+            let mut child = owned.lock().map_err(|_| lock_poisoned())?;
+            if child
                 .child
                 .try_wait()
                 .map_err(|error| PulseError::io("<managed-process-wait>", error))?
-                .is_some()
+                .is_none()
             {
-                break;
+                if !native::process_identity_matches(&child.identity, &child.executable)? {
+                    let observed = native::current_process_executable(child.identity.pid)
+                        .map(|path| path.to_string_lossy().into_owned())
+                        .unwrap_or_else(|error| format!("<unavailable: {}>", error.code()));
+                    return Err(PulseError::validation(
+                        "managed_process_identity_mismatch",
+                        format!(
+                            "recorded PID/start/process-group/executable identity no longer matches; expected executable {}, observed {observed}; refusing cancellation",
+                            child.executable.display()
+                        ),
+                    ));
+                }
+                native::terminate_process_group(&child.identity, &child.executable)?;
+                let deadline = Instant::now() + Duration::from_secs(2);
+                loop {
+                    if child
+                        .child
+                        .try_wait()
+                        .map_err(|error| PulseError::io("<managed-process-wait>", error))?
+                        .is_some()
+                    {
+                        break;
+                    }
+                    if Instant::now() >= deadline {
+                        native::force_terminate_process_group(&child.identity, &child.executable)?;
+                        child
+                            .child
+                            .wait()
+                            .map_err(|error| PulseError::io("<managed-process-wait>", error))?;
+                        break;
+                    }
+                    thread::sleep(Duration::from_millis(20));
+                }
             }
-            if Instant::now() >= deadline {
-                native::force_terminate_process_group(&owned.identity, &owned.executable)?;
-                owned
-                    .child
-                    .wait()
-                    .map_err(|error| PulseError::io("<managed-process-wait>", error))?;
-                break;
-            }
-            thread::sleep(Duration::from_millis(20));
+        }
+        let mut children = self.children.lock().map_err(|_| lock_poisoned())?;
+        if children
+            .get(process_id)
+            .is_some_and(|current| Arc::ptr_eq(current, &owned))
+        {
+            children.remove(process_id);
         }
         Ok(())
+    }
+
+    pub fn is_alive(&self, process_id: &str) -> Result<bool> {
+        let owned = self.owned_child(process_id)?;
+        let mut owned = owned.lock().map_err(|_| lock_poisoned())?;
+        Ok(owned
+            .child
+            .try_wait()
+            .map_err(|error| PulseError::io("<managed-process-wait>", error))?
+            .is_none())
     }
 
     fn owned_child(&self, process_id: &str) -> Result<Arc<Mutex<OwnedChild>>> {
@@ -321,10 +377,12 @@ impl ProcessOwner {
             platform_start_marker: record.platform_start_marker.clone(),
             identity_status: "recorded".to_string(),
         };
-        match native::process_identity_matches(&identity, Path::new(&record.executable)) {
-            Ok(true) => Ok(ManagedProcessState::StaleNeedsOperator),
-            Ok(false) => Ok(ManagedProcessState::Exited),
-            Err(_) => Ok(ManagedProcessState::StaleNeedsOperator),
+        match native::process_identity_status(&identity, Path::new(&record.executable)) {
+            Ok(native::ProcessIdentityStatus::Match) => Ok(ManagedProcessState::StaleNeedsOperator),
+            Ok(native::ProcessIdentityStatus::Absent) => Ok(ManagedProcessState::Exited),
+            Ok(native::ProcessIdentityStatus::Mismatch) | Err(_) => {
+                Ok(ManagedProcessState::StaleNeedsOperator)
+            }
         }
     }
 
@@ -336,18 +394,29 @@ impl ProcessOwner {
             platform_start_marker: record.platform_start_marker.clone(),
             identity_status: "recorded".to_string(),
         };
-        if !native::process_identity_matches(&identity, Path::new(&record.executable))? {
-            return Err(PulseError::validation(
-                "managed_process_identity_mismatch",
-                "recorded process identity no longer matches; refusing cancellation",
-            ));
-        }
         let executable = Path::new(&record.executable);
+        match native::process_identity_status(&identity, executable)? {
+            native::ProcessIdentityStatus::Absent => return Ok(()),
+            native::ProcessIdentityStatus::Mismatch => {
+                return Err(PulseError::validation(
+                    "managed_process_identity_mismatch",
+                    "recorded PID/start/process-group identity no longer matches; refusing cancellation",
+                ))
+            }
+            native::ProcessIdentityStatus::Match => {}
+        }
         native::terminate_process_group(&identity, executable)?;
         let deadline = Instant::now() + Duration::from_secs(2);
         while Instant::now() < deadline {
-            if !native::process_identity_matches(&identity, executable)? {
-                return Ok(());
+            match native::process_identity_status(&identity, executable)? {
+                native::ProcessIdentityStatus::Absent => return Ok(()),
+                native::ProcessIdentityStatus::Mismatch => {
+                    return Err(PulseError::validation(
+                        "managed_process_identity_mismatch",
+                        "process identity changed while waiting for termination",
+                    ))
+                }
+                native::ProcessIdentityStatus::Match => {}
             }
             thread::sleep(Duration::from_millis(20));
         }

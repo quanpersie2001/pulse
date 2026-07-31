@@ -87,33 +87,53 @@ pub fn current_process_executable(pid: u32) -> Result<PathBuf> {
     process_executable(pid)
 }
 
-pub fn process_identity_matches(
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProcessIdentityStatus {
+    Match,
+    Absent,
+    Mismatch,
+}
+
+pub fn process_identity_status(
     expected: &NativeProcessIdentity,
     expected_executable: &Path,
-) -> Result<bool> {
+) -> Result<ProcessIdentityStatus> {
     let current = match current_process_identity(expected.pid) {
         Ok(current) => current,
-        Err(error) if error.code() == "managed_process_not_found" => return Ok(false),
+        Err(error) if error.code() == "managed_process_not_found" => {
+            return Ok(ProcessIdentityStatus::Absent)
+        }
         Err(error) => return Err(error),
     };
     if current.platform != expected.platform
         || current.platform_start_marker != expected.platform_start_marker
         || current.process_group_id != expected.process_group_id
     {
-        return Ok(false);
+        return Ok(ProcessIdentityStatus::Mismatch);
     }
     let observed = process_executable(expected.pid)?;
     let expected = expected_executable
         .canonicalize()
         .map_err(|error| PulseError::io(expected_executable, error))?;
-    Ok(observed == expected)
+    if observed == expected {
+        Ok(ProcessIdentityStatus::Match)
+    } else {
+        Ok(ProcessIdentityStatus::Mismatch)
+    }
+}
+
+pub fn process_identity_matches(
+    expected: &NativeProcessIdentity,
+    expected_executable: &Path,
+) -> Result<bool> {
+    Ok(process_identity_status(expected, expected_executable)? == ProcessIdentityStatus::Match)
 }
 
 pub fn terminate_process_group(identity: &NativeProcessIdentity, executable: &Path) -> Result<()> {
     if !process_identity_matches(identity, executable)? {
         return Err(PulseError::validation(
             "managed_process_identity_mismatch",
-            "PID/start/executable identity does not match the managed process",
+            "PID/start/process-group/executable identity does not match the managed process",
         ));
     }
     #[cfg(any(target_os = "linux", target_os = "macos"))]

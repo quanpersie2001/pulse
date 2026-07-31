@@ -77,6 +77,29 @@ fn pulse_mutates_only_the_temporary_fixture_copy() {
 }
 
 #[test]
+fn core_query_stays_offline_when_daemon_is_stopped() {
+    let repo = TestRepo::from_fixture("minimal-service");
+    let daemon_home = tempfile::tempdir().unwrap();
+    let output = std::process::Command::new(crate::common_bin::resolve_pulse_bin())
+        .arg("--repo-root")
+        .arg(repo.path())
+        .args(["work", "list", "--json"])
+        .env("PULSE_DAEMON_HOME", daemon_home.path())
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "offline Core query failed: stdout={} stderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(std::fs::read_dir(daemon_home.path())
+        .unwrap()
+        .next()
+        .is_none());
+}
+
+#[test]
 fn fixture_working_copies_are_isolated() {
     let first = TestRepo::from_fixture("minimal-service");
     let second = TestRepo::from_fixture("minimal-service");

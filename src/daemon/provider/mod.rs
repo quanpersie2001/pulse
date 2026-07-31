@@ -13,7 +13,7 @@ use crate::{PulseError, Result};
 #[serde(deny_unknown_fields)]
 pub struct ProviderCapabilities {
     pub create: bool,
-    pub attach: bool,
+    pub resume: bool,
     pub send: bool,
     pub observe: bool,
     pub interrupt: bool,
@@ -44,6 +44,12 @@ pub trait AgentProvider: Send + Sync {
     fn initialize_request(&self) -> Result<ProviderRequest>;
     fn initialized_notification(&self) -> Result<String>;
     fn create_session_request(&self, cwd: &str, options: &Value) -> Result<ProviderRequest>;
+    fn resume_session_request(
+        &self,
+        provider_handle: &str,
+        cwd: &str,
+        options: &Value,
+    ) -> Result<ProviderRequest>;
     fn parse_session_handle(&self, response: &Value) -> Result<String>;
     fn encode_send(&self, provider_handle: &str, input: &str) -> Result<ProviderRequest>;
     fn parse_turn_handle(&self, response: &Value) -> Result<String>;

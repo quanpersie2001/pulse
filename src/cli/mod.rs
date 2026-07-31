@@ -41,7 +41,7 @@ pub fn run(cli: Cli) -> Result<(), PulseError> {
         args::Command::Graph { command } => graph::handle(&store, command),
         args::Command::Evidence { command } => evidence::handle(&store, command),
         args::Command::Knowledge { command } => knowledge::handle(&store, command),
-        args::Command::Daemon { command } => daemon::handle_daemon(command),
+        args::Command::Daemon { command } => daemon::handle_daemon(command, explicit_key),
         args::Command::Project { command } => daemon::handle_project(command, explicit_key),
         args::Command::Workspace { command } => daemon::handle_workspace(command, explicit_key),
         args::Command::Session { command } => daemon::handle_session(command, explicit_key),

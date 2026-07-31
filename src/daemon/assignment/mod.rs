@@ -27,6 +27,8 @@ pub struct AssignmentSagaRecord {
     pub schema_version: u32,
     pub saga_id: String,
     pub idempotency_key: String,
+    #[serde(default)]
+    pub request_fingerprint: String,
     pub project_id: String,
     pub ticket_id: String,
     pub actor: String,

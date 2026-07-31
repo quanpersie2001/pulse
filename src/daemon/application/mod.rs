@@ -55,6 +55,10 @@ impl DaemonApplication {
         &self.store
     }
 
+    pub fn managed_process_is_alive(&self, process_id: &str) -> Result<bool> {
+        self.process_owner.is_alive(process_id)
+    }
+
     pub fn handle(
         &self,
         request: &DaemonRequest,
@@ -76,36 +80,66 @@ impl DaemonApplication {
             .map_err(protocol_error_from_pulse)
     }
 
-    /// Gracefully tear down managed processes and persist state before the
-    /// transport loop exits.  Idempotent — safe to call more than once.
-    pub fn shutdown_cleanup(&self) {
-        if !self.shutdown.load(Ordering::SeqCst) {
-            self.shutdown.store(true, Ordering::SeqCst);
-        }
-        // Snapshot process IDs before iterating (we remove entries during
-        // termination).
-        let process_ids = match self.store.with_state(false, |state| {
-            Ok(state.processes.keys().cloned().collect::<Vec<_>>())
-        }) {
-            Ok(ids) => ids,
-            Err(_) => return,
-        };
-        for process_id in &process_ids {
-            let _ = self.process_owner.terminate(process_id);
-        }
-        // Mark sessions that were not already closed as Error.
-        if let Ok(()) = self.store.with_state(true, |state| {
-            for session in state.sessions.values_mut() {
-                if session.lifecycle != crate::daemon::session::SessionLifecycle::Closed {
-                    session.lifecycle = crate::daemon::session::SessionLifecycle::Error;
-                    session.last_error =
-                        Some("daemon shut down; managed processes were terminated".to_string());
-                    session.updated_at = chrono::Utc::now().to_rfc3339();
+    /// Request transport shutdown. Final process cleanup is owned by the serve
+    /// loop after all accepted request workers have been joined.
+    pub fn request_shutdown(&self) {
+        self.shutdown.store(true, Ordering::SeqCst);
+    }
+
+    /// Gracefully tear down managed processes and persist the observed result.
+    /// This is called exactly once by the transport owner.
+    pub fn shutdown_cleanup(&self) -> Result<()> {
+        self.request_shutdown();
+        let processes = self.store.with_state(false, |state| {
+            Ok(state
+                .processes
+                .values()
+                .filter(|process| process.state != ManagedProcessState::Exited)
+                .cloned()
+                .collect::<Vec<_>>())
+        })?;
+        let mut outcomes = std::collections::BTreeMap::new();
+        for process in &processes {
+            let outcome = match self.process_owner.terminate(&process.process_id) {
+                Ok(()) => Ok(()),
+                Err(error) if error.code() == "managed_process_not_owned" => {
+                    self.process_owner.terminate_record(process)
                 }
-            }
-            for process in state.processes.values_mut() {
-                process.state = crate::daemon::process::ManagedProcessState::Exited;
-                process.updated_at = chrono::Utc::now().to_rfc3339();
+                Err(error) => Err(error),
+            };
+            outcomes.insert(
+                process.process_id.clone(),
+                outcome
+                    .err()
+                    .map(|error| format!("{}: {error}", error.code())),
+            );
+        }
+        self.store.with_state(true, |state| {
+            let now = chrono::Utc::now().to_rfc3339();
+            for process in state
+                .processes
+                .values_mut()
+                .filter(|process| outcomes.contains_key(&process.process_id))
+            {
+                let failure = outcomes.get(&process.process_id).cloned().flatten();
+                process.state = if failure.is_none() {
+                    ManagedProcessState::Exited
+                } else {
+                    ManagedProcessState::StaleNeedsOperator
+                };
+                process.updated_at = now.clone();
+                if let Some(session) = state.sessions.get_mut(&process.owner_id) {
+                    if session.lifecycle != SessionLifecycle::Closed {
+                        session.lifecycle = SessionLifecycle::Error;
+                    }
+                    session.last_error = Some(match failure {
+                        Some(failure) => format!(
+                            "daemon shutdown could not prove managed process termination: {failure}"
+                        ),
+                        None => "daemon shut down; managed process was terminated".to_string(),
+                    });
+                    session.updated_at = now.clone();
+                }
             }
             append_event(
                 state,
@@ -113,10 +147,14 @@ impl DaemonApplication {
                 None,
                 None,
                 None,
-                json!({"pid": self.pid}),
+                json!({
+                    "pid": self.pid,
+                    "terminated": outcomes.values().filter(|failure| failure.is_none()).count(),
+                    "stale_needs_operator": outcomes.values().filter(|failure| failure.is_some()).count(),
+                }),
             );
             Ok(())
-        }) {}
+        })
     }
 
     fn handle_inner(
@@ -136,7 +174,8 @@ impl DaemonApplication {
         } else {
             Some(self.store.acquire_idempotency(idempotency_key)?)
         };
-        if !idempotency_key.is_empty() {
+        let cacheable = !matches!(request, DaemonRequest::AssignmentStart { .. });
+        if cacheable && !idempotency_key.is_empty() {
             let fingerprint = hash_serializable(request)?;
             if let Some(cached) = self.store.with_state(false, |state| {
                 Ok(state.idempotency_results.get(idempotency_key).cloned())
@@ -151,6 +190,13 @@ impl DaemonApplication {
             }
         }
 
+        if self.shutdown.load(Ordering::SeqCst) && !matches!(request, DaemonRequest::Shutdown) {
+            return Err(PulseError::validation(
+                "daemon_shutting_down",
+                "daemon is shutting down and no longer accepts requests",
+            ));
+        }
+
         let response = match request {
             DaemonRequest::Handshake { .. } => DaemonResponse::Handshake {
                 daemon_version: env!("CARGO_PKG_VERSION").to_string(),
@@ -161,7 +207,7 @@ impl DaemonApplication {
             },
             DaemonRequest::Status => self.status()?,
             DaemonRequest::Shutdown => {
-                self.shutdown_cleanup();
+                self.request_shutdown();
                 DaemonResponse::ShuttingDown
             }
             DaemonRequest::ProjectOpen { root } => self.project_open(root)?,
@@ -211,20 +257,10 @@ impl DaemonApplication {
             DaemonRequest::SessionSend { session_id, input } => {
                 self.session_send(session_id, input)?
             }
-            DaemonRequest::SessionAttach {
-                session_id,
-                provider_id,
-                provider_options,
-            } => {
-                self.session_reattach(session_id, provider_id, provider_options, idempotency_key)?
-            }
             DaemonRequest::SessionResume {
                 session_id,
-                provider_id,
                 provider_options,
-            } => {
-                self.session_reattach(session_id, provider_id, provider_options, idempotency_key)?
-            }
+            } => self.session_resume(session_id, provider_options)?,
             DaemonRequest::SessionInterrupt { session_id } => self.session_interrupt(session_id)?,
             DaemonRequest::SessionClose { session_id } => self.session_close(session_id)?,
             DaemonRequest::SessionArchive { session_id } => self.session_archive(session_id)?,
@@ -319,7 +355,7 @@ impl DaemonApplication {
             } => self.timeline_subscribe(cursor, *limit, session_id.as_deref(), *wait_ms)?,
         };
 
-        if !idempotency_key.is_empty() {
+        if cacheable && !idempotency_key.is_empty() {
             let fingerprint = hash_serializable(request)?;
             let value = serde_json::to_value(&response).map_err(PulseError::from)?;
             self.store.with_state(true, |state| {
@@ -400,8 +436,7 @@ impl DaemonApplication {
                         (Some(project), Some(lease)) => {
                             let reservations = crate::kernel::reservation::list_reservations(
                                 Path::new(&project.canonical_root),
-                            )
-                            .unwrap_or_default();
+                            )?;
                             if reservations.iter().any(|reservation| {
                                 reservation.lease_id == lease
                                     && reservation.state
@@ -852,37 +887,26 @@ impl DaemonApplication {
         result
     }
 
-    fn session_reattach(
-        &self,
-        session_id: &str,
-        provider_id: &str,
-        provider_options: &Value,
-        _idempotency_key: &str,
-    ) -> Result<DaemonResponse> {
-        let provider = self.providers.get(provider_id)?;
-        provider.availability()?;
-        let launch = provider.launch(provider_options)?;
-
-        // Snapshot the session record to get workspace/project context.
-        let session_snapshot =
-            self.store.with_state(false, |state| {
-                let session = state.sessions.get(session_id).cloned().ok_or_else(|| {
-                    PulseError::NotFound {
-                        subject: format!("session {session_id}"),
-                    }
-                })?;
-                Ok(session)
-            })?;
-
-        // Only allow attach/resume on sessions that are not actively running
-        // or already open for turns.
+    fn session_resume(&self, session_id: &str, provider_options: &Value) -> Result<DaemonResponse> {
+        let _session_guard = self
+            .store
+            .acquire_idempotency(&format!("session-operation:{session_id}"))?;
+        let session_snapshot = self.store.with_state(false, |state| {
+            state
+                .sessions
+                .get(session_id)
+                .cloned()
+                .ok_or_else(|| PulseError::NotFound {
+                    subject: format!("session {session_id}"),
+                })
+        })?;
         if !matches!(
             session_snapshot.lifecycle,
             SessionLifecycle::Error | SessionLifecycle::Closed | SessionLifecycle::Initializing
         ) {
             return Err(PulseError::validation(
-                "session_attach_not_required",
-                "session is already usable and does not need reattachment",
+                "session_resume_not_required",
+                "session is already usable and does not need resumption",
             ));
         }
         if session_snapshot.archived_at.is_some() {
@@ -891,7 +915,27 @@ impl DaemonApplication {
                 "archived sessions cannot be resumed",
             ));
         }
-
+        let provider_handle = session_snapshot.provider_handle.clone().ok_or_else(|| {
+            PulseError::validation(
+                "provider_resume_handle_missing",
+                "session has no persisted provider handle to resume",
+            )
+        })?;
+        let provider = self.providers.get(&session_snapshot.provider_id)?;
+        if !provider.capabilities().resume {
+            return Err(PulseError::validation(
+                "provider_resume_unsupported",
+                "provider does not support resuming a persisted session",
+            ));
+        }
+        provider.availability()?;
+        let launch = provider.launch(provider_options)?;
+        if !launch.native_protocol {
+            return Err(PulseError::validation(
+                "provider_resume_unsupported",
+                "opaque provider sessions cannot resume a persisted provider handle",
+            ));
+        }
         let workspace = self.store.with_state(false, |state| {
             state
                 .workspaces
@@ -907,21 +951,24 @@ impl DaemonApplication {
                 "session resumption requires an open workspace",
             ));
         }
-
-        // Terminate the old managed process if it still has a handle.
         if let Some(old_process_id) = session_snapshot.managed_process_id.as_deref() {
-            if self.store.with_state(false, |state| {
-                Ok(state.processes.contains_key(old_process_id))
-            })? {
-                let _ = self.process_owner.terminate(old_process_id);
+            let old_record = self.store.with_state(false, |state| {
+                Ok(state.processes.get(old_process_id).cloned())
+            })?;
+            if let Some(old_record) = old_record {
+                match self.process_owner.terminate(old_process_id) {
+                    Ok(()) => {}
+                    Err(error) if error.code() == "managed_process_not_owned" => {
+                        self.process_owner.terminate_record(&old_record)?;
+                    }
+                    Err(error) => return Err(error),
+                }
             }
         }
-
-        // Spawn a new provider process.
         let process = self.process_owner.spawn(SpawnRequest {
             owner_kind: "session",
             owner_id: session_id,
-            provider_id,
+            provider_id: &session_snapshot.provider_id,
             executable: &launch.executable,
             args: &launch.args,
             cwd: Path::new(&workspace.root),
@@ -929,12 +976,7 @@ impl DaemonApplication {
             max_log_bytes: 4 * 1024 * 1024,
         })?;
         let new_process_id = process.process_id.clone();
-
-        // Negotiate native protocol session handle if applicable.
-        let provider_session_result = (|| -> Result<(Option<String>, Vec<Value>)> {
-            if !launch.native_protocol {
-                return Ok((None, Vec::new()));
-            }
+        let provider_session_result = (|| -> Result<Vec<Value>> {
             let initialize = provider.initialize_request()?;
             let (_, mut notifications) = self.process_owner.request_json(
                 &new_process_id,
@@ -944,34 +986,42 @@ impl DaemonApplication {
             )?;
             self.process_owner
                 .send_line(&new_process_id, &provider.initialized_notification()?)?;
-            let create = provider.create_session_request(&workspace.root, provider_options)?;
-            let (response, create_notifications) = self.process_owner.request_json(
+            let resume = provider.resume_session_request(
+                &provider_handle,
+                &workspace.root,
+                provider_options,
+            )?;
+            let (response, resume_notifications) = self.process_owner.request_json(
                 &new_process_id,
-                &create.request_id,
-                &create.message,
+                &resume.request_id,
+                &resume.message,
                 Duration::from_secs(30),
             )?;
-            notifications.extend(create_notifications);
-            Ok((
-                Some(provider.parse_session_handle(&response)?),
-                notifications,
-            ))
+            let resumed_handle = provider.parse_session_handle(&response)?;
+            if resumed_handle != provider_handle {
+                return Err(PulseError::validation(
+                    "provider_resume_identity_mismatch",
+                    "provider resumed a different native session handle",
+                ));
+            }
+            notifications.extend(resume_notifications);
+            Ok(notifications)
         })();
-        let (provider_handle, provider_notifications) = match provider_session_result {
+        let provider_notifications = match provider_session_result {
             Ok(result) => result,
             Err(error) => {
                 let _ = self.process_owner.terminate(&new_process_id);
                 return Err(error);
             }
         };
-
         let result = self.store.with_state(true, |state| {
-            // Remove old process record; insert new one.
             if let Some(old_process_id) = session_snapshot.managed_process_id.as_deref() {
-                state.processes.remove(old_process_id);
+                if let Some(old_process) = state.processes.get_mut(old_process_id) {
+                    old_process.state = ManagedProcessState::Exited;
+                    old_process.updated_at = chrono::Utc::now().to_rfc3339();
+                }
             }
             state.processes.insert(new_process_id.clone(), process);
-
             let session =
                 state
                     .sessions
@@ -979,15 +1029,21 @@ impl DaemonApplication {
                     .ok_or_else(|| PulseError::NotFound {
                         subject: format!("session {session_id}"),
                     })?;
-            session.provider_id = provider_id.to_string();
-            session.provider_handle = provider_handle.clone();
+            if session.lifecycle != session_snapshot.lifecycle
+                || session.managed_process_id != session_snapshot.managed_process_id
+            {
+                return Err(PulseError::validation(
+                    "session_resume_conflict",
+                    "session changed while provider resumption was in progress",
+                ));
+            }
             session.managed_process_id = Some(new_process_id.clone());
             session.lifecycle = SessionLifecycle::Idle;
             session.active_turn_id = None;
             session.last_error = None;
+            session.provider_detail = launch.provider_detail.clone();
             session.updated_at = chrono::Utc::now().to_rfc3339();
             let session = session.clone();
-
             for notification in provider_notifications {
                 append_event(
                     state,
@@ -1000,12 +1056,13 @@ impl DaemonApplication {
             }
             append_event(
                 state,
-                "session.reattached",
+                "session.resumed",
                 Some(&session.project_id),
                 Some(&session.workspace_id),
                 Some(session_id),
                 json!({
-                    "provider_id": provider_id,
+                    "provider_id": session.provider_id,
+                    "provider_handle": provider_handle,
                     "new_process_id": new_process_id,
                     "old_process_id": session_snapshot.managed_process_id,
                 }),
@@ -1622,11 +1679,49 @@ impl DaemonApplication {
         idempotency_key: &str,
     ) -> Result<DaemonResponse> {
         let saga_id = deterministic_id("saga", idempotency_key);
+        let mut normalized_capabilities = capabilities.to_vec();
+        normalized_capabilities.sort();
+        normalized_capabilities.dedup();
+        let request_fingerprint = hash_serializable(&json!({
+            "project_id": project_id,
+            "ticket_id": ticket_id,
+            "actor": actor,
+            "assignee": assignee,
+            "capabilities": normalized_capabilities,
+            "isolation": isolation,
+            "provider_id": provider_id,
+            "provider_options": provider_options,
+            "ttl_seconds": ttl_seconds,
+        }))?;
 
         // ── Phase 0: ensure a saga record exists ──────────────────────
         let _is_recoverable = if let Some(existing) = self.store.with_state(false, |state| {
             Ok(state.assignment_sagas.get(&saga_id).cloned())
         })? {
+            if (!existing.request_fingerprint.is_empty()
+                && existing.request_fingerprint != request_fingerprint)
+                || existing.project_id != project_id
+                || existing.ticket_id != ticket_id
+                || existing.actor != actor
+                || existing.assignee != assignee
+            {
+                return Err(PulseError::validation(
+                    "assignment_idempotency_conflict",
+                    "assignment idempotency key is bound to different inputs",
+                ));
+            }
+            if existing.request_fingerprint.is_empty() {
+                self.store.with_state(true, |state| {
+                    let saga = state.assignment_sagas.get_mut(&saga_id).ok_or_else(|| {
+                        PulseError::NotFound {
+                            subject: format!("assignment saga {saga_id}"),
+                        }
+                    })?;
+                    saga.request_fingerprint = request_fingerprint.clone();
+                    saga.updated_at = chrono::Utc::now().to_rfc3339();
+                    Ok(())
+                })?;
+            }
             if matches!(
                 existing.state,
                 AssignmentSagaState::BootstrapDelivered
@@ -1652,6 +1747,7 @@ impl DaemonApplication {
                 schema_version: 1,
                 saga_id: saga_id.clone(),
                 idempotency_key: idempotency_key.to_string(),
+                request_fingerprint: request_fingerprint.clone(),
                 project_id: project.project_id,
                 ticket_id: ticket_id.to_string(),
                 actor: actor.to_string(),
@@ -1742,9 +1838,15 @@ impl DaemonApplication {
             }
         };
         // If this is a recovery retry, the workspace may be archived.
-        if workspace.lifecycle == crate::daemon::workspace::WorkspaceLifecycle::Archived {
-            let _ = self.workspace_restore(&workspace.workspace_id);
-        }
+        let workspace =
+            if workspace.lifecycle == crate::daemon::workspace::WorkspaceLifecycle::Archived {
+                match self.workspace_restore(&workspace.workspace_id)? {
+                    DaemonResponse::Workspace { workspace } => workspace,
+                    _ => unreachable!("workspace_restore response kind"),
+                }
+            } else {
+                workspace
+            };
         self.store.with_state(true, |state| {
             let saga = state
                 .assignment_sagas
@@ -1757,11 +1859,9 @@ impl DaemonApplication {
         })?;
 
         // ── Phase 3: provision or recover session ─────────────────────
-        // On recovery the session may be in Error/Closed state. We attempt
-        // session_create first (it is deterministic and returns the
-        // existing session). If the returned session is not Idle we
-        // re-attach a fresh provider process under the same Pulse
-        // session_id.
+        // On recovery the session may be in Error/Closed state. A native
+        // provider handle is resumed through a fresh transport process while
+        // the stable Pulse session_id and provider handle stay unchanged.
         let session = match self.session_create(
             &workspace.workspace_id,
             provider_id,
@@ -1782,27 +1882,16 @@ impl DaemonApplication {
                 return Err(error);
             }
         };
-        // If the deterministic session is not in a usable (Idle) state
-        // we must re-attach a new provider process.
         let session = if session.lifecycle != SessionLifecycle::Idle {
-            // Close the unusable session's old process if any.
-            if let Some(process_id) = session.managed_process_id.as_deref() {
-                let _ = self.process_owner.terminate(process_id);
-            }
-            match self.session_reattach(
-                &session.session_id,
-                provider_id,
-                provider_options,
-                &format!("{idempotency_key}:reattach"),
-            ) {
+            match self.session_resume(&session.session_id, provider_options) {
                 Ok(DaemonResponse::Session { session }) => session,
-                Ok(_) => unreachable!("session_reattach response kind"),
+                Ok(_) => unreachable!("session_resume response kind"),
                 Err(error) => {
                     let _ = self.workspace_archive(&workspace.workspace_id);
                     let _ = core.release_reservation(
                         &reservation.reservation.lease_id,
                         actor,
-                        "session reattach failed",
+                        "session resume failed",
                     );
                     self.mark_saga_error(&saga_id, AssignmentSagaState::Recoverable, &error)?;
                     return Err(error);

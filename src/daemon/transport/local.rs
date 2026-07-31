@@ -110,24 +110,55 @@ pub fn serve(store: StateStore) -> Result<()> {
     crate::storage::atomic_write_private(&store.endpoint_path(), &endpoint_bytes)?;
 
     let shutdown = application.shutdown_flag();
+    let mut workers = Vec::new();
+    let mut serve_error = None;
     while !shutdown.load(Ordering::SeqCst) {
         match listener.accept() {
             Ok((stream, _)) => {
                 let application = Arc::clone(&application);
                 let auth_token = endpoint.auth_token.clone();
-                thread::spawn(move || {
-                    let _ = handle_connection(stream, application, &auth_token);
-                });
+                workers.push(thread::spawn(move || {
+                    handle_connection(stream, application, &auth_token)
+                }));
             }
             Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                let mut index = 0;
+                while index < workers.len() {
+                    if workers[index].is_finished() {
+                        let worker = workers.swap_remove(index);
+                        if worker.join().is_err() {
+                            serve_error.get_or_insert_with(|| {
+                                PulseError::validation(
+                                    "daemon_worker_panicked",
+                                    "daemon request worker panicked",
+                                )
+                            });
+                            application.request_shutdown();
+                        }
+                    } else {
+                        index += 1;
+                    }
+                }
                 thread::sleep(Duration::from_millis(25));
             }
-            Err(error) => return Err(PulseError::io("<daemon-accept>", error)),
+            Err(error) => {
+                serve_error = Some(PulseError::io("<daemon-accept>", error));
+                application.request_shutdown();
+            }
         }
     }
-    application.shutdown_cleanup();
+    for worker in workers {
+        if worker.join().is_err() {
+            serve_error.get_or_insert_with(|| {
+                PulseError::validation("daemon_worker_panicked", "daemon request worker panicked")
+            });
+        }
+    }
+    if let Err(error) = application.shutdown_cleanup() {
+        serve_error.get_or_insert(error);
+    }
     let _ = fs::remove_file(store.endpoint_path());
-    Ok(())
+    serve_error.map_or(Ok(()), Err)
 }
 
 fn handle_connection(
