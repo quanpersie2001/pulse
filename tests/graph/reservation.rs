@@ -226,6 +226,225 @@ fn changed_ticket_revision_rejects_activation_and_compensation_releases() {
     assert_eq!(released.state, ReservationState::Released);
 }
 
+fn reservation_file(repo: &std::path::Path, lease_id: &str) -> std::path::PathBuf {
+    repo.join(".pulse/runtime/assignment/reservations")
+        .join(format!("{lease_id}.json"))
+}
+
+fn packet_file(repo: &std::path::Path, lease_id: &str) -> std::path::PathBuf {
+    repo.join(".pulse/runtime/assignment/packets")
+        .join(format!("{lease_id}.json"))
+}
+
+fn records_for_key(
+    repo: &std::path::Path,
+    key: &str,
+) -> Vec<pulse::reservation::CoreReservationV1> {
+    let key_hash = pulse::canonical_json::hash_bytes(key.as_bytes());
+    let directory = repo.join(".pulse/runtime/assignment/reservations");
+    let mut records = std::fs::read_dir(&directory)
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .filter(|path| path.extension().and_then(|ext| ext.to_str()) == Some("json"))
+        .map(|path| {
+            let record: pulse::reservation::CoreReservationV1 =
+                serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+            record
+        })
+        .filter(|record| record.idempotency_key_hash == key_hash)
+        .collect::<Vec<_>>();
+    records.sort_by(|left, right| left.lease_id.cmp(&right.lease_id));
+    records
+}
+
+fn live_leases_for_key(repo: &std::path::Path, key: &str) -> Vec<String> {
+    let mut live = records_for_key(repo, key)
+        .into_iter()
+        .filter(|record| {
+            matches!(
+                record.state,
+                ReservationState::Reserved
+                    | ReservationState::Acknowledged
+                    | ReservationState::Active
+            )
+        })
+        .map(|record| record.lease_id)
+        .collect::<Vec<_>>();
+    live.sort();
+    live
+}
+
+/// Deterministically move a reservation record into a terminal state the way a
+/// future state writer would: set the state and recompute the fingerprint so the
+/// record still passes `CoreReservationV1::validate`.
+fn terminalize(repo: &std::path::Path, lease_id: &str, state: ReservationState) -> Vec<u8> {
+    let path = reservation_file(repo, lease_id);
+    let mut record: pulse::reservation::CoreReservationV1 =
+        serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    record.state = state;
+    record.reservation_fingerprint = record.compute_fingerprint().unwrap();
+    let bytes = pulse::canonical_json::to_canonical_bytes(&record).unwrap();
+    std::fs::write(&path, &bytes).unwrap();
+    bytes
+}
+
+/// Shared shape for terminal-retry coverage: after the first reservation is
+/// forced into a terminal state, a retry with the same idempotency key must
+/// allocate exactly one fresh immutable generation, preserve the prior terminal
+/// record and packet byte-for-byte, and replay to the same fresh outcome.
+fn assert_fresh_generation_retry(
+    repo: &TestRepo,
+    ticket_id: &str,
+    key: &str,
+    terminal_state: ReservationState,
+) {
+    let store = JsonGraphStore::new(repo.path());
+    let first = reserve(&store, ticket_id, key);
+    let first_path = reservation_file(repo.path(), &first.reservation.lease_id);
+    let first_reservation_bytes = std::fs::read(&first_path).unwrap();
+    let first_packet_path = packet_file(repo.path(), &first.reservation.lease_id);
+    let first_packet_bytes = std::fs::read(&first_packet_path).unwrap();
+
+    let terminal_bytes = terminalize(repo.path(), &first.reservation.lease_id, terminal_state);
+    assert_ne!(terminal_bytes, first_reservation_bytes);
+    let terminal_record: pulse::reservation::CoreReservationV1 =
+        serde_json::from_slice(&terminal_bytes).unwrap();
+    assert_eq!(terminal_record.state, terminal_state);
+
+    let retry = reserve(&store, ticket_id, key);
+    assert_ne!(retry.reservation.lease_id, first.reservation.lease_id);
+    assert!(
+        retry.reservation.lease_id.ends_with("_g000002"),
+        "fresh generation lease id: {}",
+        retry.reservation.lease_id
+    );
+    assert_eq!(retry.reservation.state, ReservationState::Reserved);
+    // The prior terminal record and its packet are preserved byte-for-byte.
+    assert_eq!(std::fs::read(&first_path).unwrap(), terminal_bytes);
+    assert_eq!(
+        std::fs::read(&first_packet_path).unwrap(),
+        first_packet_bytes
+    );
+    // The fresh generation carries its own live packet for the same subject.
+    let retry_packet =
+        std::fs::read(packet_file(repo.path(), &retry.reservation.lease_id)).unwrap();
+    let retry_packet: pulse::work_packet::WorkPacketV1 =
+        serde_json::from_slice(&retry_packet).unwrap();
+    assert_eq!(
+        retry_packet.packet_fingerprint,
+        retry.reservation.packet_fingerprint
+    );
+    assert_eq!(retry_packet.subject.id, ticket_id);
+
+    // Exactly one live lease remains for the key: the fresh generation.
+    assert_eq!(
+        live_leases_for_key(repo.path(), key),
+        vec![retry.reservation.lease_id.clone()]
+    );
+    assert_eq!(records_for_key(repo.path(), key).len(), 2);
+
+    // Replaying the same key returns the fresh generation unchanged.
+    let replay = reserve(&store, ticket_id, key);
+    assert_eq!(replay, retry);
+}
+
+#[test]
+fn expired_reservation_retry_allocates_a_fresh_immutable_lease() {
+    let repo = TestRepo::from_fixture("minimal-service");
+    let store = JsonGraphStore::new(repo.path());
+    bootstrap_repo(&repo, &store);
+    write_policy(repo.path(), &["work.assignment.release"]);
+    let ticket_id = setup_ready_ticket(repo.path(), &store);
+
+    assert_fresh_generation_retry(
+        &repo,
+        &ticket_id,
+        "reservation-expired",
+        ReservationState::Expired,
+    );
+}
+
+#[test]
+fn stale_reservation_retry_allocates_a_fresh_immutable_lease() {
+    let repo = TestRepo::from_fixture("minimal-service");
+    let store = JsonGraphStore::new(repo.path());
+    bootstrap_repo(&repo, &store);
+    write_policy(repo.path(), &["work.assignment.release"]);
+    let ticket_id = setup_ready_ticket(repo.path(), &store);
+
+    assert_fresh_generation_retry(
+        &repo,
+        &ticket_id,
+        "reservation-stale-needs-operator",
+        ReservationState::StaleNeedsOperator,
+    );
+}
+
+#[test]
+fn concurrent_terminal_retry_reuses_one_fresh_live_generation() {
+    let repo = TestRepo::from_fixture("minimal-service");
+    let store = JsonGraphStore::new(repo.path());
+    bootstrap_repo(&repo, &store);
+    write_policy(repo.path(), &["work.assignment.release"]);
+    let ticket_id = setup_ready_ticket(repo.path(), &store);
+    let key = "reservation-concurrent-retry";
+
+    let first = reserve(&store, &ticket_id, key);
+    terminalize(
+        repo.path(),
+        &first.reservation.lease_id,
+        ReservationState::Expired,
+    );
+
+    let left_repo = repo.path().to_path_buf();
+    let right_repo = repo.path().to_path_buf();
+    let left_ticket = ticket_id.clone();
+    let right_ticket = ticket_id.clone();
+    let left = std::thread::spawn(move || {
+        JsonGraphStore::new(left_repo)
+            .reserve_work(ReserveWorkArgs {
+                ticket_id: left_ticket,
+                actor: "agent:tester".to_string(),
+                assignee: "agent:codex-local".to_string(),
+                capability_inventory_bytes: valid_inventory_bytes("agent:codex-local"),
+                ttl_seconds: 1800,
+                idempotency_key: key.to_string(),
+            })
+            .unwrap()
+    });
+    let right = std::thread::spawn(move || {
+        JsonGraphStore::new(right_repo)
+            .reserve_work(ReserveWorkArgs {
+                ticket_id: right_ticket,
+                actor: "agent:tester".to_string(),
+                assignee: "agent:codex-local".to_string(),
+                capability_inventory_bytes: valid_inventory_bytes("agent:codex-local"),
+                ttl_seconds: 1800,
+                idempotency_key: key.to_string(),
+            })
+            .unwrap()
+    });
+    let left_outcome = left.join().unwrap();
+    let right_outcome = right.join().unwrap();
+
+    // Both retries converge on the same fresh live generation instead of
+    // allocating duplicate leases.
+    assert_eq!(left_outcome, right_outcome);
+    assert!(left_outcome.reservation.lease_id.ends_with("_g000002"));
+    assert_eq!(left_outcome.reservation.state, ReservationState::Reserved);
+    assert_eq!(
+        live_leases_for_key(repo.path(), key),
+        vec![left_outcome.reservation.lease_id.clone()]
+    );
+    assert_eq!(records_for_key(repo.path(), key).len(), 2);
+    // The prior terminal record is still on disk, untouched.
+    let terminal: pulse::reservation::CoreReservationV1 = serde_json::from_slice(
+        &std::fs::read(reservation_file(repo.path(), &first.reservation.lease_id)).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(terminal.state, ReservationState::Expired);
+}
+
 #[cfg(unix)]
 #[test]
 fn assignment_retry_restores_archived_workspace_and_resumes_closed_session() {
