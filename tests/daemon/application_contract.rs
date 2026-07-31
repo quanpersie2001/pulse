@@ -737,6 +737,262 @@ fn session_resume_recovers_after_error_lifecycle() {
 }
 
 #[cfg(unix)]
+fn resume_fail_provider_options(mode: &str) -> serde_json::Value {
+    let script = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/fake_codex_resume_fail.mjs");
+    json!({
+        "executable": std::env::var("NODE").unwrap_or_else(|_| "node".to_string()),
+        "args": [script.to_string_lossy(), mode],
+    })
+}
+
+/// Assert the persisted failure state for a session resume that could not
+/// complete: explicit `Error` lifecycle with an actionable `last_error`, the
+/// old and candidate processes both recorded as `Exited`, no `Running` process
+/// owned by the session, neither process owned by the `ProcessOwner`, and
+/// exactly one `session.resume_failed` timeline event correlated to the
+/// old/candidate ids and the failure code. Returns the candidate process id.
+#[cfg(unix)]
+fn assert_resume_failure_persisted(
+    app: &DaemonApplication,
+    session_id: &str,
+    old_process_id: &str,
+    expected_code: &str,
+) -> String {
+    use pulse::daemon::process::ManagedProcessState;
+
+    let state = app.store().load().unwrap();
+    let session = state.sessions.get(session_id).unwrap();
+    assert_eq!(
+        session.lifecycle,
+        SessionLifecycle::Error,
+        "session must be an explicit Error after resume failure"
+    );
+    let last_error = session
+        .last_error
+        .as_deref()
+        .expect("session must carry an actionable last_error after resume failure");
+    assert!(
+        last_error.contains(expected_code),
+        "last_error {last_error:?} should name the failure code {expected_code:?}"
+    );
+
+    // The old process was terminated at the start of resume and must be Exited.
+    assert_eq!(
+        state.processes[old_process_id].state,
+        ManagedProcessState::Exited
+    );
+
+    // Exactly one session.resume_failed event, correlated to old + candidate.
+    let timeline = match handle(
+        app,
+        DaemonRequest::TimelineList {
+            cursor: None,
+            limit: 1000,
+            session_id: Some(session_id.to_string()),
+        },
+        "",
+    ) {
+        DaemonResponse::Timeline { page } => page,
+        other => panic!("unexpected response: {other:?}"),
+    };
+    let failures: Vec<_> = timeline
+        .events
+        .iter()
+        .filter(|event| event.event_type == "session.resume_failed")
+        .collect();
+    assert_eq!(
+        failures.len(),
+        1,
+        "exactly one session.resume_failed event must be emitted, found {}",
+        failures.len()
+    );
+    let payload = &failures[0].payload;
+    assert_eq!(
+        payload["failure_code"].as_str(),
+        Some(expected_code),
+        "session.resume_failed failure_code mismatch: {:?}",
+        payload
+    );
+    assert_eq!(
+        payload["old_process_id"].as_str(),
+        Some(old_process_id),
+        "session.resume_failed old_process_id mismatch: {:?}",
+        payload
+    );
+    let candidate_process_id = payload["candidate_process_id"]
+        .as_str()
+        .expect("a spawned candidate must be correlated in session.resume_failed")
+        .to_string();
+
+    // The candidate must be recorded as Exited, never Running.
+    let candidate = state
+        .processes
+        .get(&candidate_process_id)
+        .unwrap_or_else(|| panic!("candidate process {candidate_process_id} must be persisted"));
+    assert_eq!(candidate.state, ManagedProcessState::Exited);
+    assert_ne!(candidate_process_id, old_process_id);
+
+    // No process owned by this session may still appear Running.
+    let running = state
+        .processes
+        .values()
+        .filter(|process| {
+            process.owner_id == session_id && process.state == ManagedProcessState::Running
+        })
+        .count();
+    assert_eq!(running, 0, "no process for the session may remain Running");
+
+    // ProcessOwner liveness: neither the old nor the candidate process is owned
+    // (both were terminated and reaped), so they cannot be mistaken for live.
+    assert!(
+        app.managed_process_is_alive(old_process_id).is_err(),
+        "old process must no longer be owned by ProcessOwner"
+    );
+    assert!(
+        app.managed_process_is_alive(&candidate_process_id).is_err(),
+        "candidate process must no longer be owned by ProcessOwner"
+    );
+
+    candidate_process_id
+}
+
+#[cfg(unix)]
+#[test]
+fn session_resume_provider_failure_persists_error_and_terminates_candidate() {
+    let (_home, project_root, app) = application();
+    let project_id = open_project(&app, project_root.path());
+    let workspace_id = create_workspace(&app, &project_id);
+
+    // Create a healthy session backed by the good fixture.
+    let session = match handle(
+        &app,
+        DaemonRequest::SessionCreate {
+            workspace_id: workspace_id.clone(),
+            provider_id: "codex".to_string(),
+            parent_session_id: None,
+            provider_options: resumable_provider_options(),
+        },
+        "resume-fail-create",
+    ) {
+        DaemonResponse::Session { session } => session,
+        other => panic!("unexpected response: {other:?}"),
+    };
+    let session_id = session.session_id.clone();
+    let old_process_id = session.managed_process_id.clone().unwrap();
+
+    // Close it so resume is permitted, then resume against a provider that
+    // answers thread/resume with a JSON-RPC error.
+    handle(
+        &app,
+        DaemonRequest::SessionClose {
+            session_id: session_id.clone(),
+        },
+        "resume-fail-close",
+    );
+    let error = app
+        .handle(
+            &DaemonRequest::SessionResume {
+                session_id: session_id.clone(),
+                provider_options: resume_fail_provider_options("resume_error"),
+            },
+            "resume-fail-provider-error",
+        )
+        .unwrap_err();
+    assert_eq!(error.code, "provider_request_failed");
+
+    let candidate_process_id = assert_resume_failure_persisted(
+        &app,
+        &session_id,
+        &old_process_id,
+        "provider_request_failed",
+    );
+    assert_ne!(candidate_process_id, old_process_id);
+}
+
+#[cfg(unix)]
+#[test]
+fn session_resume_handle_mismatch_persists_error_and_terminates_candidate() {
+    let (_home, project_root, app) = application();
+    let project_id = open_project(&app, project_root.path());
+    let workspace_id = create_workspace(&app, &project_id);
+
+    let session = match handle(
+        &app,
+        DaemonRequest::SessionCreate {
+            workspace_id: workspace_id.clone(),
+            provider_id: "codex".to_string(),
+            parent_session_id: None,
+            provider_options: resumable_provider_options(),
+        },
+        "resume-mismatch-create",
+    ) {
+        DaemonResponse::Session { session } => session,
+        other => panic!("unexpected response: {other:?}"),
+    };
+    assert_eq!(
+        session.provider_handle.as_deref(),
+        Some("thread-pulse-test")
+    );
+    let session_id = session.session_id.clone();
+    let old_process_id = session.managed_process_id.clone().unwrap();
+
+    handle(
+        &app,
+        DaemonRequest::SessionClose {
+            session_id: session_id.clone(),
+        },
+        "resume-mismatch-close",
+    );
+
+    // The provider resumes a *different* native thread id, so the daemon must
+    // reject the handle and record the failure.
+    let error = app
+        .handle(
+            &DaemonRequest::SessionResume {
+                session_id: session_id.clone(),
+                provider_options: resume_fail_provider_options("handle_mismatch"),
+            },
+            "resume-fail-handle-mismatch",
+        )
+        .unwrap_err();
+    assert_eq!(error.code, "provider_resume_identity_mismatch");
+
+    let candidate_process_id = assert_resume_failure_persisted(
+        &app,
+        &session_id,
+        &old_process_id,
+        "provider_resume_identity_mismatch",
+    );
+    assert_ne!(candidate_process_id, old_process_id);
+
+    // A failed resume must leave the session resumable again (Error lifecycle,
+    // stable handle preserved) — retrying against a healthy provider succeeds.
+    let resumed = match handle(
+        &app,
+        DaemonRequest::SessionResume {
+            session_id: session_id.clone(),
+            provider_options: resumable_provider_options(),
+        },
+        "resume-mismatch-retry",
+    ) {
+        DaemonResponse::Session { session } => session,
+        other => panic!("unexpected response: {other:?}"),
+    };
+    assert_eq!(resumed.session_id, session_id);
+    assert_eq!(resumed.lifecycle, SessionLifecycle::Idle);
+    assert_eq!(
+        resumed.provider_handle.as_deref(),
+        Some("thread-pulse-test")
+    );
+    handle(
+        &app,
+        DaemonRequest::SessionClose { session_id },
+        "resume-mismatch-cleanup",
+    );
+}
+
+#[cfg(unix)]
 #[test]
 fn daemon_restart_with_live_process_fails_closed_and_terminates_matching_identity() {
     let (home, project_root, app) = application();

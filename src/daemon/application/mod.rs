@@ -13,7 +13,9 @@ use crate::daemon::assignment::{
 };
 use crate::daemon::permissions::RuntimePrincipal;
 use crate::daemon::persistence::{IdempotencyGuard, IdempotencyRecord, StateStore};
-use crate::daemon::process::{ManagedProcessState, ProcessOwner, SpawnRequest};
+use crate::daemon::process::{
+    ManagedProcessRecord, ManagedProcessState, ProcessOwner, SpawnRequest,
+};
 use crate::daemon::project::ProjectRecord;
 use crate::daemon::protocol::{DaemonRequest, DaemonResponse, ProtocolError, DAEMON_CAPABILITIES};
 use crate::daemon::provider::ProviderRegistry;
@@ -1024,7 +1026,7 @@ impl DaemonApplication {
                 }
             }
         }
-        let process = self.process_owner.spawn(SpawnRequest {
+        let process = match self.process_owner.spawn(SpawnRequest {
             owner_kind: "session",
             owner_id: session_id,
             provider_id: &session_snapshot.provider_id,
@@ -1033,7 +1035,14 @@ impl DaemonApplication {
             cwd: Path::new(&workspace.root),
             log_root: &self.store.root().join("logs"),
             max_log_bytes: 4 * 1024 * 1024,
-        })?;
+        }) {
+            Ok(process) => process,
+            Err(error) => {
+                // The old process was already terminated above; record the
+                // accurate ledger/session state before surfacing the spawn error.
+                return self.fail_session_resume(session_id, &session_snapshot, None, error);
+            }
+        };
         let new_process_id = process.process_id.clone();
         let provider_session_result = (|| -> Result<Vec<Value>> {
             let initialize = provider.initialize_request()?;
@@ -1070,9 +1079,17 @@ impl DaemonApplication {
             Ok(result) => result,
             Err(error) => {
                 let _ = self.process_owner.terminate(&new_process_id);
-                return Err(error);
+                return self.fail_session_resume(
+                    session_id,
+                    &session_snapshot,
+                    Some(&process),
+                    error,
+                );
             }
         };
+        // `process` is moved into the commit closure below; keep an independent
+        // copy so the rare final-commit failure can still record the candidate.
+        let candidate_record = process.clone();
         let result = self.store.with_state(true, |state| {
             if let Some(old_process_id) = session_snapshot.managed_process_id.as_deref() {
                 if let Some(old_process) = state.processes.get_mut(old_process_id) {
@@ -1128,10 +1145,89 @@ impl DaemonApplication {
             );
             Ok(DaemonResponse::Session { session })
         });
-        if result.is_err() {
-            let _ = self.process_owner.terminate(&new_process_id);
+        match result {
+            Ok(response) => Ok(response),
+            Err(error) => {
+                let _ = self.process_owner.terminate(&new_process_id);
+                self.fail_session_resume(
+                    session_id,
+                    &session_snapshot,
+                    Some(&candidate_record),
+                    error,
+                )
+            }
         }
-        result
+    }
+
+    /// Persist a precise failure outcome for a session resume that could not
+    /// complete, then return the original error.
+    ///
+    /// By the time a resume fails the previously-managed ("old") process has
+    /// already been terminated, and the candidate process — when one was
+    /// spawned — has been terminated too. This records both terminal states in
+    /// the process ledger, transitions the session to an explicit [`Error`]
+    /// lifecycle with an actionable `last_error`, and emits a single
+    /// `session.resume_failed` timeline event correlated to the old/candidate
+    /// process ids and the failure code. The candidate never remains alive or
+    /// appears `Running`.
+    ///
+    /// For a `session_resume_conflict` (a concurrent replacement won the session
+    /// while this resume was in flight) the session lifecycle is left untouched
+    /// so the winning state is not clobbered; the dead processes are still
+    /// recorded. This is the smallest safe transition — no state-machine
+    /// redesign — and it preserves the strict no-false-idle invariant.
+    ///
+    /// [`Error`]: SessionLifecycle::Error
+    fn fail_session_resume(
+        &self,
+        session_id: &str,
+        session_snapshot: &SessionRecord,
+        candidate: Option<&ManagedProcessRecord>,
+        error: PulseError,
+    ) -> Result<DaemonResponse> {
+        let failure_code = error.code();
+        let detail = error.to_string();
+        let preserve_session = failure_code == "session_resume_conflict";
+        // Best-effort persistence: the original resume error is the primary
+        // signal and is always propagated regardless of whether this write lands.
+        let _ = self.store.with_state(true, |state| {
+            let now = chrono::Utc::now().to_rfc3339();
+            if let Some(old_process_id) = session_snapshot.managed_process_id.as_deref() {
+                if let Some(old_process) = state.processes.get_mut(old_process_id) {
+                    old_process.state = ManagedProcessState::Exited;
+                    old_process.updated_at = now.clone();
+                }
+            }
+            if let Some(candidate) = candidate {
+                let mut record = candidate.clone();
+                record.state = ManagedProcessState::Exited;
+                record.updated_at = now.clone();
+                state.processes.insert(record.process_id.clone(), record);
+            }
+            if !preserve_session {
+                if let Some(session) = state.sessions.get_mut(session_id) {
+                    session.lifecycle = SessionLifecycle::Error;
+                    session.last_error = Some(format!(
+                        "session resume failed ({failure_code}): {detail}; the provider process was terminated and the session is not idle"
+                    ));
+                    session.updated_at = now.clone();
+                }
+            }
+            append_event(
+                state,
+                "session.resume_failed",
+                Some(&session_snapshot.project_id),
+                Some(&session_snapshot.workspace_id),
+                Some(session_id),
+                json!({
+                    "failure_code": failure_code,
+                    "old_process_id": session_snapshot.managed_process_id,
+                    "candidate_process_id": candidate.map(|record| record.process_id.clone()),
+                }),
+            );
+            Ok(())
+        });
+        Err(error)
     }
 
     fn session_list(
