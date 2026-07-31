@@ -8,9 +8,11 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crate::canonical_json::{hash_bytes, hash_serializable};
-use crate::daemon::assignment::{AssignmentSagaRecord, AssignmentSagaState};
+use crate::daemon::assignment::{
+    AssignmentSagaRecord, AssignmentSagaState, DeliveryRecord, DeliveryState,
+};
 use crate::daemon::permissions::RuntimePrincipal;
-use crate::daemon::persistence::{IdempotencyRecord, StateStore};
+use crate::daemon::persistence::{IdempotencyGuard, IdempotencyRecord, StateStore};
 use crate::daemon::process::{ManagedProcessState, ProcessOwner, SpawnRequest};
 use crate::daemon::project::ProjectRecord;
 use crate::daemon::protocol::{DaemonRequest, DaemonResponse, ProtocolError, DAEMON_CAPABILITIES};
@@ -355,6 +357,12 @@ impl DaemonApplication {
             } => self.timeline_subscribe(cursor, *limit, session_id.as_deref(), *wait_ms)?,
         };
 
+        // Crash-consistency boundary for client-facing idempotency: the
+        // mutation itself is already durably committed at this point, so a
+        // crash here only loses the client response and the cached replay
+        // record — never the underlying effect.
+        self.store
+            .check_failpoint("before_idempotency_result_commit")?;
         if cacheable && !idempotency_key.is_empty() {
             let fingerprint = hash_serializable(request)?;
             let value = serde_json::to_value(&response).map_err(PulseError::from)?;
@@ -421,14 +429,21 @@ impl DaemonApplication {
     }
 
     fn reconcile_assignment_sagas(&self) -> Result<()> {
+        #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+        enum Recovery {
+            Recoverable,
+            UncertainDelivery,
+            Activated,
+        }
         let snapshot = self.store.load()?;
         let mut reconciled = Vec::new();
         for saga in snapshot.assignment_sagas.values() {
-            let next = match saga.state {
+            let recovery = match saga.state {
                 AssignmentSagaState::Reserving
                 | AssignmentSagaState::Reserved
                 | AssignmentSagaState::WorkspaceReady
-                | AssignmentSagaState::SessionReady => Some(AssignmentSagaState::Recoverable),
+                | AssignmentSagaState::SessionReady => Some(Recovery::Recoverable),
+                AssignmentSagaState::DeliveryPending => Some(Recovery::UncertainDelivery),
                 AssignmentSagaState::Acknowledged => {
                     let project = snapshot.projects.get(&saga.project_id);
                     let lease = saga.lease_id.as_deref();
@@ -442,32 +457,76 @@ impl DaemonApplication {
                                     && reservation.state
                                         == crate::reservation::ReservationState::Active
                             }) {
-                                Some(AssignmentSagaState::Activated)
+                                Some(Recovery::Activated)
                             } else {
-                                Some(AssignmentSagaState::Recoverable)
+                                Some(Recovery::Recoverable)
                             }
                         }
-                        _ => Some(AssignmentSagaState::Recoverable),
+                        _ => Some(Recovery::Recoverable),
                     }
                 }
                 _ => None,
             };
-            if let Some(next) = next {
-                reconciled.push((saga.saga_id.clone(), next));
+            if let Some(recovery) = recovery {
+                reconciled.push((saga.saga_id.clone(), recovery));
             }
         }
         if reconciled.is_empty() {
             return Ok(());
         }
         self.store.with_state(true, |state| {
-            for (saga_id, next) in &reconciled {
-                if let Some(saga) = state.assignment_sagas.get_mut(saga_id) {
-                    saga.state = *next;
-                    saga.last_error = (next == &AssignmentSagaState::Recoverable).then(|| {
-                        "daemon restart interrupted assignment provisioning; retry with the original idempotency key"
-                            .to_string()
-                    });
-                    saga.updated_at = chrono::Utc::now().to_rfc3339();
+            for (saga_id, recovery) in &reconciled {
+                let Some(saga) = state.assignment_sagas.get_mut(saga_id) else {
+                    continue;
+                };
+                let now = chrono::Utc::now().to_rfc3339();
+                match recovery {
+                    Recovery::Recoverable => {
+                        saga.state = AssignmentSagaState::Recoverable;
+                        saga.last_error = Some(
+                            "daemon restart interrupted assignment provisioning; retry with the original idempotency key"
+                                .to_string(),
+                        );
+                    }
+                    Recovery::UncertainDelivery => {
+                        saga.last_error = Some(DELIVERY_UNCERTAIN_MESSAGE.to_string());
+                    }
+                    Recovery::Activated => {
+                        saga.state = AssignmentSagaState::Activated;
+                    }
+                }
+                saga.updated_at = now;
+                // Snapshot the fields the delivery/event bookkeeping needs so
+                // the mutable borrow of the saga can end before the rest of
+                // `state` is touched.
+                let project_id = saga.project_id.clone();
+                let workspace_id = saga.workspace_id.clone();
+                let session_id = saga.session_id.clone();
+                let delivery_id = saga.delivery_id.clone();
+                if *recovery == Recovery::UncertainDelivery {
+                    // Fail closed: the provider outcome cannot be proven, so
+                    // the saga stays in `DeliveryPending`. It is never blindly
+                    // re-sent and its lease is never released; only a typed
+                    // acknowledgement backed by proof can move it.
+                    if let Some(delivery_id) = delivery_id.as_deref() {
+                        if let Some(delivery) = state.deliveries.get_mut(delivery_id) {
+                            if delivery.state == DeliveryState::IntentRecorded {
+                                delivery.state = DeliveryState::Uncertain;
+                                delivery.updated_at = chrono::Utc::now().to_rfc3339();
+                            }
+                        }
+                    }
+                    append_event(
+                        state,
+                        "assignment.delivery_uncertain",
+                        Some(&project_id),
+                        workspace_id.as_deref(),
+                        session_id.as_deref(),
+                        json!({
+                            "saga_id": saga_id,
+                            "delivery_id": delivery_id,
+                        }),
+                    );
                 }
             }
             Ok(())
@@ -1109,6 +1168,18 @@ impl DaemonApplication {
     }
 
     fn session_send(&self, session_id: &str, input: &str) -> Result<DaemonResponse> {
+        let prepared = self.prepare_session_turn(session_id, input)?;
+        let committed = self.execute_session_turn(prepared, input)?;
+        Ok(DaemonResponse::Session {
+            session: committed.session,
+        })
+    }
+
+    /// Loads the session snapshot, validates that a new turn is allowed and
+    /// encodes the provider request. The provider request identifier (when the
+    /// protocol exposes one) is available here, BEFORE any provider I/O, so a
+    /// delivery intent can persist it as correlation before sending.
+    fn prepare_session_turn(&self, session_id: &str, input: &str) -> Result<PreparedSessionTurn> {
         if input.trim().is_empty() {
             return Err(PulseError::validation(
                 "session_input_empty",
@@ -1140,34 +1211,64 @@ impl DaemonApplication {
             )
         })?;
         let provider = self.providers.get(&snapshot.provider_id)?;
-        let (turn_id, notifications) =
-            if let Some(provider_handle) = snapshot.provider_handle.as_deref() {
+        let (request_id, message) = match snapshot.provider_handle.as_deref() {
+            Some(provider_handle) => {
                 let request = provider.encode_send(provider_handle, input)?;
+                (Some(request.request_id), Some(request.message))
+            }
+            None => (None, None),
+        };
+        Ok(PreparedSessionTurn {
+            _session_guard,
+            snapshot,
+            process_id,
+            request_id,
+            message,
+        })
+    }
+
+    /// Performs the provider I/O of a prepared turn and commits the session to
+    /// `Running` with the transport-acknowledged turn identifier.
+    fn execute_session_turn(
+        &self,
+        prepared: PreparedSessionTurn,
+        input: &str,
+    ) -> Result<CommittedSessionTurn> {
+        let provider = self.providers.get(&prepared.snapshot.provider_id)?;
+        let (turn_id, provider_turn_id, notifications) = match prepared.message.as_deref() {
+            Some(message) => {
+                let request_id = prepared
+                    .request_id
+                    .as_deref()
+                    .expect("native provider request has an identifier");
                 let (response, notifications) = self.process_owner.request_json(
-                    &process_id,
-                    &request.request_id,
-                    &request.message,
+                    &prepared.process_id,
+                    request_id,
+                    message,
                     Duration::from_secs(30),
                 )?;
-                (provider.parse_turn_handle(&response)?, notifications)
-            } else {
-                self.process_owner.send_line(&process_id, input)?;
-                (format!("turn_{}", ulid::Ulid::new()), Vec::new())
-            };
-        self.store.with_state(true, |state| {
+                let turn = provider.parse_turn_handle(&response)?;
+                (turn.clone(), Some(turn), notifications)
+            }
+            None => {
+                self.process_owner.send_line(&prepared.process_id, input)?;
+                (format!("turn_{}", ulid::Ulid::new()), None, Vec::new())
+            }
+        };
+        let session = self.store.with_state(true, |state| {
             for notification in notifications {
                 append_event(
                     state,
                     "provider.notification",
-                    Some(&snapshot.project_id),
-                    Some(&snapshot.workspace_id),
-                    Some(session_id),
+                    Some(&prepared.snapshot.project_id),
+                    Some(&prepared.snapshot.workspace_id),
+                    Some(&prepared.snapshot.session_id),
                     notification,
                 );
             }
             let session = state
                 .sessions
-                .get_mut(session_id)
+                .get_mut(&prepared.snapshot.session_id)
                 .expect("snapshot existed");
             session.lifecycle = SessionLifecycle::Running;
             session.active_turn_id = Some(turn_id.clone());
@@ -1178,10 +1279,14 @@ impl DaemonApplication {
                 "session.turn_started",
                 Some(&session.project_id),
                 Some(&session.workspace_id),
-                Some(session_id),
+                Some(&session.session_id),
                 json!({"turn_id": turn_id}),
             );
-            Ok(DaemonResponse::Session { session })
+            Ok(session)
+        })?;
+        Ok(CommittedSessionTurn {
+            provider_turn_id,
+            session,
         })
     }
 
@@ -1695,7 +1800,7 @@ impl DaemonApplication {
         }))?;
 
         // ── Phase 0: ensure a saga record exists ──────────────────────
-        let _is_recoverable = if let Some(existing) = self.store.with_state(false, |state| {
+        let _is_recoverable = if let Some(mut existing) = self.store.with_state(false, |state| {
             Ok(state.assignment_sagas.get(&saga_id).cloned())
         })? {
             if (!existing.request_fingerprint.is_empty()
@@ -1724,10 +1829,28 @@ impl DaemonApplication {
             }
             if matches!(
                 existing.state,
-                AssignmentSagaState::BootstrapDelivered
+                AssignmentSagaState::DeliveryPending
+                    | AssignmentSagaState::BootstrapDelivered
                     | AssignmentSagaState::Acknowledged
                     | AssignmentSagaState::Activated
             ) {
+                // A `DeliveryPending` saga is the fail-closed bootstrap state:
+                // the provider outcome cannot be proven, so it is never re-sent
+                // and never released. Surface the operator explanation once it
+                // is observed, then replay the pending saga unchanged.
+                if existing.state == AssignmentSagaState::DeliveryPending
+                    && existing.last_error.is_none()
+                {
+                    let message = DELIVERY_UNCERTAIN_MESSAGE.to_string();
+                    let _ = self.store.with_state(true, |state| {
+                        if let Some(saga) = state.assignment_sagas.get_mut(&saga_id) {
+                            saga.last_error = Some(message.clone());
+                            saga.updated_at = chrono::Utc::now().to_rfc3339();
+                        }
+                        Ok(())
+                    });
+                    existing.last_error = Some(message);
+                }
                 // Fast path: already provisioned — idempotent return.
                 return Ok(DaemonResponse::Assignment { saga: existing });
             }
@@ -1919,35 +2042,93 @@ impl DaemonApplication {
             reservation.reservation.packet_fingerprint,
             reservation.reservation.lease_id,
         );
-        if let Err(error) = self.session_send(&session.session_id, &bootstrap) {
-            let _ = self.session_close(&session.session_id);
-            let _ = self.workspace_archive(&workspace.workspace_id);
-            let released = core
-                .release_reservation(
+        let prepared = match self.prepare_session_turn(&session.session_id, &bootstrap) {
+            Ok(prepared) => prepared,
+            Err(error) => {
+                self.compensate_failed_bootstrap_delivery(
+                    &core,
+                    &saga_id,
+                    &session.session_id,
+                    &workspace.workspace_id,
                     &reservation.reservation.lease_id,
                     actor,
-                    "bootstrap delivery failed",
-                )
-                .is_ok();
-            self.mark_saga_error(
-                &saga_id,
-                if released {
-                    AssignmentSagaState::Released
-                } else {
-                    AssignmentSagaState::Recoverable
-                },
-                &error,
-            )?;
-            return Err(error);
-        }
+                    &delivery_id,
+                    &error,
+                )?;
+                return Err(error);
+            }
+        };
+        let intent_now = chrono::Utc::now().to_rfc3339();
         self.store.with_state(true, |state| {
             let saga = state
                 .assignment_sagas
                 .get_mut(&saga_id)
                 .expect("saga exists");
             saga.delivery_id = Some(delivery_id.clone());
-            saga.state = AssignmentSagaState::BootstrapDelivered;
+            saga.state = AssignmentSagaState::DeliveryPending;
+            saga.last_error = None;
             saga.updated_at = chrono::Utc::now().to_rfc3339();
+            state.deliveries.insert(
+                delivery_id.clone(),
+                DeliveryRecord {
+                    schema_version: 1,
+                    delivery_id: delivery_id.clone(),
+                    saga_id: saga_id.clone(),
+                    session_id: session.session_id.clone(),
+                    payload: bootstrap.clone(),
+                    correlation_request_id: prepared.request_id.clone(),
+                    correlation_turn_id: None,
+                    state: DeliveryState::IntentRecorded,
+                    created_at: intent_now.clone(),
+                    updated_at: intent_now,
+                },
+            );
+            append_event(
+                state,
+                "assignment.delivery_intent_recorded",
+                Some(project_id),
+                Some(&workspace.workspace_id),
+                Some(&session.session_id),
+                json!({"saga_id": saga_id, "delivery_id": delivery_id}),
+            );
+            Ok(())
+        })?;
+        // Crash-consistency boundary: the durable delivery intent now exists
+        // BEFORE any provider I/O. From here on, a crash or commit failure must
+        // never blindly re-send the bootstrap and must never release the
+        // reservation without proof of the provider outcome.
+        self.store.check_failpoint("after_delivery_intent")?;
+        let committed = match self.execute_session_turn(prepared, &bootstrap) {
+            Ok(committed) => committed,
+            Err(error) => {
+                self.compensate_failed_bootstrap_delivery(
+                    &core,
+                    &saga_id,
+                    &session.session_id,
+                    &workspace.workspace_id,
+                    &reservation.reservation.lease_id,
+                    actor,
+                    &delivery_id,
+                    &error,
+                )?;
+                return Err(error);
+            }
+        };
+        self.store
+            .check_failpoint("before_delivery_delivered_commit")?;
+        self.store.with_state(true, |state| {
+            let saga = state
+                .assignment_sagas
+                .get_mut(&saga_id)
+                .expect("saga exists");
+            saga.state = AssignmentSagaState::BootstrapDelivered;
+            saga.last_error = None;
+            saga.updated_at = chrono::Utc::now().to_rfc3339();
+            if let Some(delivery) = state.deliveries.get_mut(&delivery_id) {
+                delivery.state = DeliveryState::Delivered;
+                delivery.correlation_turn_id = committed.provider_turn_id.clone();
+                delivery.updated_at = chrono::Utc::now().to_rfc3339();
+            }
             let saga = saga.clone();
             append_event(
                 state,
@@ -1959,6 +2140,46 @@ impl DaemonApplication {
             );
             Ok(DaemonResponse::Assignment { saga })
         })
+    }
+
+    /// Records the delivery as failed and applies the existing delivery-failure
+    /// compensation: close the session, archive the workspace and release the
+    /// Core reservation. This is only safe while the daemon is live and the
+    /// failure was observed synchronously; crash recovery never takes this path
+    /// and instead fails closed in `DeliveryPending`.
+    #[allow(clippy::too_many_arguments)]
+    fn compensate_failed_bootstrap_delivery(
+        &self,
+        core: &crate::JsonGraphStore,
+        saga_id: &str,
+        session_id: &str,
+        workspace_id: &str,
+        lease_id: &str,
+        actor: &str,
+        delivery_id: &str,
+        error: &PulseError,
+    ) -> Result<()> {
+        let _ = self.store.with_state(true, |state| {
+            if let Some(delivery) = state.deliveries.get_mut(delivery_id) {
+                delivery.state = DeliveryState::Failed;
+                delivery.updated_at = chrono::Utc::now().to_rfc3339();
+            }
+            Ok(())
+        });
+        let _ = self.session_close(session_id);
+        let _ = self.workspace_archive(workspace_id);
+        let released = core
+            .release_reservation(lease_id, actor, "bootstrap delivery failed")
+            .is_ok();
+        self.mark_saga_error(
+            saga_id,
+            if released {
+                AssignmentSagaState::Released
+            } else {
+                AssignmentSagaState::Recoverable
+            },
+            error,
+        )
     }
 
     fn assignment_acknowledge(
@@ -2276,6 +2497,30 @@ impl DaemonApplication {
         })
     }
 }
+
+/// A turn prepared for provider I/O: the session lock is held, the session
+/// snapshot is fixed, and the provider request (when the protocol has one) is
+/// already encoded so its request identifier can be persisted as delivery
+/// correlation BEFORE any bytes reach the provider.
+struct PreparedSessionTurn {
+    _session_guard: IdempotencyGuard,
+    snapshot: SessionRecord,
+    process_id: String,
+    request_id: Option<String>,
+    message: Option<String>,
+}
+
+struct CommittedSessionTurn {
+    /// Provider-native turn identifier from the transport acknowledgement;
+    /// `None` when the provider protocol exposes none (opaque transports).
+    provider_turn_id: Option<String>,
+    session: SessionRecord,
+}
+
+/// Operator-facing explanation for a delivery whose provider outcome cannot be
+/// proven. Recovery fails closed: the assignment is neither re-sent nor
+/// released, and typed acknowledgement remains the only way forward.
+const DELIVERY_UNCERTAIN_MESSAGE: &str = "bootstrap delivery outcome cannot be proven: the delivery intent was recorded before provider I/O but no delivered acknowledgement was persisted. The assignment was not released and will not be re-sent; resolve the provider session manually and record a typed acknowledgement only with proof.";
 
 fn append_event(
     state: &mut crate::daemon::persistence::DaemonState,

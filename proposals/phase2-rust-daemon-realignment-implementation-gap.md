@@ -2,7 +2,13 @@
 
 > **Status:** Phase 2 realignment acceptance implemented and verified. G9
 > HTTP/WebSocket and desktop adapters remain explicitly later client work; the
-> shared MCP adapter and policy-gated session mailbox are implemented.
+> shared MCP adapter and policy-gated session mailbox are implemented. Bootstrap
+> delivery now persists a deterministic delivery intent (delivery id, exact
+> payload and provider request correlation) before provider I/O; restart
+> recovery fails closed in a durable `DeliveryPending`/uncertain state when the
+> provider outcome cannot be proven — it never blindly re-sends and never
+> releases a possibly-valid assignment. Typed acknowledgement remains a separate
+> later step; activation is never inferred from provider state.
 >
 > **Purpose:** reconcile the implemented Phase 2 runner prototype with the
 > accepted Core + Rust Daemon architecture.

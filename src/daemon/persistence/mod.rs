@@ -8,7 +8,7 @@ use std::fs::{self, File, OpenOptions};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use crate::daemon::assignment::AssignmentSagaRecord;
+use crate::daemon::assignment::{AssignmentSagaRecord, DeliveryRecord};
 use crate::daemon::process::ManagedProcessRecord;
 use crate::daemon::project::ProjectRecord;
 use crate::daemon::session::{CommunicationGrantRecord, SessionMessageRecord, SessionRecord};
@@ -33,6 +33,8 @@ pub struct DaemonState {
     pub session_messages: BTreeMap<String, SessionMessageRecord>,
     pub processes: BTreeMap<String, ManagedProcessRecord>,
     pub assignment_sagas: BTreeMap<String, AssignmentSagaRecord>,
+    #[serde(default)]
+    pub deliveries: BTreeMap<String, DeliveryRecord>,
     pub timeline: Vec<TimelineEvent>,
     #[serde(default)]
     pub idempotency_results: BTreeMap<String, IdempotencyRecord>,
@@ -59,6 +61,7 @@ impl DaemonState {
             session_messages: BTreeMap::new(),
             processes: BTreeMap::new(),
             assignment_sagas: BTreeMap::new(),
+            deliveries: BTreeMap::new(),
             timeline: Vec::new(),
             idempotency_results: BTreeMap::new(),
         }
@@ -205,11 +208,73 @@ impl StateStore {
         lock_with_timeout(&file, &path, Duration::from_secs(30))?;
         Ok(IdempotencyGuard { path, file })
     }
+
+    /// Test-only deterministic fault injection for crash-consistency tests.
+    ///
+    /// A marker file at `<root>/failpoints/<name>.panic` makes the next
+    /// failpoint call panic (simulating a daemon crash between two durable
+    /// commits); `<name>.error` makes it return an injected store failure.
+    /// Without marker files this is a no-op, so production behavior is
+    /// unaffected. Tests arm markers with [`Self::arm_failpoint`].
+    pub fn check_failpoint(&self, name: &str) -> Result<()> {
+        let panic_path = self.root.join("failpoints").join(format!("{name}.panic"));
+        let error_path = self.root.join("failpoints").join(format!("{name}.error"));
+        if panic_path.exists() {
+            panic!("injected daemon crash at failpoint {name:?}");
+        }
+        if error_path.exists() {
+            return Err(PulseError::validation(
+                "injected_failpoint",
+                format!("injected store failure at failpoint {name:?}"),
+            ));
+        }
+        Ok(())
+    }
+
+    /// Test-only: create a failpoint marker (see [`Self::check_failpoint`]).
+    pub fn arm_failpoint(&self, name: &str, mode: FailpointMode) -> Result<()> {
+        let path = self
+            .root
+            .join("failpoints")
+            .join(format!("{name}.{}", mode.as_str()));
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).map_err(|error| PulseError::io(parent, error))?;
+        }
+        fs::write(&path, b"").map_err(|error| PulseError::io(&path, error))
+    }
+
+    /// Test-only: remove a failpoint marker (see [`Self::check_failpoint`]).
+    pub fn disarm_failpoint(&self, name: &str, mode: FailpointMode) -> Result<()> {
+        let path = self
+            .root
+            .join("failpoints")
+            .join(format!("{name}.{}", mode.as_str()));
+        match fs::remove_file(&path) {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(PulseError::io(&path, error)),
+        }
+    }
 }
 
 pub struct DaemonOwnerGuard {
     path: PathBuf,
     file: File,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FailpointMode {
+    Panic,
+    Error,
+}
+
+impl FailpointMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Panic => "panic",
+            Self::Error => "error",
+        }
+    }
 }
 
 pub struct IdempotencyGuard {

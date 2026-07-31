@@ -850,3 +850,445 @@ fn daemon_saga_requires_acknowledgement_before_core_activation() {
         NodeStatus::Done
     );
 }
+
+#[cfg(unix)]
+mod delivery_crash_consistency {
+    use super::*;
+    use pulse::daemon::application::DaemonApplication;
+    use pulse::daemon::assignment::{AssignmentSagaRecord, AssignmentSagaState, DeliveryState};
+    use pulse::daemon::persistence::{FailpointMode, StateStore};
+    use pulse::daemon::protocol::{DaemonRequest, DaemonResponse};
+    use pulse::daemon::workspace::IsolationMode;
+    use serde_json::json;
+    use std::panic::{catch_unwind, AssertUnwindSafe};
+    use std::path::Path;
+    use std::time::{Duration, Instant};
+
+    /// Opaque provider that appends every received stdin byte to `log_path`,
+    /// so a test can count exactly how many bootstrap deliveries reached it.
+    /// Pipe writes below PIPE_BUF are atomic, so each bootstrap lands as one
+    /// complete append.
+    fn provider_options(log_path: &Path) -> serde_json::Value {
+        json!({
+            "executable": "/bin/sh",
+            "args": ["-c", "cat >> \"$1\"", "pulse-test", log_path.to_string_lossy().to_string()],
+            "protocol_mode": "opaque_test",
+        })
+    }
+
+    /// Native-protocol mock provider in POSIX awk: echoes each request's id
+    /// back inside a thread/start- or turn/start-shaped result, skips
+    /// notifications (no `"id"`), and flushes after every response so the
+    /// daemon's JSONL request/response loop never stalls.
+    const NATIVE_MOCK_PROVIDER: &str = r#"{ if ($0 !~ /"id":"/) next; id = $0; sub(/.*"id":"/, "", id); sub(/".*/, "", id); if ($0 ~ /"method":"turn\/start"/) { printf "{\"jsonrpc\":\"2.0\",\"id\":\"%s\",\"result\":{\"turn\":{\"id\":\"turn-native-1\"}}}\n", id } else { printf "{\"jsonrpc\":\"2.0\",\"id\":\"%s\",\"result\":{\"thread\":{\"id\":\"thread-native-1\"}}}\n", id } fflush() }"#;
+
+    fn open_project(daemon: &DaemonApplication, root: &Path) -> String {
+        match daemon
+            .handle(
+                &DaemonRequest::ProjectOpen {
+                    root: root.to_string_lossy().to_string(),
+                },
+                "delivery-project",
+            )
+            .unwrap()
+        {
+            DaemonResponse::Project { project } => project.project_id,
+            other => panic!("unexpected response: {other:?}"),
+        }
+    }
+
+    fn assignment_start_request(
+        project_id: &str,
+        ticket_id: &str,
+        provider_options: &serde_json::Value,
+    ) -> DaemonRequest {
+        DaemonRequest::AssignmentStart {
+            project_id: project_id.to_string(),
+            ticket_id: ticket_id.to_string(),
+            actor: "agent:tester".to_string(),
+            assignee: "agent:codex-local".to_string(),
+            capabilities: vec![
+                "repository.inspect".to_string(),
+                "source.read".to_string(),
+                "source.write".to_string(),
+                "test.run".to_string(),
+                "workspace.worktree".to_string(),
+            ],
+            isolation: IsolationMode::Local,
+            provider_id: "codex".to_string(),
+            provider_options: provider_options.clone(),
+            ttl_seconds: 1800,
+        }
+    }
+
+    fn start_assignment(
+        daemon: &DaemonApplication,
+        request: &DaemonRequest,
+        key: &str,
+    ) -> AssignmentSagaRecord {
+        match daemon.handle(request, key).unwrap() {
+            DaemonResponse::Assignment { saga } => saga,
+            other => panic!("unexpected response: {other:?}"),
+        }
+    }
+
+    fn setup_daemon(repo: &TestRepo) -> (tempfile::TempDir, DaemonApplication, String) {
+        let daemon_home = tempfile::tempdir().unwrap();
+        let daemon = DaemonApplication::new(StateStore::new(daemon_home.path()), "test").unwrap();
+        let project_id = open_project(&daemon, repo.path());
+        (daemon_home, daemon, project_id)
+    }
+
+    fn setup_ticket(repo: &TestRepo, store: &JsonGraphStore) -> String {
+        bootstrap_repo(repo, store);
+        write_policy(repo.path(), &["work.assignment.release"]);
+        setup_ready_ticket(repo.path(), store)
+    }
+
+    fn count_lease_lines(path: &Path) -> usize {
+        std::fs::read_to_string(path)
+            .map(|contents| {
+                contents
+                    .lines()
+                    .filter(|line| line.starts_with("lease="))
+                    .count()
+            })
+            .unwrap_or(0)
+    }
+
+    fn wait_until(timeout: Duration, what: &str, mut condition: impl FnMut() -> bool) {
+        let deadline = Instant::now() + timeout;
+        while !condition() {
+            assert!(Instant::now() < deadline, "timed out waiting for {what}");
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+
+    fn reservation_state(
+        root: &Path,
+        lease_id: &str,
+    ) -> Option<pulse::reservation::ReservationState> {
+        pulse::kernel::reservation::list_reservations(root)
+            .unwrap()
+            .into_iter()
+            .find(|reservation| reservation.lease_id == lease_id)
+            .map(|reservation| reservation.state)
+    }
+
+    #[test]
+    fn delivery_intent_is_persisted_before_provider_send() {
+        let repo = TestRepo::from_fixture("minimal-service");
+        let store = JsonGraphStore::new(repo.path());
+        let ticket_id = setup_ticket(&repo, &store);
+        let (daemon_home, daemon, project_id) = setup_daemon(&repo);
+        let provider_log = daemon_home.path().join("provider-received.log");
+        let request =
+            assignment_start_request(&project_id, &ticket_id, &provider_options(&provider_log));
+        let state_store = StateStore::new(daemon_home.path());
+        state_store
+            .arm_failpoint("after_delivery_intent", FailpointMode::Panic)
+            .unwrap();
+
+        // Crash after the durable intent commit, before any provider I/O.
+        let outcome = catch_unwind(AssertUnwindSafe(|| {
+            start_assignment(&daemon, &request, "delivery-intent-key")
+        }));
+        assert!(outcome.is_err(), "injected crash must abort the request");
+        assert_eq!(
+            count_lease_lines(&provider_log),
+            0,
+            "no bootstrap may reach the provider before the intent is durable"
+        );
+        state_store
+            .disarm_failpoint("after_delivery_intent", FailpointMode::Panic)
+            .unwrap();
+
+        drop(daemon);
+        let restarted =
+            DaemonApplication::new(StateStore::new(daemon_home.path()), "test-restarted").unwrap();
+        let saga = start_assignment(&restarted, &request, "delivery-intent-key");
+        assert_eq!(saga.state, AssignmentSagaState::DeliveryPending);
+        let delivery_id = saga
+            .delivery_id
+            .clone()
+            .expect("delivery identity is durable");
+        assert!(
+            saga.last_error
+                .as_deref()
+                .unwrap_or_default()
+                .contains("cannot be proven"),
+            "recovery must fail closed with an explicit explanation"
+        );
+
+        let state = restarted.store().load().unwrap();
+        let delivery = state
+            .deliveries
+            .get(&delivery_id)
+            .expect("delivery record is durable");
+        assert_eq!(delivery.state, DeliveryState::Uncertain);
+        assert_eq!(delivery.saga_id, saga.saga_id);
+        assert_eq!(
+            delivery.session_id,
+            saga.session_id.as_deref().expect("saga session")
+        );
+        assert_eq!(delivery.correlation_request_id, None);
+        assert_eq!(delivery.correlation_turn_id, None);
+        let lease_id = saga.lease_id.as_deref().expect("saga lease");
+        assert!(
+            delivery.payload.contains(&format!("lease={lease_id}")),
+            "payload must be the exact bootstrap for the saga lease"
+        );
+        assert_eq!(
+            count_lease_lines(&provider_log),
+            0,
+            "crash before send must not deliver the bootstrap"
+        );
+    }
+
+    #[test]
+    fn provider_accepts_then_delivered_commit_failure_does_not_duplicate_or_release() {
+        let repo = TestRepo::from_fixture("minimal-service");
+        let store = JsonGraphStore::new(repo.path());
+        let ticket_id = setup_ticket(&repo, &store);
+        let (daemon_home, daemon, project_id) = setup_daemon(&repo);
+        let provider_log = daemon_home.path().join("provider-received.log");
+        let request =
+            assignment_start_request(&project_id, &ticket_id, &provider_options(&provider_log));
+        let state_store = StateStore::new(daemon_home.path());
+        state_store
+            .arm_failpoint("before_delivery_delivered_commit", FailpointMode::Error)
+            .unwrap();
+
+        // The provider accepts the bootstrap, but the daemon state commit that
+        // would record `BootstrapDelivered` fails. The daemon stays alive.
+        let error = daemon
+            .handle(&request, "delivery-commit-failure-key")
+            .unwrap_err();
+        assert_eq!(error.code, "injected_failpoint");
+        wait_until(
+            Duration::from_secs(5),
+            "provider to accept the bootstrap",
+            || count_lease_lines(&provider_log) == 1,
+        );
+        state_store
+            .disarm_failpoint("before_delivery_delivered_commit", FailpointMode::Error)
+            .unwrap();
+
+        // Retry with the original idempotency key must not re-send and must not
+        // release the reservation: it replays the pending saga.
+        let saga = start_assignment(&daemon, &request, "delivery-commit-failure-key");
+        assert_eq!(saga.state, AssignmentSagaState::DeliveryPending);
+        let delivery_id = saga
+            .delivery_id
+            .clone()
+            .expect("delivery identity is durable");
+        assert!(
+            saga.last_error
+                .as_deref()
+                .unwrap_or_default()
+                .contains("cannot be proven"),
+            "retry must explain the pending delivery"
+        );
+        let lease_id = saga.lease_id.clone().expect("saga lease");
+
+        let state = daemon.store().load().unwrap();
+        let delivery = state
+            .deliveries
+            .get(&delivery_id)
+            .expect("delivery record is durable");
+        assert_eq!(
+            delivery.state,
+            DeliveryState::IntentRecorded,
+            "no delivered acknowledgement was ever persisted"
+        );
+        assert_eq!(delivery.correlation_turn_id, None);
+        assert_eq!(
+            reservation_state(repo.path(), &lease_id),
+            Some(pulse::reservation::ReservationState::Reserved),
+            "a failed delivered-commit must not release the reservation"
+        );
+        assert_eq!(
+            count_lease_lines(&provider_log),
+            1,
+            "retry must not re-send the bootstrap"
+        );
+    }
+
+    #[test]
+    fn restart_with_uncertain_delivery_fails_closed_without_duplicate() {
+        let repo = TestRepo::from_fixture("minimal-service");
+        let store = JsonGraphStore::new(repo.path());
+        let ticket_id = setup_ticket(&repo, &store);
+        let (daemon_home, daemon, project_id) = setup_daemon(&repo);
+        let provider_log = daemon_home.path().join("provider-received.log");
+        let request =
+            assignment_start_request(&project_id, &ticket_id, &provider_options(&provider_log));
+        let state_store = StateStore::new(daemon_home.path());
+        state_store
+            .arm_failpoint("before_delivery_delivered_commit", FailpointMode::Panic)
+            .unwrap();
+
+        // Provider accepts the bootstrap, then the daemon crashes before
+        // persisting the delivered acknowledgement.
+        let outcome = catch_unwind(AssertUnwindSafe(|| {
+            start_assignment(&daemon, &request, "restart-uncertain-key")
+        }));
+        assert!(outcome.is_err(), "injected crash must abort the request");
+        wait_until(
+            Duration::from_secs(5),
+            "provider to accept the bootstrap",
+            || count_lease_lines(&provider_log) == 1,
+        );
+        state_store
+            .disarm_failpoint("before_delivery_delivered_commit", FailpointMode::Panic)
+            .unwrap();
+
+        drop(daemon);
+        let restarted =
+            DaemonApplication::new(StateStore::new(daemon_home.path()), "test-restarted").unwrap();
+        let saga = start_assignment(&restarted, &request, "restart-uncertain-key");
+        assert_eq!(saga.state, AssignmentSagaState::DeliveryPending);
+        let delivery_id = saga
+            .delivery_id
+            .clone()
+            .expect("delivery identity is durable");
+        assert!(
+            saga.last_error
+                .as_deref()
+                .unwrap_or_default()
+                .contains("cannot be proven"),
+            "restart recovery must fail closed with an explicit explanation"
+        );
+        let lease_id = saga.lease_id.clone().expect("saga lease");
+
+        let state = restarted.store().load().unwrap();
+        let delivery = state
+            .deliveries
+            .get(&delivery_id)
+            .expect("delivery record is durable");
+        assert_eq!(
+            delivery.state,
+            DeliveryState::Uncertain,
+            "intent without delivered proof must be marked uncertain"
+        );
+        assert_eq!(
+            reservation_state(repo.path(), &lease_id),
+            Some(pulse::reservation::ReservationState::Reserved),
+            "uncertain delivery must never release a possibly-valid assignment"
+        );
+        assert_eq!(
+            count_lease_lines(&provider_log),
+            1,
+            "restart retry must not duplicate the bootstrap"
+        );
+    }
+
+    #[test]
+    fn delivered_commit_success_but_response_lost_does_not_duplicate() {
+        let repo = TestRepo::from_fixture("minimal-service");
+        let store = JsonGraphStore::new(repo.path());
+        let ticket_id = setup_ticket(&repo, &store);
+        let (daemon_home, daemon, project_id) = setup_daemon(&repo);
+        let provider_log = daemon_home.path().join("provider-received.log");
+        let request =
+            assignment_start_request(&project_id, &ticket_id, &provider_options(&provider_log));
+        let state_store = StateStore::new(daemon_home.path());
+        state_store
+            .arm_failpoint("before_idempotency_result_commit", FailpointMode::Panic)
+            .unwrap();
+
+        // The delivered acknowledgement IS persisted (`BootstrapDelivered`),
+        // but the daemon crashes before the client response and its idempotent
+        // replay record are persisted.
+        let outcome = catch_unwind(AssertUnwindSafe(|| {
+            start_assignment(&daemon, &request, "response-lost-key")
+        }));
+        assert!(outcome.is_err(), "injected crash must abort the request");
+        wait_until(
+            Duration::from_secs(5),
+            "provider to accept the bootstrap",
+            || count_lease_lines(&provider_log) == 1,
+        );
+        state_store
+            .disarm_failpoint("before_idempotency_result_commit", FailpointMode::Panic)
+            .unwrap();
+
+        drop(daemon);
+        let restarted =
+            DaemonApplication::new(StateStore::new(daemon_home.path()), "test-restarted").unwrap();
+        let saga = start_assignment(&restarted, &request, "response-lost-key");
+        assert_eq!(
+            saga.state,
+            AssignmentSagaState::BootstrapDelivered,
+            "the durable delivered state must replay"
+        );
+        let delivery_id = saga
+            .delivery_id
+            .clone()
+            .expect("delivery identity is durable");
+
+        let state = restarted.store().load().unwrap();
+        let delivery = state
+            .deliveries
+            .get(&delivery_id)
+            .expect("delivery record is durable");
+        assert_eq!(delivery.state, DeliveryState::Delivered);
+        assert_eq!(
+            count_lease_lines(&provider_log),
+            1,
+            "replayed retry must not re-send the bootstrap"
+        );
+    }
+
+    #[test]
+    fn native_delivery_record_correlates_provider_request_and_turn_identifiers() {
+        let repo = TestRepo::from_fixture("minimal-service");
+        let store = JsonGraphStore::new(repo.path());
+        let ticket_id = setup_ticket(&repo, &store);
+        let (_daemon_home, daemon, project_id) = setup_daemon(&repo);
+        let request = assignment_start_request(
+            &project_id,
+            &ticket_id,
+            &json!({
+                "executable": "/usr/bin/awk",
+                "args": [NATIVE_MOCK_PROVIDER],
+            }),
+        );
+        let saga = start_assignment(&daemon, &request, "native-correlation-key");
+        assert_eq!(saga.state, AssignmentSagaState::BootstrapDelivered);
+        let delivery_id = saga
+            .delivery_id
+            .clone()
+            .expect("delivery identity is durable");
+        let lease_id = saga.lease_id.as_deref().expect("saga lease");
+
+        let state = daemon.store().load().unwrap();
+        let delivery = state
+            .deliveries
+            .get(&delivery_id)
+            .expect("delivery record is durable");
+        assert_eq!(delivery.state, DeliveryState::Delivered);
+        let request_id = delivery
+            .correlation_request_id
+            .as_deref()
+            .expect("native provider request identifier is correlated");
+        assert!(
+            request_id.starts_with("pulse-turn-start-"),
+            "request id: {request_id}"
+        );
+        assert_eq!(
+            delivery.correlation_turn_id.as_deref(),
+            Some("turn-native-1")
+        );
+        assert!(
+            delivery.payload.contains(&format!("lease={lease_id}")),
+            "payload must be the exact bootstrap for the saga lease"
+        );
+        let session = state
+            .sessions
+            .get(&delivery.session_id)
+            .expect("delivery session");
+        assert_eq!(session.provider_handle.as_deref(), Some("thread-native-1"));
+        assert_eq!(session.active_turn_id.as_deref(), Some("turn-native-1"));
+    }
+}
