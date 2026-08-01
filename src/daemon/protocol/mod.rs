@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::daemon::assignment::AssignmentSagaRecord;
+use crate::daemon::process::{CapturedProcessLogs, ManagedProcessRecord};
 use crate::daemon::project::ProjectRecord;
 use crate::daemon::session::{CommunicationGrantRecord, SessionMessageRecord, SessionRecord};
 use crate::daemon::timeline::{TimelineCursor, TimelinePage};
@@ -24,6 +25,9 @@ pub const DAEMON_CAPABILITIES: &[&str] = &[
     "assignment_saga_v1",
     "session_mailbox_v1",
     "session_resume_v1",
+    "session_attach_v1",
+    "session_inspect_v1",
+    "session_logs_v1",
     "mcp_tool_adapter_v1",
 ];
 
@@ -99,6 +103,12 @@ pub enum DaemonRequest {
     SessionShow {
         session_id: String,
     },
+    SessionInspect {
+        session_id: String,
+    },
+    SessionLogs {
+        session_id: String,
+    },
     SessionSend {
         session_id: String,
         input: String,
@@ -112,6 +122,12 @@ pub enum DaemonRequest {
     SessionResume {
         session_id: String,
         provider_options: Value,
+    },
+    SessionAttach {
+        session_id: String,
+    },
+    SessionForceClose {
+        session_id: String,
     },
     SessionArchive {
         session_id: String,
@@ -142,6 +158,14 @@ pub enum DaemonRequest {
     AssignmentAcknowledge {
         saga_id: String,
         acknowledgement_id: String,
+    },
+    AssignmentAcknowledgeBound {
+        saga_id: String,
+        acknowledgement_id: String,
+        lease_id: String,
+        session_id: String,
+        packet_fingerprint: String,
+        delivery_id: String,
     },
     AssignmentInspect {
         saga_id: String,
@@ -184,6 +208,8 @@ impl DaemonRequest {
                 | Self::WorkspaceList { .. }
                 | Self::SessionList { .. }
                 | Self::SessionShow { .. }
+                | Self::SessionInspect { .. }
+                | Self::SessionLogs { .. }
                 | Self::SessionMessages { .. }
                 | Self::AssignmentInspect { .. }
                 | Self::TimelineList { .. }
@@ -196,13 +222,15 @@ impl DaemonRequest {
             Self::Shutdown
             | Self::ProjectArchive { .. }
             | Self::SessionCommunicationGrant { .. } => "runtime.admin",
-            Self::SessionResume { .. } => "runtime.admin",
+            Self::SessionResume { .. } | Self::SessionForceClose { .. } => "runtime.admin",
             Self::Handshake { .. }
             | Self::Status
             | Self::ProjectList { .. }
             | Self::WorkspaceList { .. }
             | Self::SessionList { .. }
             | Self::SessionShow { .. }
+            | Self::SessionInspect { .. }
+            | Self::SessionLogs { .. }
             | Self::SessionMessages { .. }
             | Self::AssignmentInspect { .. }
             | Self::TimelineList { .. }
@@ -210,6 +238,45 @@ impl DaemonRequest {
             _ => "runtime.write",
         }
     }
+}
+
+/// Validate transport-independent envelope requirements before any application
+/// handler is allowed to observe or mutate state. Local transport additionally
+/// supplies the loopback authentication token; MCP supplies `None` because its
+/// authenticated principal is established by the host adapter.
+pub fn validate_envelope(
+    envelope: &RequestEnvelope,
+    auth_token: Option<&str>,
+) -> std::result::Result<(), ProtocolError> {
+    if envelope.protocol_version != PROTOCOL_VERSION {
+        return Err(ProtocolError::new(
+            "daemon_protocol_incompatible",
+            format!(
+                "client protocol {} is incompatible with daemon protocol {}",
+                envelope.protocol_version, PROTOCOL_VERSION
+            ),
+            false,
+        ));
+    }
+    if let Some(auth_token) = auth_token {
+        if envelope.auth_token != auth_token {
+            return Err(ProtocolError::new(
+                "daemon_authentication_failed",
+                "daemon authentication token is invalid",
+                false,
+            ));
+        }
+    }
+    for capability in &envelope.required_capabilities {
+        if !DAEMON_CAPABILITIES.contains(&capability.as_str()) {
+            return Err(ProtocolError::new(
+                "daemon_capability_missing",
+                format!("daemon does not provide required capability {capability:?}"),
+                false,
+            ));
+        }
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -249,6 +316,15 @@ pub enum DaemonResponse {
     },
     Session {
         session: SessionRecord,
+    },
+    SessionInspection {
+        session: SessionRecord,
+        process: Box<Option<ManagedProcessRecord>>,
+    },
+    SessionLogs {
+        session_id: String,
+        process_id: String,
+        logs: CapturedProcessLogs,
     },
     Sessions {
         sessions: Vec<SessionRecord>,

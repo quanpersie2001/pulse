@@ -6,7 +6,9 @@
 
 use crate::daemon::application::DaemonApplication;
 use crate::daemon::permissions::RuntimePrincipal;
-use crate::daemon::protocol::{RequestEnvelope, ResponseEnvelope, PROTOCOL_VERSION};
+use crate::daemon::protocol::{
+    validate_envelope, RequestEnvelope, ResponseEnvelope, PROTOCOL_VERSION,
+};
 
 pub struct McpToolAdapter<'a> {
     application: &'a DaemonApplication,
@@ -28,19 +30,13 @@ impl<'a> McpToolAdapter<'a> {
             .load()
             .map(|state| state.epoch)
             .unwrap_or_else(|_| "epoch_unknown".to_string());
-        let response = if envelope.protocol_version != PROTOCOL_VERSION {
-            Err(crate::daemon::protocol::ProtocolError::new(
-                "daemon_protocol_incompatible",
-                "MCP tool protocol version is incompatible with the daemon",
-                false,
-            ))
-        } else {
+        let response = validate_envelope(&envelope, None).and_then(|()| {
             self.application.handle_as(
                 &self.principal,
                 &envelope.request,
                 &envelope.idempotency_key,
             )
-        };
+        });
         ResponseEnvelope {
             protocol_version: PROTOCOL_VERSION,
             request_id: envelope.request_id,

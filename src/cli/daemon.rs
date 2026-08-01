@@ -77,6 +77,19 @@ pub(crate) enum SessionCommand {
         #[arg(long)]
         acknowledgement_id: String,
     },
+    AcknowledgeBound {
+        saga_id: String,
+        #[arg(long)]
+        acknowledgement_id: String,
+        #[arg(long)]
+        lease_id: String,
+        #[arg(long)]
+        session_id: String,
+        #[arg(long)]
+        packet_fingerprint: String,
+        #[arg(long)]
+        delivery_id: String,
+    },
     Assignment {
         saga_id: String,
     },
@@ -92,6 +105,12 @@ pub(crate) enum SessionCommand {
     Show {
         session_id: String,
     },
+    Inspect {
+        session_id: String,
+    },
+    Logs {
+        session_id: String,
+    },
     Send {
         session_id: String,
         input: String,
@@ -100,6 +119,12 @@ pub(crate) enum SessionCommand {
         session_id: String,
     },
     Close {
+        session_id: String,
+    },
+    ForceClose {
+        session_id: String,
+    },
+    Attach {
         session_id: String,
     },
     Resume(SessionResumeArgs),
@@ -314,6 +339,21 @@ pub(crate) fn handle_session(command: SessionCommand, explicit_key: Option<&str>
             saga_id,
             acknowledgement_id,
         },
+        SessionCommand::AcknowledgeBound {
+            saga_id,
+            acknowledgement_id,
+            lease_id,
+            session_id,
+            packet_fingerprint,
+            delivery_id,
+        } => DaemonRequest::AssignmentAcknowledgeBound {
+            saga_id,
+            acknowledgement_id,
+            lease_id,
+            session_id,
+            packet_fingerprint,
+            delivery_id,
+        },
         SessionCommand::Assignment { saga_id } => DaemonRequest::AssignmentInspect { saga_id },
         SessionCommand::Handoff(args) => DaemonRequest::HandoffSubmit {
             saga_id: args.saga_id,
@@ -357,11 +397,17 @@ pub(crate) fn handle_session(command: SessionCommand, explicit_key: Option<&str>
             include_archived: all,
         },
         SessionCommand::Show { session_id } => DaemonRequest::SessionShow { session_id },
+        SessionCommand::Inspect { session_id } => DaemonRequest::SessionInspect { session_id },
+        SessionCommand::Logs { session_id } => DaemonRequest::SessionLogs { session_id },
         SessionCommand::Send { session_id, input } => {
             DaemonRequest::SessionSend { session_id, input }
         }
         SessionCommand::Interrupt { session_id } => DaemonRequest::SessionInterrupt { session_id },
         SessionCommand::Close { session_id } => DaemonRequest::SessionClose { session_id },
+        SessionCommand::ForceClose { session_id } => {
+            DaemonRequest::SessionForceClose { session_id }
+        }
+        SessionCommand::Attach { session_id } => DaemonRequest::SessionAttach { session_id },
         SessionCommand::Resume(args) => DaemonRequest::SessionResume {
             session_id: args.session_id,
             provider_options: serde_json::from_str::<Value>(&args.provider_options)?,
@@ -490,6 +536,26 @@ mod tests {
             cli.command,
             crate::cli::args::Command::Session {
                 command: SessionCommand::Resume(SessionResumeArgs { session_id, .. })
+            } if session_id == "ses_test"
+        ));
+    }
+
+    #[test]
+    fn cli_parses_daemon_backed_session_inspect_and_logs() {
+        let inspect = crate::cli::Cli::try_parse_from(["pulse", "session", "inspect", "ses_test"])
+            .expect("session inspect CLI should parse");
+        assert!(matches!(
+            inspect.command,
+            crate::cli::args::Command::Session {
+                command: SessionCommand::Inspect { session_id }
+            } if session_id == "ses_test"
+        ));
+        let logs = crate::cli::Cli::try_parse_from(["pulse", "session", "logs", "ses_test"])
+            .expect("session logs CLI should parse");
+        assert!(matches!(
+            logs.command,
+            crate::cli::args::Command::Session {
+                command: SessionCommand::Logs { session_id }
             } if session_id == "ses_test"
         ));
     }

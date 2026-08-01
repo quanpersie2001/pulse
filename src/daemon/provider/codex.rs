@@ -21,7 +21,6 @@ impl AgentProvider for CodexNativeProvider {
             send: true,
             observe: true,
             interrupt: true,
-            close: true,
             native_tools: BTreeSet::new(),
         }
     }
@@ -84,9 +83,7 @@ impl AgentProvider for CodexNativeProvider {
                     "title": "Pulse daemon",
                     "version": env!("CARGO_PKG_VERSION"),
                 },
-                "capabilities": {
-                    "experimentalApi": true,
-                }
+                "capabilities": {}
             }),
         )
     }
@@ -251,6 +248,18 @@ mod tests {
         let interrupt: Value = serde_json::from_str(&interrupt.message).unwrap();
         assert_eq!(interrupt["method"], "turn/interrupt");
         assert_eq!(interrupt["params"]["turnId"], "turn-1");
+
+        let supported_methods = [
+            initialize["method"].as_str().unwrap(),
+            create["method"].as_str().unwrap(),
+            resume["method"].as_str().unwrap(),
+            send["method"].as_str().unwrap(),
+            interrupt["method"].as_str().unwrap(),
+        ];
+        assert!(!supported_methods.contains(&"thread/close"));
+        assert!(!supported_methods.contains(&"thread/archive"));
+        assert!(!supported_methods.contains(&"thread/delete"));
+        assert!(!supported_methods.contains(&"thread/unsubscribe"));
     }
 
     #[test]

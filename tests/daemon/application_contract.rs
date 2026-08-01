@@ -73,6 +73,60 @@ fn resumable_provider_options() -> serde_json::Value {
     })
 }
 
+fn high_volume_provider_options() -> serde_json::Value {
+    let script = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/fake_codex_high_volume_provider.mjs");
+    json!({
+        "executable": std::env::var("NODE").unwrap_or_else(|_| "node".to_string()),
+        "args": [script.to_string_lossy()]
+    })
+}
+
+#[cfg(unix)]
+#[test]
+fn high_volume_turn_preserves_completion_and_returns_idle_with_loss_marker() {
+    let (_home, project_root, app) = application();
+    let project_id = open_project(&app, project_root.path());
+    let workspace_id = create_workspace(&app, &project_id);
+    let session = match handle(
+        &app,
+        DaemonRequest::SessionCreate {
+            workspace_id,
+            provider_id: "codex".to_string(),
+            parent_session_id: None,
+            provider_options: high_volume_provider_options(),
+        },
+        "high-volume-create",
+    ) {
+        DaemonResponse::Session { session } => session,
+        other => panic!("unexpected response: {other:?}"),
+    };
+    let sent = match handle(
+        &app,
+        DaemonRequest::SessionSend {
+            session_id: session.session_id.clone(),
+            input: "high volume".to_string(),
+        },
+        "high-volume-send",
+    ) {
+        DaemonResponse::Session { session } => session,
+        other => panic!("unexpected response: {other:?}"),
+    };
+    assert_eq!(sent.lifecycle, SessionLifecycle::Idle);
+    assert!(sent.active_turn_id.is_none());
+    let timeline = app.store().load().unwrap().timeline;
+    assert!(timeline.iter().any(|event| {
+        event.event_type == "provider.notification"
+            && event.payload.get("method").and_then(|value| value.as_str())
+                == Some("turn/completed")
+    }));
+    assert!(timeline.iter().any(|event| {
+        event.event_type == "provider.notification"
+            && event.payload.get("method").and_then(|value| value.as_str())
+                == Some("pulse/notification_loss")
+    }));
+}
+
 #[cfg(windows)]
 fn provider_options() -> serde_json::Value {
     json!({
@@ -122,6 +176,439 @@ fn project_workspace_and_idempotency_are_stable() {
         )
         .unwrap_err();
     assert_eq!(error.code, "idempotency_key_conflict");
+}
+
+#[cfg(unix)]
+#[test]
+fn session_attach_reuses_live_process_and_rejects_conflicting_sender() {
+    let (_home, project_root, app) = application();
+    let project_id = open_project(&app, project_root.path());
+    let workspace_id = create_workspace(&app, &project_id);
+    let session = match handle(
+        &app,
+        DaemonRequest::SessionCreate {
+            workspace_id,
+            provider_id: "codex".to_string(),
+            parent_session_id: None,
+            provider_options: provider_options(),
+        },
+        "attach-create",
+    ) {
+        DaemonResponse::Session { session } => session,
+        other => panic!("unexpected response: {other:?}"),
+    };
+    let process_id = session.managed_process_id.clone().unwrap();
+    let before = app.store().load().unwrap();
+    let attached = handle(
+        &app,
+        DaemonRequest::SessionAttach {
+            session_id: session.session_id.clone(),
+        },
+        "attach-live",
+    );
+    let attached = match attached {
+        DaemonResponse::Session { session } => session,
+        other => panic!("unexpected response: {other:?}"),
+    };
+    assert_eq!(attached.session_id, session.session_id);
+    assert_eq!(attached.provider_handle, session.provider_handle);
+    assert_eq!(
+        attached.managed_process_id.as_deref(),
+        Some(process_id.as_str())
+    );
+    assert_eq!(
+        app.store().load().unwrap().timeline.len(),
+        before.timeline.len()
+    );
+
+    let conflicting = RuntimePrincipal {
+        principal_id: "worker:other".to_string(),
+        session_id: Some("ses_other".to_string()),
+        capabilities: ["runtime.write".to_string()].into_iter().collect(),
+    };
+    let error = app
+        .handle_as(
+            &conflicting,
+            &DaemonRequest::SessionAttach {
+                session_id: session.session_id,
+            },
+            "attach-conflict",
+        )
+        .unwrap_err();
+    assert_eq!(error.code, "session_access_denied");
+    assert!(app.managed_process_is_alive(&process_id).unwrap());
+}
+
+#[test]
+fn cached_session_replay_is_authorized_before_response_lookup() {
+    let (_home, project_root, app) = application();
+    let project_id = open_project(&app, project_root.path());
+    let workspace_id = create_workspace(&app, &project_id);
+    let session = match handle(
+        &app,
+        DaemonRequest::SessionCreate {
+            workspace_id,
+            provider_id: "codex".to_string(),
+            parent_session_id: None,
+            provider_options: provider_options(),
+        },
+        "replay-session-create",
+    ) {
+        DaemonResponse::Session { session } => session,
+        other => panic!("unexpected response: {other:?}"),
+    };
+    let request = DaemonRequest::SessionShow {
+        session_id: session.session_id.clone(),
+    };
+    app.handle_as(
+        &RuntimePrincipal::local_cli(),
+        &request,
+        "cross-principal-replay",
+    )
+    .unwrap();
+    let other_principal = RuntimePrincipal {
+        principal_id: "worker:other".to_string(),
+        session_id: Some("ses_other".to_string()),
+        capabilities: ["runtime.read".to_string()].into_iter().collect(),
+    };
+    let error = app
+        .handle_as(&other_principal, &request, "cross-principal-replay")
+        .unwrap_err();
+    assert_eq!(error.code, "session_access_denied");
+}
+
+#[test]
+fn handoff_and_verification_bind_to_session_and_reviewer_principal() {
+    let (_home, _project_root, app) = application();
+    let now = chrono::Utc::now().to_rfc3339();
+    app.store()
+        .with_state(true, |state| {
+            state.assignment_sagas.insert(
+                "saga-review-auth".to_string(),
+                pulse::daemon::assignment::AssignmentSagaRecord {
+                    schema_version: 1,
+                    saga_id: "saga-review-auth".to_string(),
+                    idempotency_key: "review-auth".to_string(),
+                    request_fingerprint: String::new(),
+                    project_id: "missing-project".to_string(),
+                    ticket_id: "ticket".to_string(),
+                    actor: "worker".to_string(),
+                    assignee: "worker".to_string(),
+                    ticket_revision: 1,
+                    packet_fingerprint: "packet".to_string(),
+                    lease_id: Some("lease".to_string()),
+                    workspace_id: Some("workspace".to_string()),
+                    session_id: Some("ses-worker".to_string()),
+                    delivery_id: None,
+                    acknowledgement_id: None,
+                    handoff_id: Some("handoff".to_string()),
+                    verification_id: None,
+                    state: pulse::daemon::assignment::AssignmentSagaState::Verifying,
+                    last_error: None,
+                    created_at: now.clone(),
+                    updated_at: now,
+                },
+            );
+            Ok(())
+        })
+        .unwrap();
+
+    let handoff = DaemonRequest::HandoffSubmit {
+        saga_id: "saga-review-auth".to_string(),
+        source_commit: "commit".to_string(),
+        summary: "summary".to_string(),
+        changed_paths: Vec::new(),
+        evidence_receipt_ids: Vec::new(),
+    };
+    let other_session = RuntimePrincipal {
+        principal_id: "other".to_string(),
+        session_id: Some("ses-other".to_string()),
+        capabilities: ["runtime.write".to_string()].into_iter().collect(),
+    };
+    assert_eq!(
+        app.handle_as(&other_session, &handoff, "handoff-other")
+            .unwrap_err()
+            .code,
+        "saga_session_identity_required"
+    );
+
+    let verification = DaemonRequest::VerificationComplete {
+        saga_id: "saga-review-auth".to_string(),
+        actor: "spoofed".to_string(),
+        source_commit: "commit".to_string(),
+        disposition: pulse::execution::VerificationDisposition::Passed,
+        summary: "verified".to_string(),
+        checks: Vec::new(),
+    };
+    let worker = RuntimePrincipal {
+        principal_id: "worker".to_string(),
+        session_id: Some("ses-worker".to_string()),
+        capabilities: ["runtime.write".to_string()].into_iter().collect(),
+    };
+    assert_eq!(
+        app.handle_as(&worker, &verification, "verify-spoof")
+            .unwrap_err()
+            .code,
+        "verification_actor_mismatch"
+    );
+    let self_review = DaemonRequest::VerificationComplete {
+        saga_id: "saga-review-auth".to_string(),
+        actor: "worker".to_string(),
+        source_commit: "commit".to_string(),
+        disposition: pulse::execution::VerificationDisposition::Passed,
+        summary: "verified".to_string(),
+        checks: Vec::new(),
+    };
+    assert_eq!(
+        app.handle_as(&worker, &self_review, "verify-self")
+            .unwrap_err()
+            .code,
+        "verification_self_review_denied"
+    );
+    let reviewer = RuntimePrincipal {
+        principal_id: "reviewer".to_string(),
+        session_id: Some("ses-reviewer".to_string()),
+        capabilities: ["runtime.write".to_string()].into_iter().collect(),
+    };
+    let valid_review = DaemonRequest::VerificationComplete {
+        saga_id: "saga-review-auth".to_string(),
+        actor: "reviewer".to_string(),
+        source_commit: "commit".to_string(),
+        disposition: pulse::execution::VerificationDisposition::Passed,
+        summary: "verified".to_string(),
+        checks: Vec::new(),
+    };
+    let error = app
+        .handle_as(&reviewer, &valid_review, "verify-valid")
+        .unwrap_err();
+    assert_ne!(error.code, "verification_actor_mismatch");
+    assert_ne!(error.code, "verification_self_review_denied");
+}
+
+#[cfg(unix)]
+#[test]
+fn session_inspect_and_logs_read_only_daemon_owned_bounded_capture() {
+    let (_home, project_root, app) = application();
+    let project_id = open_project(&app, project_root.path());
+    let workspace_id = create_workspace(&app, &project_id);
+    let session = match handle(
+        &app,
+        DaemonRequest::SessionCreate {
+            workspace_id,
+            provider_id: "codex".to_string(),
+            parent_session_id: None,
+            provider_options: provider_options(),
+        },
+        "inspect-create",
+    ) {
+        DaemonResponse::Session { session } => session,
+        other => panic!("unexpected response: {other:?}"),
+    };
+    let process_id = session.managed_process_id.clone().unwrap();
+    let process = app.store().load().unwrap().processes[&process_id].clone();
+    std::fs::write(&process.stdout_prefix_path, b"stdout-prefix").unwrap();
+    std::fs::write(&process.stdout_tail_path, b"stdout-tail").unwrap();
+    std::fs::write(&process.stderr_prefix_path, b"stderr-prefix").unwrap();
+    std::fs::write(&process.stderr_tail_path, b"stderr-tail").unwrap();
+
+    let inspected = handle(
+        &app,
+        DaemonRequest::SessionInspect {
+            session_id: session.session_id.clone(),
+        },
+        "",
+    );
+    match inspected {
+        DaemonResponse::SessionInspection {
+            session: inspected_session,
+            process: inspected_process,
+        } => {
+            assert_eq!(inspected_session.session_id, session.session_id);
+            assert_eq!(
+                inspected_process.as_ref().as_ref().unwrap().process_id,
+                process_id
+            );
+        }
+        other => panic!("unexpected response: {other:?}"),
+    }
+
+    let logs = handle(
+        &app,
+        DaemonRequest::SessionLogs {
+            session_id: session.session_id.clone(),
+        },
+        "",
+    );
+    match logs {
+        DaemonResponse::SessionLogs {
+            session_id,
+            process_id: logged_process_id,
+            logs,
+        } => {
+            assert_eq!(session_id, session.session_id);
+            assert_eq!(logged_process_id, process_id);
+            assert_eq!(logs.stdout_prefix, "stdout-prefix");
+            assert_eq!(logs.stdout_tail, "stdout-tail");
+            assert_eq!(logs.stderr_prefix, "stderr-prefix");
+            assert_eq!(logs.stderr_tail, "stderr-tail");
+        }
+        other => panic!("unexpected response: {other:?}"),
+    }
+}
+
+#[test]
+fn bound_assignment_ack_rejects_wrong_sender_and_exact_binding_mismatch_without_mutation() {
+    let (_home, _project_root, app) = application();
+    let now = chrono::Utc::now().to_rfc3339();
+    app.store()
+        .with_state(true, |state| {
+            state.assignment_sagas.insert(
+                "saga_bound".to_string(),
+                pulse::daemon::assignment::AssignmentSagaRecord {
+                    schema_version: 1,
+                    saga_id: "saga_bound".to_string(),
+                    idempotency_key: "bound-key".to_string(),
+                    request_fingerprint: String::new(),
+                    project_id: "project".to_string(),
+                    ticket_id: "ticket".to_string(),
+                    actor: "worker".to_string(),
+                    assignee: "worker".to_string(),
+                    ticket_revision: 1,
+                    packet_fingerprint: "packet-good".to_string(),
+                    lease_id: Some("lease-good".to_string()),
+                    workspace_id: Some("workspace".to_string()),
+                    session_id: Some("ses-worker".to_string()),
+                    delivery_id: Some("delivery-good".to_string()),
+                    acknowledgement_id: None,
+                    handoff_id: None,
+                    verification_id: None,
+                    state: pulse::daemon::assignment::AssignmentSagaState::BootstrapDelivered,
+                    last_error: None,
+                    created_at: now.clone(),
+                    updated_at: now.clone(),
+                },
+            );
+            state.deliveries.insert(
+                "delivery-good".to_string(),
+                pulse::daemon::assignment::DeliveryRecord {
+                    schema_version: 1,
+                    delivery_id: "delivery-good".to_string(),
+                    saga_id: "saga_bound".to_string(),
+                    session_id: "ses-worker".to_string(),
+                    payload: "packet".to_string(),
+                    correlation_request_id: None,
+                    correlation_turn_id: Some("turn".to_string()),
+                    state: pulse::daemon::assignment::DeliveryState::Delivered,
+                    created_at: now.clone(),
+                    updated_at: now,
+                },
+            );
+            Ok(())
+        })
+        .unwrap();
+    let before = app.store().load().unwrap();
+    let wrong_sender = RuntimePrincipal {
+        principal_id: "worker:other".to_string(),
+        session_id: Some("ses-other".to_string()),
+        capabilities: ["runtime.write".to_string()].into_iter().collect(),
+    };
+    let request = DaemonRequest::AssignmentAcknowledgeBound {
+        saga_id: "saga_bound".to_string(),
+        acknowledgement_id: "ack".to_string(),
+        lease_id: "lease-good".to_string(),
+        session_id: "ses-worker".to_string(),
+        packet_fingerprint: "packet-good".to_string(),
+        delivery_id: "delivery-good".to_string(),
+    };
+    let error = app
+        .handle_as(&wrong_sender, &request, "bound-wrong-sender")
+        .unwrap_err();
+    assert_eq!(error.code, "session_sender_identity_required");
+    let worker = RuntimePrincipal {
+        principal_id: "worker:session".to_string(),
+        session_id: Some("ses-worker".to_string()),
+        capabilities: ["runtime.write".to_string()].into_iter().collect(),
+    };
+    let mut mismatched = request;
+    if let DaemonRequest::AssignmentAcknowledgeBound { delivery_id, .. } = &mut mismatched {
+        *delivery_id = "delivery-wrong".to_string();
+    }
+    let error = app
+        .handle_as(&worker, &mismatched, "bound-wrong-binding")
+        .unwrap_err();
+    assert_eq!(error.code, "assignment_acknowledgement_mismatch");
+    let after = app.store().load().unwrap();
+    assert_eq!(before.assignment_sagas, after.assignment_sagas);
+    assert_eq!(before.deliveries, after.deliveries);
+}
+
+#[test]
+fn acknowledgement_saga_serialization_preserves_identical_replay_and_rejects_conflict() {
+    let (_home, _project_root, app) = application();
+    let now = chrono::Utc::now().to_rfc3339();
+    app.store()
+        .with_state(true, |state| {
+            state.assignment_sagas.insert(
+                "saga_ack_lock".to_string(),
+                pulse::daemon::assignment::AssignmentSagaRecord {
+                    schema_version: 1,
+                    saga_id: "saga_ack_lock".to_string(),
+                    idempotency_key: "ack-lock-key".to_string(),
+                    request_fingerprint: String::new(),
+                    project_id: "project".to_string(),
+                    ticket_id: "ticket".to_string(),
+                    actor: "worker".to_string(),
+                    assignee: "worker".to_string(),
+                    ticket_revision: 1,
+                    packet_fingerprint: "packet".to_string(),
+                    lease_id: Some("lease".to_string()),
+                    workspace_id: Some("workspace".to_string()),
+                    session_id: Some("session".to_string()),
+                    delivery_id: Some("delivery".to_string()),
+                    acknowledgement_id: Some("ack-same".to_string()),
+                    handoff_id: None,
+                    verification_id: None,
+                    state: pulse::daemon::assignment::AssignmentSagaState::Activated,
+                    last_error: None,
+                    created_at: now.clone(),
+                    updated_at: now,
+                },
+            );
+            Ok(())
+        })
+        .unwrap();
+    let first_app = Arc::clone(&app);
+    let first = std::thread::spawn(move || {
+        first_app.handle(
+            &DaemonRequest::AssignmentAcknowledge {
+                saga_id: "saga_ack_lock".to_string(),
+                acknowledgement_id: "ack-same".to_string(),
+            },
+            "ack-replay-one",
+        )
+    });
+    let second_app = Arc::clone(&app);
+    let second = std::thread::spawn(move || {
+        second_app.handle(
+            &DaemonRequest::AssignmentAcknowledge {
+                saga_id: "saga_ack_lock".to_string(),
+                acknowledgement_id: "ack-same".to_string(),
+            },
+            "ack-replay-two",
+        )
+    });
+    assert!(first.join().unwrap().is_ok());
+    assert!(second.join().unwrap().is_ok());
+    let conflict = app
+        .handle(
+            &DaemonRequest::AssignmentAcknowledge {
+                saga_id: "saga_ack_lock".to_string(),
+                acknowledgement_id: "ack-other".to_string(),
+            },
+            "ack-conflict",
+        )
+        .unwrap_err();
+    assert_eq!(conflict.code, "assignment_acknowledgement_conflict");
 }
 
 #[test]
@@ -1446,4 +1933,18 @@ fn mcp_adapter_shares_mutation_idempotency_and_enforces_runtime_permissions() {
         denied.response.unwrap_err().code,
         "runtime_permission_denied"
     );
+
+    let mut unsupported = RequestEnvelope::new(
+        DaemonRequest::ProjectOpen {
+            root: project_root.path().to_string_lossy().to_string(),
+        },
+        "mcp-unknown-capability",
+    );
+    unsupported.required_capabilities = vec!["not_a_daemon_capability".to_string()];
+    let response = McpToolAdapter::new(&app, RuntimePrincipal::local_cli()).invoke(unsupported);
+    assert_eq!(
+        response.response.unwrap_err().code,
+        "daemon_capability_missing"
+    );
+    assert_eq!(app.store().load().unwrap().projects.len(), 1);
 }

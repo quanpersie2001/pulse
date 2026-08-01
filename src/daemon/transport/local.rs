@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 use crate::daemon::application::DaemonApplication;
 use crate::daemon::persistence::StateStore;
 use crate::daemon::protocol::{
-    ProtocolError, RequestEnvelope, ResponseEnvelope, DAEMON_CAPABILITIES, PROTOCOL_VERSION,
+    validate_envelope, ProtocolError, RequestEnvelope, ResponseEnvelope, PROTOCOL_VERSION,
 };
 use crate::{PulseError, Result};
 
@@ -208,33 +208,7 @@ fn validate_request(
     envelope: &RequestEnvelope,
     auth_token: &str,
 ) -> std::result::Result<(), ProtocolError> {
-    if envelope.protocol_version != PROTOCOL_VERSION {
-        return Err(ProtocolError::new(
-            "daemon_protocol_incompatible",
-            format!(
-                "client protocol {} is incompatible with daemon protocol {}",
-                envelope.protocol_version, PROTOCOL_VERSION
-            ),
-            false,
-        ));
-    }
-    if envelope.auth_token != auth_token {
-        return Err(ProtocolError::new(
-            "daemon_authentication_failed",
-            "daemon authentication token is invalid",
-            false,
-        ));
-    }
-    for capability in &envelope.required_capabilities {
-        if !DAEMON_CAPABILITIES.contains(&capability.as_str()) {
-            return Err(ProtocolError::new(
-                "daemon_capability_missing",
-                format!("daemon does not provide required capability {capability:?}"),
-                false,
-            ));
-        }
-    }
-    Ok(())
+    validate_envelope(envelope, Some(auth_token))
 }
 
 fn random_token() -> String {

@@ -4,16 +4,19 @@ mod native;
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::collections::BTreeMap;
-use std::io::{BufRead, BufReader, Read, Write};
+use std::collections::{BTreeMap, VecDeque};
+use std::io::{BufRead, BufReader, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
-use std::sync::mpsc::{self, Receiver, TryRecvError};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
 use crate::{PulseError, Result};
+
+const PROVIDER_OUTPUT_QUEUE_CAPACITY: usize = 64;
+const PROVIDER_MAX_LINE_BYTES: usize = 64 * 1024;
+const PROVIDER_MAX_RETURNED_NOTIFICATIONS: usize = PROVIDER_OUTPUT_QUEUE_CAPACITY;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -48,11 +51,399 @@ pub struct ManagedProcessRecord {
     pub updated_at: String,
 }
 
+const MAX_CAPTURED_LOG_FRAGMENT_BYTES: usize = 64 * 1024;
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct CapturedProcessLogs {
+    pub stdout_prefix: String,
+    pub stdout_tail: String,
+    pub stderr_prefix: String,
+    pub stderr_tail: String,
+}
+
+/// Read only the bounded prefix/tail fragments owned by the daemon process
+/// record. This is intentionally not a Core run-store or arbitrary path API.
+pub fn read_captured_logs(record: &ManagedProcessRecord) -> Result<CapturedProcessLogs> {
+    Ok(CapturedProcessLogs {
+        stdout_prefix: read_log_fragment(Path::new(&record.stdout_prefix_path), false)?,
+        stdout_tail: read_log_fragment(Path::new(&record.stdout_tail_path), true)?,
+        stderr_prefix: read_log_fragment(Path::new(&record.stderr_prefix_path), false)?,
+        stderr_tail: read_log_fragment(Path::new(&record.stderr_tail_path), true)?,
+    })
+}
+
+fn read_log_fragment(path: &Path, tail: bool) -> Result<String> {
+    let mut file = std::fs::File::open(path).map_err(|error| PulseError::io(path, error))?;
+    let length = file
+        .metadata()
+        .map_err(|error| PulseError::io(path, error))?
+        .len();
+    let start = if tail {
+        length.saturating_sub(MAX_CAPTURED_LOG_FRAGMENT_BYTES as u64)
+    } else {
+        0
+    };
+    file.seek(SeekFrom::Start(start))
+        .map_err(|error| PulseError::io(path, error))?;
+    let amount = (length - start).min(MAX_CAPTURED_LOG_FRAGMENT_BYTES as u64) as usize;
+    let mut bytes = vec![0; amount];
+    file.read_exact(&mut bytes)
+        .map_err(|error| PulseError::io(path, error))?;
+    Ok(String::from_utf8_lossy(&bytes).into_owned())
+}
+
 struct OwnedChild {
     child: Child,
     identity: native::NativeProcessIdentity,
     executable: PathBuf,
-    stdout_lines: Receiver<String>,
+    output: Arc<ProviderOutputDispatcher>,
+}
+
+struct ProviderOutputDispatcher {
+    state: Mutex<ProviderOutputState>,
+    wake: Condvar,
+}
+
+struct ProviderOutputState {
+    responses: VecDeque<String>,
+    terminal_notifications: VecDeque<String>,
+    control_notifications: VecDeque<String>,
+    delta_notifications: VecDeque<String>,
+    server_requests: VecDeque<ProviderServerRequest>,
+    dropped_notifications: u64,
+    closed: bool,
+}
+
+#[derive(Debug, Clone)]
+struct ProviderServerRequest {
+    id: serde_json::Value,
+    method: String,
+}
+
+struct ProviderOutputBatch {
+    response: Option<String>,
+    notifications: Vec<String>,
+    server_requests: Vec<ProviderServerRequest>,
+    dropped_notifications: u64,
+}
+
+impl ProviderOutputDispatcher {
+    fn new() -> Self {
+        Self {
+            state: Mutex::new(ProviderOutputState {
+                responses: VecDeque::new(),
+                terminal_notifications: VecDeque::new(),
+                control_notifications: VecDeque::new(),
+                delta_notifications: VecDeque::new(),
+                server_requests: VecDeque::new(),
+                dropped_notifications: 0,
+                closed: false,
+            }),
+            wake: Condvar::new(),
+        }
+    }
+
+    fn dispatch(&self, line: String) {
+        let classification = classify_provider_line(&line);
+        let mut state = self.state.lock().expect("provider output dispatcher lock");
+        match classification {
+            ProviderLineClass::Response => {
+                while state.responses.len() >= PROVIDER_OUTPUT_QUEUE_CAPACITY && !state.closed {
+                    state = self
+                        .wake
+                        .wait(state)
+                        .expect("provider output dispatcher lock");
+                }
+                if !state.closed {
+                    state.responses.push_back(line);
+                }
+            }
+            ProviderLineClass::ServerRequest(request) => {
+                while state.server_requests.len() >= PROVIDER_OUTPUT_QUEUE_CAPACITY && !state.closed
+                {
+                    state = self
+                        .wake
+                        .wait(state)
+                        .expect("provider output dispatcher lock");
+                }
+                if !state.closed {
+                    state.server_requests.push_back(request);
+                }
+            }
+            ProviderLineClass::Notification {
+                priority: NotificationPriority::Terminal,
+            } => {
+                if state.terminal_notifications.len() >= PROVIDER_OUTPUT_QUEUE_CAPACITY {
+                    state.terminal_notifications.pop_front();
+                    state.dropped_notifications = state.dropped_notifications.saturating_add(1);
+                }
+                if !state.closed {
+                    state.terminal_notifications.push_back(line);
+                }
+            }
+            ProviderLineClass::Notification {
+                priority: NotificationPriority::Control,
+            } => {
+                if state.control_notifications.len() >= PROVIDER_OUTPUT_QUEUE_CAPACITY {
+                    state.control_notifications.pop_front();
+                    state.dropped_notifications = state.dropped_notifications.saturating_add(1);
+                }
+                if !state.closed {
+                    state.control_notifications.push_back(line);
+                }
+            }
+            ProviderLineClass::Notification {
+                priority: NotificationPriority::Delta,
+            } => {
+                if state.delta_notifications.len() < PROVIDER_OUTPUT_QUEUE_CAPACITY {
+                    state.delta_notifications.push_back(line);
+                } else {
+                    state.dropped_notifications = state.dropped_notifications.saturating_add(1);
+                }
+            }
+        }
+        self.wake.notify_all();
+    }
+
+    fn close(&self) {
+        let mut state = self.state.lock().expect("provider output dispatcher lock");
+        state.closed = true;
+        self.wake.notify_all();
+    }
+
+    fn take(&self, request_id: &str, timeout: Duration) -> Result<ProviderOutputBatch> {
+        let deadline = Instant::now() + timeout;
+        let mut state = self.state.lock().map_err(|_| lock_poisoned())?;
+        let mut pending_notifications = Vec::new();
+        let mut pending_dropped_notifications: u64 = 0;
+        loop {
+            let response = state
+                .responses
+                .iter()
+                .position(|line| response_matches_request(line, request_id))
+                .and_then(|index| state.responses.remove(index));
+            for line in state.terminal_notifications.drain(..) {
+                let (accepted, evicted) =
+                    append_bounded_notification_line_with_loss(&mut pending_notifications, line);
+                if !accepted || evicted {
+                    pending_dropped_notifications = pending_dropped_notifications.saturating_add(1);
+                }
+            }
+            for line in state.control_notifications.drain(..) {
+                let (accepted, evicted) =
+                    append_bounded_notification_line_with_loss(&mut pending_notifications, line);
+                if !accepted || evicted {
+                    pending_dropped_notifications = pending_dropped_notifications.saturating_add(1);
+                }
+            }
+            for line in state.delta_notifications.drain(..) {
+                let (accepted, evicted) =
+                    append_bounded_notification_line_with_loss(&mut pending_notifications, line);
+                if !accepted || evicted {
+                    pending_dropped_notifications = pending_dropped_notifications.saturating_add(1);
+                }
+            }
+            let server_requests: Vec<_> = state.server_requests.drain(..).collect();
+            pending_dropped_notifications = pending_dropped_notifications
+                .saturating_add(std::mem::take(&mut state.dropped_notifications));
+            if response.is_some() || !server_requests.is_empty() {
+                self.wake.notify_all();
+                return Ok(ProviderOutputBatch {
+                    response,
+                    notifications: pending_notifications,
+                    server_requests,
+                    dropped_notifications: pending_dropped_notifications,
+                });
+            }
+            if state.closed && state.responses.is_empty() {
+                return Err(PulseError::validation(
+                    "provider_transport_closed",
+                    "provider response channel closed",
+                ));
+            }
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                return Err(PulseError::validation(
+                    "provider_response_timeout",
+                    format!("provider did not answer request {request_id:?}"),
+                ));
+            }
+            let (next_state, timed_out) = self
+                .wake
+                .wait_timeout(state, remaining)
+                .map_err(|_| lock_poisoned())?;
+            state = next_state;
+            if timed_out.timed_out() {
+                return Err(PulseError::validation(
+                    "provider_response_timeout",
+                    format!("provider did not answer request {request_id:?}"),
+                ));
+            }
+        }
+    }
+
+    fn drain(&self) -> Result<ProviderOutputBatch> {
+        let mut state = self.state.lock().map_err(|_| lock_poisoned())?;
+        let mut notifications = Vec::new();
+        let mut dropped_notifications: u64 = 0;
+        for line in state.terminal_notifications.drain(..) {
+            let (accepted, evicted) =
+                append_bounded_notification_line_with_loss(&mut notifications, line);
+            if !accepted || evicted {
+                dropped_notifications = dropped_notifications.saturating_add(1);
+            }
+        }
+        for line in state.control_notifications.drain(..) {
+            let (accepted, evicted) =
+                append_bounded_notification_line_with_loss(&mut notifications, line);
+            if !accepted || evicted {
+                dropped_notifications = dropped_notifications.saturating_add(1);
+            }
+        }
+        for line in state.delta_notifications.drain(..) {
+            let (accepted, evicted) =
+                append_bounded_notification_line_with_loss(&mut notifications, line);
+            if !accepted || evicted {
+                dropped_notifications = dropped_notifications.saturating_add(1);
+            }
+        }
+        let server_requests = state.server_requests.drain(..).collect();
+        dropped_notifications =
+            dropped_notifications.saturating_add(std::mem::take(&mut state.dropped_notifications));
+        self.wake.notify_all();
+        Ok(ProviderOutputBatch {
+            response: None,
+            notifications,
+            server_requests,
+            dropped_notifications,
+        })
+    }
+}
+
+enum ProviderLineClass {
+    Response,
+    Notification { priority: NotificationPriority },
+    ServerRequest(ProviderServerRequest),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum NotificationPriority {
+    Terminal,
+    Control,
+    Delta,
+}
+
+fn classify_provider_line(line: &str) -> ProviderLineClass {
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(line) else {
+        return ProviderLineClass::Notification {
+            priority: NotificationPriority::Control,
+        };
+    };
+    let Some(object) = value.as_object() else {
+        return ProviderLineClass::Notification {
+            priority: NotificationPriority::Control,
+        };
+    };
+    let has_id = object.get("id").is_some();
+    let method = object.get("method").and_then(serde_json::Value::as_str);
+    match (has_id, method) {
+        (true, Some(method)) => ProviderLineClass::ServerRequest(ProviderServerRequest {
+            id: object.get("id").cloned().unwrap_or(serde_json::Value::Null),
+            method: method.to_string(),
+        }),
+        (true, None) => ProviderLineClass::Response,
+        (false, Some(method)) => ProviderLineClass::Notification {
+            priority: notification_priority(method),
+        },
+        (false, None) => ProviderLineClass::Notification {
+            priority: NotificationPriority::Delta,
+        },
+    }
+}
+
+fn response_matches_request(line: &str, request_id: &str) -> bool {
+    serde_json::from_str::<serde_json::Value>(line)
+        .ok()
+        .and_then(|value| {
+            value
+                .get("id")
+                .and_then(serde_json::Value::as_str)
+                .map(|id| id == request_id)
+        })
+        .unwrap_or(false)
+}
+
+fn notification_priority(method: &str) -> NotificationPriority {
+    if matches!(
+        method,
+        "turn/completed" | "turn/failed" | "turn/aborted" | "turn/cancelled" | "error"
+    ) {
+        NotificationPriority::Terminal
+    } else if method.starts_with("approval/") || method.starts_with("thread/") {
+        NotificationPriority::Control
+    } else {
+        NotificationPriority::Delta
+    }
+}
+
+fn notification_priority_for_value(value: &serde_json::Value) -> NotificationPriority {
+    value
+        .get("method")
+        .and_then(serde_json::Value::as_str)
+        .map(notification_priority)
+        .unwrap_or(NotificationPriority::Delta)
+}
+
+fn append_bounded_notification_line_with_loss(
+    notifications: &mut Vec<String>,
+    line: String,
+) -> (bool, bool) {
+    let priority = serde_json::from_str::<serde_json::Value>(&line)
+        .map(|value| notification_priority_for_value(&value))
+        .unwrap_or(NotificationPriority::Control);
+    let capacity = PROVIDER_MAX_RETURNED_NOTIFICATIONS;
+    if notifications.len() < capacity {
+        notifications.push(line);
+        return (true, false);
+    }
+    let evict = |notifications: &mut Vec<String>, priorities: &[NotificationPriority]| {
+        notifications.iter().position(|existing| {
+            let existing_priority = serde_json::from_str::<serde_json::Value>(existing)
+                .map(|value| notification_priority_for_value(&value))
+                .unwrap_or(NotificationPriority::Control);
+            priorities.contains(&existing_priority)
+        })
+    };
+    let index = match priority {
+        NotificationPriority::Terminal => evict(
+            notifications,
+            &[NotificationPriority::Delta, NotificationPriority::Control],
+        )
+        .or_else(|| evict(notifications, &[NotificationPriority::Terminal])),
+        NotificationPriority::Control => evict(notifications, &[NotificationPriority::Delta])
+            .or_else(|| evict(notifications, &[NotificationPriority::Control])),
+        NotificationPriority::Delta => None,
+    };
+    if let Some(index) = index {
+        notifications.remove(index);
+        notifications.push(line);
+        (true, true)
+    } else {
+        (false, false)
+    }
+}
+
+fn server_request_rejection(request: &ProviderServerRequest) -> String {
+    serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": request.id,
+        "error": {
+            "code": -32601,
+            "message": format!("unsupported provider server request method {:?}", request.method),
+        }
+    })
+    .to_string()
 }
 
 #[derive(Default)]
@@ -156,7 +547,7 @@ impl ProcessOwner {
                 "child stderr pipe is unavailable",
             )
         })?;
-        let stdout_lines = spawn_provider_output_drain(
+        let output = spawn_provider_output_drain(
             stdout,
             stdout_prefix.clone(),
             stdout_tail.clone(),
@@ -195,7 +586,7 @@ impl ProcessOwner {
                 child,
                 identity,
                 executable: observed_executable,
-                stdout_lines,
+                output,
             })),
         );
         Ok(record)
@@ -215,43 +606,50 @@ impl ProcessOwner {
         timeout: Duration,
     ) -> Result<(serde_json::Value, Vec<serde_json::Value>)> {
         let owned = self.owned_child(process_id)?;
-        let mut owned = owned.lock().map_err(|_| lock_poisoned())?;
-        write_provider_line(&mut owned, message)?;
+        let owned = owned.lock().map_err(|_| lock_poisoned())?;
+        let mut child = owned;
+        write_provider_line(&mut child, message)?;
         let deadline = Instant::now() + timeout;
         let mut notifications = Vec::new();
+        let mut dropped_notifications: u64 = 0;
         loop {
             let remaining = deadline.saturating_duration_since(Instant::now());
-            if remaining.is_zero() {
-                return Err(PulseError::validation(
-                    "provider_response_timeout",
-                    format!("provider did not answer request {request_id:?}"),
-                ));
+            let batch = child.output.take(request_id, remaining)?;
+            for server_request in &batch.server_requests {
+                write_provider_line(&mut child, &server_request_rejection(server_request))?;
             }
-            let line = owned
-                .stdout_lines
-                .recv_timeout(remaining)
-                .map_err(|error| {
-                    PulseError::validation(
-                        "provider_transport_closed",
-                        format!("provider response channel closed: {error}"),
-                    )
-                })?;
+            for line in batch.notifications {
+                let (accepted, evicted) = append_notification_with_loss(&mut notifications, &line)?;
+                if !accepted || evicted {
+                    dropped_notifications = dropped_notifications.saturating_add(1);
+                }
+            }
+            dropped_notifications =
+                dropped_notifications.saturating_add(batch.dropped_notifications);
+            let Some(line) = batch.response else {
+                continue;
+            };
             let value: serde_json::Value = serde_json::from_str(&line).map_err(|error| {
                 PulseError::validation(
                     "provider_protocol_invalid",
                     format!("provider emitted invalid JSON: {error}"),
                 )
             })?;
-            if value.get("id").and_then(serde_json::Value::as_str) == Some(request_id) {
+            if response_matches_request(&line, request_id) {
                 if let Some(error) = value.get("error") {
                     return Err(PulseError::validation(
                         "provider_request_failed",
                         error.to_string(),
                     ));
                 }
+                append_notification_loss(&mut notifications, dropped_notifications);
                 return Ok((value, notifications));
             }
-            notifications.push(value);
+            let (accepted, evicted) =
+                append_notification_value_with_loss(&mut notifications, value);
+            if !accepted || evicted {
+                dropped_notifications = dropped_notifications.saturating_add(1);
+            }
         }
     }
 
@@ -263,23 +661,21 @@ impl ProcessOwner {
         let Some(owned) = owned else {
             return Ok(Vec::new());
         };
-        let owned = owned.lock().map_err(|_| lock_poisoned())?;
+        let mut owned = owned.lock().map_err(|_| lock_poisoned())?;
+        let batch = owned.output.drain()?;
         let mut events = Vec::new();
-        loop {
-            match owned.stdout_lines.try_recv() {
-                Ok(line) => {
-                    let value = serde_json::from_str(&line).map_err(|error| {
-                        PulseError::validation(
-                            "provider_protocol_invalid",
-                            format!("provider emitted invalid JSON: {error}"),
-                        )
-                    })?;
-                    events.push(value);
-                }
-                Err(TryRecvError::Empty) => return Ok(events),
-                Err(TryRecvError::Disconnected) => return Ok(events),
+        let mut dropped_notifications = batch.dropped_notifications;
+        for server_request in &batch.server_requests {
+            write_provider_line(&mut owned, &server_request_rejection(server_request))?;
+        }
+        for line in batch.notifications {
+            let (accepted, evicted) = append_notification_with_loss(&mut events, &line)?;
+            if !accepted || evicted {
+                dropped_notifications = dropped_notifications.saturating_add(1);
             }
         }
+        append_notification_loss(&mut events, dropped_notifications);
+        Ok(events)
     }
 
     pub fn terminate(&self, process_id: &str) -> Result<()> {
@@ -479,14 +875,15 @@ fn spawn_provider_output_drain<R: Read + Send + 'static>(
     prefix_path: PathBuf,
     tail_path: PathBuf,
     max_bytes: usize,
-) -> Result<Receiver<String>> {
+) -> Result<Arc<ProviderOutputDispatcher>> {
     if max_bytes == 0 {
         return Err(PulseError::validation(
             "managed_log_limit_invalid",
             "managed log limit must be positive",
         ));
     }
-    let (sender, receiver) = mpsc::channel();
+    let output = Arc::new(ProviderOutputDispatcher::new());
+    let drain_output = Arc::clone(&output);
     thread::spawn(move || {
         let prefix_limit = max_bytes / 2;
         let tail_limit = max_bytes - prefix_limit;
@@ -494,27 +891,160 @@ fn spawn_provider_output_drain<R: Read + Send + 'static>(
         let mut tail = Vec::with_capacity(tail_limit);
         let mut reader = BufReader::new(reader);
         let mut line = Vec::new();
+        let mut lines_since_flush = 0;
         loop {
             line.clear();
-            let count = match reader.read_until(b'\n', &mut line) {
-                Ok(0) => break,
-                Ok(count) => count,
+            let oversized = match read_provider_line(
+                &mut reader,
+                &mut line,
+                &mut prefix,
+                &mut tail,
+                prefix_limit,
+                tail_limit,
+            ) {
+                Ok(Some(oversized)) => oversized,
+                Ok(None) => break,
                 Err(_) => break,
             };
-            let take = prefix_limit.saturating_sub(prefix.len()).min(count);
-            prefix.extend_from_slice(&line[..take]);
-            tail.extend_from_slice(&line[..count]);
-            if tail.len() > tail_limit {
-                tail.drain(..tail.len() - tail_limit);
+            lines_since_flush += 1;
+            if lines_since_flush >= 16 {
+                let _ = crate::storage::atomic_write_private(&prefix_path, &prefix);
+                let _ = crate::storage::atomic_write_private(&tail_path, &tail);
+                lines_since_flush = 0;
             }
-            let _ = crate::storage::atomic_write_private(&prefix_path, &prefix);
-            let _ = crate::storage::atomic_write_private(&tail_path, &tail);
-            if let Ok(text) = std::str::from_utf8(&line) {
-                let _ = sender.send(text.trim_end_matches(['\r', '\n']).to_string());
+            if oversized {
+                drain_output.dispatch(
+                    serde_json::json!({
+                        "method": "pulse/provider_output_line_oversized",
+                        "params": {"max_bytes": PROVIDER_MAX_LINE_BYTES}
+                    })
+                    .to_string(),
+                );
+            } else if let Ok(text) = std::str::from_utf8(&line) {
+                drain_output.dispatch(text.trim_end_matches(['\r', '\n']).to_string());
             }
         }
+        let _ = crate::storage::atomic_write_private(&prefix_path, &prefix);
+        let _ = crate::storage::atomic_write_private(&tail_path, &tail);
+        drain_output.close();
     });
-    Ok(receiver)
+    Ok(output)
+}
+
+fn read_provider_line<R: BufRead>(
+    reader: &mut R,
+    line: &mut Vec<u8>,
+    prefix: &mut Vec<u8>,
+    tail: &mut Vec<u8>,
+    prefix_limit: usize,
+    tail_limit: usize,
+) -> std::io::Result<Option<bool>> {
+    let mut oversized = false;
+    loop {
+        let buffer = reader.fill_buf()?;
+        if buffer.is_empty() {
+            return Ok((!line.is_empty()).then_some(oversized));
+        }
+        let consumed = buffer
+            .iter()
+            .position(|byte| *byte == b'\n')
+            .map_or(buffer.len(), |position| position + 1);
+        let chunk = &buffer[..consumed];
+        let prefix_take = prefix_limit.saturating_sub(prefix.len()).min(chunk.len());
+        prefix.extend_from_slice(&chunk[..prefix_take]);
+        tail.extend_from_slice(chunk);
+        if tail.len() > tail_limit {
+            tail.drain(..tail.len() - tail_limit);
+        }
+        let line_take = PROVIDER_MAX_LINE_BYTES
+            .saturating_sub(line.len())
+            .min(chunk.len());
+        line.extend_from_slice(&chunk[..line_take]);
+        if line_take < chunk.len() {
+            oversized = true;
+        }
+        let complete = chunk.last() == Some(&b'\n');
+        reader.consume(consumed);
+        if complete {
+            return Ok(Some(oversized));
+        }
+    }
+}
+
+fn append_notification_with_loss(
+    notifications: &mut Vec<serde_json::Value>,
+    line: &str,
+) -> Result<(bool, bool)> {
+    let value = serde_json::from_str(line).map_err(|error| {
+        PulseError::validation(
+            "provider_protocol_invalid",
+            format!("provider emitted invalid JSON: {error}"),
+        )
+    })?;
+    Ok(append_notification_value_with_loss(notifications, value))
+}
+
+fn append_notification_value_with_loss(
+    notifications: &mut Vec<serde_json::Value>,
+    value: serde_json::Value,
+) -> (bool, bool) {
+    let priority = notification_priority_for_value(&value);
+    let capacity = if priority == NotificationPriority::Delta {
+        PROVIDER_MAX_RETURNED_NOTIFICATIONS.saturating_sub(1)
+    } else {
+        PROVIDER_MAX_RETURNED_NOTIFICATIONS
+    };
+    if notifications.len() < capacity {
+        notifications.push(value);
+        return (true, false);
+    }
+    let candidates = match priority {
+        NotificationPriority::Terminal => [
+            NotificationPriority::Delta,
+            NotificationPriority::Control,
+            NotificationPriority::Terminal,
+        ],
+        NotificationPriority::Control => [
+            NotificationPriority::Delta,
+            NotificationPriority::Control,
+            NotificationPriority::Control,
+        ],
+        NotificationPriority::Delta => [NotificationPriority::Delta; 3],
+    };
+    let index = candidates.iter().find_map(|candidate| {
+        notifications
+            .iter()
+            .position(|existing| notification_priority_for_value(existing) == *candidate)
+    });
+    if let Some(index) = index {
+        notifications.remove(index);
+        notifications.push(value);
+        (true, true)
+    } else {
+        (false, false)
+    }
+}
+
+fn append_notification_loss(notifications: &mut Vec<serde_json::Value>, dropped: u64) {
+    if dropped == 0 {
+        return;
+    }
+    if notifications.len() >= PROVIDER_MAX_RETURNED_NOTIFICATIONS {
+        if let Some(index) = notifications.iter().position(|existing| {
+            matches!(
+                notification_priority_for_value(existing),
+                NotificationPriority::Delta | NotificationPriority::Control
+            )
+        }) {
+            notifications.remove(index);
+        }
+    }
+    if notifications.len() < PROVIDER_MAX_RETURNED_NOTIFICATIONS {
+        notifications.push(serde_json::json!({
+            "method": "pulse/notification_loss",
+            "params": {"dropped": dropped}
+        }));
+    }
 }
 
 fn lock_poisoned() -> PulseError {
@@ -554,4 +1084,168 @@ pub fn resolve_executable(program: &str) -> Result<PathBuf> {
         "provider_unavailable",
         format!("provider executable {program:?} was not found on PATH"),
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Cursor;
+    use std::time::Duration;
+
+    #[test]
+    fn provider_line_cap_bounds_line_buffer_and_preserves_log_tail_cap() {
+        let mut reader = BufReader::new(Cursor::new(
+            [vec![b'x'; PROVIDER_MAX_LINE_BYTES + 10], vec![b'\n']].concat(),
+        ));
+        let mut line = Vec::new();
+        let mut prefix = Vec::new();
+        let mut tail = Vec::new();
+        let result = read_provider_line(&mut reader, &mut line, &mut prefix, &mut tail, 32, 48)
+            .expect("read capped provider line");
+
+        assert_eq!(result, Some(true));
+        assert_eq!(line.len(), PROVIDER_MAX_LINE_BYTES);
+        assert_eq!(prefix.len(), 32);
+        assert_eq!(tail.len(), 48);
+    }
+
+    #[test]
+    fn provider_dispatcher_bounds_notifications_without_poisoning_control() {
+        let output = ProviderOutputDispatcher::new();
+        for index in 0..(PROVIDER_OUTPUT_QUEUE_CAPACITY * 4) {
+            output.dispatch(format!("{{\"notification\":{index}}}"));
+        }
+        output.dispatch("{\"jsonrpc\":\"2.0\",\"id\":\"control\",\"result\":{}}".to_string());
+
+        let batch = output
+            .take("control", Duration::from_secs(2))
+            .expect("control response survives notification pressure");
+        assert!(batch.response.is_some());
+        assert!(batch.dropped_notifications > 0);
+        assert!(batch.notifications.len() <= PROVIDER_OUTPUT_QUEUE_CAPACITY);
+    }
+
+    #[test]
+    fn provider_dispatcher_classifies_string_and_numeric_server_requests() {
+        let output = ProviderOutputDispatcher::new();
+        output.dispatch(
+            r#"{"jsonrpc":"2.0","id":"approval-1","method":"item/commandExecution/approval","params":{}}"#
+                .to_string(),
+        );
+        output.dispatch(
+            r#"{"jsonrpc":"2.0","id":7,"method":"item/tool/request","params":{}}"#.to_string(),
+        );
+        output.dispatch(r#"{"jsonrpc":"2.0","id":"turn-1","result":{"ok":true}}"#.to_string());
+
+        let first = output
+            .take("turn-1", Duration::from_secs(2))
+            .expect("server requests are surfaced while awaiting response");
+        assert_eq!(first.server_requests.len(), 2);
+        assert_eq!(first.server_requests[0].id, serde_json::json!("approval-1"));
+        assert_eq!(first.server_requests[1].id, serde_json::json!(7));
+        let rejection: serde_json::Value =
+            serde_json::from_str(&server_request_rejection(&first.server_requests[1]))
+                .expect("valid JSON-RPC rejection");
+        assert_eq!(rejection["id"], serde_json::json!(7));
+        assert_eq!(rejection["error"]["code"], serde_json::json!(-32601));
+        assert!(
+            first.response.is_some(),
+            "original response remains available"
+        );
+    }
+
+    #[test]
+    fn terminal_notification_survives_delta_pressure_and_records_loss() {
+        let output = ProviderOutputDispatcher::new();
+        for index in 0..(PROVIDER_OUTPUT_QUEUE_CAPACITY * 4) {
+            output.dispatch(format!(
+                r#"{{"jsonrpc":"2.0","method":"item/delta","params":{{"index":{index}}}}}"#
+            ));
+        }
+        output.dispatch(
+            r#"{"jsonrpc":"2.0","method":"turn/completed","params":{"turn":{"id":"turn-1"}}}"#
+                .to_string(),
+        );
+        let batch = output.drain().expect("drain provider output");
+        assert!(batch
+            .notifications
+            .iter()
+            .any(|line| line.contains("turn/completed")));
+        assert!(batch.dropped_notifications > 0);
+    }
+
+    #[test]
+    fn newest_terminal_survives_more_than_a_queue_of_control_notifications() {
+        let output = ProviderOutputDispatcher::new();
+        for index in 0..(PROVIDER_OUTPUT_QUEUE_CAPACITY * 2) {
+            output.dispatch(format!(
+                r#"{{"jsonrpc":"2.0","method":"thread/started","params":{{"index":{index}}}}}"#
+            ));
+        }
+        output.dispatch(
+            r#"{"jsonrpc":"2.0","method":"turn/completed","params":{"turn":{"id":"turn-control-pressure"}}}"#
+                .to_string(),
+        );
+        output.dispatch(
+            r#"{"jsonrpc":"2.0","id":"delayed","result":{"turn":{"id":"turn-control-pressure"}}}"#
+                .to_string(),
+        );
+        let batch = output
+            .take("delayed", Duration::from_secs(2))
+            .expect("delayed response survives control pressure");
+        assert!(batch.response.is_some());
+        assert!(batch
+            .notifications
+            .iter()
+            .any(|line| line.contains("turn/completed")));
+        assert!(batch.dropped_notifications > 0);
+    }
+
+    #[test]
+    fn take_bounds_pending_notifications_across_wakeups_and_emits_loss_marker() {
+        let output = Arc::new(ProviderOutputDispatcher::new());
+        let producer = Arc::clone(&output);
+        let producer_thread = thread::spawn(move || {
+            for index in 0..(PROVIDER_OUTPUT_QUEUE_CAPACITY * 3) {
+                producer.dispatch(format!(
+                    r#"{{"jsonrpc":"2.0","method":"thread/started","params":{{"index":{index}}}}}"#
+                ));
+                if index % 4 == 0 {
+                    thread::sleep(Duration::from_millis(1));
+                }
+            }
+            producer.dispatch(
+                r#"{"jsonrpc":"2.0","method":"turn/completed","params":{"turn":{"id":"turn-wakeup"}}}"#
+                    .to_string(),
+            );
+            thread::sleep(Duration::from_millis(20));
+            producer
+                .dispatch(r#"{"jsonrpc":"2.0","id":"delayed","result":{"ok":true}}"#.to_string());
+        });
+        let batch = output
+            .take("delayed", Duration::from_secs(2))
+            .expect("delayed response arrives after repeated wakeups");
+        producer_thread.join().expect("provider output producer");
+        assert!(batch.notifications.len() <= PROVIDER_MAX_RETURNED_NOTIFICATIONS);
+        assert!(batch
+            .notifications
+            .iter()
+            .any(|line| line.contains("turn/completed")));
+        assert!(batch.dropped_notifications > 0);
+
+        let mut returned = Vec::new();
+        for line in batch.notifications {
+            let value: serde_json::Value = serde_json::from_str(&line).expect("valid notification");
+            assert!(append_notification_value_with_loss(&mut returned, value).0);
+        }
+        append_notification_loss(&mut returned, batch.dropped_notifications);
+        assert!(returned.len() <= PROVIDER_MAX_RETURNED_NOTIFICATIONS);
+        assert!(returned.iter().any(|value| {
+            value.get("method").and_then(serde_json::Value::as_str) == Some("turn/completed")
+        }));
+        assert!(returned.iter().any(|value| {
+            value.get("method").and_then(serde_json::Value::as_str)
+                == Some("pulse/notification_loss")
+        }));
+    }
 }

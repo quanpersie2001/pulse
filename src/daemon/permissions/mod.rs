@@ -42,4 +42,14 @@ impl RuntimePrincipal {
             Err("session_sender_identity_required")
         }
     }
+
+    pub fn require_session_access(&self, session_id: &str) -> Result<(), &'static str> {
+        if self.capabilities.contains("runtime.admin")
+            || self.session_id.as_deref() == Some(session_id)
+        {
+            Ok(())
+        } else {
+            Err("session_access_denied")
+        }
+    }
 }

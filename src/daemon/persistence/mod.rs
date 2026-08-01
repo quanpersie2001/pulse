@@ -46,6 +46,8 @@ pub struct IdempotencyRecord {
     pub request_fingerprint: String,
     pub response: Value,
     pub recorded_at: String,
+    #[serde(default)]
+    pub principal_id: String,
 }
 
 impl DaemonState {

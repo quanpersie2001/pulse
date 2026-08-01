@@ -14,7 +14,7 @@ use crate::daemon::assignment::{
 use crate::daemon::permissions::RuntimePrincipal;
 use crate::daemon::persistence::{IdempotencyGuard, IdempotencyRecord, StateStore};
 use crate::daemon::process::{
-    ManagedProcessRecord, ManagedProcessState, ProcessOwner, SpawnRequest,
+    read_captured_logs, ManagedProcessRecord, ManagedProcessState, ProcessOwner, SpawnRequest,
 };
 use crate::daemon::project::ProjectRecord;
 use crate::daemon::protocol::{DaemonRequest, DaemonResponse, ProtocolError, DAEMON_CAPABILITIES};
@@ -167,6 +167,7 @@ impl DaemonApplication {
         request: &DaemonRequest,
         idempotency_key: &str,
     ) -> Result<DaemonResponse> {
+        self.authorize_request(principal, request)?;
         if request.is_mutating() && idempotency_key.trim().is_empty() {
             return Err(PulseError::validation(
                 "idempotency_key_required",
@@ -188,6 +189,12 @@ impl DaemonApplication {
                     return Err(PulseError::validation(
                         "idempotency_key_conflict",
                         "idempotency key was already used for a different request",
+                    ));
+                }
+                if cached.principal_id != principal.principal_id {
+                    return Err(PulseError::validation(
+                        "idempotency_principal_conflict",
+                        "idempotency key was already used by a different runtime principal",
                     ));
                 }
                 return serde_json::from_value(cached.response).map_err(PulseError::from);
@@ -258,6 +265,8 @@ impl DaemonApplication {
                 include_archived,
             } => self.session_list(workspace_id.as_deref(), *include_archived)?,
             DaemonRequest::SessionShow { session_id } => self.session_show(session_id)?,
+            DaemonRequest::SessionInspect { session_id } => self.session_inspect(session_id)?,
+            DaemonRequest::SessionLogs { session_id } => self.session_logs(session_id)?,
             DaemonRequest::SessionSend { session_id, input } => {
                 self.session_send(session_id, input)?
             }
@@ -265,6 +274,17 @@ impl DaemonApplication {
                 session_id,
                 provider_options,
             } => self.session_resume(session_id, provider_options)?,
+            DaemonRequest::SessionAttach { session_id } => {
+                principal
+                    .require_session_access(session_id)
+                    .map_err(|code| {
+                        PulseError::validation(code, "session attach is not authorized")
+                    })?;
+                self.session_attach(session_id)?
+            }
+            DaemonRequest::SessionForceClose { session_id } => {
+                self.session_force_close(session_id)?
+            }
             DaemonRequest::SessionInterrupt { session_id } => self.session_interrupt(session_id)?,
             DaemonRequest::SessionClose { session_id } => self.session_close(session_id)?,
             DaemonRequest::SessionArchive { session_id } => self.session_archive(session_id)?,
@@ -314,7 +334,29 @@ impl DaemonApplication {
             DaemonRequest::AssignmentAcknowledge {
                 saga_id,
                 acknowledgement_id,
-            } => self.assignment_acknowledge(saga_id, acknowledgement_id)?,
+            } => self.assignment_acknowledge_admin(principal, saga_id, acknowledgement_id)?,
+            DaemonRequest::AssignmentAcknowledgeBound {
+                saga_id,
+                acknowledgement_id,
+                lease_id,
+                session_id,
+                packet_fingerprint,
+                delivery_id,
+            } => {
+                principal
+                    .require_session_sender(session_id)
+                    .map_err(|code| {
+                        PulseError::validation(code, "acknowledgement sender is not authorized")
+                    })?;
+                self.assignment_acknowledge_bound(
+                    saga_id,
+                    acknowledgement_id,
+                    lease_id,
+                    session_id,
+                    packet_fingerprint,
+                    delivery_id,
+                )?
+            }
             DaemonRequest::AssignmentInspect { saga_id } => self.assignment_inspect(saga_id)?,
             DaemonRequest::HandoffSubmit {
                 saga_id,
@@ -375,12 +417,119 @@ impl DaemonApplication {
                         request_fingerprint: fingerprint,
                         response: value,
                         recorded_at: chrono::Utc::now().to_rfc3339(),
+                        principal_id: principal.principal_id.clone(),
                     },
                 );
                 Ok(())
             })?;
         }
         Ok(response)
+    }
+
+    fn authorize_request(
+        &self,
+        principal: &RuntimePrincipal,
+        request: &DaemonRequest,
+    ) -> Result<()> {
+        match request {
+            DaemonRequest::SessionAttach { session_id }
+            | DaemonRequest::SessionShow { session_id }
+            | DaemonRequest::SessionInspect { session_id }
+            | DaemonRequest::SessionLogs { session_id }
+            | DaemonRequest::SessionSend { session_id, .. }
+            | DaemonRequest::SessionInterrupt { session_id }
+            | DaemonRequest::SessionClose { session_id }
+            | DaemonRequest::SessionResume { session_id, .. }
+            | DaemonRequest::SessionArchive { session_id }
+            | DaemonRequest::SessionMessages { session_id } => principal
+                .require_session_access(session_id)
+                .map_err(|code| PulseError::validation(code, "session access is not authorized")),
+            DaemonRequest::SessionCommunicationGrant {
+                sender_session_id, ..
+            }
+            | DaemonRequest::SessionMessageSend {
+                sender_session_id, ..
+            } => principal
+                .require_session_sender(sender_session_id)
+                .map_err(|code| PulseError::validation(code, "session sender is not authorized")),
+            DaemonRequest::AssignmentAcknowledge { .. }
+            | DaemonRequest::SessionForceClose { .. } => {
+                principal.require("runtime.admin").map_err(|code| {
+                    PulseError::validation(code, "runtime administrator access is required")
+                })
+            }
+            DaemonRequest::AssignmentAcknowledgeBound { session_id, .. } => principal
+                .require_session_sender(session_id)
+                .map_err(|code| {
+                    PulseError::validation(code, "acknowledgement sender is not authorized")
+                }),
+            DaemonRequest::HandoffSubmit { saga_id, .. } => {
+                self.authorize_saga_session(principal, saga_id, "handoff")
+            }
+            DaemonRequest::VerificationComplete { saga_id, actor, .. } => {
+                self.authorize_verification(principal, saga_id, actor)
+            }
+            _ => Ok(()),
+        }
+    }
+
+    fn authorize_saga_session(
+        &self,
+        principal: &RuntimePrincipal,
+        saga_id: &str,
+        operation: &str,
+    ) -> Result<()> {
+        if principal.capabilities.contains("runtime.admin") {
+            return Ok(());
+        }
+        let session_id = self.assignment_saga(saga_id)?.session_id.ok_or_else(|| {
+            PulseError::validation("assignment_saga_invalid", "saga has no session")
+        })?;
+        if principal.session_id.as_deref() == Some(session_id.as_str()) {
+            Ok(())
+        } else {
+            Err(PulseError::validation(
+                "saga_session_identity_required",
+                format!("{operation} must come from the saga-bound session"),
+            ))
+        }
+    }
+
+    fn authorize_verification(
+        &self,
+        principal: &RuntimePrincipal,
+        saga_id: &str,
+        actor: &str,
+    ) -> Result<()> {
+        let saga_session = self.assignment_saga(saga_id)?.session_id.ok_or_else(|| {
+            PulseError::validation("assignment_saga_invalid", "saga has no session")
+        })?;
+        if principal.capabilities.contains("runtime.admin") {
+            if principal.principal_id == "local_cli" || principal.principal_id == actor {
+                return Ok(());
+            }
+            return Err(PulseError::validation(
+                "verification_actor_mismatch",
+                "trusted administrators must identify the verification actor",
+            ));
+        }
+        if principal.principal_id != actor {
+            return Err(PulseError::validation(
+                "verification_actor_mismatch",
+                "verification actor must match the authenticated principal",
+            ));
+        }
+        match principal.session_id.as_deref() {
+            None => Err(PulseError::validation(
+                "verification_reviewer_identity_required",
+                "verification requires an authenticated reviewer session",
+            )),
+            Some(session_id) if session_id == saga_session => Err(PulseError::validation(
+                "verification_self_review_denied",
+                "the worker session cannot verify its own handoff",
+            )),
+            Some(_) => Ok(()),
+        }
     }
 
     fn begin_epoch_and_recover(&self) -> Result<()> {
@@ -948,6 +1097,40 @@ impl DaemonApplication {
         result
     }
 
+    /// Attach to an already-managed live session. This is deliberately not a
+    /// resume: it never launches a process or asks the provider to recreate a
+    /// native thread, and therefore preserves both Pulse and provider identity.
+    fn session_attach(&self, session_id: &str) -> Result<DaemonResponse> {
+        let session = self.store.with_state(false, |state| {
+            state
+                .sessions
+                .get(session_id)
+                .cloned()
+                .ok_or_else(|| PulseError::NotFound {
+                    subject: format!("session {session_id}"),
+                })
+        })?;
+        if !matches!(
+            session.lifecycle,
+            SessionLifecycle::Idle | SessionLifecycle::Running
+        ) {
+            return Err(PulseError::validation(
+                "session_attach_conflict",
+                "only an idle or running live session can be attached",
+            ));
+        }
+        let process_id = session.managed_process_id.as_deref().ok_or_else(|| {
+            PulseError::validation("session_attach_conflict", "session has no managed process")
+        })?;
+        if !self.process_owner.is_alive(process_id)? {
+            return Err(PulseError::validation(
+                "session_attach_conflict",
+                "session process is no longer live",
+            ));
+        }
+        Ok(DaemonResponse::Session { session })
+    }
+
     fn session_resume(&self, session_id: &str, provider_options: &Value) -> Result<DaemonResponse> {
         let _session_guard = self
             .store
@@ -1263,6 +1446,58 @@ impl DaemonApplication {
         })
     }
 
+    fn session_inspect(&self, session_id: &str) -> Result<DaemonResponse> {
+        self.refresh_session_provider_events(session_id)?;
+        self.store.with_state(false, |state| {
+            let session =
+                state
+                    .sessions
+                    .get(session_id)
+                    .cloned()
+                    .ok_or_else(|| PulseError::NotFound {
+                        subject: format!("session {session_id}"),
+                    })?;
+            let process = session
+                .managed_process_id
+                .as_ref()
+                .and_then(|process_id| state.processes.get(process_id).cloned());
+            Ok(DaemonResponse::SessionInspection {
+                session,
+                process: Box::new(process),
+            })
+        })
+    }
+
+    fn session_logs(&self, session_id: &str) -> Result<DaemonResponse> {
+        let process = self.store.with_state(false, |state| {
+            let session = state
+                .sessions
+                .get(session_id)
+                .ok_or_else(|| PulseError::NotFound {
+                    subject: format!("session {session_id}"),
+                })?;
+            let process_id = session.managed_process_id.as_ref().ok_or_else(|| {
+                PulseError::validation(
+                    "session_logs_unavailable",
+                    "session has no daemon-managed process logs",
+                )
+            })?;
+            state
+                .processes
+                .get(process_id)
+                .cloned()
+                .ok_or_else(|| PulseError::NotFound {
+                    subject: format!("managed process {process_id}"),
+                })
+        })?;
+        let logs = read_captured_logs(&process)?;
+        Ok(DaemonResponse::SessionLogs {
+            session_id: session_id.to_string(),
+            process_id: process.process_id,
+            logs,
+        })
+    }
+
     fn session_send(&self, session_id: &str, input: &str) -> Result<DaemonResponse> {
         let prepared = self.prepare_session_turn(session_id, input)?;
         let committed = self.execute_session_turn(prepared, input)?;
@@ -1351,6 +1586,9 @@ impl DaemonApplication {
                 (format!("turn_{}", ulid::Ulid::new()), None, Vec::new())
             }
         };
+        let turn_completed = notifications
+            .iter()
+            .any(|event| event.get("method").and_then(Value::as_str) == Some("turn/completed"));
         let session = self.store.with_state(true, |state| {
             for notification in notifications {
                 append_event(
@@ -1366,8 +1604,12 @@ impl DaemonApplication {
                 .sessions
                 .get_mut(&prepared.snapshot.session_id)
                 .expect("snapshot existed");
-            session.lifecycle = SessionLifecycle::Running;
-            session.active_turn_id = Some(turn_id.clone());
+            session.lifecycle = if turn_completed {
+                SessionLifecycle::Idle
+            } else {
+                SessionLifecycle::Running
+            };
+            session.active_turn_id = (!turn_completed).then_some(turn_id.clone());
             session.updated_at = chrono::Utc::now().to_rfc3339();
             let session = session.clone();
             append_event(
@@ -1471,17 +1713,56 @@ impl DaemonApplication {
         let _session_guard = self
             .store
             .acquire_idempotency(&format!("session-operation:{session_id}"))?;
-        let process_id = self.store.with_state(false, |state| {
+        let snapshot = self.store.with_state(false, |state| {
             let session = state
                 .sessions
                 .get(session_id)
                 .ok_or_else(|| PulseError::NotFound {
                     subject: format!("session {session_id}"),
                 })?;
-            Ok(session.managed_process_id.clone())
+            Ok(session.clone())
         })?;
-        if let Some(process_id) = process_id.as_deref() {
-            self.process_owner.terminate(process_id)?;
+        if snapshot.lifecycle == SessionLifecycle::Running {
+            if let (Some(provider_handle), Some(turn_handle), Some(process_id)) = (
+                snapshot.provider_handle.as_deref(),
+                snapshot.active_turn_id.as_deref(),
+                snapshot.managed_process_id.as_deref(),
+            ) {
+                let provider = self.providers.get(&snapshot.provider_id)?;
+                let request = provider.encode_interrupt(provider_handle, turn_handle)?;
+                self.process_owner.request_json(
+                    process_id,
+                    &request.request_id,
+                    &request.message,
+                    Duration::from_secs(10),
+                )?;
+            } else if snapshot.provider_handle.is_some() {
+                return Err(PulseError::validation(
+                    "provider_interrupt_unacknowledged",
+                    "running session has no complete provider interrupt identity",
+                ));
+            }
+        }
+        let Some(process_id) = snapshot.managed_process_id.as_deref() else {
+            return Err(PulseError::validation(
+                "managed_process_missing",
+                "session has no daemon-managed process to terminate",
+            ));
+        };
+        match self.process_owner.terminate(process_id) {
+            Ok(()) => {}
+            Err(error) if error.code() == "managed_process_not_owned" => {
+                let process =
+                    self.store.with_state(false, |state| {
+                        state.processes.get(process_id).cloned().ok_or_else(|| {
+                            PulseError::NotFound {
+                                subject: format!("managed process {process_id}"),
+                            }
+                        })
+                    })?;
+                self.process_owner.terminate_record(&process)?;
+            }
+            Err(error) => return Err(error),
         }
         self.store.with_state(true, |state| {
             let session =
@@ -1497,7 +1778,7 @@ impl DaemonApplication {
             let project_id = session.project_id.clone();
             let workspace_id = session.workspace_id.clone();
             let session = session.clone();
-            if let Some(process_id) = process_id.as_deref() {
+            if let Some(process_id) = snapshot.managed_process_id.as_deref() {
                 if let Some(process) = state.processes.get_mut(process_id) {
                     process.state = ManagedProcessState::Exited;
                     process.updated_at = chrono::Utc::now().to_rfc3339();
@@ -1510,6 +1791,50 @@ impl DaemonApplication {
                 Some(&workspace_id),
                 Some(session_id),
                 Value::Null,
+            );
+            Ok(DaemonResponse::Session { session })
+        })
+    }
+
+    fn session_force_close(&self, session_id: &str) -> Result<DaemonResponse> {
+        let _session_guard = self
+            .store
+            .acquire_idempotency(&format!("session-operation:{session_id}"))?;
+        let process_id = self.store.with_state(false, |state| {
+            state
+                .sessions
+                .get(session_id)
+                .ok_or_else(|| PulseError::NotFound {
+                    subject: format!("session {session_id}"),
+                })
+                .and_then(|session| {
+                    session.managed_process_id.clone().ok_or_else(|| {
+                        PulseError::validation(
+                            "provider_force_close_invalid",
+                            "session has no managed process",
+                        )
+                    })
+                })
+        })?;
+        self.process_owner.terminate(&process_id)?;
+        self.store.with_state(true, |state| {
+            let session = state.sessions.get_mut(session_id).expect("session exists");
+            session.lifecycle = SessionLifecycle::Closed;
+            session.active_turn_id = None;
+            session.last_error = Some("session force-closed by an administrator".to_string());
+            session.updated_at = chrono::Utc::now().to_rfc3339();
+            if let Some(process) = state.processes.get_mut(&process_id) {
+                process.state = ManagedProcessState::Exited;
+                process.updated_at = chrono::Utc::now().to_rfc3339();
+            }
+            let session = session.clone();
+            append_event(
+                state,
+                "session.force_closed",
+                Some(&session.project_id),
+                Some(&session.workspace_id),
+                Some(session_id),
+                json!({"process_id": process_id}),
             );
             Ok(DaemonResponse::Session { session })
         })
@@ -2278,11 +2603,89 @@ impl DaemonApplication {
         )
     }
 
+    fn assignment_acknowledge_admin(
+        &self,
+        principal: &RuntimePrincipal,
+        saga_id: &str,
+        acknowledgement_id: &str,
+    ) -> Result<DaemonResponse> {
+        principal.require("runtime.admin").map_err(|code| {
+            PulseError::validation(
+                code,
+                "legacy acknowledgement requires explicit admin recovery",
+            )
+        })?;
+        let response = self.assignment_acknowledge(saga_id, acknowledgement_id)?;
+        self.store.with_state(true, |state| {
+            append_event(
+                state,
+                "assignment.admin_acknowledged",
+                None,
+                None,
+                None,
+                json!({"saga_id": saga_id, "acknowledgement_id": acknowledgement_id}),
+            );
+            Ok(())
+        })?;
+        Ok(response)
+    }
+
+    fn assignment_acknowledge_bound(
+        &self,
+        saga_id: &str,
+        acknowledgement_id: &str,
+        lease_id: &str,
+        session_id: &str,
+        packet_fingerprint: &str,
+        delivery_id: &str,
+    ) -> Result<DaemonResponse> {
+        let saga = self.store.with_state(false, |state| {
+            state
+                .assignment_sagas
+                .get(saga_id)
+                .cloned()
+                .ok_or_else(|| PulseError::NotFound {
+                    subject: format!("assignment saga {saga_id}"),
+                })
+        })?;
+        if saga.lease_id.as_deref() != Some(lease_id)
+            || saga.session_id.as_deref() != Some(session_id)
+            || saga.packet_fingerprint != packet_fingerprint
+            || saga.delivery_id.as_deref() != Some(delivery_id)
+        {
+            return Err(PulseError::validation(
+                "assignment_acknowledgement_mismatch",
+                "acknowledgement does not bind the exact saga lease, session, packet and delivery",
+            ));
+        }
+        let delivery = self.store.with_state(false, |state| {
+            state.deliveries.get(delivery_id).cloned().ok_or_else(|| {
+                PulseError::validation(
+                    "assignment_acknowledgement_mismatch",
+                    "acknowledgement delivery does not exist",
+                )
+            })
+        })?;
+        if delivery.saga_id != saga_id
+            || delivery.session_id != session_id
+            || delivery.state != DeliveryState::Delivered
+        {
+            return Err(PulseError::validation(
+                "assignment_acknowledgement_mismatch",
+                "acknowledgement delivery is not the delivered record for this saga session",
+            ));
+        }
+        self.assignment_acknowledge(saga_id, acknowledgement_id)
+    }
+
     fn assignment_acknowledge(
         &self,
         saga_id: &str,
         acknowledgement_id: &str,
     ) -> Result<DaemonResponse> {
+        let _saga_guard = self
+            .store
+            .acquire_idempotency(&format!("assignment-saga:{saga_id}"))?;
         if acknowledgement_id.trim().is_empty() {
             return Err(PulseError::validation(
                 "assignment_acknowledgement_invalid",
@@ -2299,7 +2702,21 @@ impl DaemonApplication {
                 })
         })?;
         if saga.state == AssignmentSagaState::Activated {
+            if saga.acknowledgement_id.as_deref() != Some(acknowledgement_id) {
+                return Err(PulseError::validation(
+                    "assignment_acknowledgement_conflict",
+                    "activated assignment is bound to a different acknowledgement",
+                ));
+            }
             return Ok(DaemonResponse::Assignment { saga });
+        }
+        if let Some(existing_acknowledgement_id) = saga.acknowledgement_id.as_deref() {
+            if existing_acknowledgement_id != acknowledgement_id {
+                return Err(PulseError::validation(
+                    "assignment_acknowledgement_conflict",
+                    "assignment saga is already bound to a different acknowledgement",
+                ));
+            }
         }
         if saga.state != AssignmentSagaState::BootstrapDelivered
             && saga.state != AssignmentSagaState::Acknowledged

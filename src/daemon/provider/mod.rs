@@ -17,7 +17,6 @@ pub struct ProviderCapabilities {
     pub send: bool,
     pub observe: bool,
     pub interrupt: bool,
-    pub close: bool,
     #[serde(default)]
     pub native_tools: BTreeSet<String>,
 }

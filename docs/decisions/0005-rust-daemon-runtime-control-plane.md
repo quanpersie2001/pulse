@@ -112,11 +112,14 @@ recoverable ledger.
 Linux, macOS and Windows are Tier-1 targets:
 
 - Linux uses a dedicated process group and `/proc` boot/start identity.
-- macOS uses a dedicated process group and a proven public process-start marker
-  plus executable identity; formatted `ps` output is not identity proof.
+- macOS uses a dedicated process group and a proven public process-start marker.
+  The authoritative identity tuple is `(pid, platform, start-marker,
+  process-group)`; executable observations remain diagnostic because macOS can
+  report unstable aliases for the same live process. Formatted `ps` output is
+  not identity proof.
 - Windows assigns the child to an owned Job Object before execution continues,
-  records creation/job/executable identity and uses the Job Object for
-  whole-tree termination.
+  records creation/job identity plus diagnostic executable metadata, and uses
+  the Job Object for whole-tree termination.
 
 Insufficient identity proof fails closed before launch.
 

@@ -120,7 +120,7 @@ fn local_protocol_rejects_mismatch_before_mutation_and_shutdowns_cleanly() {
     match handshake {
         DaemonResponse::Handshake { capabilities, .. } => {
             assert!(capabilities.contains(&"session_resume_v1".to_string()));
-            assert!(!capabilities.contains(&"session_attach_v1".to_string()));
+            assert!(capabilities.contains(&"session_attach_v1".to_string()));
         }
         other => panic!("unexpected handshake response: {other:?}"),
     }
@@ -152,4 +152,34 @@ fn local_protocol_rejects_mismatch_before_mutation_and_shutdowns_cleanly() {
             .count(),
         1
     );
+}
+
+#[test]
+fn local_protocol_rejects_unknown_required_capability_before_mutation() {
+    let home = tempfile::tempdir().unwrap();
+    let store = StateStore::new(home.path());
+    let server_store = store.clone();
+    let server = std::thread::spawn(move || local::serve(server_store));
+    local::wait_until_ready(&store, Duration::from_secs(5)).unwrap();
+    let client = LocalClient::discover(&store).unwrap();
+    let mut request = RequestEnvelope::new(
+        DaemonRequest::ProjectOpen {
+            root: home.path().to_string_lossy().to_string(),
+        },
+        "unknown-required-capability",
+    );
+    request.required_capabilities = vec!["not_a_daemon_capability".to_string()];
+    let response = client.request(request).unwrap();
+    assert_eq!(
+        response.response.unwrap_err().code,
+        "daemon_capability_missing"
+    );
+    assert!(store.load().unwrap().projects.is_empty());
+    client
+        .request(RequestEnvelope::new(
+            DaemonRequest::Shutdown,
+            "stop-capability-parity",
+        ))
+        .unwrap();
+    server.join().unwrap().unwrap();
 }

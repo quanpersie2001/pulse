@@ -145,7 +145,7 @@ pub fn terminate_process_group(identity: &NativeProcessIdentity, executable: &Pa
     if !process_identity_matches(identity, executable)? {
         return Err(PulseError::validation(
             "managed_process_identity_mismatch",
-            "PID/start/process-group/executable identity does not match the managed process",
+            "PID/platform/start-marker/process-group identity does not match the managed process",
         ));
     }
     #[cfg(any(target_os = "linux", target_os = "macos"))]
