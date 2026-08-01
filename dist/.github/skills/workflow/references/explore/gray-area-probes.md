@@ -52,8 +52,8 @@ Select only probes that are genuinely relevant to the confirmed work boundary.
 
 ## RUNTIME — Operations and workflow behavior
 
-- What runtime state, CLI command, or process currently owns the behavior?
-- What state mirrors or generated views must remain aligned?
+- What daemon posture, CLI command, or process currently owns the behavior?
+- What state mirrors or graph projections must remain aligned?
 - What failure/recovery paths exist today?
 - What concurrency, locking, reservation, or idempotency behavior matters?
 - What operational evidence is missing?

@@ -7,7 +7,7 @@ This document defines the vocabulary the `pulse:workflow` router uses when it ta
 The target canonical metadata source is:
 
 ```text
-.pulse/workgraph/items.jsonl
+.pulse/workgraph/nodes/
 ```
 
 The router talks about work items in a way that matches that model.
@@ -18,17 +18,13 @@ Pulse v2 uses these item kinds:
 
 - `EPIC`
 - `STORY`
-- `TASK`
-- `BUG`
+- `TICKET`
+- `DECISION`
 
 ## Status model
 
-Canonical statuses:
-
-- `OPEN`
-- `IN_PROGRESS`
-- `BLOCKED`
-- `CLOSED`
+Canonical statuses are `DRAFT`, `SHAPED`, `READY`, `ACTIVE`, `VERIFYING`,
+`REWORK`, `BLOCKED`, `DONE`, `CANCELLED`, and `SUPERSEDED`.
 
 `BLOCKED` is for external blockers.
 Dependency blocking is derived state, not a separate canonical status requirement.
@@ -39,17 +35,20 @@ Hierarchy and dependency are separate concepts.
 
 - an `EPIC` is the top-level capability boundary
 - a `STORY` belongs to an epic
-- a `TASK` or `BUG` belongs to a story
+- a `Ticket` belongs to a story
 - dependencies may exist across epic boundaries
 
 ## Ready semantics
 
-A work item is ready when all are true:
+A Ticket is executable only when all are true:
 
-- the item is `OPEN`
+- the canonical item status is `READY`
 - it has no external `blocked_reason`
-- every dependency is `CLOSED`
+- every dependency is `DONE`
 - the current workflow has passed the required approval gate for execution
+
+Preparation and in-progress statuses are not executable; only `READY` is
+executable.
 
 Only dependency edges participate in readiness checks.
 Traceability links must not change readiness.
@@ -98,7 +97,7 @@ Pulse v2 deliberately separates durable responsibility from short-lived executio
 
 ### Reservation
 
-- stored in runtime state, not canonical item metadata
+- stored in daemon posture, not canonical item metadata
 - expresses the current execution lease
 - prevents two workers from doing the same work at once
 
@@ -114,7 +113,7 @@ Typical attached paths include:
 
 ## Router implications
 
-- `plan` should produce lowercase `plan.md` shapes and materialize approved current-slice items through `node .opencode/skills/workflow/scripts/pulse.mjs workgraph`, never by hand-editing `.pulse/workgraph/items.jsonl`.
-- `validate` should test whether the Gate 2-approved `plan.md` and materialized TASK/BUG items are ready for execution, using `node .opencode/skills/workflow/scripts/pulse.mjs workgraph` output rather than hand-editing `.pulse/workgraph/items.jsonl`.
+- `plan` should produce lowercase `plan.md` shapes and materialize approved current-slice items through supported Rust `pulse work` commands, never by hand-editing `.pulse/workgraph/nodes/`.
+- `validate` should test whether the Gate 2-approved `plan.md` and materialized Ticket items are ready for execution, using `pulse work` output rather than hand-editing `.pulse/workgraph/nodes/`.
 - `swarm` and `execute` should respect owner and reservation boundaries.
 - `review` and `compound` should consume verification and lifecycle evidence rather than redefining metadata.

@@ -114,7 +114,6 @@ pub fn load_existing(repo_root: &Path) -> Result<Option<DocsRegistryEnvelope>> {
             "docs registry exists but evidence manifest is missing",
         )
     })?;
-    recover_prepared_transactions(repo_root)?;
     Ok(Some(load_existing_registry(
         repo_root,
         &evidence.repository_id,

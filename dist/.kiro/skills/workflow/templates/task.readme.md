@@ -81,7 +81,7 @@ Runnable checks with expected outcomes:
 
 Explicit artifact paths or concrete records validation/execution must produce:
 
-- `works/epics/<epic>/<story>/verification/{{id}}.md` — <evidence to capture>
+- `works/<node-id>/verification/{{id}}.md` — <evidence to capture>
 
 ## Caveats / Risks
 

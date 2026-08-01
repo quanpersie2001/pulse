@@ -3,8 +3,8 @@ use super::*;
 impl JsonGraphStore {
     pub fn bootstrap(&self) -> PulseResult<()> {
         let _guard = WriteGuard::acquire(&self.repo_root)?;
-        self.bootstrap_unlocked()?;
         recover_prepared_transactions(&self.repo_root)?;
+        self.bootstrap_unlocked()?;
         Ok(())
     }
 
@@ -520,7 +520,9 @@ impl WorkgraphBootstrapInspection {
     }
 }
 
-fn classify_workgraph_bootstrap_state(wg: &Path) -> PulseResult<WorkgraphBootstrapState> {
+pub(super) fn classify_workgraph_bootstrap_state(
+    wg: &Path,
+) -> PulseResult<WorkgraphBootstrapState> {
     let inspection = inspect_workgraph_bootstrap_state(wg)?;
     if !inspection.has_only_safe_entries {
         return Ok(WorkgraphBootstrapState::UnexpectedPartialState);

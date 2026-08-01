@@ -1,14 +1,20 @@
 # Phase 2: Rust Daemon Realignment Implementation Gap
 
-> **Status:** Phase 2 realignment acceptance implemented and verified. G9
-> HTTP/WebSocket and desktop adapters remain explicitly later client work; the
-> shared MCP adapter and policy-gated session mailbox are implemented. Bootstrap
-> delivery now persists a deterministic delivery intent (delivery id, exact
-> payload and provider request correlation) before provider I/O; restart
-> recovery fails closed in a durable `DeliveryPending`/uncertain state when the
-> provider outcome cannot be proven — it never blindly re-sends and never
-> releases a possibly-valid assignment. Typed acknowledgement remains a separate
-> later step; activation is never inferred from provider state.
+> **Current status (2026-08-01):** Phase 2 realignment implementation is
+> substantially present and focused behavior-tested, but acceptance remains
+> **Verifying**, not complete. G9 HTTP/WebSocket and desktop adapters remain
+> explicitly later client work; the shared MCP adapter and policy-gated session
+> mailbox are implemented. Bootstrap delivery now persists a deterministic
+> delivery intent (delivery id, exact payload and provider request correlation)
+> before provider I/O; restart recovery fails closed in a durable
+> `DeliveryPending`/uncertain state when the provider outcome cannot be proven —
+> it never blindly re-sends and never releases a possibly-valid assignment.
+> Typed acknowledgement remains separate; activation is never inferred from
+> provider state. The complete Phase 3 close gate is not installed, no
+> full-suite-green result is claimed here, and daemon whole-snapshot boundedness,
+> Windows native acceptance coverage and `repository_id` naming remain
+> deferred/risk items. Reservation TTL recovery currently covers
+> `Reserved`/`Acknowledged`, not `Active`.
 >
 > **Purpose:** reconcile the implemented Phase 2 runner prototype with the
 > accepted Core + Rust Daemon architecture.
@@ -121,7 +127,28 @@ replacement is proven:
 
 Do not add translation layers solely to keep these names alive.
 
-## 4. Missing target capabilities
+### 3.4 Current capability and evidence matrix
+
+This is the reconciled current snapshot. `Implemented` means the capability is
+present in the current tree; `Behavior-tested` identifies focused/source
+evidence that was inspected for this snapshot. Neither label is a claim that
+the complete Phase 3 close gate or full test suite is green.
+
+| Capability | Current disposition | Source evidence | Test/evidence path |
+|---|---|---|---|
+| Daemon ownership, local protocol and runtime application boundary | Implemented; behavior-tested | [`src/daemon/application/mod.rs`](../src/daemon/application/mod.rs), [`src/daemon/protocol/mod.rs`](../src/daemon/protocol/mod.rs), [`src/daemon/transport/local.rs`](../src/daemon/transport/local.rs) | [`tests/daemon/application_contract.rs`](../tests/daemon/application_contract.rs), [`tests/daemon/local_protocol.rs`](../tests/daemon/local_protocol.rs) |
+| Project/Workspace/Session/Provider/ProcessOwner/timeline ownership | Implemented; behavior-tested | [`src/daemon/project/mod.rs`](../src/daemon/project/mod.rs), [`src/daemon/workspace/mod.rs`](../src/daemon/workspace/mod.rs), [`src/daemon/session/mod.rs`](../src/daemon/session/mod.rs), [`src/daemon/provider/mod.rs`](../src/daemon/provider/mod.rs), [`src/daemon/process/mod.rs`](../src/daemon/process/mod.rs), [`src/daemon/timeline/mod.rs`](../src/daemon/timeline/mod.rs) | [`tests/daemon/application_contract.rs`](../tests/daemon/application_contract.rs) |
+| Assignment delivery intent, external-effect uncertainty and delayed provider events | Implemented; behavior-tested | [`src/daemon/assignment/mod.rs`](../src/daemon/assignment/mod.rs), [`src/daemon/persistence/mod.rs`](../src/daemon/persistence/mod.rs), [`src/daemon/process/mod.rs`](../src/daemon/process/mod.rs) | [`tests/daemon/application_contract.rs`](../tests/daemon/application_contract.rs) (`acknowledged_turn_commit_failure_is_unknown_and_retry_is_blocked`, `delayed_provider_event_is_durable_without_session_or_timeline_read`) |
+| Core reservation, typed acknowledgement and proof-driven verification state | Implemented; behavior-tested; `Passed` remains `Verifying` until close gate | [`src/kernel/reservation.rs`](../src/kernel/reservation.rs), [`src/kernel/completion.rs`](../src/kernel/completion.rs), [`src/daemon/assignment/mod.rs`](../src/daemon/assignment/mod.rs) | [`tests/daemon/application_contract.rs`](../tests/daemon/application_contract.rs), [`tests/graph/lifecycle.rs`](../tests/graph/lifecycle.rs) |
+| Hidden supervisor/direct provider launcher removal and bootstrap/read-side-effect boundaries | Implemented; source/architecture evidence | [`src/bin/pulse.rs`](../src/bin/pulse.rs), [`src/daemon/mod.rs`](../src/daemon/mod.rs), [`src/graph/store/bootstrap.rs`](../src/graph/store/bootstrap.rs) | [`tests/graph/architecture_guards.rs`](../tests/graph/architecture_guards.rs), [`tests/public_api_contract.rs`](../tests/public_api_contract.rs) |
+| Reservation TTL recovery for `Reserved`/`Acknowledged` | Implemented; `Active` TTL recovery not implemented | [`src/daemon/assignment/mod.rs`](../src/daemon/assignment/mod.rs), [`src/kernel/reservation.rs`](../src/kernel/reservation.rs) | [`tests/daemon/application_contract.rs`](../tests/daemon/application_contract.rs), [`tests/graph/reservation.rs`](../tests/graph/reservation.rs) |
+| Daemon whole-snapshot boundedness, Windows native acceptance coverage and `repository_id` naming | Deferred/risk or still unverified | Current source/test coverage is not sufficient to close these claims | No full acceptance evidence recorded here |
+
+## 4. Historical gap inventory (superseded current-state claims)
+
+The table below preserves the proposal's original gap snapshot for historical
+traceability. Its `Current state` column is not a current repository status
+claim; use §3.4 for the reconciled status.
 
 | Capability | Current state | Gap |
 |---|---|---|

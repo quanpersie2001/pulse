@@ -62,12 +62,12 @@ Each tend cycle:
 1. Read new events from coordination surface.
 2. Validate required fields on each event.
 3. Verify item transition is valid in workgraph metadata.
-4. Update worker status in `.pulse/runtime/STATE.md`.
+4. Record worker status in the work artifact.
 5. For `[BLOCKED]`: acknowledge, decide next action (reroute, unblock, escalate).
 6. For `[FILE CONFLICT]`: check reservation ownership, resolve or escalate.
 7. For `[READY_TO_COMMIT]`: verify file list, grant or hold slot.
 8. For `[DONE]`: validate completion report, release worker registration.
-9. Re-check `node .rovodev/skills/workflow/scripts/pulse.mjs ready --repo-root <repo> --json` after significant transitions.
+9. Re-check `pulse work list --repo-root <repo> --json` after significant transitions.
 10. Refresh reservation posture when conflicts or stalled workers appear.
 11. Check for newly unblocked work to spawn additional workers if safe.
 

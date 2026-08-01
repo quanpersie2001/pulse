@@ -222,6 +222,12 @@ impl DaemonRequest {
             Self::Shutdown
             | Self::ProjectArchive { .. }
             | Self::SessionCommunicationGrant { .. } => "runtime.admin",
+            Self::ProjectOpen { .. } => "runtime.project",
+            Self::WorkspaceCreate { .. }
+            | Self::WorkspaceArchive { .. }
+            | Self::WorkspaceRestore { .. } => "runtime.workspace",
+            Self::SessionCreate { .. } => "runtime.session",
+            Self::AssignmentStart { .. } => "runtime.assignment",
             Self::SessionResume { .. } | Self::SessionForceClose { .. } => "runtime.admin",
             Self::Handshake { .. }
             | Self::Status

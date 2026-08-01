@@ -56,10 +56,10 @@ This is not the path for trivial non-feature corrections already covered by ligh
 | Clarifying questions | Ask one question at a time to uncover purpose, constraints, and success criteria | Validated direction inputs |
 | Approaches | Present 2–3 viable directions with trade-offs | Chosen direction |
 | Brief sections | Present the work brief in sections and validate incrementally | Approved work direction |
-| Brief | Write the approved direction to `works/epics/<epic-id>-<epic-slug>/<story-id>-<story-slug>/work-brief.md` using [work-brief.template.md](work-brief.template.md) | Stable brief for downstream workflow |
+| Brief | Write the approved direction to `works/<story-id>/work-brief.md` using [work-brief.template.md](work-brief.template.md) | Stable brief for downstream workflow |
 | Self-review | Run the work-brief reviewer and fix serious issues | Downstream-ready work brief |
 | User review gate | Wait for explicit approval on the written brief | Approved handoff artifact |
-| Handoff | Update runtime mirrors when recording posture and recommend `pulse:workflow explore` as the next manual step | Clean pipeline transition |
+| Handoff | Record posture in the work artifact and recommend `pulse:workflow explore` as the next manual step | Clean pipeline transition |
 
 ---
 
@@ -73,7 +73,7 @@ Create a task for each item and complete them in order:
 4. **Ask clarifying questions** — one at a time; purpose, constraints, and success criteria
 5. **Propose 2–3 directions** — with trade-offs and your recommendation
 6. **Present brief sections** — in sections scaled to complexity; get user approval after each section when needed
-7. **Write work brief** — save the approved direction to `works/epics/<epic-id>-<epic-slug>/<story-id>-<story-slug>/work-brief.md` and note the path
+7. **Write work brief** — save the approved direction to `works/<story-id>/work-brief.md` and note the path
 8. **Work-brief self-review** — independent check for placeholders, contradictions, scope, implementation leakage, and ambiguity
 9. **User reviews work brief** — ask the user to confirm before proceeding
 10. **Handoff to `pulse:workflow explore`** — recommend `pulse:workflow explore` as the next manual step; do not invoke it by default
@@ -114,7 +114,7 @@ digraph brainstorming {
 }
 ```
 
-**The terminal state is an approved `work-brief.md` under `works/` plus runtime mirror updates when workflow posture is recorded, with `pulse:workflow explore` recommended as the next manual step.** Do NOT invoke planning, validating, or any execution command by default. Do not invoke `pulse:workflow explore` unless the user explicitly asks to continue.
+**The terminal state is an approved `work-brief.md` under `works/` plus any work-artifact notes, with `pulse:workflow explore` recommended as the next manual step.** Do NOT invoke planning, validating, or any execution command by default. Do not invoke `pulse:workflow explore` unless the user explicitly asks to continue.
 
 ---
 
@@ -263,7 +263,7 @@ Once the direction is clear, present the work brief sections:
 
 After the user approves the direction and brief content, write the work brief.
 
-**Path:** target story `work-brief.md` under `works/`, typically `works/epics/<epic-id>-<epic-slug>/<story-id>-<story-slug>/work-brief.md`
+**Path:** target story `work-brief.md` under `works/<story-id>/work-brief.md`
 
 **Template:** use [work-brief.template.md](work-brief.template.md) from this command directory.
 
@@ -322,7 +322,7 @@ Wait for the user's response. If they request changes, make them, rerun the self
 
 After user work-brief approval:
 
-1. Update `.pulse/runtime/state.json` and `.pulse/runtime/STATE.md` together if recording workflow posture:
+1. Record the corresponding work-artifact note together if recording workflow posture:
    ```
    Current: brainstorming complete for <work>
    Work brief: <works story work-brief.md path>
@@ -335,7 +335,7 @@ After user work-brief approval:
 
 <HARD-GATE>
 Do NOT create work items, write code, plan, validate, execute, or chain into another workflow command. The only recommended next manual command is `pulse:workflow explore`.
-The terminal state of this command is a written, approved `work-brief.md` and synchronized runtime state when runtime posture is recorded.
+The terminal state of this command is a written, approved `work-brief.md` and synchronized work-artifact notes when needed.
 </HARD-GATE>
 
 ---

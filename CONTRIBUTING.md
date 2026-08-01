@@ -1,7 +1,7 @@
 # Contributing
 
 This repo packages one plugin, `pulse`, with a single public workflow surface: `pulse:workflow`.
-Use this guide when editing router commands, runtime scripts, manifests, or public docs.
+Use this guide when editing router commands, manifests, or public docs. The Rust CLI and daemon own mutable runtime and workgraph state.
 
 ## Repository Truth
 
@@ -9,7 +9,7 @@ These paths matter most:
 
 - [`skills/workflow/`](skills/workflow) is the canonical source of public workflow behavior
 - [`skills/workflow/references/`](skills/workflow/references) owns command-level behavior docs
-- [`skills/workflow/scripts/`](skills/workflow/scripts) owns canonical runtime CLI logic
+- the Rust CLI and daemon own canonical runtime and workgraph logic
 - [`.codex-plugin/plugin.json`](.codex-plugin/plugin.json) is the Codex package manifest
 - [`.claude-plugin/plugin.json`](.claude-plugin/plugin.json) is the Claude plugin manifest
 - [`.mcp.json`](.mcp.json) is the packaged MCP manifest for shared runtime servers
@@ -35,14 +35,13 @@ skills/workflow/
 ├── SKILL.md
 ├── commands/
 ├── references/
-├── templates/
-└── scripts/
+└── templates/
 ```
 
-Runtime status, readiness, and reservation operations use the rendered `{{pulse_command}}` command from the installed workflow skill. Canonical state lives in:
+Runtime status, readiness, and session/lease operations use the Rust `pulse` CLI and daemon. Canonical graph state lives in:
 
-- `.pulse/runtime/`
-- `.pulse/workgraph/items.jsonl`
+- Rust daemon state reported by `pulse daemon status`
+- `.pulse/workgraph/nodes/`
 
 ## SKILL.md Format
 
@@ -76,7 +75,7 @@ Operational instructions.
 
 Pulse is documented and operated as one router with subcommands:
 
-- `pulse:workflow onboard`
+- `pulse:workflow use`
 - `pulse:workflow explore`
 - `pulse:workflow brainstorm`
 - `pulse:workflow plan`
@@ -95,14 +94,18 @@ Pulse is documented and operated as one router with subcommands:
 - `dev-note-distil`
 - `prompt-leverage`
 
-### Runtime command
+### Runtime authority
 
-Use `{{pulse_command}}` for status, readiness, and reservations, for example:
+Use Rust `pulse` commands for status, readiness, and workgraph operations, for example:
 
 ```bash
-{{pulse_command}} ready --repo-root <repo> --json
-{{pulse_command}} reservation list --repo-root <repo> --active-only --json
+pulse work list --repo-root <repo> --json
+pulse daemon status
 ```
+
+The packaged plugin assumes the Rust `pulse` CLI is already available on the
+target environment's `PATH`; it does not install the binary. Binary
+installation and distribution remain an unresolved product decision.
 
 ## Adding or Changing Router Commands
 
@@ -128,10 +131,10 @@ Minimum verification:
 
 For runtime changes, verify:
 
-- `pulse:workflow use` initializes expected `.pulse/runtime` and `.pulse/workgraph` layout when needed and restores session context.
-- `pulse:workflow onboard` still performs explicit bootstrap/remediation correctly when invoked directly.
-- `{{pulse_command}} status --repo-root <repo> --json` returns valid scout state.
-- `{{pulse_command}} ready --repo-root <repo> --json` and reservation commands produce expected JSON outputs.
+- `pulse:workflow use` provides guidance only and does not initialize or repair state.
+- `pulse graph bootstrap --repo-root <repo> --json` explicitly initializes the supported graph layout.
+- `pulse graph validate --repo-root <repo> --json` validates graph state.
+- `pulse daemon start` and `pulse daemon status` explicitly manage and inspect daemon runtime.
 
 ## Documentation Rules
 

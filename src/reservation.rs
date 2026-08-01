@@ -294,3 +294,11 @@ pub struct ActivateReservationArgs {
     pub runtime_binding: RuntimeBinding,
     pub acknowledgement: AssignmentAcknowledgement,
 }
+
+#[derive(Debug, Clone)]
+pub struct AcknowledgeReservationArgs {
+    pub lease_id: String,
+    pub actor: String,
+    pub runtime_binding: RuntimeBinding,
+    pub acknowledgement: AssignmentAcknowledgement,
+}

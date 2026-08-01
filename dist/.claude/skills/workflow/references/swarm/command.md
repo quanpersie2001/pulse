@@ -48,11 +48,11 @@ Readiness -> Surface Init -> Spawn -> Tend Loop -> Pause or Complete
 2. Inspect executable readiness:
 
 ```bash
-node .claude/skills/workflow/scripts/pulse.mjs ready --repo-root <repo> --json
+pulse work list --repo-root <repo> --json
 ```
 
-3. Inspect full graph posture for active epic/story from `.pulse/workgraph/views/graph.json`.
-4. Update `.pulse/runtime/state.json` and `.pulse/runtime/STATE.md` with active coordinator intent.
+3. Inspect full graph posture for active epic/story from Rust `pulse work` output.
+4. Record the corresponding work-artifact note with active coordinator intent.
 
 Hard stop if approval/slice boundaries conflict across artifacts/state.
 
@@ -88,24 +88,24 @@ Adapter mapping:
 - Codex: spawn native subagents, parent thread is coordination surface
 - Other: use the active coordination surface defined by the runtime
 
-Do not pre-assign permanent tracks. Workers self-route from live `node .claude/skills/workflow/scripts/pulse.mjs ready --repo-root <repo> --json` output after startup checks.
+Do not pre-assign permanent tracks. Workers self-route from live `pulse work list --repo-root <repo> --json` output after startup checks.
 
-Immediately register each worker in `.pulse/runtime/STATE.md` under `## Active Workers`.
+Record each worker in the coordinator work artifact.
 
 ### Phase 4 — Tend loop (continuous while actionable work exists)
 
-Stay in tending mode while any worker is active, blocked, expected to report, or while `node .claude/skills/workflow/scripts/pulse.mjs ready --repo-root <repo> --json` still returns executable work.
+Stay in tending mode while any worker is active, blocked, expected to report, or while `pulse work list --repo-root <repo> --json` still returns executable work.
 
 Each cycle must:
 
 1. Process new worker events and validate required fields.
-2. Update worker status in `.pulse/runtime/STATE.md`.
+2. Record worker status in the work artifact.
 3. Respond immediately to blockers/conflicts.
-4. Re-check `node .claude/skills/workflow/scripts/pulse.mjs ready --repo-root <repo> --json` and active workgraph posture after significant transitions.
+4. Re-check `pulse work list --repo-root <repo> --json` and active workgraph posture after significant transitions.
 5. Refresh reservation posture when conflicts or stalled workers appear:
 
 ```bash
-node .claude/skills/workflow/scripts/pulse.mjs reservation list --repo-root <repo> --active-only --json
+pulse daemon status
 ```
 
 6. Enforce one active commit slot on shared branch at a time.
@@ -126,8 +126,8 @@ If runtime cannot wake/poll and no actionable signal exists, run one full tend c
 
 If context is critical or coordinator must stop:
 
-1. Write `.pulse/runtime/handoffs/coordinator.json`.
-2. Register in `.pulse/runtime/handoffs/manifest.json`.
+1. Record coordinator posture in the owning work artifact.
+2. Record the coordinator handoff in the owning work artifact.
 3. Broadcast paused-not-complete summary with resume instructions.
 4. Preserve worker roster, blockers, reservations, and commit-slot posture.
 
@@ -144,7 +144,7 @@ Coordinator may reassign orphaned worker handoff only after confirming:
 1. prior worker inactivity
 2. reservation transfer safety
 3. commit queue transfer safety
-4. manifest + owner handoff metadata updated in `.pulse/runtime/handoffs/manifest.json`
+4. owner handoff note updated in the work artifact; live posture confirmed with `pulse daemon status`
 
 ### Phase 6 — Completion determination
 
@@ -154,7 +154,7 @@ Completion requires all:
 
 - no executable current-slice work remains
 - no unresolved blockers/conflicts for active slice
-- approved shape artifacts and `.pulse/runtime/STATE.md` agree on whether later slices remain
+- approved shape artifacts and `pulse daemon status` agree on whether later slices remain
 
 Then route:
 

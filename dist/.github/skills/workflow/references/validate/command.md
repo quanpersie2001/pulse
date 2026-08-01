@@ -17,11 +17,11 @@ Produce a precise execution-readiness decision for the approved current slice, e
 Validate must prove:
 
 - Gate 2 approved `plan.md` exists and is the active planning artifact
-- approved TASK/BUG materialization required by the plan is complete
-- runtime mirrors, story artifacts, and workgraph metadata point to the same active slice
+- approved Ticket materialization required by the plan is complete
+- daemon posture, story artifacts, and workgraph metadata point to the same active slice
 - planned work still fits the current repository reality
 - high-impact assumptions are proven or routed to a bounded probe/spike
-- TASK/BUG contracts contain enough file scope, dependency, verification, and evidence detail for execution
+- Ticket contracts contain enough file scope, dependency, verification, and evidence detail for execution
 
 ## Entry criteria
 
@@ -29,15 +29,15 @@ Run `pulse:workflow validate` when:
 
 - `pulse:workflow plan` has completed Gate 2 approval
 - story `plan.md` is approved and current
-- approved TASK/BUG work items have been materialized through `node .github/skills/workflow/scripts/pulse.mjs workgraph` when the plan requires them
+- approved Ticket work items have been materialized through `pulse work` when the plan requires them
 - execution has not started for the selected slice
 - runtime/workgraph posture can identify the active epic/story and current slice
 
 Do not run when:
 
 - Gate 2 approval is pending, ambiguous, rejected, or not recorded
-- `plan.md`, runtime mirrors, and workgraph metadata disagree about active work
-- approved TASK/BUG materialization from `plan.md` is incomplete
+- `plan.md`, daemon posture, and workgraph metadata disagree about active work
+- approved Ticket materialization from `plan.md` is incomplete
 - onboarding/readiness is stale or blocked
 - the user is asking to implement, fix, review, or merge rather than prove readiness
 
@@ -54,38 +54,38 @@ Read only the artifacts needed to prove readiness for the active story/slice. Va
 
 ### Minimum story inputs
 
-- `works/epics/<epic-id>-<epic-slug>/<story-id>-<story-slug>/discovery.md`
-- `works/epics/<epic-id>-<epic-slug>/<story-id>-<story-slug>/solution-design.md`
-- approved `works/epics/<epic-id>-<epic-slug>/<story-id>-<story-slug>/plan.md`
-- TASK/BUG README files returned by workgraph `content_path` for the current slice
-- TASK/BUG verification paths returned by workgraph `verification_path`, when already present or required
+- `works/<story-id>/discovery.md`
+- `works/<story-id>/solution-design.md`
+- approved `works/<story-id>/plan.md`
+- Ticket README files under each returned `value.content_dir` for the current slice
+- declared Ticket verification evidence paths, when already present or required
 
 ### Runtime and workgraph inputs
 
-- `.pulse/runtime/state.json`
-- `.pulse/runtime/STATE.md`
-- `node .github/skills/workflow/scripts/pulse.mjs status --repo-root <repo> --json`
-- `node .github/skills/workflow/scripts/pulse.mjs workgraph list --repo-root <repo> --json` or a narrower workgraph read when supported
-- `node .github/skills/workflow/scripts/pulse.mjs workgraph doctor --repo-root <repo> --json`
+- daemon posture from `pulse daemon status`
+- the owning work artifact
+- `pulse daemon status`
+- `pulse work list --repo-root <repo> --json` or a narrower workgraph read when supported
+- `pulse graph validate --repo-root <repo> --json`
 
 ### Optional targeted inputs
 
-- relevant repo files named by `plan.md` or TASK/BUG README file scope
+- relevant repo files named by `plan.md` or Ticket README file scope
 - relevant test/config files needed to prove commands exist and are runnable
 - docs paths named by the docs impact section when docs changes are part of the current slice
 - story `references/*.md` only when `discovery.md`, `solution-design.md`, or `plan.md` cite them for a validation-critical assumption
 
-Do not hand-edit `.pulse/workgraph/items.jsonl`. Treat it as database-like storage behind `node .github/skills/workflow/scripts/pulse.mjs workgraph`.
+Do not hand-edit `.pulse/workgraph/nodes/`. Treat it as database-like storage behind supported Rust `pulse work` commands.
 
 ## Command-local references
 
-- [runtime-appendix.md](runtime-appendix.md) — orientation fields, consistency gate, reality gate, feasibility matrix, TASK/BUG contract checklist, and probe protocol
+- [runtime-appendix.md](runtime-appendix.md) — orientation fields, consistency gate, reality gate, feasibility matrix, Ticket contract checklist, and probe protocol
 
 ## Core contracts
 
 ### Gate 2 is required input
 
-Validate must not mark Gate 2 approved, invent a plan approval, or materialize TASK/BUG items that planning failed to create. See [Phase 0](#phase-0--orientation-and-gate-2-proof) for enforcement.
+Validate must not mark Gate 2 approved, invent a plan approval, or materialize Ticket items that planning failed to create. See [Phase 0](#phase-0--orientation-and-gate-2-proof) for enforcement.
 
 ### Plan and design are immutable during validation
 
@@ -93,7 +93,7 @@ Validate may test, inspect, and locally clarify execution readiness. It must not
 
 ### Workgraph via CLI only
 
-Use `node .github/skills/workflow/scripts/pulse.mjs workgraph ... --json` for reads and consistency checks. Do not treat generated views or raw JSONL as writable truth. Validate must not create speculative items, add unapproved edges, or close work. Use [workgraph-model.md](../shared/workgraph-model.md) for semantics.
+Use `pulse work ... --json` for reads and consistency checks. Do not treat graph projections or generated graph data as writable truth. Validate must not create speculative items, add unapproved edges, or close work. Use [workgraph-model.md](../shared/workgraph-model.md) for semantics.
 
 ### Probes are feasibility proof, not implementation
 
@@ -109,28 +109,28 @@ Use the orientation fields in [runtime-appendix.md](runtime-appendix.md#a-orient
 - active epic/story and selected current slice
 - approved `plan.md` path and Gate 2 approval source
 - referenced `solution-design.md` decision IDs
-- materialized TASK/BUG IDs for the current slice
-- runtime mirror sync status: `in-sync`, `out-of-sync`, or `missing`
-- workgraph doctor status
+- materialized Ticket IDs for the current slice
+- daemon status confirmation when runtime work is involved
+- `pulse graph validate --repo-root <repo> --json` status
 - goal of the current slice
 
 Hard stop when:
 
 - `plan.md` is missing or not approved
 - Gate 2 approval is not explicit
-- approved TASK/BUG materialization required by the plan is incomplete
-- runtime mirrors conflict with story artifacts or workgraph metadata
-- workgraph doctor reports unresolved issues outside a local obvious repair
+- approved Ticket materialization required by the plan is incomplete
+- daemon posture conflicts with story artifacts or workgraph metadata
+- `pulse graph validate` reports unresolved issues outside a local obvious repair
 
 ### Phase 1 — Runtime and workgraph consistency gate
 
 Use the runtime/workgraph consistency template in [runtime-appendix.md](runtime-appendix.md#b-runtimeworkgraph-consistency-gate), then verify the active story/slice can be trusted:
 
 - runtime active epic/story/item IDs match workgraph output
-- TASK/BUG items are children of the active story
+- Ticket items are children of the active story
 - dependencies only reference existing approved items or intentional existing blockers
 - links are non-blocking traceability, not hidden dependencies
-- `content_path` and `verification_path` stay under the owning story/work content area
+- `value.content_dir` and declared evidence paths stay under the owning story/work content area
 - no active reservation or handoff conflict blocks validation
 - generated readiness posture does not contradict Gate 2 state
 
@@ -177,9 +177,9 @@ Probe timebox policy:
 - if inconclusive, stop and offer explicit options: extend, replan, constrain scope, or route to design/explore
 - never classify inconclusive as ready
 
-### Phase 4 — TASK/BUG contract gate
+### Phase 4 — Ticket contract gate
 
-Use the TASK/BUG contract checklist in [runtime-appendix.md](runtime-appendix.md#e-taskbug-contract-checklist). For each current-slice TASK/BUG, verify contract quality from workgraph output and the item README:
+Use the Ticket contract checklist in [runtime-appendix.md](runtime-appendix.md#e-taskbug-contract-checklist). For each current-slice Ticket, verify contract quality from workgraph output and the item README:
 
 - parent story is correct
 - source plan and decision refs map back to `plan.md` and `solution-design.md`
@@ -233,7 +233,7 @@ Use `ready-with-constraints` only when execution is safe if the listed constrain
 
 Execution mode guidance:
 
-- recommend `swarm` only when multiple validated TASK/BUG items can proceed safely in parallel with clear dependency/reservation boundaries
+- recommend `swarm` only when multiple validated Ticket items can proceed safely in parallel with clear dependency/reservation boundaries
 - recommend `single-worker` when the slice is small, highly coupled, sequential, or coordination overhead would exceed benefit
 
 ### Phase 7 — Gate 3 approval hard stop
@@ -253,7 +253,7 @@ Present the Gate 3 approval request with:
 
 On approval:
 
-- record Gate 3 approved state in `.pulse/runtime/STATE.md` and `.pulse/runtime/state.json`
+- record Gate 3 approved state in the work artifact and confirm live posture with `pulse daemon status`
 - set `gate: Gate 3` or the equivalent runtime gate field
 - set `gate_status: approved`
 - set `recommended_next_command` to `pulse:workflow swarm` or `pulse:workflow execute`
@@ -281,7 +281,7 @@ Validate owns:
 - runtime/workgraph consistency checks for current readiness
 - feasibility truth testing
 - assumption/probe matrix
-- TASK/BUG contract quality checks
+- Ticket contract quality checks
 - execution-readiness decision
 - Gate 3 approval request and runtime approval recording after explicit approval
 
@@ -301,8 +301,8 @@ Validate does not own:
 
 If paused near context limits:
 
-- write a validating-owned handoff snapshot under `.pulse/runtime/handoffs/`
-- include completed phase, active story/slice, TASK/BUG IDs checked, probes run, open blockers, and next probe/action
+- record a validating-owned handoff note in the owning work artifact
+- include completed phase, active story/slice, Ticket IDs checked, probes run, open blockers, and next probe/action
 - resume from Phase 0 orientation, then continue at the next incomplete phase
 
 ## Red flags
@@ -312,7 +312,7 @@ Stop if you catch yourself:
 - validating without explicit Gate 2 approval
 - treating `ready` as execution approval
 - starting implementation or broad refactor while probing
-- treating runtime mirrors as truth when artifacts or workgraph disagree
+- treating daemon posture as truth when artifacts or workgraph disagree
 - approving with unresolved high-impact assumptions
 - running structural checks before reality/feasibility clarity
 - creating or editing workgraph items instead of routing to plan
@@ -326,8 +326,7 @@ Each phase specifies its own routing. Summary:
 
 | Target | When |
 |--------|------|
-| `pulse:workflow plan` | incomplete TASK/BUG materialization; task scope/sequencing/dependency/docs/validation-plan change; reality gate fails on task decomposition |
+| `pulse:workflow plan` | incomplete Ticket materialization; task scope/sequencing/dependency/docs/validation-plan change; reality gate fails on task decomposition |
 | `pulse:workflow design` | solution decision wrong/incomplete/infeasible; reality gate fails on approved solution; probe proves plan needs different work |
 | `pulse:workflow explore` | discovery evidence missing; external/provider/security research needed |
 | `pulse:workflow use` | runtime/workgraph posture stale/blocked/conflicts; mirrors disagree with artifacts or workgraph |
-

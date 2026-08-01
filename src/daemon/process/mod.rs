@@ -4,7 +4,7 @@ mod native;
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::io::{BufRead, BufReader, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
@@ -98,6 +98,7 @@ struct OwnedChild {
     identity: native::NativeProcessIdentity,
     executable: PathBuf,
     output: Arc<ProviderOutputDispatcher>,
+    output_reader: Option<thread::JoinHandle<()>>,
 }
 
 struct ProviderOutputDispatcher {
@@ -107,6 +108,7 @@ struct ProviderOutputDispatcher {
 
 struct ProviderOutputState {
     responses: VecDeque<String>,
+    active_waiters: BTreeSet<String>,
     terminal_notifications: VecDeque<String>,
     control_notifications: VecDeque<String>,
     delta_notifications: VecDeque<String>,
@@ -128,11 +130,26 @@ struct ProviderOutputBatch {
     dropped_notifications: u64,
 }
 
+struct ActiveWaiter {
+    output: Arc<ProviderOutputDispatcher>,
+    request_id: String,
+}
+
+impl Drop for ActiveWaiter {
+    fn drop(&mut self) {
+        if let Ok(mut state) = self.output.state.lock() {
+            state.active_waiters.remove(&self.request_id);
+            self.output.wake.notify_all();
+        }
+    }
+}
+
 impl ProviderOutputDispatcher {
     fn new() -> Self {
         Self {
             state: Mutex::new(ProviderOutputState {
                 responses: VecDeque::new(),
+                active_waiters: BTreeSet::new(),
                 terminal_notifications: VecDeque::new(),
                 control_notifications: VecDeque::new(),
                 delta_notifications: VecDeque::new(),
@@ -149,13 +166,24 @@ impl ProviderOutputDispatcher {
         let mut state = self.state.lock().expect("provider output dispatcher lock");
         match classification {
             ProviderLineClass::Response => {
-                while state.responses.len() >= PROVIDER_OUTPUT_QUEUE_CAPACITY && !state.closed {
-                    state = self
-                        .wake
-                        .wait(state)
-                        .expect("provider output dispatcher lock");
-                }
                 if !state.closed {
+                    // A response without a currently waiting request cannot
+                    // be correlated indefinitely. Bound this queue by
+                    // discarding the oldest unmatched response so shutdown
+                    // cannot strand the stdout reader behind stale replies.
+                    if state.responses.len() >= PROVIDER_OUTPUT_QUEUE_CAPACITY {
+                        let evict = state.responses.iter().position(|response| {
+                            match response_request_id(response) {
+                                Some(request_id) => !state.active_waiters.contains(&request_id),
+                                None => true,
+                            }
+                        });
+                        if let Some(index) = evict {
+                            state.responses.remove(index);
+                        } else {
+                            return;
+                        }
+                    }
                     state.responses.push_back(line);
                 }
             }
@@ -204,6 +232,15 @@ impl ProviderOutputDispatcher {
             }
         }
         self.wake.notify_all();
+    }
+
+    fn register_waiter(self: &Arc<Self>, request_id: &str) -> Result<ActiveWaiter> {
+        let mut state = self.state.lock().map_err(|_| lock_poisoned())?;
+        state.active_waiters.insert(request_id.to_string());
+        Ok(ActiveWaiter {
+            output: Arc::clone(self),
+            request_id: request_id.to_string(),
+        })
     }
 
     fn close(&self) {
@@ -319,6 +356,44 @@ impl ProviderOutputDispatcher {
             dropped_notifications,
         })
     }
+
+    fn requeue_front(&self, lines: &[String]) -> Result<()> {
+        let mut state = self.state.lock().map_err(|_| lock_poisoned())?;
+        for line in lines.iter().rev() {
+            match classify_provider_line(line) {
+                ProviderLineClass::Notification {
+                    priority: NotificationPriority::Terminal,
+                } => {
+                    if state.terminal_notifications.len() >= PROVIDER_OUTPUT_QUEUE_CAPACITY {
+                        state.terminal_notifications.pop_back();
+                        state.dropped_notifications = state.dropped_notifications.saturating_add(1);
+                    }
+                    state.terminal_notifications.push_front(line.clone());
+                }
+                ProviderLineClass::Notification {
+                    priority: NotificationPriority::Control,
+                } => {
+                    if state.control_notifications.len() >= PROVIDER_OUTPUT_QUEUE_CAPACITY {
+                        state.control_notifications.pop_back();
+                        state.dropped_notifications = state.dropped_notifications.saturating_add(1);
+                    }
+                    state.control_notifications.push_front(line.clone());
+                }
+                ProviderLineClass::Notification {
+                    priority: NotificationPriority::Delta,
+                } => {
+                    if state.delta_notifications.len() >= PROVIDER_OUTPUT_QUEUE_CAPACITY {
+                        state.delta_notifications.pop_back();
+                        state.dropped_notifications = state.dropped_notifications.saturating_add(1);
+                    }
+                    state.delta_notifications.push_front(line.clone());
+                }
+                ProviderLineClass::Response | ProviderLineClass::ServerRequest(_) => {}
+            }
+        }
+        self.wake.notify_all();
+        Ok(())
+    }
 }
 
 enum ProviderLineClass {
@@ -363,15 +438,18 @@ fn classify_provider_line(line: &str) -> ProviderLineClass {
 }
 
 fn response_matches_request(line: &str, request_id: &str) -> bool {
+    response_request_id(line).is_some_and(|id| id == request_id)
+}
+
+fn response_request_id(line: &str) -> Option<String> {
     serde_json::from_str::<serde_json::Value>(line)
         .ok()
         .and_then(|value| {
             value
                 .get("id")
                 .and_then(serde_json::Value::as_str)
-                .map(|id| id == request_id)
+                .map(str::to_string)
         })
-        .unwrap_or(false)
 }
 
 fn notification_priority(method: &str) -> NotificationPriority {
@@ -446,9 +524,9 @@ fn server_request_rejection(request: &ProviderServerRequest) -> String {
     .to_string()
 }
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct ProcessOwner {
-    children: Mutex<BTreeMap<String, Arc<Mutex<OwnedChild>>>>,
+    children: Arc<Mutex<BTreeMap<String, Arc<Mutex<OwnedChild>>>>>,
 }
 
 pub struct SpawnRequest<'a> {
@@ -547,7 +625,7 @@ impl ProcessOwner {
                 "child stderr pipe is unavailable",
             )
         })?;
-        let output = spawn_provider_output_drain(
+        let (output, output_reader) = spawn_provider_output_drain(
             stdout,
             stdout_prefix.clone(),
             stdout_tail.clone(),
@@ -587,13 +665,14 @@ impl ProcessOwner {
                 identity,
                 executable: observed_executable,
                 output,
+                output_reader: Some(output_reader),
             })),
         );
         Ok(record)
     }
 
     pub fn send_line(&self, process_id: &str, message: &str) -> Result<()> {
-        let owned = self.owned_child(process_id)?;
+        let owned = self.owned_child_for_termination(process_id)?;
         let mut owned = owned.lock().map_err(|_| lock_poisoned())?;
         write_provider_line(&mut owned, message)
     }
@@ -605,9 +684,10 @@ impl ProcessOwner {
         message: &str,
         timeout: Duration,
     ) -> Result<(serde_json::Value, Vec<serde_json::Value>)> {
-        let owned = self.owned_child(process_id)?;
+        let owned = self.owned_child_for_termination(process_id)?;
         let owned = owned.lock().map_err(|_| lock_poisoned())?;
         let mut child = owned;
+        let _active_waiter = child.output.register_waiter(request_id)?;
         write_provider_line(&mut child, message)?;
         let deadline = Instant::now() + timeout;
         let mut notifications = Vec::new();
@@ -631,7 +711,7 @@ impl ProcessOwner {
             };
             let value: serde_json::Value = serde_json::from_str(&line).map_err(|error| {
                 PulseError::validation(
-                    "provider_protocol_invalid",
+                    "provider_protocol_invalid_after_transport",
                     format!("provider emitted invalid JSON: {error}"),
                 )
             })?;
@@ -669,73 +749,125 @@ impl ProcessOwner {
             write_provider_line(&mut owned, &server_request_rejection(server_request))?;
         }
         for line in batch.notifications {
-            let (accepted, evicted) = append_notification_with_loss(&mut events, &line)?;
-            if !accepted || evicted {
-                dropped_notifications = dropped_notifications.saturating_add(1);
+            if let Ok((accepted, evicted)) = append_notification_with_loss(&mut events, &line) {
+                if !accepted || evicted {
+                    dropped_notifications = dropped_notifications.saturating_add(1);
+                }
             }
         }
         append_notification_loss(&mut events, dropped_notifications);
         Ok(events)
     }
 
-    pub fn terminate(&self, process_id: &str) -> Result<()> {
-        let owned = self
-            .children
-            .lock()
-            .map_err(|_| lock_poisoned())?
-            .get(process_id)
-            .cloned();
+    pub fn requeue_json(&self, process_id: &str, events: &[serde_json::Value]) -> Result<()> {
+        let owned = {
+            let children = self.children.lock().map_err(|_| lock_poisoned())?;
+            children.get(process_id).cloned()
+        };
         let Some(owned) = owned else {
             return Err(PulseError::validation(
                 "managed_process_not_owned",
-                "daemon does not own a live handle for the managed process",
+                format!("managed process {process_id} is not owned by this daemon"),
             ));
         };
-        {
-            let mut child = owned.lock().map_err(|_| lock_poisoned())?;
-            if child
-                .child
-                .try_wait()
-                .map_err(|error| PulseError::io("<managed-process-wait>", error))?
-                .is_none()
-            {
-                if !native::process_identity_matches(&child.identity, &child.executable)? {
-                    return Err(PulseError::validation(
-                        "managed_process_identity_mismatch",
-                        "recorded PID/start/process-group identity no longer matches; the managed \
-                         process may have exited and its pid may have been reused; refusing \
-                         cancellation",
-                    ));
-                }
-                native::terminate_process_group(&child.identity, &child.executable)?;
-                let deadline = Instant::now() + Duration::from_secs(2);
-                loop {
-                    if child
-                        .child
-                        .try_wait()
-                        .map_err(|error| PulseError::io("<managed-process-wait>", error))?
-                        .is_some()
-                    {
-                        break;
-                    }
-                    if Instant::now() >= deadline {
-                        native::force_terminate_process_group(&child.identity, &child.executable)?;
-                        child
-                            .child
-                            .wait()
-                            .map_err(|error| PulseError::io("<managed-process-wait>", error))?;
-                        break;
-                    }
-                    thread::sleep(Duration::from_millis(20));
-                }
-            }
-        }
+        let lines = events
+            .iter()
+            .map(serde_json::to_string)
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(PulseError::from)?;
+        let result = owned
+            .lock()
+            .map_err(|_| lock_poisoned())?
+            .output
+            .requeue_front(&lines);
+        result
+    }
+
+    pub fn terminate(&self, process_id: &str) -> Result<()> {
+        let owned = self.owned_child_for_termination(process_id)?;
+        self.terminate_owned(&owned)?;
+        self.release_handle_for(process_id, &owned)
+    }
+
+    pub fn terminate_and_drain(&self, process_id: &str) -> Result<Vec<serde_json::Value>> {
+        let owned = self.owned_child_for_termination(process_id)?;
+        self.terminate_owned(&owned)?;
+        let mut events = self.drain_json(process_id)?;
+        self.wait_output_quiescence(&owned)?;
+        events.extend(self.drain_json(process_id)?);
+        Ok(events)
+    }
+
+    pub fn release_handle(&self, process_id: &str) -> Result<()> {
+        let owned = self.owned_child(process_id)?;
+        self.release_handle_for(process_id, &owned)
+    }
+
+    fn release_handle_for(&self, process_id: &str, owned: &Arc<Mutex<OwnedChild>>) -> Result<()> {
         let mut children = self.children.lock().map_err(|_| lock_poisoned())?;
         if children
             .get(process_id)
-            .is_some_and(|current| Arc::ptr_eq(current, &owned))
+            .is_some_and(|current| Arc::ptr_eq(current, owned))
         {
             children.remove(process_id);
+        }
+        Ok(())
+    }
+
+    fn terminate_owned(&self, owned: &Arc<Mutex<OwnedChild>>) -> Result<()> {
+        let mut child = owned.lock().map_err(|_| lock_poisoned())?;
+        if child
+            .child
+            .try_wait()
+            .map_err(|error| PulseError::io("<managed-process-wait>", error))?
+            .is_none()
+        {
+            if !native::process_identity_matches(&child.identity, &child.executable)? {
+                return Err(PulseError::validation(
+                    "managed_process_identity_mismatch",
+                    "recorded PID/start/process-group identity no longer matches; the managed \
+                     process may have exited and its pid may have been reused; refusing \
+                     cancellation",
+                ));
+            }
+            native::terminate_process_group(&child.identity, &child.executable)?;
+            let deadline = Instant::now() + Duration::from_secs(2);
+            loop {
+                if child
+                    .child
+                    .try_wait()
+                    .map_err(|error| PulseError::io("<managed-process-wait>", error))?
+                    .is_some()
+                {
+                    break;
+                }
+                if Instant::now() >= deadline {
+                    native::force_terminate_process_group(&child.identity, &child.executable)?;
+                    child
+                        .child
+                        .wait()
+                        .map_err(|error| PulseError::io("<managed-process-wait>", error))?;
+                    break;
+                }
+                thread::sleep(Duration::from_millis(20));
+            }
+        }
+        Ok(())
+    }
+
+    fn wait_output_quiescence(&self, owned: &Arc<Mutex<OwnedChild>>) -> Result<()> {
+        let reader = owned
+            .lock()
+            .map_err(|_| lock_poisoned())?
+            .output_reader
+            .take();
+        if let Some(reader) = reader {
+            reader.join().map_err(|_| {
+                PulseError::validation(
+                    "provider_output_reader_failed",
+                    "provider stdout reader did not terminate cleanly",
+                )
+            })?;
         }
         Ok(())
     }
@@ -758,6 +890,20 @@ impl ProcessOwner {
             .cloned()
             .ok_or_else(|| PulseError::NotFound {
                 subject: format!("managed process {process_id}"),
+            })
+    }
+
+    fn owned_child_for_termination(&self, process_id: &str) -> Result<Arc<Mutex<OwnedChild>>> {
+        self.children
+            .lock()
+            .map_err(|_| lock_poisoned())?
+            .get(process_id)
+            .cloned()
+            .ok_or_else(|| {
+                PulseError::validation(
+                    "managed_process_not_owned",
+                    "daemon does not own a live handle for the managed process",
+                )
             })
     }
 
@@ -875,7 +1021,7 @@ fn spawn_provider_output_drain<R: Read + Send + 'static>(
     prefix_path: PathBuf,
     tail_path: PathBuf,
     max_bytes: usize,
-) -> Result<Arc<ProviderOutputDispatcher>> {
+) -> Result<(Arc<ProviderOutputDispatcher>, thread::JoinHandle<()>)> {
     if max_bytes == 0 {
         return Err(PulseError::validation(
             "managed_log_limit_invalid",
@@ -884,7 +1030,7 @@ fn spawn_provider_output_drain<R: Read + Send + 'static>(
     }
     let output = Arc::new(ProviderOutputDispatcher::new());
     let drain_output = Arc::clone(&output);
-    thread::spawn(move || {
+    let reader_handle = thread::spawn(move || {
         let prefix_limit = max_bytes / 2;
         let tail_limit = max_bytes - prefix_limit;
         let mut prefix = Vec::with_capacity(prefix_limit);
@@ -928,7 +1074,7 @@ fn spawn_provider_output_drain<R: Read + Send + 'static>(
         let _ = crate::storage::atomic_write_private(&tail_path, &tail);
         drain_output.close();
     });
-    Ok(output)
+    Ok((output, reader_handle))
 }
 
 fn read_provider_line<R: BufRead>(
@@ -1123,6 +1269,36 @@ mod tests {
         assert!(batch.response.is_some());
         assert!(batch.dropped_notifications > 0);
         assert!(batch.notifications.len() <= PROVIDER_OUTPUT_QUEUE_CAPACITY);
+    }
+
+    #[test]
+    fn active_waiter_response_survives_inverse_response_pressure() {
+        let output = Arc::new(ProviderOutputDispatcher::new());
+        let _waiter = output
+            .register_waiter("awaited")
+            .expect("register active response waiter");
+        output.dispatch(r#"{"jsonrpc":"2.0","id":"awaited","result":{}}"#.to_string());
+        for index in 0..(PROVIDER_OUTPUT_QUEUE_CAPACITY * 2) {
+            output.dispatch(format!(
+                r#"{{"jsonrpc":"2.0","id":"unrelated-{index}","result":{{}}}}"#
+            ));
+        }
+        let batch = output
+            .take("awaited", Duration::from_secs(2))
+            .expect("active waiter response survives inverse pressure");
+        assert_eq!(
+            batch
+                .response
+                .and_then(|response| serde_json::from_str::<serde_json::Value>(&response).ok())
+                .and_then(|response| {
+                    response
+                        .get("id")
+                        .and_then(serde_json::Value::as_str)
+                        .map(str::to_string)
+                })
+                .unwrap(),
+            "awaited"
+        );
     }
 
     #[test]

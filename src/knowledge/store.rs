@@ -498,9 +498,29 @@ impl KnowledgeStore {
     }
 
     pub fn status(&self) -> PulseResult<KnowledgeStatusReport> {
-        let _guard = WriteGuard::acquire(&self.repo_root)?;
-        let manifest = bootstrap_unlocked(&self.repo_root)?.manifest;
-        recover_prepared_transactions(&self.repo_root)?;
+        if has_pending_transaction(&self.repo_root)? {
+            return Err(PulseError::validation(
+                "knowledge_recovery_required",
+                "knowledge status requires prepared transaction recovery before observing a coherent snapshot",
+            ));
+        }
+        let Some(manifest) = crate::knowledge::manifest::load_existing(&self.repo_root)? else {
+            return Ok(KnowledgeStatusReport {
+                schema_version: 1,
+                code: "not_installed".to_string(),
+                manifest: "not_installed".to_string(),
+                knowledge_fingerprint: None,
+                counts: crate::knowledge::projection::KnowledgeCounts {
+                    entries: 0,
+                    relations: 0,
+                    by_status: Default::default(),
+                    by_kind: Default::default(),
+                },
+                cache_state: CacheState::Missing,
+                errors: 0,
+                warnings: 0,
+            });
+        };
         let (entries, relations) = load_records(&self.repo_root)?;
         let report = validate_loaded(&self.repo_root, &manifest, &entries, &relations)?;
         let fingerprint = knowledge_fingerprint(&self.repo_root, &manifest).ok();
@@ -698,6 +718,29 @@ impl KnowledgeStore {
             .join(".pulse/knowledge/relations")
             .join(format!("{id}.json"))
     }
+}
+
+fn has_pending_transaction(repo_root: &Path) -> PulseResult<bool> {
+    let path = repo_root.join(".pulse/runtime/transactions");
+    if !path.exists() {
+        return Ok(false);
+    }
+    for entry in fs::read_dir(&path).map_err(|error| PulseError::io(&path, error))? {
+        let entry = entry.map_err(|error| PulseError::io(&path, error))?;
+        if entry
+            .file_type()
+            .map_err(|error| PulseError::io(entry.path(), error))?
+            .is_file()
+            && entry
+                .path()
+                .extension()
+                .and_then(|extension| extension.to_str())
+                == Some("json")
+        {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 fn apply_patch(learning: &mut Learning, patch: LearningPatch, now: DateTime<Utc>) -> Vec<String> {

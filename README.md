@@ -26,13 +26,13 @@
 
 Pulse ships one public workflow router skill, **`pulse:workflow`**, plus packaged standalone utility skills outside that router.
 
-Workflow subcommands are: onboard, explore, brainstorm, plan, validate, swarm, execute, review, and compound. Runtime status, readiness, and reservations run through **`{{pulse_command}}`**, which renders to provider-specific `node <provider-skills-root>/workflow/scripts/pulse.mjs ...` commands. Canonical state lives in **`.pulse/runtime/`** and canonical metadata in **`.pulse/workgraph/items.jsonl`**.
+Workflow subcommands are: use, intake, brainstorm, explore, design, plan, validate, swarm, execute, review, and compound. Runtime status and session/lease coordination run through the Rust **`pulse`** CLI and daemon. The graph authority is **`.pulse/workgraph/`**, with nodes and edges owned by Rust commands.
 
 Standalone utility skills remain packaged separately for focused non-router tasks: `architecture-rescue`, `systematic-debug-fix`, `dev-note`, `dev-note-distil`, `prompt-leverage`.
 
 ## The Delivery Chain
 
-1. `pulse:workflow onboard` prepares runtime and readiness.
+1. `pulse:workflow use` guides the operator through runtime and graph readiness; it does not perform the operation.
 2. `pulse:workflow explore` locks decisions in feature context artifacts.
 3. `pulse:workflow plan` selects shape and execution contract.
 4. `pulse:workflow validate` proves feasibility before implementation.
@@ -55,7 +55,7 @@ Standalone utility skills remain packaged separately for focused non-router task
 | --- | --- |
 | Requirements drift in chat | Lock decisions in context artifacts |
 | Plans are plausible but brittle | Validate before execution |
-| Parallel workers collide | Coordinate through rendered `pulse.mjs reservation` commands |
+| Parallel workers collide | Coordinate through Rust daemon session/lease operations |
 | Work is hard to audit later | Preserve artifacts, evidence, and review trail |
 
 ## Installation
@@ -77,7 +77,12 @@ Codex reads the marketplace name from [`.agents/plugins/marketplace.json`](.agen
 
 ### After Install
 
-Start with **`pulse:workflow use`** in the target repo to initialize `.pulse/runtime` and `.pulse/workgraph`. Installed skill docs render `{{pulse_command}}` to concrete `node <provider-skills-root>/workflow/scripts/pulse.mjs ...` commands for status, readiness, and reservation operations.
+Start with **`pulse:workflow use`** in the target repo as guidance. The installed skill does not initialize state; with operator approval, use the existing Rust commands `pulse graph bootstrap --repo-root <repo> --json` and `pulse daemon start` for those operations.
+
+Operational commands require the Rust `pulse` CLI to be available on the
+target environment's `PATH`. The plugin does not install or package that
+binary; binary installation and distribution remain an unresolved product
+decision.
 
 ## Project Docs
 

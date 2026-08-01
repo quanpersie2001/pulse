@@ -14,7 +14,7 @@ Produce a story-scoped `discovery.md` and any needed `references/*.md` research 
 
 Explore gathers:
 - current repo behavior and architecture evidence
-- relevant docs, story artifacts, runtime state, and tests
+- relevant docs, story artifacts, daemon posture, and tests
 - existing patterns and constraints
 - contradictions or drift between artifacts and implementation
 - external/domain/library/provider/security evidence when needed
@@ -43,8 +43,8 @@ Read in this order when present:
 1. owning story `intake.md`
 2. story `work-brief.md`
 3. existing story `discovery.md` if resuming or refreshing discovery
-4. `.pulse/runtime/STATE.md` and `.pulse/runtime/state.json`
-5. relevant story references under `works/epics/<epic>/<story>/references/`
+4. daemon posture from `pulse daemon status`
+5. relevant story references under `works/<story-id>/references/`
 6. targeted repo docs, code, tests, runtime files, and recent history needed for the discovery scope
 
 Rule: answer from evidence first. Ask users only for research scope clarification or missing context evidence cannot provide.
@@ -95,7 +95,7 @@ Gather evidence without deciding the final solution:
 - trace relevant existing behavior
 - identify established patterns and constraints
 - list reusable surfaces and risky coupling
-- find contradictions between artifacts, docs, code, tests, and runtime state
+- find contradictions between artifacts, docs, code, tests, and daemon posture
 - identify missing evidence
 - record paths and concrete observations
 
@@ -128,7 +128,7 @@ Use deep research for:
 Deep-research output must be saved under the owning story:
 
 ```text
-works/epics/<epic-id>-<epic-slug>/<story-id>-<story-slug>/references/<topic-slug>.md
+works/<story-id>/references/<topic-slug>.md
 ```
 
 Reference file requirements:
@@ -164,7 +164,7 @@ Design must decide:
 Write:
 
 ```text
-works/epics/<epic-id>-<epic-slug>/<story-id>-<story-slug>/discovery.md
+works/<story-id>/discovery.md
 ```
 
 Use [discovery.template.md](discovery.template.md).
@@ -201,7 +201,7 @@ Fix serious issues and rerun once. After two failed repair loops, stop and ask f
 
 After discovery passes review:
 
-1. Update runtime mirrors together if recording workflow posture:
+1. Record workflow posture in the work artifact:
    ```text
    Current: exploration/discovery complete for <work>
    Discovery: <works story discovery.md path>

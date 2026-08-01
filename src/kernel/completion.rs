@@ -51,12 +51,12 @@ impl JsonGraphStore {
         }
         let handoff_id = deterministic_evidence_id("handoff", &args.idempotency_key);
         let handoff_path = handoff_path(&self.repo_root, &handoff_id);
+        let _guard = WriteGuard::acquire(&self.repo_root)?;
+        authorize(&self.repo_root, &args.actor, "work.assignment.handoff")?;
+        recover_prepared_transactions(&self.repo_root)?;
         if handoff_path.exists() {
             return load_handoff(&self.repo_root, &handoff_id);
         }
-        let _guard = WriteGuard::acquire(&self.repo_root)?;
-        recover_prepared_transactions(&self.repo_root)?;
-        authorize(&self.repo_root, &args.actor, "work.assignment.handoff")?;
         let reservation =
             crate::kernel::reservation::load_reservation(&self.repo_root, &args.lease_id)?;
         if reservation.state != ReservationState::Active {
@@ -169,12 +169,12 @@ impl JsonGraphStore {
         }
         let verification_id = deterministic_evidence_id("verify", &args.idempotency_key);
         let verification_path = verification_path(&self.repo_root, &verification_id);
+        let _guard = WriteGuard::acquire(&self.repo_root)?;
+        authorize(&self.repo_root, &args.actor, "work.assignment.verify")?;
+        recover_prepared_transactions(&self.repo_root)?;
         if verification_path.exists() {
             return load_verification(&self.repo_root, &verification_id);
         }
-        let _guard = WriteGuard::acquire(&self.repo_root)?;
-        recover_prepared_transactions(&self.repo_root)?;
-        authorize(&self.repo_root, &args.actor, "work.assignment.verify")?;
         let handoff = load_handoff(&self.repo_root, &args.handoff_id)?;
         if handoff.recorded_by == args.actor {
             return Err(PulseError::validation(
@@ -201,8 +201,13 @@ impl JsonGraphStore {
                 "Ticket is not the exact verifying revision from the handoff",
             ));
         }
+        // Verification is an independent proof observation, not the final close
+        // gate.  The Phase 3 QA baseline/case resolver is not represented by a
+        // current typed schema, so a passed check must remain non-terminal until
+        // that authority exists.  In particular, caller-provided command/exit
+        // records cannot authorize Done by themselves.
         let (target, reason) = match args.disposition {
-            VerificationDisposition::Passed => (NodeStatus::Done, None),
+            VerificationDisposition::Passed => (NodeStatus::Verifying, None),
             VerificationDisposition::Rework => (
                 NodeStatus::Rework,
                 Some(TransitionReason {
@@ -392,6 +397,7 @@ fn normalize_strings(values: &mut Vec<String>) {
 fn status_name(status: NodeStatus) -> &'static str {
     match status {
         NodeStatus::Done => "done",
+        NodeStatus::Verifying => "verifying",
         NodeStatus::Rework => "rework",
         NodeStatus::Blocked => "blocked",
         _ => "invalid",

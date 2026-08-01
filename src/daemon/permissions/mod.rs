@@ -18,10 +18,19 @@ impl RuntimePrincipal {
         Self {
             principal_id: "local_cli".to_string(),
             session_id: None,
-            capabilities: ["runtime.read", "runtime.write", "runtime.admin"]
-                .into_iter()
-                .map(str::to_string)
-                .collect(),
+            capabilities: [
+                "runtime.read",
+                "runtime.write",
+                "runtime.admin",
+                "runtime.project",
+                "runtime.workspace",
+                "runtime.session",
+                "runtime.assignment",
+                "runtime.provider_launch",
+            ]
+            .into_iter()
+            .map(str::to_string)
+            .collect(),
         }
     }
 

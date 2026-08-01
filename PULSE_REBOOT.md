@@ -172,13 +172,24 @@ prove theo thứ tự Core -> Runtime -> Orchestration.
 ## Frontier hiện tại
 
 Phase 1 Core foundations và phần lớn Phase 2 packet/reservation đã được
-implemented. Phase 2 Slice 3 cũng đã implement một CLI-owned hidden supervisor,
-workspace/run store và Codex process path.
+implemented. Phase 2 runtime realignment hiện đã có Rust daemon ownership cho
+Project/Workspace/Session/Provider/ProcessOwner/timeline, local protocol, MCP
+adapter và assignment saga. Legacy Slice 3 CLI-owned hidden supervisor,
+workspace/run store và Codex process path là prototype history; chúng đã bị xóa
+khỏi current runtime path, không còn là một launcher đang chờ bị thay.
 
-Direction mới thay per-run supervisor bằng long-lived Rust daemon theo
-Project/Workspace/Session/Provider architecture. Những implementation hiện có
-không phải compatibility target; primitive đúng được salvage, ownership sai
-được move/rewrite và obsolete path bị xóa sau replacement proof.
+Đây vẫn là target design pre-release. Focused/source evidence đã chứng minh
+nhiều capability, nhưng trạng thái verification của Phase 2 vẫn là
+`Verifying`: verification `Passed` không tự đóng Phase 3 close gate, và chưa có
+evidence full-suite green trong tài liệu này. Reservation TTL recovery hiện chỉ
+cover `Reserved`/`Acknowledged`, chưa cover `Active`; daemon whole-snapshot
+boundedness, Windows native acceptance coverage và `repository_id` naming vẫn là
+deferred/risk items.
+
+Normative direction vẫn là long-lived Rust daemon theo
+Project/Workspace/Session/Provider architecture. Primitive đúng được giữ,
+ownership sai đã được move/rewrite và obsolete path đã bị xóa sau replacement
+proof; các capability còn thiếu tiếp tục theo execution plan bên dưới.
 
 Execution plan duy nhất:
 [`proposals/phase2-rust-daemon-realignment-implementation-gap.md`](proposals/phase2-rust-daemon-realignment-implementation-gap.md).

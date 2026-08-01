@@ -10,7 +10,7 @@ Review is independent verification. It does not trust execution claims, silently
 
 ## Mission
 
-Evaluate completed `TASK`/`BUG` work against approved story boundaries, item contracts, verification evidence, implementation gap logs, and the actual change set; classify findings; create explicit remediation items when needed; and enforce Gate 4.
+Evaluate completed `Ticket` work against approved story boundaries, item contracts, verification evidence, implementation gap logs, and the actual change set; classify findings; create explicit remediation items when needed; and enforce Gate 4.
 
 P1 findings or missing required evidence block Gate 4 approval.
 
@@ -20,12 +20,12 @@ Run `pulse:workflow review` only when all are true:
 
 - Gate 3-approved current-slice execution is complete
 - no worker, reservation, or commit queue remains in flight for the slice
-- every claimed completed `TASK`/`BUG` is `CLOSED` in the workgraph
-- each completed item has fresh verification evidence at its `verification_path`
+- every claimed completed `Ticket` is `DONE` in the workgraph
+- each completed Ticket has fresh verification evidence at its declared evidence path
 - any `implement-gap.md` created during execution is present and surfaced
-- runtime state, workgraph metadata, and story artifacts agree on the active epic/story/slice
+- daemon posture, workgraph metadata, and story artifacts agree on the active epic/story/slice
 
-Do not run while execution is still active, item boundaries are disputed, Gate 3 is ambiguous, or onboarding/runtime posture is stale.
+Do not run while execution is still active, item boundaries are disputed, Gate 3 is ambiguous, or onboarding/daemon posture is stale.
 
 If entry fails, reroute precisely:
 
@@ -63,13 +63,13 @@ Orient -> Scope & Evidence Audit -> Specialist Review -> Normalize Findings
 Read in this order:
 
 1. `AGENTS.md`
-2. `node .pi/skills/workflow/scripts/pulse.mjs status --repo-root <repo> --json`
-3. `.pulse/runtime/state.json`
-4. `.pulse/runtime/STATE.md`
+2. `pulse daemon status`
+3. daemon posture from `pulse daemon status`
+4. the owning work artifact
 5. active story `plan.md`
 6. active story `solution-design.md`
-7. item README files for completed current-slice `TASK`/`BUG` items
-8. each item `verification_path`
+7. item README files for completed current-slice `Ticket` items
+8. each item's declared verification evidence path
 9. each item `implement-gap.md` when present
 10. current git diff or committed range for the completed slice
 
@@ -128,7 +128,9 @@ Each accepted finding must include:
 
 ## Phase 5 — Create explicit remediation items
 
-When a finding requires implementation work, create or propose a workgraph `BUG` or `TASK` under the active story using `node .pi/skills/workflow/scripts/pulse.mjs workgraph create ... --json`, but only when the user/project policy permits review to materialize fix work.
+When a finding requires implementation work, create or propose a workgraph
+Ticket under the active story using `pulse work create ... --json`, but only
+when the user/project policy permits review to materialize fix work.
 
 Use [review-item-template.md](review-item-template.md) for the README/body shape.
 
@@ -188,13 +190,13 @@ Publish:
   - `pulse:workflow design` for solution repair
   - `pulse:workflow compound` after clean pass or accepted follow-ups
 
-Update `.pulse/runtime/state.json` and `.pulse/runtime/STATE.md` together when recording Gate 4 posture.
+Record the corresponding work-artifact note together when recording Gate 4 posture.
 
 Default continuation is `manual_invoke` unless the user explicitly asks to continue now.
 
 ## Pause/resume posture
 
-If review pauses, write a review-owned handoff under `.pulse/runtime/handoffs/` and register it in `.pulse/runtime/handoffs/manifest.json`.
+If review pauses, record a review-owned handoff note in the owning work artifact. Do not create hidden runtime state.
 
 Resume from Phase 1 orientation, then continue at the next incomplete phase. Do not resume review from memory-only recall.
 

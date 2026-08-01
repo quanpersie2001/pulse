@@ -2,7 +2,7 @@
 
 Reusable templates, checklists, and reference material for validation.
 
-This appendix assumes validate is consuming an approved story-scoped `plan.md` and any approved TASK/BUG work items already materialized through `node .agents/skills/workflow/scripts/pulse.mjs workgraph`.
+This appendix assumes validate is consuming an approved story-scoped `plan.md` and any approved Ticket work items already materialized through `pulse work`.
 
 ## A. Orientation and Gate 2 proof
 
@@ -10,14 +10,14 @@ Confirm and present these fields:
 
 - Mode: `spike | small_change | standard_feature | high_risk_feature`
 - Active story: `<story-id> — <story title>`
-- Current slice: `<TASK/BUG IDs or story-level slice>`
+- Current slice: `<Ticket IDs or story-level slice>`
 - Approved plan: `works/.../plan.md`
 - Gate 2 status: `APPROVED | PENDING | REVISE_REQUIRED | MISSING`
 - Gate 2 source: `<plan.md section / runtime record / explicit approval note>`
 - Solution design: `works/.../solution-design.md`
 - Decision refs in slice: `D...`
-- Materialized items: `<T-... / B-... / none required by plan>`
-- Workgraph doctor: `PASS | FAIL | NOT RUN`
+- Materialized Tickets: `<TK-... / none required by plan>`
+- Graph validation: `PASS | FAIL | NOT RUN`
 - STATE mirror: `in sync | out of sync | missing`
 - Goal of current slice: `<one-line practical outcome>`
 
@@ -25,9 +25,9 @@ Stop conditions:
 
 - `plan.md` is missing or not explicitly approved
 - Gate 2 approval fields are missing where required
-- approved TASK/BUG materialization required by `plan.md` is incomplete
-- runtime mirrors, `plan.md`, and workgraph metadata disagree about active story/slice
-- workgraph doctor fails with unresolved current-slice issues
+- approved Ticket materialization required by `plan.md` is incomplete
+- daemon posture, `plan.md`, and workgraph metadata disagree about active story/slice
+- `pulse graph validate` fails with unresolved current-slice issues
 
 ## B. Runtime/workgraph consistency gate
 
@@ -43,11 +43,11 @@ Verify these fields from runtime and workgraph output:
 - Content paths: `PASS | FAIL`
 - Verification paths: `PASS | FAIL`
 - Reservation/handoff conflicts: `PASS | FAIL`
-- Decision: `proceed | route to use | route to plan | repair local mirror wording`
+- Decision: `proceed | route to use | route to plan | repair work-artifact wording`
 
 PASS only when:
 
-- every current TASK/BUG is under the active story
+- every current Ticket is under the active story
 - workgraph IDs match the approved plan mapping
 - dependency edges implement approved blocking dependencies
 - links are non-blocking traceability only
@@ -110,9 +110,9 @@ NOT READY - RETURN TO EXPLORE
 
 READY is feasibility only. It is not Gate 3 approval and must not start execution.
 
-## E. TASK/BUG contract checklist
+## E. Ticket contract checklist
 
-For each current-slice TASK/BUG, verify both workgraph metadata and the item README.
+For each current-slice Ticket, verify both workgraph metadata and the item README.
 
 Required contract fields:
 

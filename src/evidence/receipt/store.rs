@@ -82,7 +82,10 @@ pub fn record_receipt(
         serde_json::from_slice(&input_bytes).map_err(|error| PulseError::json(file, error))?;
     validate_receipt_id(&receipt.id)?;
     normalize_bindings(&mut receipt);
-    let manifest = manifest::load(repo_root)?;
+    let _guard = WriteGuard::acquire(repo_root)?;
+    crate::storage::bootstrap(repo_root)?;
+    crate::storage::transaction::recover_prepared_transactions(repo_root)?;
+    let manifest = manifest::bootstrap(repo_root)?.manifest;
     if input_bytes.len() as u64 > manifest.max_inline_receipt_bytes {
         return Err(PulseError::validation(
             "receipt_schema_invalid",
@@ -94,11 +97,6 @@ pub fn record_receipt(
     let canonical = to_canonical_bytes(&receipt)?;
     let receipt_hash = hash_bytes(&canonical);
     let receipt_path = receipt_path(repo_root, &receipt.id);
-
-    let _guard = WriteGuard::acquire(repo_root)?;
-    crate::storage::bootstrap(repo_root)?;
-    crate::storage::transaction::recover_prepared_transactions(repo_root)?;
-    manifest::bootstrap(repo_root)?;
 
     if receipt_path.exists() {
         let existing =

@@ -1,129 +1,40 @@
-# `pulse:workflow use` Readiness Contract
+# Workflow readiness contract
 
-This document defines the readiness posture `use` must enforce before session loading and downstream workflow routing.
+This document defines an advisory readiness check. It does not create files or
+repair state.
 
-## Core idea
+## Required evidence
 
-Readiness must tell the operator whether Pulse can proceed, in what mode, and what must be repaired first. Once readiness is established, `use` continues into session loading.
-
-## Readiness outcomes
-
-| Outcome | Meaning |
-| --- | --- |
-| `PASS` | Ready for the requested Pulse workflow posture. |
-| `DEGRADED` | Safe to proceed only with an explicit reduced capability. |
-| `FAIL` | Required prerequisite is missing or runtime posture is unsafe. |
-
-## Core prerequisites
-
-| Capability | Why it matters | Missing effect |
+| Check | Evidence or owner | Failure action |
 | --- | --- | --- |
-| `git` | Repo identity and normal software workflow operations | `FAIL` when source-control context is required |
-| `node` | Plugin-owned Pulse runtime helpers | `FAIL` |
-| Pulse workflow source tree | Router, references, templates, and runtime-owned assets must be available through the installed skill package | `FAIL` |
-| installed workflow runtime entrypoint | `scripts/pulse.mjs` must be available through the installed workflow skill package | `FAIL` after materialization is requested |
-| valid workgraph schema | `.pulse/workgraph/schema.json` is the machine-readable workgraph contract | `FAIL` |
-| valid workgraph metadata | `.pulse/workgraph/items.jsonl` is the only writable item metadata truth | `FAIL` |
-| safe session pointers | Session load must not read outside the repo or allowed roots | `FAIL` or rejected path |
-| verified swarm capability | Required only for `swarm` execution posture | `DEGRADED` to `execute` unless swarm is explicitly required |
+| Rust graph exists | `pulse graph validate --repo-root <repo> --json` | Ask before running `pulse graph bootstrap --repo-root <repo> --json` |
+| Rust daemon is available | `pulse daemon status` or `pulse daemon doctor` | Ask before running `pulse daemon start` |
+| Current work is known | `pulse work list --repo-root <repo> --json` and approved work artifacts | Route to `pulse:workflow plan` or `pulse:workflow use` |
+| Current item is executable | `pulse work ready <id> --repo-root <repo> --json` | Route to validation or planning |
+| Runtime session is known | `pulse session list` or `pulse session inspect <id>` | Ask for the missing session identifier or route to execution setup |
 
-## Required v2 runtime files
+The supported graph layout is `.pulse/workgraph/nodes/`, `.pulse/workgraph/edges/`,
+`.pulse/workgraph/manifest.json`, and `.pulse/workgraph/schemas/`. Generated
+projections are outputs of Rust commands, not writable truth.
 
-Use must verify or materialize:
+## Readiness result
 
-```text
-.pulse/runtime/tooling-status.json
-.pulse/runtime/state.json
-.pulse/runtime/STATE.md
-.pulse/runtime/handoffs/manifest.json
-.pulse/runtime/reservations.json
-```
+Report `PASS`, `DEGRADED`, or `FAIL` with the command output, repository source
+commit, active work identifier, daemon posture, and the smallest next action.
+Do not invent readiness, runtime, handoff, or reservation state inside the
+repository. The skill only reports evidence and recommends commands; it does
+not own those mutations.
 
-## Required v2 workgraph files
+## Mutation boundary
 
-Use must verify or materialize:
+The workflow may recommend an explicit Rust command after the relevant approval.
+Only that command may mutate Pulse state. In particular, the skill must not:
 
-```text
-.pulse/workgraph/items.jsonl
-.pulse/workgraph/schema.json
-.pulse/workgraph/views/active.json
-.pulse/workgraph/views/closed.json
-.pulse/workgraph/views/ready.json
-.pulse/workgraph/views/graph.json
-```
+- hand-edit graph node or edge files;
+- create or repair schemas, projections, locks, or runtime records itself;
+- move repository contents into backup directories or otherwise rewrite the target repository;
+- copy legacy state into a new layout; or
+- claim that a workflow invocation performed onboarding.
 
-`write.lock` may be absent when no mutation is active. If it exists and is owned by a live process, readiness must fail for mutating workflow steps.
-
-## Plugin runtime availability
-
-Use must verify that runtime helpers are available from the installed workflow skill package. Canonical runtime code is not a repo-local readiness asset.
-
-`.pulse/scripts/` may exist only as non-authoritative historical data. Missing shims must not block a greenfield v2 repo; stale shims are warnings only.
-
-## Harness readiness
-
-Use must verify or materialize:
-
-```text
-.pulse/harness/HARNESS_BACKLOG.md
-```
-
-The source template is `skills/workflow/templates/HARNESS_BACKLOG.md`.
-
-`skills/workflow/references/HARNESS.md` is the canonical harness operating reference. A runtime `.pulse/harness/HARNESS.md` must not become a second source of truth.
-
-## Session-load readiness
-
-Use must be able to report:
-
-- session posture: `fresh`, `resumable`, `active`, or `conflicted`
-- active command when known
-- active epic, story, and work item IDs when known
-- selected handoff when one owner is selected
-- resume options when multiple owners are available
-- read-first paths derived from the selected handoff and workgraph metadata
-- loaded files, missing files, rejected paths, and conflicts
-- recommended next workflow command
-
-Session-load reads must be pointer-driven. Use must not recursively load all of `works/`, `docs/`, `.pulse/memory/`, or `.pulse/runtime/`.
-
-Allowed session-read roots:
-
-```text
-AGENTS.md
-.pulse/runtime/handoffs/
-.pulse/memory/
-works/
-docs/
-```
-
-## What readiness must report
-
-A complete readiness brief should include:
-
-- repo root
-- readiness outcome (`PASS`/`DEGRADED`/`FAIL`)
-- requested mode when known
-- recommended mode
-- active command when known
-- active epic, story, and work item IDs when known
-- session-load summary
-- open reservations
-- resumable handoffs
-- missing core prerequisites
-- degraded capabilities
-- domain status for `.pulse`, `docs`, and `works`
-- runtime file status
-- workgraph file status
-- plugin runtime availability and optional shim warnings
-- harness backlog status
-- domain normalization status for `.pulse`, `docs`, and `works` (`missing|compliant|non_compliant`)
-- backup paths and onboarding reconstruction briefs when semantic reconstruction is required
-- loaded, missing, and rejected session files
-- recommended next command
-
-## Contract boundary
-
-`pulse:workflow use` is the operational authority for readiness and session loading.
-
-Runtime helper implementation can evolve, but this readiness contract remains stable at the workflow surface. Downstream commands must consume the result rather than recreating a separate readiness or session-load contract.
+Human-authored plans, design notes, verification notes, and handoff notes may
+remain in their owning work-artifact directories. They are not Pulse state.

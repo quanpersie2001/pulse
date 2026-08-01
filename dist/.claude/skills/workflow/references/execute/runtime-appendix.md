@@ -6,11 +6,13 @@ Use this appendix for compact checklists and templates referenced by `command.md
 
 Before reserving files or writing code, confirm the selected item is executable:
 
-- kind is `TASK` or `BUG`
+- kind is `Ticket`
 - belongs to the Gate 3-approved current story/slice
-- status is `OPEN` or a same-owner resumed `IN_PROGRESS`
+- status is `READY` before claiming work; a same-owner resumed item may be
+  `ACTIVE`
 - dependency-unblocked and not externally blocked
-- `content_path` and `verification_path` stay under `works/`
+- `content_dir` is exactly `works/<node-id>`; verification evidence uses a declared
+  work-artifact path, not a workgraph-owned verification field
 - item README has no unresolved placeholders for the fields below
 
 Required README fields:
@@ -48,7 +50,7 @@ Create or update an item-local gap log when implementation reveals something the
 Default path:
 
 ```text
-<dirname(item content_path)>/implement-gap.md
+<value.content_dir>/implement-gap.md
 ```
 
 Use it for:
@@ -66,7 +68,7 @@ If no gap occurred, no `implement-gap.md` is required.
 
 ## Verification evidence contract
 
-Update the item workgraph `verification_path` before closing.
+Update the declared verification evidence path before review.
 
 Evidence must include:
 
@@ -95,25 +97,25 @@ Worker `[DONE]` report:
 
 ```text
 [DONE]
-item_id: <T/B-id>
+item_id: <TK-id>
 runtime_identity: <worker-id>
 commit: <hash or COMMIT_BLOCKED reason>
 files_changed: [<path>]
 verification: PASS
 commands: [<command> -> exit <code>]
-evidence_paths: [<verification_path>]
+evidence_paths: [<declared-verification-path>]
 implementation_gap: None. | <implement-gap.md path> — <summary>
 follow_up: None. | <needed follow-up>
 reservations: released | <release issue>
 ```
 
-Standalone `.pulse/runtime/STATE.md` record should include the same fields.
+Standalone work-artifact note should include the same fields.
 
 Blocked report:
 
 ```text
 [BLOCKED]
-item_id: <T/B-id>
+item_id: <TK-id>
 phase: contract | reservation | implementation | verification | close | commit
 blocking_reason: <specific reason>
 implementation_gap: None. | <implement-gap.md path> — <summary>
@@ -131,9 +133,9 @@ Use the shared envelope from [`../use/handoff-contract.md`](../use/handoff-contr
 If compaction is detected, stop and re-read before implementing:
 
 1. `AGENTS.md`
-2. `node .claude/skills/workflow/scripts/pulse.mjs status --repo-root <repo> --json`
-3. `.pulse/runtime/state.json` and `.pulse/runtime/STATE.md`
-4. current item via `workgraph show`
+2. `pulse daemon status`
+3. daemon posture from `pulse daemon status`
+4. current item via `pulse work show <id> --repo-root <repo> --json`
 5. item README, verification file, and `implement-gap.md` when present
 6. parent `plan.md` and `solution-design.md`
 7. active reservations
@@ -144,7 +146,7 @@ If compaction is detected, stop and re-read before implementing:
 Stop if you notice:
 
 - Gate 3 approval is missing or stale
-- item kind is not `TASK` or `BUG`
+- item kind is not `Ticket`
 - item README has placeholders or missing contract sections
 - file scope is absent, too broad, or contradicted by implementation needs
 - implementation requires changing `solution-design.md` or `plan.md`

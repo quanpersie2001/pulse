@@ -50,10 +50,9 @@ fn bootstrap_is_idempotent_and_does_not_overwrite_user_files() {
 
     let manifest_path = repo.join(".pulse/workgraph/manifest.json");
     fs::write(&manifest_path, b"user-owned manifest\n").unwrap();
-    let second = bootstrap(repo).unwrap();
+    let error = bootstrap(repo).unwrap_err();
+    assert_eq!(error.code(), "workgraph_partial_state_refused");
     assert_eq!(fs::read(&manifest_path).unwrap(), b"user-owned manifest\n");
-    let canonical_manifest_path = fs::canonicalize(&manifest_path).unwrap();
-    assert!(second.preserved.contains(&canonical_manifest_path));
 
     let template_value: serde_json::Value = serde_json::from_str(MANIFEST_JSON).unwrap();
     assert!(to_canonical_bytes(&template_value)

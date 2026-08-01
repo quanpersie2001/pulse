@@ -18,6 +18,59 @@ use crate::{PulseError, Result};
 
 pub const DAEMON_STATE_SCHEMA_VERSION: u32 = 1;
 
+/// Durable journal entry for an effect that crosses the daemon boundary.
+/// Entries are intentionally additive to the existing state document so older
+/// daemon state remains readable.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ExternalEffectKind {
+    WorktreeCreate,
+    ProviderProcessCreate,
+    ProviderSessionCreate,
+    ProviderSessionResume,
+    SessionSend,
+    BootstrapDelivery,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ExternalEffectState {
+    NotSent,
+    /// The daemon durably committed that external I/O is about to begin.
+    /// Recovery must treat this exactly like an unknown outcome.
+    Attempting,
+    Acknowledged,
+    OutcomeUnknown,
+    DefinitivelyFailed,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ExternalEffectRecord {
+    pub schema_version: u32,
+    pub effect_id: String,
+    pub kind: ExternalEffectKind,
+    pub state: ExternalEffectState,
+    pub owner_id: String,
+    /// Canonical request identity. A replay with the same effect id but a
+    /// different fingerprint is a conflict, never a new attempt.
+    #[serde(default)]
+    pub request_fingerprint: String,
+    /// Durable external resource identity when it is known (worktree path or
+    /// managed process id). This is the adoption/cleanup correlation key.
+    #[serde(default)]
+    pub resource_id: Option<String>,
+    /// Exact provider request body prepared before external I/O.  This is
+    /// retained so a proven pre-I/O retry can reuse the original correlation
+    /// identity and payload rather than asking the provider to encode a new
+    /// request.
+    #[serde(default)]
+    pub request_message: Option<String>,
+    pub detail: String,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct DaemonState {
@@ -35,6 +88,8 @@ pub struct DaemonState {
     pub assignment_sagas: BTreeMap<String, AssignmentSagaRecord>,
     #[serde(default)]
     pub deliveries: BTreeMap<String, DeliveryRecord>,
+    #[serde(default)]
+    pub external_effects: BTreeMap<String, ExternalEffectRecord>,
     pub timeline: Vec<TimelineEvent>,
     #[serde(default)]
     pub idempotency_results: BTreeMap<String, IdempotencyRecord>,
@@ -64,6 +119,7 @@ impl DaemonState {
             processes: BTreeMap::new(),
             assignment_sagas: BTreeMap::new(),
             deliveries: BTreeMap::new(),
+            external_effects: BTreeMap::new(),
             timeline: Vec::new(),
             idempotency_results: BTreeMap::new(),
         }

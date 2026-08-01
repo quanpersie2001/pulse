@@ -6,7 +6,7 @@ Compound answers:
 
 > What durable, reusable knowledge emerged from this completed work slice, and where should it live so future planning and execution benefit?
 
-Compound is the canonical post-cycle learning extraction. It produces machine-readable learnings, corrections, and ratchets. It does not consolidate runtime state, repair artifacts, or re-execute work.
+Compound is the canonical post-cycle learning extraction. It produces machine-readable learnings, corrections, and ratchets. It does not consolidate daemon posture, repair artifacts, or re-execute work.
 
 ## Mission
 
@@ -47,14 +47,14 @@ Gather Context -> Analyze (3 streams) -> Synthesize Learnings -> Classify & Rout
 
 ### Phase 1 — Gather context
 
-Read work artifacts, verification evidence, runtime state, and workgraph metadata for the completed slice.
+Read work artifacts, verification evidence, daemon posture, and workgraph metadata for the completed slice.
 
 Minimum reads:
 
 - story `README.md`, `work-brief.md`, `discovery.md`, `solution-design.md`
-- task/bug `README.md` and `verification.md`
-- `.pulse/runtime/STATE.md` and `.pulse/runtime/state.json`
-- `.pulse/workgraph/items.jsonl` or workgraph views when structure clarifies the completed slice
+- Ticket `README.md` and `verification.md`
+- daemon posture from `pulse daemon status`
+- `.pulse/workgraph/nodes/` or a Rust graph projection when structure clarifies the completed slice
 - review findings and relevant verification artifacts
 
 Fallback if work artifacts are partial: session summary plus recent diff.
@@ -76,7 +76,7 @@ Use [analysis-prompts.md](analysis-prompts.md) for stream prompts.
 Write one learnings file per completed feature or work slice:
 
 ```text
-.pulse/memory/learnings/YYYYMMDD-<slug>.md
+the owning learning artifact directory/YYYYMMDD-<slug>.md
 ```
 
 Use [learnings-template.md](learnings-template.md) for file structure.
@@ -95,9 +95,9 @@ Classify each learning into exactly one propagation route:
 
 | Route | Meaning | Destination |
 |-------|---------|-------------|
-| `global-critical` | cross-feature planner-visible rule | `.pulse/memory/critical-patterns.md` (candidate) |
-| `correction` | tactical guardrail for repeated/expensive mistake | `.pulse/memory/corrections/` |
-| `ratchet` | non-regression must-check from repeated/costly miss | `.pulse/memory/ratchet/` |
+| `global-critical` | cross-feature planner-visible rule | owning learning artifact (candidate) |
+| `correction` | tactical guardrail for repeated/expensive mistake | owning learning artifact/corrections/ |
+| `ratchet` | non-regression must-check from repeated/costly miss | owning learning artifact/ratchet/ |
 | `work-item-local` | attach to future work via item `memory_hooks.learnings` | learnings file only |
 | `planner-only` | planning/decomposition heuristic | learnings file only |
 
@@ -111,7 +111,7 @@ Use [corrections-and-ratchets.md](corrections-and-ratchets.md) for correction an
 
 ### Phase 5 — Promote critical learnings
 
-Promote to `.pulse/memory/critical-patterns.md` only when all are true:
+Promote to the owning learning artifact only when all are true:
 
 - cross-feature value
 - meaningful waste prevented if known earlier
@@ -123,7 +123,7 @@ Append promoted entries with a link back to the full learnings file.
 
 ### Phase 6 — Update state
 
-Update `.pulse/runtime/STATE.md` and `.pulse/runtime/state.json` with:
+Record the corresponding work-artifact note with:
 
 - feature or completed slice
 - date

@@ -6,8 +6,8 @@ Use this prompt when running the `discovery.md` reviewer after `pulse:workflow e
 You are a discovery reviewer. Verify this `pulse:workflow explore` output is evidence-complete enough for `pulse:workflow design`.
 
 Files to review:
-- Discovery: works/epics/<epic-id>-<epic-slug>/<story-id>-<story-slug>/discovery.md
-- References directory, if present: works/epics/<epic-id>-<epic-slug>/<story-id>-<story-slug>/references/
+- Discovery: works/<story-id>/discovery.md
+- References directory, if present: works/<story-id>/references/
 
 Check for:
 - Evidence quality: material claims cite repo paths, artifacts, command output, or external sources

@@ -19,7 +19,7 @@ Produce an approved `plan.md` that validation and execution can follow without c
 - full task breakdown
 - mandatory docs impact
 - epic/story README handling
-- approved TASK/BUG materialization posture
+- approved Ticket materialization posture
 - validation plan
 - Gate 2 approval request
 
@@ -48,8 +48,8 @@ Minimum story inputs:
 
 Runtime/workgraph/docs inputs:
 
-- `.pulse/runtime/state.json` and `.pulse/runtime/STATE.md`
-- active epic/story workgraph state queried through `node .gemini/skills/workflow/scripts/pulse.mjs workgraph ... --json`
+- daemon posture from `pulse daemon status`
+- active epic/story workgraph state queried through `pulse work ... --json`
 - targeted docs context after affected surfaces are known:
   - inspect only the required docs surfaces needed to judge impact
   - read `docs/ARCHITECTURE.md` or `docs/GLOSSARY.md` only when architecture/runtime/workgraph terms may change
@@ -61,7 +61,7 @@ Optional fallback inputs; read only for boundary drift, missing carried-forward 
 - story `intake.md`
 - story `work-brief.md` when brainstorm was used
 - story `references/*.md` when cited but not summarized enough for planning
-- `.pulse/memory/critical-patterns.md` when relevant
+- the owning learning artifact when relevant
 - prior `plan.md` when iterating
 
 If plan needs `intake.md` or `work-brief.md` to infer missing solution scope, behavior, direction, or constraints, stop and route back to `pulse:workflow design`.
@@ -72,7 +72,7 @@ If plan needs `intake.md` or `work-brief.md` to infer missing solution scope, be
 
 `solution-design.md` is immutable input.
 
-Plan may decompose, sequence, map docs/validation evidence, enrich work content, and prepare approved TASK/BUG materialization.
+Plan may decompose, sequence, map docs/validation evidence, enrich work content, and prepare approved Ticket materialization.
 
 Plan must not revise design, alter schema/API/UX/product behavior, add solution decisions, or silently resolve design gaps.
 
@@ -100,74 +100,85 @@ Intake creates or matches EPIC/STORY boundaries and writes `intake.md`. Plan han
 - enrich existing epic `README.md` from [epic.readme.md](../../templates/epic.readme.md) when useful content already exists
 - create story `README.md` from [story.readme.md](../../templates/story.readme.md) when the STORY exists but README content is missing
 - enrich existing story `README.md` from [story.readme.md](../../templates/story.readme.md) when useful content already exists
-- create TASK/BUG README content from [task.readme.md](../../templates/task.readme.md) only after `workgraph create --json` returns the canonical `content_path`
+- create Ticket README content from [task.readme.md](../../templates/task.readme.md) only after `pulse work create --json` returns the canonical `value.content_dir`
 
 Do not create duplicate EPIC/STORY items when intake already established the boundary. README creation or enrichment is content handling, not boundary creation.
 
 ### Workgraph via CLI only
 
-Use `node .gemini/skills/workflow/scripts/pulse.mjs workgraph ... --json` for all workgraph reads and mutations. Treat `plan.md` as the approved information artifact only: it records the items and edges to materialize, but it must not contain a generic operations/how-to table. Keep CLI usage guidance here in `command.md` so agents know exactly how to create the approved work after Gate 2.
+Use `pulse work ... --json` for all workgraph reads and mutations. Treat `plan.md` as the approved information artifact only: it records the items and edges to materialize, but it must not contain a generic operations/how-to table. Keep CLI usage guidance here in `command.md` so agents know exactly how to create the approved work after Gate 2.
 
 Use [workgraph-model.md](../shared/workgraph-model.md) when deciding dependency vs link semantics, readiness behavior, or owner/reservation boundaries.
 
 ### Workgraph materialization CLI guide
 
-After explicit Gate 2 approval, materialize only the approved TASK/BUG rows and edge rows recorded in `plan.md`. Use the rendered `node .gemini/skills/workflow/scripts/pulse.mjs` value from the installed workflow skill; do not call `scripts/pulse.mjs` by a guessed filesystem path.
+After explicit Gate 2 approval, create only the approved Ticket rows and edge rows recorded in `plan.md`. Use the `pulse` command on `PATH`; do not guess a plugin filesystem path.
 
-#### 1. Create approved TASK/BUG items
+#### 1. Create approved Ticket items
 
-For each approved item row, run one create command. Use the active STORY ID as `--parent`; TASK and BUG items must be children of a STORY.
+For each approved item row, run one create command. Use a separate graph edge command for approved parent or dependency relationships.
 
 ```bash
-node .gemini/skills/workflow/scripts/pulse.mjs workgraph create \
+pulse work create \
   --repo-root <repo> \
-  --kind TASK \
-  --parent <story-id> \
+  --kind ticket \
   --title "<approved task title>" \
-  --label "<optional-label>" \
-  --risk "<optional-risk-flag>" \
+  --role implementation \
+  --risk low \
+  --materialization R1 \
   --json
 ```
 
-Use `--kind BUG` for bug items. Optional fields are available when approved: `--owner <owner>`, `--priority <n>`, repeated `--label <label>`, and repeated `--risk <flag>`.
+Ticket creation must include `--role`, `--risk`, and `--materialization`; use
+the assessed values from the approved contract.
 
 Read the JSON response and record the returned values before creating edges:
 
-- `item.id` — canonical work item ID to use instead of the plan temp ref (`W1`, `W2`, etc.)
-- `item.content_path` — canonical README path for the item
-- `item.verification_path` — canonical verification path for TASK/BUG items
+Rust returns `MutationOutcome<Node>`; read `MutationOutcome.value` as the
+returned `Node` and use `Node.content_dir` for the human-authored work
+directory.
 
-Maintain a temp-ref map while materializing, for example:
+- `value.id` — canonical work item ID to use instead of the plan temp ref (`W1`, `W2`, etc.)
+- `value.content_dir` — canonical work-artifact directory for the item
+- `value.status` — current Rust lifecycle status
+
+Maintain a temp-ref map while materializing, using current Rust Ticket IDs, for example:
 
 ```text
-W1 -> T-12, content_path=works/epics/<epic>/<story>/T-12-<slug>/README.md
-W2 -> T-13, content_path=works/epics/<epic>/<story>/T-13-<slug>/README.md
+W1 -> TK-12, content_dir=works/TK-12
+W2 -> TK-13, content_dir=works/TK-13
 ```
 
-Do not invent IDs, slugs, or content paths. Use only the values returned by `workgraph create --json`.
+Do not invent IDs, slugs, or content directories. Use only the values returned by `pulse work create --json`.
 
-#### 2. Write TASK/BUG README content at returned paths
+#### 2. Write Ticket README content at returned paths
 
-After each create command returns, write or enrich the README at `item.content_path` using [task.readme.md](../../templates/task.readme.md) and the approved item information from `plan.md`. Preserve the returned path and ID. Do not write task README files before create returns.
+After each create command returns, write or enrich `README.md` under
+`value.content_dir` using [task.readme.md](../../templates/task.readme.md) and
+the approved item information from `plan.md`. Preserve the returned directory
+and ID. Do not write Ticket README files before create returns.
 
 #### 3. Add approved dependency edges
 
 For each dependency edge row in `plan.md`, resolve temp refs through the temp-ref map, then run:
 
 ```bash
-node .gemini/skills/workflow/scripts/pulse.mjs workgraph dep add \
+pulse graph edge add \
+  --type blocked_by \
+  --from <item-id> \
+  --to <depends-on-item-id> \
+  --actor <actor> \
   --repo-root <repo> \
-  <item-id> \
-  <depends-on-item-id> \
   --json
 ```
 
-Direction matters: `<item-id>` is blocked by `<depends-on-item-id>`. Use `dep add` only for blocking dependencies that affect readiness.
+Direction matters: `<item-id>` is blocked by `<depends-on-item-id>`. Use this
+`pulse graph edge add` form only for blocking dependencies that affect readiness.
 
-Example: if `W2` depends on `W1`, and the temp-ref map is `W2 -> T-13`, `W1 -> T-12`, run:
+Example: if `W2` depends on `W1`, and the temp-ref map is `W2 -> TK-13`, `W1 -> TK-12`, run:
 
 ```bash
-node .gemini/skills/workflow/scripts/pulse.mjs workgraph dep add --repo-root <repo> T-13 T-12 --json
+pulse graph edge add --type blocked_by --from TK-13 --to TK-12 --actor <actor> --repo-root <repo> --json
 ```
 
 #### 4. Add approved traceability links
@@ -175,10 +186,12 @@ node .gemini/skills/workflow/scripts/pulse.mjs workgraph dep add --repo-root <re
 For each non-blocking traceability row in `plan.md`, resolve temp refs through the temp-ref map, then run:
 
 ```bash
-node .gemini/skills/workflow/scripts/pulse.mjs workgraph link add \
+pulse graph edge add \
+  --type related \
+  --from <item-id> \
+  --to <linked-item-id> \
+  --actor <actor> \
   --repo-root <repo> \
-  <item-id> \
-  <linked-item-id> \
   --json
 ```
 
@@ -189,22 +202,22 @@ Links are for related-item traceability only; they must not be used when readine
 After all approved items, README content, dependency edges, and links are materialized, run:
 
 ```bash
-node .gemini/skills/workflow/scripts/pulse.mjs workgraph doctor --repo-root <repo> --json
+pulse graph validate --repo-root <repo> --json
 ```
 
 If doctor reports issues, repair only issues caused by the materialization pass. Do not create speculative items or unapproved edges while repairing.
 
 ### Work item decomposition
 
-Plan must decompose the approved story into TASK/BUG items like a lightweight Jira plan:
+Plan must decompose the approved story into Ticket items like a lightweight Jira plan:
 
-- each TASK/BUG has a clear title, purpose, file scope, verification expectation, and design decision refs
+- each Ticket has a clear title, purpose, file scope, verification expectation, and design decision refs
 - `depends_on` means one item cannot safely execute or complete until another item is closed
 - `link` means non-blocking traceability only; it must not affect readiness or execution order
-- item IDs and content paths are not hand-authored in `plan.md`; use placeholders until `node .gemini/skills/workflow/scripts/pulse.mjs workgraph create ... --json` returns canonical values
-- before Gate 2 approval, record the intended TASK/BUG items and edge posture only
-- after Gate 2 approval, create items with `node .gemini/skills/workflow/scripts/pulse.mjs workgraph create ... --json`, then add approved edges with `node .gemini/skills/workflow/scripts/pulse.mjs workgraph dep add ... --json` and `node .gemini/skills/workflow/scripts/pulse.mjs workgraph link add ... --json`
-- after materialization, run or request `node .gemini/skills/workflow/scripts/pulse.mjs workgraph doctor --repo-root <repo> --json`
+- item IDs and content directories are not hand-authored in `plan.md`; use placeholders until `pulse work create ... --json` returns canonical values
+- before Gate 2 approval, record the intended Ticket items and edge posture only
+- after Gate 2 approval, create items with `pulse work create ... --json`, then add approved edges with `pulse graph edge add ... --json`
+- after creation, run or request `pulse graph validate --repo-root <repo> --json`
 
 ### Planning mode
 
@@ -225,13 +238,13 @@ Above `small_change`, record why the smaller mode is insufficient.
 
 1. Read minimum story inputs.
 2. Choose the planning mode using the table above.
-3. Query active epic/story through `node .gemini/skills/workflow/scripts/pulse.mjs workgraph ... --json`.
+3. Query active epic/story through `pulse work ... --json`.
 4. Confirm:
    - active story boundary
    - approved design status
    - design decision IDs and planning constraints
    - discovery evidence needed for task/docs/validation plan
-   - runtime mirror sync
+   - daemon status confirmation when runtime work is involved
    - existing epic/story README posture
 5. Identify affected surfaces from the approved design before reading docs.
 6. Inspect only docs surfaces relevant to those affected surfaces.
@@ -244,7 +257,7 @@ Hard stop if `solution-design.md` is not authoritative or approved.
 Create or update:
 
 ```text
-works/epics/<epic-id>-<epic-slug>/<story-id>-<story-slug>/plan.md
+works/<story-id>/plan.md
 ```
 
 Use [plan.template.md](./plan.template.md) as the starting structure for the story `plan.md`. Keep the artifact focused on implementation detail: what will be implemented, where, how, and how completion will be proven.
@@ -262,7 +275,7 @@ Draft must include:
 - sequencing/parallelization
 - scope and completion contract
 - validation plan
-- approved TASK/BUG items, dependency edges, and traceability links
+- approved Ticket items, dependency edges, and traceability links
 - README creation/enrichment posture when relevant
 - risks and repair posture
 
@@ -280,7 +293,7 @@ Check `plan.md` before Gate 2 approval:
 - validation plan includes proof strategy, test layers, fixtures, commands, expected results, and evidence to produce
 - docs impact covers `docs/ARCHITECTURE.md`, `docs/GLOSSARY.md`, `docs/decisions/`, and `docs/product/`
 - README handling reuses existing EPIC/STORY items and does not dominate the implementation plan
-- TASK/BUG materialization posture includes planned `workgraph create`, `dep add`, and `link add` operations without pre-approval mutations
+- Ticket creation posture includes planned `pulse work create` and `pulse graph edge add` operations without pre-approval mutations
 - no product, architecture, schema, API, UX, migration, or verification-strategy decisions were added
 
 Fix issues once. If serious issues remain, stop and route as below.
@@ -289,9 +302,9 @@ Fix issues once. If serious issues remain, stop and route as below.
 
 Present `plan.md` for explicit Gate 2 approval.
 
-Gate 2 approves decomposition, docs impact, README handling, scope and completion boundary, and TASK/BUG materialization posture. It does not approve new solution decisions.
+Gate 2 approves decomposition, docs impact, README handling, scope and completion boundary, and Ticket materialization posture. It does not approve new solution decisions.
 
-Before approval, `pulse:workflow plan` may produce or repair the approval-ready `plan.md`. It must not create TASK/BUG items, mutate workgraph metadata, mark the plan approved, or write task README files.
+Before approval, `pulse:workflow plan` may produce or repair the approval-ready `plan.md`. It must not create Ticket items, mutate workgraph metadata, mark the plan approved, or write task README files.
 
 ### Phase 4 — Post-approval materialization
 
@@ -301,14 +314,14 @@ After approval:
 
 1. mark `plan.md` approved
 2. create or enrich epic/story `README.md` content as approved, using the README templates only for missing or enriched sections
-3. create approved TASK/BUG items through `node .gemini/skills/workflow/scripts/pulse.mjs workgraph create ... --json`
-4. write task README content at each returned `content_path` using [task.readme.md](../../templates/task.readme.md)
-5. add approved dependency/link edges through `node .gemini/skills/workflow/scripts/pulse.mjs workgraph dep/link ... --json`
-6. run or request `node .gemini/skills/workflow/scripts/pulse.mjs workgraph doctor --repo-root <repo> --json`
-7. sync `.pulse/runtime/STATE.md` and `.pulse/runtime/state.json`
+3. create approved Ticket items through `pulse work create ... --json`
+4. write Ticket README content under each returned `value.content_dir` using [task.readme.md](../../templates/task.readme.md)
+5. add approved dependency/link edges through `pulse graph edge add ... --json`
+6. run or request `pulse graph validate --repo-root <repo> --json`
+7. confirm daemon posture with `pulse daemon status` when runtime work is involved
 8. recommend `pulse:workflow validate`
 
-Create only approved TASK/BUG items. Do not create speculative future backlog.
+Create only approved Ticket items. Do not create speculative future backlog.
 
 ## Reroutes
 
@@ -337,7 +350,7 @@ Before Gate 2 approval, a successful planning pass requires:
 - lowercase `plan.md` under the owning story
 - docs impact recorded for all required docs surfaces
 - epic/story README creation/enrichment posture recorded
-- approved TASK/BUG materialization posture recorded without mutations
+- approved Ticket materialization posture recorded without mutations
 - scope and completion contract
 - validation plan with observable evidence
 - explicit Gate 2 approval request
@@ -348,7 +361,7 @@ After explicit Gate 2 approval, a successful materialization pass requires:
 
 - approved lowercase `plan.md` under the owning story
 - epic/story README creation/enrichment completed when approved
-- approved TASK/BUG materialization applied only through `node .gemini/skills/workflow/scripts/pulse.mjs workgraph`
-- task README content written from returned `content_path` values
-- `.pulse/runtime` mirrors synchronized
+- approved Ticket materialization applied only through `pulse work`
+- Ticket README content written under returned `value.content_dir` values
+- daemon posture mirrors synchronized
 - next recommendation: `pulse:workflow validate`

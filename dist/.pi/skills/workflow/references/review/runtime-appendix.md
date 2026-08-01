@@ -25,10 +25,10 @@ When uncertain between P1 and P2, choose P1 if merge/release could expose users 
 
 ## Evidence integrity checklist
 
-For each reviewed `TASK`/`BUG`, verify:
+For each reviewed `Ticket`, verify:
 
 - workgraph item is closed for this execution pass
-- evidence file exists at `verification_path`
+- evidence file exists at the declared verification evidence path
 - evidence lists commands, exit codes, and observed outputs
 - evidence maps to the reviewed diff/commit range
 - unresolved gaps are explicit

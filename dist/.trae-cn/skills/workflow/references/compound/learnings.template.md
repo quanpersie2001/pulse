@@ -1,6 +1,6 @@
 # Learnings File Template
 
-Use this template when writing `.pulse/memory/learnings/YYYYMMDD-<slug>.md`.
+Use this template when writing an owning learning artifact at `learnings/YYYYMMDD-<slug>.md`.
 
 One file per feature. Multiple learnings can appear in a single file — separate them
 with `---` dividers. Start each file with the YAML frontmatter below, then add
@@ -161,7 +161,7 @@ rather than writing parallel logic.
 
 ## critical-patterns.md Entry Format
 
-When promoting a critical learning to `.pulse/memory/critical-patterns.md`,
+When promoting a critical learning to the owning learning artifact,
 use this condensed format:
 
 ```markdown
@@ -173,7 +173,7 @@ use this condensed format:
 <2-4 sentence summary. What happened, root cause, and what to do differently.
 Enough context that a reader doesn't need to open the full file to act on it.>
 
-**Full entry:** .pulse/memory/learnings/YYYYMMDD-<slug>.md
+**Full entry:** learnings/YYYYMMDD-<slug>.md
 ```
 
 Only promote entries whose propagation is `global-critical`.

@@ -67,6 +67,28 @@ fn event_count(repo: &std::path::Path, event_type: &str, subject: &str) -> usize
     count
 }
 
+fn tree_bytes(root: &std::path::Path) -> Vec<(String, Vec<u8>)> {
+    fn visit(root: &std::path::Path, path: &std::path::Path, out: &mut Vec<(String, Vec<u8>)>) {
+        for entry in fs::read_dir(path).unwrap() {
+            let entry = entry.unwrap();
+            let path = entry.path();
+            if path.is_dir() {
+                visit(root, &path, out);
+            } else {
+                out.push((
+                    path.strip_prefix(root).unwrap().display().to_string(),
+                    fs::read(path).unwrap(),
+                ));
+            }
+        }
+    }
+
+    let mut out = Vec::new();
+    visit(root, root, &mut out);
+    out.sort_by(|left, right| left.0.cmp(&right.0));
+    out
+}
+
 fn make_shaping_receipt(
     id: &str,
     node: &pulse::graph::node::Node,
@@ -170,6 +192,57 @@ fn evidence_artifact_put_verify_and_tamper_detection() {
     .unwrap();
     let err = pulse::evidence::verify_artifact(repo, &out.artifact.digest).unwrap_err();
     assert_eq!(err.code(), "artifact_hash_mismatch");
+}
+
+#[test]
+fn evidence_mutations_refuse_malformed_workgraph_without_changing_graph_bytes() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path();
+    let store = JsonGraphStore::new(repo);
+    let node = store
+        .create_node(WorkKind::Ticket, "Malformed graph".to_string())
+        .unwrap()
+        .value;
+    let manifest = pulse::evidence::bootstrap(repo).unwrap().manifest;
+    let content_rel = format!("works/{}/ticket.md", node.id);
+    let content_path = repo.join(&content_rel);
+    fs::create_dir_all(content_path.parent().unwrap()).unwrap();
+    fs::write(&content_path, b"acceptance").unwrap();
+    let source_commit = commit_all(repo);
+    let receipt = make_shaping_receipt(
+        "rcpt_01J00000000000000000000004",
+        &node,
+        &manifest,
+        &content_rel,
+        hash_bytes(b"acceptance"),
+        source_commit,
+    );
+    let receipt_file = repo.join("malformed-graph-receipt.json");
+    write_json(&receipt_file, &receipt);
+    let artifact_input = repo.join("artifact.txt");
+    fs::write(&artifact_input, b"artifact").unwrap();
+
+    let graph_root = repo.join(".pulse/workgraph");
+    let before = tree_bytes(&graph_root);
+    fs::write(graph_root.join("manifest.json"), b"malformed\n").unwrap();
+    let malformed = tree_bytes(&graph_root);
+
+    let artifact_error = pulse::evidence::put_artifact(
+        repo,
+        None,
+        &artifact_input,
+        "test".to_string(),
+        None,
+        None,
+        1024,
+    )
+    .unwrap_err();
+    let receipt_error = pulse::evidence::record_receipt(repo, None, &receipt_file).unwrap_err();
+
+    assert_eq!(artifact_error.code(), "workgraph_partial_state_refused");
+    assert_eq!(receipt_error.code(), artifact_error.code());
+    assert_ne!(before, malformed);
+    assert_eq!(malformed, tree_bytes(&graph_root));
 }
 
 #[test]
@@ -355,6 +428,52 @@ fn receipt_record_recovery_completes_missing_event_and_retry_is_unchanged() {
     assert_eq!(report.integrity.status, "valid");
     let retry = pulse::evidence::record_receipt(repo, None, &file).unwrap();
     assert_eq!(retry.code, "unchanged");
+}
+
+#[test]
+fn first_use_receipt_bootstrap_and_failpoint_commit_share_the_fence() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path();
+    let store = JsonGraphStore::new(repo);
+    let node = store
+        .create_node(WorkKind::Ticket, "First use".to_string())
+        .unwrap()
+        .value;
+    let manifest = pulse::evidence::bootstrap(repo).unwrap().manifest;
+    let content_rel = format!("works/{}/ticket.md", node.id);
+    let content_path = repo.join(&content_rel);
+    fs::create_dir_all(content_path.parent().unwrap()).unwrap();
+    fs::write(&content_path, b"acceptance").unwrap();
+    let source_commit = commit_all(repo);
+    let mut receipt = make_shaping_receipt(
+        "rcpt_01J00000000000000000000005",
+        &node,
+        &manifest,
+        &content_rel,
+        hash_bytes(b"acceptance"),
+        source_commit,
+    );
+    receipt.bindings.source = None;
+    if let ReceiptPayload::ShapingValidation(payload) = &mut receipt.payload {
+        payload.source_posture = SourcePosture::NotRequiredContentBound;
+    }
+    let receipt_file = repo.join("first-use-receipt.json");
+    write_json(&receipt_file, &receipt);
+    fs::remove_dir_all(repo.join(".pulse/evidence")).unwrap();
+    let graph_before = tree_bytes(&repo.join(".pulse/workgraph"));
+
+    let error = pulse::evidence::record_receipt(
+        repo,
+        Some(TransactionFailpoint::AfterCanonical),
+        &receipt_file,
+    )
+    .unwrap_err();
+
+    assert_eq!(error.code(), "failpoint");
+    assert_eq!(graph_before, tree_bytes(&repo.join(".pulse/workgraph")));
+    assert!(repo.join(".pulse/evidence/manifest.json").exists());
+    recover_prepared_transactions(repo).unwrap();
+    assert!(pulse::evidence::show_receipt(repo, &receipt.id).is_ok());
 }
 
 #[test]

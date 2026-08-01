@@ -3,7 +3,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { getPulseCommand, PROVIDERS } from "./lib/providers.mjs";
+import { getPulseCommand, PROVIDERS, WORKFLOW_SKILL_NAME } from "./lib/providers.mjs";
 import {
   assertNoUnresolvedRuntimePlaceholders,
   renderPulsePlaceholders,
@@ -32,6 +32,60 @@ const TEXT_EXTENSIONS = new Set([
 ]);
 const TEXT_FILENAMES = new Set(["SKILL.md"]);
 const EXCLUDED_DIRS = new Set(["tests"]);
+const LEGACY_CANONICAL_PATHS = [
+  "items.jsonl",
+  "runtime/state.json",
+  "runtime/STATE.md",
+  "runtime/reservations.json",
+];
+const LEGACY_GUIDANCE_MARKERS = [
+  ".pulse/runtime",
+  ".pulse/harness",
+  ".pulse/scripts",
+  ".pulse/workgraph/schema.json",
+  ".pulse/workgraph/views/",
+  "tooling-status.json",
+  "session-load",
+  "runtime mirror",
+  "handoff manifest",
+  "backup-",
+  "backed-up",
+  "pulse work doctor",
+  "pulse work dep",
+  "pulse work link",
+  "workgraph create",
+  "workgraph dep",
+  "workgraph link",
+  "workgraph views",
+  "pulse work update",
+  "pulse work close",
+  "pulse work reopen",
+  "--to done",
+  "T-",
+  "B-",
+  "TASK",
+  "BUG",
+  "pulse status ",
+  "pulse ready ",
+  "pulse reservation ",
+  "{{pulse_command}}",
+  "the Rust `pulse` executable`",
+  "content_dir=works/epics",
+  "works/epics/",
+];
+const REQUIRED_WORKFLOW_CONTRACT_MARKERS = [
+  "Canonical statuses are `DRAFT`, `SHAPED`, `READY`, `ACTIVE`, `VERIFYING`",
+  "the canonical item status is `READY`",
+  "--role implementation",
+  "--risk low",
+  "--materialization R1",
+  "MutationOutcome.value",
+  "Node.content_dir",
+  "`content_dir` is exactly `works/<node-id>`",
+  "content_dir=works/TK-12",
+  "pulse:workflow use",
+  "full close gate",
+];
 
 function isDirectExecution(metaUrl, entryPath = process.argv[1]) {
   if (!entryPath) {
@@ -118,6 +172,66 @@ function copyRenderedTree(sourceDir, outputDir, { pulseCommand }) {
   }
 }
 
+function walkFiles(rootDir) {
+  const files = [];
+  const pending = [rootDir];
+  while (pending.length > 0) {
+    const current = pending.pop();
+    for (const entry of fs.readdirSync(current, { withFileTypes: true })) {
+      const filePath = path.join(current, entry.name);
+      if (entry.isDirectory()) {
+        pending.push(filePath);
+      } else if (entry.isFile()) {
+        files.push(filePath);
+      }
+    }
+  }
+  return files;
+}
+
+function assertRustRuntimeDistribution() {
+  const workflowDir = path.join(DIST_DIR, ".codex", "skills", WORKFLOW_SKILL_NAME);
+  if (fs.existsSync(path.join(workflowDir, "scripts"))) {
+    throw new Error("workflow distribution must not contain a legacy scripts runtime");
+  }
+
+  for (const filePath of walkFiles(DIST_DIR)) {
+    const relativePath = path.relative(DIST_DIR, filePath);
+    const content = fs.readFileSync(filePath, "utf8");
+    const forbiddenMarkers = [
+      "pulse.mjs",
+      ...LEGACY_CANONICAL_PATHS,
+    ];
+    if (relativePath.includes(`${path.sep}skills${path.sep}${WORKFLOW_SKILL_NAME}${path.sep}`)) {
+      forbiddenMarkers.push(...LEGACY_GUIDANCE_MARKERS);
+    }
+    for (const forbidden of forbiddenMarkers) {
+      if (relativePath.includes(forbidden) || content.includes(forbidden)) {
+        throw new Error(`legacy canonical runtime reference ${forbidden} found in ${relativePath}`);
+      }
+    }
+    if (/\bnode\s+[^\n]*pulse/.test(content)) {
+      throw new Error(`Node public runtime invocation found in ${relativePath}`);
+    }
+  }
+
+  for (const provider of PROVIDERS) {
+    const workflowDir = path.join(DIST_DIR, provider.configDir, "skills", WORKFLOW_SKILL_NAME);
+    const workflowText = walkFiles(workflowDir)
+      .filter(shouldTreatAsText)
+      .map((filePath) => fs.readFileSync(filePath, "utf8"))
+      .join("\n");
+    for (const marker of REQUIRED_WORKFLOW_CONTRACT_MARKERS) {
+      if (!workflowText.includes(marker)) {
+        throw new Error(`workflow distribution contract marker missing for ${provider.name}: ${marker}`);
+      }
+    }
+    if (workflowText.includes("pulse:workflow onboard")) {
+      throw new Error(`unrouted public workflow command remains for ${provider.name}`);
+    }
+  }
+}
+
 function getSkillSourceDirs() {
   const manifests = PLUGIN_MANIFEST_PATHS.map((manifestPath) => ({
     path: manifestPath,
@@ -139,6 +253,7 @@ export function buildSkills() {
       copyRenderedTree(skillDir, outputDir, { pulseCommand });
     }
   }
+  assertRustRuntimeDistribution();
 }
 
 if (isDirectExecution(import.meta.url)) {

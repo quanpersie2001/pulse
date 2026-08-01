@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::thread;
 use std::time::{Duration, Instant};
 
 use crate::canonical_json::{hash_bytes, hash_serializable};
@@ -12,7 +13,10 @@ use crate::daemon::assignment::{
     AssignmentSagaRecord, AssignmentSagaState, DeliveryRecord, DeliveryState,
 };
 use crate::daemon::permissions::RuntimePrincipal;
-use crate::daemon::persistence::{IdempotencyGuard, IdempotencyRecord, StateStore};
+use crate::daemon::persistence::{
+    ExternalEffectKind, ExternalEffectRecord, ExternalEffectState, IdempotencyGuard,
+    IdempotencyRecord, StateStore,
+};
 use crate::daemon::process::{
     read_captured_logs, ManagedProcessRecord, ManagedProcessState, ProcessOwner, SpawnRequest,
 };
@@ -48,7 +52,22 @@ impl DaemonApplication {
             endpoint: endpoint.into(),
         };
         application.begin_epoch_and_recover()?;
+        application.start_provider_ingestion();
         Ok(application)
+    }
+
+    fn start_provider_ingestion(&self) {
+        let store = self.store.clone();
+        let owner = self.process_owner.clone();
+        let shutdown = Arc::clone(&self.shutdown);
+        thread::spawn(move || {
+            while !shutdown.load(Ordering::SeqCst) {
+                if let Err(error) = ingest_provider_events(&store, &owner) {
+                    eprintln!("daemon provider event ingestion failed: {error}");
+                }
+                thread::sleep(Duration::from_millis(25));
+            }
+        });
     }
 
     pub fn shutdown_flag(&self) -> Arc<AtomicBool> {
@@ -268,7 +287,7 @@ impl DaemonApplication {
             DaemonRequest::SessionInspect { session_id } => self.session_inspect(session_id)?,
             DaemonRequest::SessionLogs { session_id } => self.session_logs(session_id)?,
             DaemonRequest::SessionSend { session_id, input } => {
-                self.session_send(session_id, input)?
+                self.session_send(session_id, input, idempotency_key)?
             }
             DaemonRequest::SessionResume {
                 session_id,
@@ -432,6 +451,22 @@ impl DaemonApplication {
         request: &DaemonRequest,
     ) -> Result<()> {
         match request {
+            DaemonRequest::SessionCreate {
+                provider_options, ..
+            }
+            | DaemonRequest::SessionResume {
+                provider_options, ..
+            }
+            | DaemonRequest::AssignmentStart {
+                provider_options, ..
+            } if has_explicit_provider_launch(provider_options)
+                && !principal.capabilities.contains("runtime.admin") =>
+            {
+                Err(PulseError::validation(
+                    "runtime_provider_launch_admin_required",
+                    "executable and argument selection requires the runtime.admin capability",
+                ))
+            }
             DaemonRequest::SessionAttach { session_id }
             | DaemonRequest::SessionShow { session_id }
             | DaemonRequest::SessionInspect { session_id }
@@ -566,6 +601,54 @@ impl DaemonApplication {
                     session.updated_at = chrono::Utc::now().to_rfc3339();
                 }
             }
+            let effect_ids = state.external_effects.keys().cloned().collect::<Vec<_>>();
+            for effect_id in effect_ids {
+                let uncertain = {
+                    let acknowledged_without_owner = state
+                        .external_effects
+                        .get(&effect_id)
+                        .is_some_and(|effect| {
+                            effect.state == ExternalEffectState::Acknowledged
+                                && !effect_has_committed_owner(state, effect)
+                        });
+                    let Some(effect) = state.external_effects.get_mut(&effect_id) else {
+                        continue;
+                    };
+                    if effect.state == ExternalEffectState::NotSent
+                        || effect.state == ExternalEffectState::DefinitivelyFailed
+                        || (effect.state == ExternalEffectState::Acknowledged
+                            && !acknowledged_without_owner)
+                    {
+                        None
+                    } else {
+                        effect.state = ExternalEffectState::OutcomeUnknown;
+                        effect.updated_at = chrono::Utc::now().to_rfc3339();
+                        Some((
+                            effect.effect_id.clone(),
+                            effect.kind.clone(),
+                            effect.owner_id.clone(),
+                            effect.detail.clone(),
+                        ))
+                    }
+                };
+                let Some((effect_id_value, effect_kind, owner_id, detail)) = uncertain else {
+                    continue;
+                };
+                append_event(
+                    state,
+                    "daemon.external_effect_uncertain",
+                    None,
+                    None,
+                    None,
+                    json!({
+                        "effect_id": effect_id_value,
+                        "kind": effect_kind,
+                        "owner_id": owner_id,
+                        "detail": detail,
+                        "operator_action": "reconcile_or_cleanup_before_retry"
+                    }),
+                );
+            }
             append_event(
                 state,
                 "daemon.epoch_started",
@@ -594,7 +677,13 @@ impl DaemonApplication {
                 | AssignmentSagaState::Reserved
                 | AssignmentSagaState::WorkspaceReady
                 | AssignmentSagaState::SessionReady => Some(Recovery::Recoverable),
-                AssignmentSagaState::DeliveryPending => Some(Recovery::UncertainDelivery),
+                AssignmentSagaState::DeliveryPending => {
+                    if pending_bootstrap_delivery_is_retryable(&snapshot, saga, &self.providers) {
+                        None
+                    } else {
+                        Some(Recovery::UncertainDelivery)
+                    }
+                }
                 AssignmentSagaState::Acknowledged => {
                     let project = snapshot.projects.get(&saga.project_id);
                     let lease = saga.lease_id.as_deref();
@@ -803,74 +892,175 @@ impl DaemonApplication {
         idempotency_key: &str,
     ) -> Result<DaemonResponse> {
         validate_name(name)?;
-        self.store.with_state(true, |state| {
-            let project =
-                state
-                    .projects
-                    .get(project_id)
-                    .cloned()
-                    .ok_or_else(|| PulseError::NotFound {
-                        subject: format!("project {project_id}"),
-                    })?;
-            if project.archived_at.is_some() {
-                return Err(PulseError::validation(
-                    "project_archived",
-                    "cannot create a workspace in an archived project",
-                ));
-            }
-            let workspace_id = deterministic_id("wks", idempotency_key);
-            if let Some(workspace) = state.workspaces.get(&workspace_id).cloned() {
-                return Ok(DaemonResponse::Workspace { workspace });
-            }
+        let workspace_id = deterministic_id("wks", idempotency_key);
+        if let Some(workspace) = self.store.with_state(false, |state| {
+            Ok(state.workspaces.get(&workspace_id).cloned())
+        })? {
+            return Ok(DaemonResponse::Workspace { workspace });
+        }
+        let prepared_worktree = if isolation == IsolationMode::Worktree {
+            let project = self.project_record(project_id)?;
             let project_root = PathBuf::from(&project.canonical_root);
-            let (root, managed, base_commit) = match isolation {
-                IsolationMode::Local => (
-                    project.canonical_root.clone(),
-                    false,
-                    requested_base.map(str::to_string),
-                ),
-                IsolationMode::Worktree => {
-                    let base = match requested_base {
-                        Some(base) => crate::source::resolve_full_commit(&project_root, base)?,
-                        None => crate::source::head_commit(&project_root)?,
-                    };
-                    let workspace_root = self.store.root().join("workspaces").join(&workspace_id);
-                    create_worktree(&project_root, &workspace_root, &base)?;
-                    (
-                        workspace_root.to_string_lossy().to_string(),
-                        true,
-                        Some(base),
-                    )
-                }
+            let base = match requested_base {
+                Some(base) => crate::source::resolve_full_commit(&project_root, base)?,
+                None => crate::source::head_commit(&project_root)?,
             };
-            let now = chrono::Utc::now().to_rfc3339();
-            let workspace = WorkspaceRecord {
-                schema_version: 1,
-                workspace_id: workspace_id.clone(),
-                project_id: project_id.to_string(),
-                name: name.to_string(),
-                isolation,
-                root,
-                managed,
-                base_commit,
-                lifecycle: WorkspaceLifecycle::Open,
-                created_at: now.clone(),
-                updated_at: now,
-                archived_at: None,
-            };
-            state
-                .workspaces
-                .insert(workspace_id.clone(), workspace.clone());
-            append_event(
-                state,
-                "workspace.created",
-                Some(project_id),
-                Some(&workspace_id),
+            let workspace_root = self.store.root().join("workspaces").join(&workspace_id);
+            let effect_id = format!("effect-worktree-{workspace_id}");
+            let existing = self.record_external_effect(
+                &effect_id,
+                ExternalEffectKind::WorktreeCreate,
+                &workspace_id,
+                &hash_bytes(format!("{project_id}:{name}:{base}").as_bytes()),
+                format!("root={} base={base}", workspace_root.display()),
                 None,
-                json!({"isolation": isolation}),
+            )?;
+            if matches!(
+                existing.state,
+                ExternalEffectState::Attempting | ExternalEffectState::OutcomeUnknown
+            ) {
+                return Err(external_effect_blocked(&effect_id));
+            }
+            if existing.state == ExternalEffectState::DefinitivelyFailed {
+                return Err(external_effect_blocked(&effect_id));
+            }
+            if existing.state == ExternalEffectState::Acknowledged {
+                if validate_owned_worktree(&project_root, &workspace_root, &base) {
+                    Some((workspace_root.to_string_lossy().to_string(), base))
+                } else {
+                    let _ = self.update_external_effect(
+                        &effect_id,
+                        ExternalEffectState::OutcomeUnknown,
+                        None,
+                        Some(
+                            "acknowledged worktree could not be adopted or safely validated"
+                                .to_string(),
+                        ),
+                    );
+                    return Err(external_effect_blocked(&effect_id));
+                }
+            } else {
+                self.store.check_failpoint("after_external_effect_intent")?;
+                self.update_external_effect(
+                    &effect_id,
+                    ExternalEffectState::Attempting,
+                    None,
+                    Some(format!(
+                        "dispatching worktree root={}",
+                        workspace_root.display()
+                    )),
+                )?;
+                if let Err(error) = create_worktree(&project_root, &workspace_root, &base) {
+                    let _ = self.update_external_effect(
+                        &effect_id,
+                        ExternalEffectState::DefinitivelyFailed,
+                        None,
+                        Some(error.to_string()),
+                    );
+                    return Err(error);
+                }
+                self.update_external_effect(
+                    &effect_id,
+                    ExternalEffectState::Attempting,
+                    Some(workspace_root.to_string_lossy().to_string()),
+                    Some(format!(
+                        "worktree created root={}",
+                        workspace_root.display()
+                    )),
+                )?;
+                self.store
+                    .check_failpoint("after_worktree_success_before_ack")?;
+                self.update_external_effect(
+                    &effect_id,
+                    ExternalEffectState::Acknowledged,
+                    Some(workspace_root.to_string_lossy().to_string()),
+                    Some(format!(
+                        "created root={} base={base}",
+                        workspace_root.display()
+                    )),
+                )?;
+                Some((workspace_root.to_string_lossy().to_string(), base))
+            }
+        } else {
+            None
+        };
+        if let Err(error) = self.store.check_failpoint("before_workspace_ledger_commit") {
+            if isolation == IsolationMode::Worktree {
+                let _ = self.update_external_effect(
+                    &format!("effect-worktree-{workspace_id}"),
+                    ExternalEffectState::OutcomeUnknown,
+                    prepared_worktree.as_ref().map(|(root, _)| root.clone()),
+                    Some(error.to_string()),
+                );
+            }
+            return Err(error);
+        }
+        let result =
+            self.store.with_state(true, |state| {
+                let project = state.projects.get(project_id).cloned().ok_or_else(|| {
+                    PulseError::NotFound {
+                        subject: format!("project {project_id}"),
+                    }
+                })?;
+                if project.archived_at.is_some() {
+                    return Err(PulseError::validation(
+                        "project_archived",
+                        "cannot create a workspace in an archived project",
+                    ));
+                }
+                if let Some(workspace) = state.workspaces.get(&workspace_id).cloned() {
+                    return Ok(DaemonResponse::Workspace { workspace });
+                }
+                let (root, managed, base_commit) = match isolation {
+                    IsolationMode::Local => (
+                        project.canonical_root.clone(),
+                        false,
+                        requested_base.map(str::to_string),
+                    ),
+                    IsolationMode::Worktree => {
+                        let (root, base) = prepared_worktree
+                            .clone()
+                            .expect("worktree effect is prepared before persistence");
+                        (root, true, Some(base))
+                    }
+                };
+                let now = chrono::Utc::now().to_rfc3339();
+                let workspace = WorkspaceRecord {
+                    schema_version: 1,
+                    workspace_id: workspace_id.clone(),
+                    project_id: project_id.to_string(),
+                    name: name.to_string(),
+                    isolation,
+                    root,
+                    managed,
+                    base_commit,
+                    lifecycle: WorkspaceLifecycle::Open,
+                    created_at: now.clone(),
+                    updated_at: now,
+                    archived_at: None,
+                };
+                state
+                    .workspaces
+                    .insert(workspace_id.clone(), workspace.clone());
+                append_event(
+                    state,
+                    "workspace.created",
+                    Some(project_id),
+                    Some(&workspace_id),
+                    None,
+                    json!({"isolation": isolation}),
+                );
+                Ok(DaemonResponse::Workspace { workspace })
+            });
+        if result.is_err() && isolation == IsolationMode::Worktree {
+            let _ = self.update_external_effect(
+                &format!("effect-worktree-{workspace_id}"),
+                ExternalEffectState::OutcomeUnknown,
+                prepared_worktree.as_ref().map(|(root, _)| root.clone()),
+                Some("workspace ledger commit failed after worktree creation".to_string()),
             );
-            Ok(DaemonResponse::Workspace { workspace })
-        })
+        }
+        result
     }
 
     fn workspace_list(
@@ -1006,7 +1196,39 @@ impl DaemonApplication {
             Ok(workspace) => workspace,
             Err(existing) => return Ok(existing),
         };
-        let process = self.process_owner.spawn(SpawnRequest {
+        let process_effect_id = format!("effect-process-{session_id}");
+        let process_effect = self.record_external_effect(
+            &process_effect_id,
+            ExternalEffectKind::ProviderProcessCreate,
+            &session_id,
+            &hash_bytes(
+                format!(
+                    "{provider_id}:{}:{:?}",
+                    launch.executable.display(),
+                    launch.args
+                )
+                .as_bytes(),
+            ),
+            format!("planned executable={}", launch.executable.display()),
+            None,
+        )?;
+        if matches!(
+            process_effect.state,
+            ExternalEffectState::Attempting
+                | ExternalEffectState::Acknowledged
+                | ExternalEffectState::OutcomeUnknown
+        ) {
+            return Err(external_effect_blocked(&process_effect_id));
+        }
+        self.store
+            .check_failpoint("after_provider_process_intent")?;
+        self.update_external_effect(
+            &process_effect_id,
+            ExternalEffectState::Attempting,
+            None,
+            Some("dispatching provider process".to_string()),
+        )?;
+        let process = match self.process_owner.spawn(SpawnRequest {
             owner_kind: "session",
             owner_id: &session_id,
             provider_id,
@@ -1015,8 +1237,93 @@ impl DaemonApplication {
             cwd: Path::new(&workspace.root),
             log_root: &self.store.root().join("logs"),
             max_log_bytes: 4 * 1024 * 1024,
-        })?;
+        }) {
+            Ok(process) => process,
+            Err(error) => {
+                let _ = self.update_external_effect(
+                    &process_effect_id,
+                    ExternalEffectState::DefinitivelyFailed,
+                    None,
+                    Some(error.to_string()),
+                );
+                return Err(error);
+            }
+        };
         let process_id = process.process_id.clone();
+        self.update_external_effect(
+            &process_effect_id,
+            ExternalEffectState::Attempting,
+            Some(process_id.clone()),
+            Some(format!(
+                "spawned process_id={process_id}; awaiting acknowledgement"
+            )),
+        )?;
+        self.store
+            .check_failpoint("after_provider_process_success_before_ack")?;
+        self.update_external_effect(
+            &process_effect_id,
+            ExternalEffectState::Acknowledged,
+            Some(process_id.clone()),
+            Some(format!("spawned process_id={process_id}")),
+        )?;
+        let session_effect_id = format!("effect-provider-session-{session_id}");
+        if launch.native_protocol {
+            if let Err(error) = self.record_external_effect(
+                &session_effect_id,
+                ExternalEffectKind::ProviderSessionCreate,
+                &session_id,
+                &hash_bytes(format!("{provider_id}:{session_id}").as_bytes()),
+                format!("provider={provider_id}"),
+                None,
+            ) {
+                let _ = self.process_owner.terminate(&process_id);
+                let _ = self.update_external_effect(
+                    &process_effect_id,
+                    ExternalEffectState::OutcomeUnknown,
+                    Some(process_id.clone()),
+                    Some("provider-session intent could not be persisted".to_string()),
+                );
+                return Err(error);
+            }
+            let session_effect = self.store.with_state(false, |state| {
+                Ok(state.external_effects.get(&session_effect_id).cloned())
+            })?;
+            if session_effect
+                .as_ref()
+                .is_some_and(|effect| effect.state == ExternalEffectState::Attempting)
+            {
+                return Err(external_effect_blocked(&session_effect_id));
+            }
+            if let Err(error) = self.store.check_failpoint("after_provider_session_intent") {
+                let terminated = self.process_owner.terminate(&process_id).is_ok();
+                let _ = self.update_external_effect(
+                    &process_effect_id,
+                    if terminated {
+                        ExternalEffectState::DefinitivelyFailed
+                    } else {
+                        ExternalEffectState::OutcomeUnknown
+                    },
+                    Some(process_id.clone()),
+                    Some(error.to_string()),
+                );
+                let _ = self.update_external_effect(
+                    &session_effect_id,
+                    ExternalEffectState::OutcomeUnknown,
+                    None,
+                    Some(error.to_string()),
+                );
+                return Err(error);
+            }
+        }
+        if launch.native_protocol {
+            self.update_external_effect(
+                &session_effect_id,
+                ExternalEffectState::Attempting,
+                None,
+                Some("dispatching provider session creation".to_string()),
+            )?;
+        }
+        let mut provider_acknowledged = false;
         let provider_session = (|| -> Result<(Option<String>, Vec<Value>)> {
             if !launch.native_protocol {
                 return Ok((None, Vec::new()));
@@ -1028,6 +1335,7 @@ impl DaemonApplication {
                 &initialize.message,
                 Duration::from_secs(10),
             )?;
+            provider_acknowledged = true;
             self.process_owner
                 .send_line(&process_id, &provider.initialized_notification()?)?;
             let create = provider.create_session_request(&workspace.root, provider_options)?;
@@ -1037,19 +1345,74 @@ impl DaemonApplication {
                 &create.message,
                 Duration::from_secs(30),
             )?;
+            provider_acknowledged = true;
             notifications.extend(create_notifications);
             Ok((
-                Some(provider.parse_session_handle(&response)?),
+                Some(
+                    provider
+                        .parse_session_handle(&response)
+                        .map_err(provider_protocol_after_transport)?,
+                ),
                 notifications,
             ))
         })();
         let (provider_handle, provider_notifications) = match provider_session {
             Ok(provider_session) => provider_session,
             Err(error) => {
-                let _ = self.process_owner.terminate(&process_id);
+                let termination = self.process_owner.terminate(&process_id);
+                let cleanup_detail = termination
+                    .as_ref()
+                    .err()
+                    .map(|cleanup| format!("provider process cleanup failed: {cleanup}"));
+                let process_state = if termination.is_ok()
+                    && !provider_acknowledged
+                    && !is_ambiguous_provider_outcome(&error)
+                {
+                    ExternalEffectState::DefinitivelyFailed
+                } else {
+                    ExternalEffectState::OutcomeUnknown
+                };
+                let session_state = if provider_acknowledged
+                    || is_ambiguous_provider_outcome(&error)
+                    || termination.is_err()
+                {
+                    ExternalEffectState::OutcomeUnknown
+                } else {
+                    ExternalEffectState::DefinitivelyFailed
+                };
+                let _ = self.update_external_effect(
+                    &process_effect_id,
+                    process_state,
+                    Some(process_id.clone()),
+                    Some(format_failure_detail(&error, cleanup_detail.as_deref())),
+                );
+                if launch.native_protocol {
+                    let _ = self.update_external_effect(
+                        &session_effect_id,
+                        session_state,
+                        None,
+                        Some(format_failure_detail(&error, cleanup_detail.as_deref())),
+                    );
+                }
                 return Err(error);
             }
         };
+        if launch.native_protocol {
+            self.update_external_effect(
+                &session_effect_id,
+                ExternalEffectState::Attempting,
+                provider_handle.clone(),
+                Some("provider session accepted; awaiting acknowledgement".to_string()),
+            )?;
+            self.store
+                .check_failpoint("after_provider_session_success_before_ack")?;
+            self.update_external_effect(
+                &session_effect_id,
+                ExternalEffectState::Acknowledged,
+                None,
+                Some("provider session acknowledged".to_string()),
+            )?;
+        }
         let result = self.store.with_state(true, |state| {
             let now = chrono::Utc::now().to_rfc3339();
             let session = SessionRecord {
@@ -1093,6 +1456,23 @@ impl DaemonApplication {
         });
         if result.is_err() {
             let _ = self.process_owner.terminate(&process_id);
+            let _ = self.update_external_effect(
+                &process_effect_id,
+                ExternalEffectState::OutcomeUnknown,
+                Some(process_id.clone()),
+                Some(
+                    "session commit failed after process creation; reconcile process ledger"
+                        .to_string(),
+                ),
+            );
+            if launch.native_protocol {
+                let _ = self.update_external_effect(
+                    &session_effect_id,
+                    ExternalEffectState::OutcomeUnknown,
+                    None,
+                    Some("session commit failed after provider acknowledgement".to_string()),
+                );
+            }
         }
         result
     }
@@ -1195,6 +1575,73 @@ impl DaemonApplication {
                 "session resumption requires an open workspace",
             ));
         }
+        let resume_effect_id = format!(
+            "effect-provider-resume-{session_id}-{}",
+            hash_bytes(format!("{provider_handle}:{}", session_snapshot.updated_at).as_bytes())
+                .trim_start_matches("sha256:")
+                .chars()
+                .take(20)
+                .collect::<String>()
+        );
+        let unresolved_resume = self.store.with_state(false, |state| {
+            Ok(state
+                .external_effects
+                .values()
+                .find(|effect| {
+                    effect.kind == ExternalEffectKind::ProviderSessionResume
+                        && effect.owner_id == session_id
+                        && matches!(
+                            effect.state,
+                            ExternalEffectState::Attempting | ExternalEffectState::OutcomeUnknown
+                        )
+                })
+                .cloned())
+        })?;
+        if let Some(effect) = unresolved_resume {
+            return Err(external_effect_blocked(&effect.effect_id));
+        }
+        let resume_effect = self.record_external_effect(
+            &resume_effect_id,
+            ExternalEffectKind::ProviderSessionResume,
+            session_id,
+            &hash_bytes(format!("{}:{provider_handle}", session_snapshot.provider_id).as_bytes()),
+            format!(
+                "provider={} handle={provider_handle}",
+                session_snapshot.provider_id
+            ),
+            None,
+        )?;
+        match resume_effect.state {
+            ExternalEffectState::NotSent => {}
+            ExternalEffectState::Acknowledged => {
+                let committed = self.store.with_state(false, |state| {
+                    Ok(effect_has_committed_owner(state, &resume_effect))
+                })?;
+                if committed {
+                    return self.store.with_state(false, |state| {
+                        let session = state.sessions.get(session_id).cloned().ok_or_else(|| {
+                            PulseError::NotFound {
+                                subject: format!("session {session_id}"),
+                            }
+                        })?;
+                        Ok(DaemonResponse::Session { session })
+                    });
+                }
+                return Err(external_effect_blocked(&resume_effect_id));
+            }
+            ExternalEffectState::Attempting
+            | ExternalEffectState::OutcomeUnknown
+            | ExternalEffectState::DefinitivelyFailed => {
+                return Err(external_effect_blocked(&resume_effect_id));
+            }
+        }
+        self.store.check_failpoint("after_session_resume_intent")?;
+        self.update_external_effect(
+            &resume_effect_id,
+            ExternalEffectState::Attempting,
+            session_snapshot.managed_process_id.clone(),
+            Some("dispatching session resume".to_string()),
+        )?;
         if let Some(old_process_id) = session_snapshot.managed_process_id.as_deref() {
             let old_record = self.store.with_state(false, |state| {
                 Ok(state.processes.get(old_process_id).cloned())
@@ -1205,7 +1652,15 @@ impl DaemonApplication {
                     Err(error) if error.code() == "managed_process_not_owned" => {
                         self.process_owner.terminate_record(&old_record)?;
                     }
-                    Err(error) => return Err(error),
+                    Err(error) => {
+                        let _ = self.update_external_effect(
+                            &resume_effect_id,
+                            ExternalEffectState::OutcomeUnknown,
+                            Some(old_process_id.to_string()),
+                            Some(format!("old process termination failed: {error}")),
+                        );
+                        return Err(error);
+                    }
                 }
             }
         }
@@ -1221,12 +1676,29 @@ impl DaemonApplication {
         }) {
             Ok(process) => process,
             Err(error) => {
+                let _ = self.update_external_effect(
+                    &resume_effect_id,
+                    ExternalEffectState::OutcomeUnknown,
+                    None,
+                    Some(format!(
+                        "replacement process spawn outcome unknown: {error}"
+                    )),
+                );
                 // The old process was already terminated above; record the
                 // accurate ledger/session state before surfacing the spawn error.
                 return self.fail_session_resume(session_id, &session_snapshot, None, error);
             }
         };
         let new_process_id = process.process_id.clone();
+        self.update_external_effect(
+            &resume_effect_id,
+            ExternalEffectState::Attempting,
+            Some(new_process_id.clone()),
+            Some("replacement process spawned; awaiting provider resume".to_string()),
+        )?;
+        self.store
+            .check_failpoint("after_session_resume_spawn_before_ack")?;
+        let mut provider_acknowledged = false;
         let provider_session_result = (|| -> Result<Vec<Value>> {
             let initialize = provider.initialize_request()?;
             let (_, mut notifications) = self.process_owner.request_json(
@@ -1235,6 +1707,7 @@ impl DaemonApplication {
                 &initialize.message,
                 Duration::from_secs(10),
             )?;
+            provider_acknowledged = true;
             self.process_owner
                 .send_line(&new_process_id, &provider.initialized_notification()?)?;
             let resume = provider.resume_session_request(
@@ -1248,7 +1721,10 @@ impl DaemonApplication {
                 &resume.message,
                 Duration::from_secs(30),
             )?;
-            let resumed_handle = provider.parse_session_handle(&response)?;
+            provider_acknowledged = true;
+            let resumed_handle = provider
+                .parse_session_handle(&response)
+                .map_err(provider_protocol_after_transport)?;
             if resumed_handle != provider_handle {
                 return Err(PulseError::validation(
                     "provider_resume_identity_mismatch",
@@ -1262,6 +1738,16 @@ impl DaemonApplication {
             Ok(result) => result,
             Err(error) => {
                 let _ = self.process_owner.terminate(&new_process_id);
+                let _ = self.update_external_effect(
+                    &resume_effect_id,
+                    if provider_acknowledged || is_ambiguous_provider_outcome(&error) {
+                        ExternalEffectState::OutcomeUnknown
+                    } else {
+                        ExternalEffectState::DefinitivelyFailed
+                    },
+                    Some(new_process_id.clone()),
+                    Some(error.to_string()),
+                );
                 return self.fail_session_resume(
                     session_id,
                     &session_snapshot,
@@ -1270,6 +1756,20 @@ impl DaemonApplication {
                 );
             }
         };
+        self.update_external_effect(
+            &resume_effect_id,
+            ExternalEffectState::Attempting,
+            Some(new_process_id.clone()),
+            Some("provider resume accepted; awaiting acknowledgement".to_string()),
+        )?;
+        self.store
+            .check_failpoint("after_session_resume_success_before_ack")?;
+        self.update_external_effect(
+            &resume_effect_id,
+            ExternalEffectState::Acknowledged,
+            Some(new_process_id.clone()),
+            Some("provider session resume acknowledged".to_string()),
+        )?;
         // `process` is moved into the commit closure below; keep an independent
         // copy so the rare final-commit failure can still record the candidate.
         let candidate_record = process.clone();
@@ -1332,6 +1832,14 @@ impl DaemonApplication {
             Ok(response) => Ok(response),
             Err(error) => {
                 let _ = self.process_owner.terminate(&new_process_id);
+                let _ = self.update_external_effect(
+                    &resume_effect_id,
+                    ExternalEffectState::OutcomeUnknown,
+                    Some(new_process_id.clone()),
+                    Some(format!(
+                        "session resume commit failed after provider acknowledgement: {error}"
+                    )),
+                );
                 self.fail_session_resume(
                     session_id,
                     &session_snapshot,
@@ -1498,8 +2006,13 @@ impl DaemonApplication {
         })
     }
 
-    fn session_send(&self, session_id: &str, input: &str) -> Result<DaemonResponse> {
-        let prepared = self.prepare_session_turn(session_id, input)?;
+    fn session_send(
+        &self,
+        session_id: &str,
+        input: &str,
+        idempotency_key: &str,
+    ) -> Result<DaemonResponse> {
+        let prepared = self.prepare_session_turn(session_id, input, idempotency_key, None)?;
         let committed = self.execute_session_turn(prepared, input)?;
         Ok(DaemonResponse::Session {
             session: committed.session,
@@ -1510,7 +2023,13 @@ impl DaemonApplication {
     /// encodes the provider request. The provider request identifier (when the
     /// protocol exposes one) is available here, BEFORE any provider I/O, so a
     /// delivery intent can persist it as correlation before sending.
-    fn prepare_session_turn(&self, session_id: &str, input: &str) -> Result<PreparedSessionTurn> {
+    fn prepare_session_turn(
+        &self,
+        session_id: &str,
+        input: &str,
+        request_identity: &str,
+        expected_request_id: Option<&str>,
+    ) -> Result<PreparedSessionTurn> {
         if input.trim().is_empty() {
             return Err(PulseError::validation(
                 "session_input_empty",
@@ -1541,20 +2060,83 @@ impl DaemonApplication {
                 "session has no provider process handle",
             )
         })?;
+        let effect_id = session_send_effect_id(session_id, request_identity);
+        let existing_message = self.store.with_state(false, |state| {
+            Ok(state
+                .external_effects
+                .get(&effect_id)
+                .and_then(|effect| effect.request_message.clone()))
+        })?;
         let provider = self.providers.get(&snapshot.provider_id)?;
-        let (request_id, message) = match snapshot.provider_handle.as_deref() {
-            Some(provider_handle) => {
-                let request = provider.encode_send(provider_handle, input)?;
-                (Some(request.request_id), Some(request.message))
+        let (request_id, message) = match (snapshot.provider_handle.as_deref(), existing_message) {
+            (Some(_), Some(message)) => {
+                let request_id = provider_request_id(&message)?;
+                if expected_request_id.is_some_and(|expected| expected != request_id) {
+                    return Err(PulseError::validation(
+                        "external_effect_request_conflict",
+                        "durable provider request identity does not match delivery correlation",
+                    ));
+                }
+                (Some(request_id), Some(message))
             }
-            None => (None, None),
+            (Some(provider_handle), None) => {
+                let request = provider.encode_send(provider_handle, input)?;
+                let message = if let Some(expected) = expected_request_id {
+                    replace_provider_request_id(&request.message, expected)?
+                } else {
+                    request.message
+                };
+                let request_id = expected_request_id
+                    .map(str::to_string)
+                    .unwrap_or(request.request_id);
+                (Some(request_id), Some(message))
+            }
+            (None, None) => (None, None),
+            (None, Some(_)) => {
+                return Err(PulseError::validation(
+                    "provider_handle_missing",
+                    "durable provider request requires a provider handle",
+                ));
+            }
         };
+        let effect = self.record_external_effect(
+            &effect_id,
+            ExternalEffectKind::SessionSend,
+            session_id,
+            &hash_bytes(request_identity.as_bytes()),
+            format!(
+                "request_id={:?} input_hash={}",
+                request_id,
+                hash_bytes(input.as_bytes())
+            ),
+            message.clone(),
+        )?;
+        let committed_turn_id = match effect.state {
+            ExternalEffectState::NotSent => None,
+            ExternalEffectState::Acknowledged => {
+                let committed = self.store.with_state(false, |state| {
+                    Ok(effect_has_committed_owner(state, &effect))
+                })?;
+                if !committed {
+                    return Err(external_effect_blocked(&effect_id));
+                }
+                effect.resource_id.clone()
+            }
+            ExternalEffectState::Attempting
+            | ExternalEffectState::OutcomeUnknown
+            | ExternalEffectState::DefinitivelyFailed => {
+                return Err(external_effect_blocked(&effect_id));
+            }
+        };
+        self.store.check_failpoint("after_session_send_intent")?;
         Ok(PreparedSessionTurn {
             _session_guard,
             snapshot,
             process_id,
             request_id,
             message,
+            effect_id,
+            committed_turn_id,
         })
     }
 
@@ -1565,9 +2147,31 @@ impl DaemonApplication {
         prepared: PreparedSessionTurn,
         input: &str,
     ) -> Result<CommittedSessionTurn> {
+        if let Some(turn_id) = prepared.committed_turn_id {
+            let session = self.store.with_state(false, |state| {
+                state
+                    .sessions
+                    .get(&prepared.snapshot.session_id)
+                    .cloned()
+                    .ok_or_else(|| PulseError::NotFound {
+                        subject: format!("session {}", prepared.snapshot.session_id),
+                    })
+            })?;
+            return Ok(CommittedSessionTurn {
+                provider_turn_id: Some(turn_id),
+                session,
+            });
+        }
         let provider = self.providers.get(&prepared.snapshot.provider_id)?;
-        let (turn_id, provider_turn_id, notifications) = match prepared.message.as_deref() {
-            Some(message) => {
+        self.update_external_effect(
+            &prepared.effect_id,
+            ExternalEffectState::Attempting,
+            None,
+            Some("dispatching session turn".to_string()),
+        )?;
+        let mut transport_acknowledged = false;
+        let provider_io = match prepared.message.as_deref() {
+            Some(message) => (|| -> Result<(String, Option<String>, Vec<Value>)> {
                 let request_id = prepared
                     .request_id
                     .as_deref()
@@ -1578,18 +2182,66 @@ impl DaemonApplication {
                     message,
                     Duration::from_secs(30),
                 )?;
-                let turn = provider.parse_turn_handle(&response)?;
-                (turn.clone(), Some(turn), notifications)
+                transport_acknowledged = true;
+                let turn = provider
+                    .parse_turn_handle(&response)
+                    .map_err(provider_protocol_after_transport)?;
+                Ok((turn.clone(), Some(turn), notifications))
+            })(),
+            None => self
+                .process_owner
+                .send_line(&prepared.process_id, input)
+                .map(|()| {
+                    transport_acknowledged = true;
+                    (format!("turn_{}", ulid::Ulid::new()), None, Vec::new())
+                }),
+        };
+        let (turn_id, provider_turn_id, notifications) = match provider_io {
+            Ok(value) => {
+                let turn_resource_id = value.0.clone();
+                self.update_external_effect(
+                    &prepared.effect_id,
+                    ExternalEffectState::Attempting,
+                    Some(turn_resource_id),
+                    Some("provider transport accepted turn; awaiting acknowledgement".to_string()),
+                )?;
+                value
             }
-            None => {
-                self.process_owner.send_line(&prepared.process_id, input)?;
-                (format!("turn_{}", ulid::Ulid::new()), None, Vec::new())
+            Err(error) => {
+                let _ = self.update_external_effect(
+                    &prepared.effect_id,
+                    if transport_acknowledged || is_ambiguous_provider_outcome(&error) {
+                        ExternalEffectState::OutcomeUnknown
+                    } else {
+                        ExternalEffectState::DefinitivelyFailed
+                    },
+                    None,
+                    Some(error.to_string()),
+                );
+                return Err(error);
             }
         };
+        self.store
+            .check_failpoint("after_session_send_success_before_ack")?;
+        self.update_external_effect(
+            &prepared.effect_id,
+            ExternalEffectState::Acknowledged,
+            Some(turn_id.clone()),
+            Some("provider transport acknowledged turn".to_string()),
+        )?;
+        if let Err(error) = self.store.check_failpoint("before_session_turn_commit") {
+            let _ = self.update_external_effect(
+                &prepared.effect_id,
+                ExternalEffectState::OutcomeUnknown,
+                Some(turn_id.clone()),
+                Some(error.to_string()),
+            );
+            return Err(error);
+        }
         let turn_completed = notifications
             .iter()
             .any(|event| event.get("method").and_then(Value::as_str) == Some("turn/completed"));
-        let session = self.store.with_state(true, |state| {
+        let session_result = self.store.with_state(true, |state| {
             for notification in notifications {
                 append_event(
                     state,
@@ -1621,7 +2273,21 @@ impl DaemonApplication {
                 json!({"turn_id": turn_id}),
             );
             Ok(session)
-        })?;
+        });
+        let session = match session_result {
+            Ok(session) => session,
+            Err(error) => {
+                let _ = self.update_external_effect(
+                    &prepared.effect_id,
+                    ExternalEffectState::OutcomeUnknown,
+                    Some(turn_id.clone()),
+                    Some(format!(
+                        "session/timeline commit failed after provider acknowledgement: {error}"
+                    )),
+                );
+                return Err(error);
+            }
+        };
         Ok(CommittedSessionTurn {
             provider_turn_id,
             session,
@@ -1654,13 +2320,14 @@ impl DaemonApplication {
         ) {
             let provider = self.providers.get(&snapshot.provider_id)?;
             let request = provider.encode_interrupt(provider_handle, turn_handle)?;
-            self.process_owner.request_json(
-                process_id,
-                &request.request_id,
-                &request.message,
-                Duration::from_secs(10),
-            )?;
-            true
+            self.process_owner
+                .request_json(
+                    process_id,
+                    &request.request_id,
+                    &request.message,
+                    Duration::from_secs(10),
+                )
+                .is_ok()
         } else {
             false
         };
@@ -1713,7 +2380,7 @@ impl DaemonApplication {
         let _session_guard = self
             .store
             .acquire_idempotency(&format!("session-operation:{session_id}"))?;
-        let snapshot = self.store.with_state(false, |state| {
+        let _initial_snapshot = self.store.with_state(false, |state| {
             let session = state
                 .sessions
                 .get(session_id)
@@ -1722,20 +2389,47 @@ impl DaemonApplication {
                 })?;
             Ok(session.clone())
         })?;
+        self.refresh_session_provider_events_locked(session_id)?;
+        let snapshot = self.store.with_state(false, |state| {
+            state
+                .sessions
+                .get(session_id)
+                .cloned()
+                .ok_or_else(|| PulseError::NotFound {
+                    subject: format!("session {session_id}"),
+                })
+        })?;
         if snapshot.lifecycle == SessionLifecycle::Running {
             if let (Some(provider_handle), Some(turn_handle), Some(process_id)) = (
                 snapshot.provider_handle.as_deref(),
                 snapshot.active_turn_id.as_deref(),
                 snapshot.managed_process_id.as_deref(),
             ) {
-                let provider = self.providers.get(&snapshot.provider_id)?;
-                let request = provider.encode_interrupt(provider_handle, turn_handle)?;
-                self.process_owner.request_json(
-                    process_id,
-                    &request.request_id,
-                    &request.message,
-                    Duration::from_secs(10),
-                )?;
+                let process_exited = self
+                    .process_owner
+                    .is_alive(process_id)
+                    .map(|alive| !alive)
+                    .unwrap_or(false);
+                if !process_exited {
+                    let provider = self.providers.get(&snapshot.provider_id)?;
+                    let request = provider.encode_interrupt(provider_handle, turn_handle)?;
+                    let (_, interrupt_notifications) = self.process_owner.request_json(
+                        process_id,
+                        &request.request_id,
+                        &request.message,
+                        Duration::from_secs(10),
+                    )?;
+                    if !interrupt_notifications.is_empty() {
+                        persist_provider_event_batch(
+                            &self.store,
+                            &self.process_owner,
+                            process_id,
+                            &snapshot,
+                            session_id,
+                            interrupt_notifications,
+                        )?;
+                    }
+                }
             } else if snapshot.provider_handle.is_some() {
                 return Err(PulseError::validation(
                     "provider_interrupt_unacknowledged",
@@ -1749,8 +2443,8 @@ impl DaemonApplication {
                 "session has no daemon-managed process to terminate",
             ));
         };
-        match self.process_owner.terminate(process_id) {
-            Ok(()) => {}
+        let drained_after_termination = match self.process_owner.terminate_and_drain(process_id) {
+            Ok(events) => events,
             Err(error) if error.code() == "managed_process_not_owned" => {
                 let process =
                     self.store.with_state(false, |state| {
@@ -1761,10 +2455,33 @@ impl DaemonApplication {
                         })
                     })?;
                 self.process_owner.terminate_record(&process)?;
+                Vec::new()
             }
             Err(error) => return Err(error),
+        };
+        if !drained_after_termination.is_empty() {
+            persist_provider_event_batch(
+                &self.store,
+                &self.process_owner,
+                process_id,
+                &snapshot,
+                session_id,
+                drained_after_termination,
+            )?;
+        }
+        // A successful persistence is the acknowledgement that permits the
+        // dead child handle to be removed. On persistence failure the helper
+        // requeues while the handle remains available for background retry.
+        if self.process_owner.release_handle(process_id).is_err() {
+            // The fallback `terminate_record` path has no local handle to
+            // release; the durable process ledger remains the authority.
         }
         self.store.with_state(true, |state| {
+            clear_interrupted_session_send_effect(
+                state,
+                session_id,
+                snapshot.active_turn_id.as_deref(),
+            );
             let session =
                 state
                     .sessions
@@ -1818,6 +2535,11 @@ impl DaemonApplication {
         })?;
         self.process_owner.terminate(&process_id)?;
         self.store.with_state(true, |state| {
+            let active_turn_id = state
+                .sessions
+                .get(session_id)
+                .and_then(|session| session.active_turn_id.clone());
+            clear_interrupted_session_send_effect(state, session_id, active_turn_id.as_deref());
             let session = state.sessions.get_mut(session_id).expect("session exists");
             session.lifecycle = SessionLifecycle::Closed;
             session.active_turn_id = None;
@@ -2113,6 +2835,13 @@ impl DaemonApplication {
     }
 
     fn refresh_session_provider_events(&self, session_id: &str) -> Result<()> {
+        let _session_guard = self
+            .store
+            .acquire_idempotency(&format!("session-operation:{session_id}"))?;
+        self.refresh_session_provider_events_locked(session_id)
+    }
+
+    fn refresh_session_provider_events_locked(&self, session_id: &str) -> Result<()> {
         let snapshot = self
             .store
             .with_state(false, |state| Ok(state.sessions.get(session_id).cloned()))?;
@@ -2126,41 +2855,14 @@ impl DaemonApplication {
         if events.is_empty() {
             return Ok(());
         }
-        self.store.with_state(true, |state| {
-            for event in events {
-                let method = event.get("method").and_then(Value::as_str);
-                if method == Some("turn/completed") {
-                    let completed_turn = event.pointer("/params/turn/id").and_then(Value::as_str);
-                    if let Some(session) = state.sessions.get_mut(session_id) {
-                        if completed_turn.is_none()
-                            || completed_turn == session.active_turn_id.as_deref()
-                        {
-                            session.lifecycle = SessionLifecycle::Idle;
-                            session.active_turn_id = None;
-                            session.updated_at = chrono::Utc::now().to_rfc3339();
-                        }
-                    }
-                } else if method == Some("thread/started") {
-                    let provider_handle =
-                        event.pointer("/params/thread/id").and_then(Value::as_str);
-                    if let (Some(session), Some(provider_handle)) =
-                        (state.sessions.get_mut(session_id), provider_handle)
-                    {
-                        session.provider_handle = Some(provider_handle.to_string());
-                        session.updated_at = chrono::Utc::now().to_rfc3339();
-                    }
-                }
-                append_event(
-                    state,
-                    "provider.notification",
-                    Some(&snapshot.project_id),
-                    Some(&snapshot.workspace_id),
-                    Some(session_id),
-                    event,
-                );
-            }
-            Ok(())
-        })
+        persist_provider_event_batch(
+            &self.store,
+            &self.process_owner,
+            process_id,
+            &snapshot,
+            session_id,
+            events,
+        )
     }
 
     fn timeline_subscribe(
@@ -2248,13 +2950,23 @@ impl DaemonApplication {
                     Ok(())
                 })?;
             }
+            let can_resume_pending_delivery = existing.state
+                == AssignmentSagaState::DeliveryPending
+                && self.store.with_state(false, |state| {
+                    Ok(pending_bootstrap_delivery_is_retryable(
+                        state,
+                        &existing,
+                        &self.providers,
+                    ))
+                })?;
             if matches!(
                 existing.state,
                 AssignmentSagaState::DeliveryPending
                     | AssignmentSagaState::BootstrapDelivered
                     | AssignmentSagaState::Acknowledged
                     | AssignmentSagaState::Activated
-            ) {
+            ) && !can_resume_pending_delivery
+            {
                 // A `DeliveryPending` saga is the fail-closed bootstrap state:
                 // the provider outcome cannot be proven, so it is never re-sent
                 // and never released. Surface the operator explanation once it
@@ -2271,6 +2983,25 @@ impl DaemonApplication {
                         Ok(())
                     });
                     existing.last_error = Some(message);
+                }
+                if existing.state == AssignmentSagaState::DeliveryPending {
+                    if let Some(session_id) = existing.session_id.as_deref() {
+                        let unresolved_effect = self.store.with_state(false, |state| {
+                            Ok(state.external_effects.values().find_map(|effect| {
+                                (effect.owner_id == session_id
+                                    && effect.kind == ExternalEffectKind::SessionSend
+                                    && matches!(
+                                        effect.state,
+                                        ExternalEffectState::Attempting
+                                            | ExternalEffectState::OutcomeUnknown
+                                    ))
+                                .then_some(effect.effect_id.clone())
+                            }))
+                        })?;
+                        if let Some(effect_id) = unresolved_effect {
+                            return Err(external_effect_blocked(&effect_id));
+                        }
+                    }
                 }
                 // Fast path: already provisioned — idempotent return.
                 return Ok(DaemonResponse::Assignment { saga: existing });
@@ -2362,22 +3093,37 @@ impl DaemonApplication {
         })?;
 
         // ── Phase 2: provision or recover workspace ───────────────────
+        let workspace_request_key = format!("{idempotency_key}:workspace");
+        let planned_workspace_id = deterministic_id("wks", &workspace_request_key);
+        self.store.with_state(true, |state| {
+            let saga = state
+                .assignment_sagas
+                .get_mut(&saga_id)
+                .expect("saga exists");
+            saga.workspace_id = Some(planned_workspace_id.clone());
+            saga.updated_at = chrono::Utc::now().to_rfc3339();
+            Ok(())
+        })?;
         let workspace = match self.workspace_create(
             project_id,
             &format!("assignment-{ticket_id}"),
             isolation,
             Some(&reservation.packet.source.commit),
-            &format!("{idempotency_key}:workspace"),
+            &workspace_request_key,
         ) {
             Ok(DaemonResponse::Workspace { workspace }) => workspace,
             Ok(_) => unreachable!("workspace_create response kind"),
             Err(error) => {
-                let _ = core.release_reservation(
-                    &reservation.reservation.lease_id,
+                self.handle_provisioning_failure(
+                    &core,
+                    &saga_id,
                     actor,
+                    &reservation.reservation.lease_id,
+                    Some(&planned_workspace_id),
+                    None,
                     "workspace provisioning failed",
-                );
-                self.mark_saga_error(&saga_id, AssignmentSagaState::Recoverable, &error)?;
+                    &error,
+                )?;
                 return Err(error);
             }
         };
@@ -2406,23 +3152,37 @@ impl DaemonApplication {
         // On recovery the session may be in Error/Closed state. A native
         // provider handle is resumed through a fresh transport process while
         // the stable Pulse session_id and provider handle stay unchanged.
+        let session_request_key = format!("{idempotency_key}:session");
+        let planned_session_id = deterministic_id("ses", &session_request_key);
+        self.store.with_state(true, |state| {
+            let saga = state
+                .assignment_sagas
+                .get_mut(&saga_id)
+                .expect("saga exists");
+            saga.session_id = Some(planned_session_id.clone());
+            saga.updated_at = chrono::Utc::now().to_rfc3339();
+            Ok(())
+        })?;
         let session = match self.session_create(
             &workspace.workspace_id,
             provider_id,
             None,
             provider_options,
-            &format!("{idempotency_key}:session"),
+            &session_request_key,
         ) {
             Ok(DaemonResponse::Session { session }) => session,
             Ok(_) => unreachable!("session_create response kind"),
             Err(error) => {
-                let _ = self.workspace_archive(&workspace.workspace_id);
-                let _ = core.release_reservation(
-                    &reservation.reservation.lease_id,
+                self.handle_provisioning_failure(
+                    &core,
+                    &saga_id,
                     actor,
+                    &reservation.reservation.lease_id,
+                    Some(&workspace.workspace_id),
+                    Some(&planned_session_id),
                     "session provisioning failed",
-                );
-                self.mark_saga_error(&saga_id, AssignmentSagaState::Recoverable, &error)?;
+                    &error,
+                )?;
                 return Err(error);
             }
         };
@@ -2431,13 +3191,16 @@ impl DaemonApplication {
                 Ok(DaemonResponse::Session { session }) => session,
                 Ok(_) => unreachable!("session_resume response kind"),
                 Err(error) => {
-                    let _ = self.workspace_archive(&workspace.workspace_id);
-                    let _ = core.release_reservation(
-                        &reservation.reservation.lease_id,
+                    self.handle_provisioning_failure(
+                        &core,
+                        &saga_id,
                         actor,
+                        &reservation.reservation.lease_id,
+                        Some(&workspace.workspace_id),
+                        Some(&session.session_id),
                         "session resume failed",
-                    );
-                    self.mark_saga_error(&saga_id, AssignmentSagaState::Recoverable, &error)?;
+                        &error,
+                    )?;
                     return Err(error);
                 }
             }
@@ -2457,14 +3220,38 @@ impl DaemonApplication {
 
         // ── Phase 4: deliver bootstrap ────────────────────────────────
         let delivery_id = deterministic_id("delivery", idempotency_key);
-        let bootstrap = format!(
-            "Pulse assignment {ticket_id}\nlease={}\npacket_fingerprint={}\nload: pulse work packet {ticket_id} --lease {} --json\nAuthority: implement only the exact lease-bound contract. Submit typed handoff evidence; process exit is not completion.",
-            reservation.reservation.lease_id,
-            reservation.reservation.packet_fingerprint,
-            reservation.reservation.lease_id,
+        let bootstrap = assignment_bootstrap_payload(
+            ticket_id,
+            &reservation.reservation.lease_id,
+            &reservation.reservation.packet_fingerprint,
         );
-        let prepared = match self.prepare_session_turn(&session.session_id, &bootstrap) {
+        let prepared = match self.prepare_session_turn(
+            &session.session_id,
+            &bootstrap,
+            idempotency_key,
+            self.store
+                .with_state(false, |state| {
+                    Ok(state
+                        .deliveries
+                        .get(&delivery_id)
+                        .and_then(|delivery| delivery.correlation_request_id.clone()))
+                })?
+                .as_deref(),
+        ) {
             Ok(prepared) => prepared,
+            Err(error)
+                if is_ambiguous_provider_outcome(&error)
+                    || error.code() == "external_effect_reconciliation_required" =>
+            {
+                self.persist_bootstrap_uncertainty(
+                    &saga_id,
+                    &delivery_id,
+                    &session.session_id,
+                    &bootstrap,
+                    &error,
+                )?;
+                return Err(error);
+            }
             Err(error) => {
                 self.compensate_failed_bootstrap_delivery(
                     &core,
@@ -2489,9 +3276,10 @@ impl DaemonApplication {
             saga.state = AssignmentSagaState::DeliveryPending;
             saga.last_error = None;
             saga.updated_at = chrono::Utc::now().to_rfc3339();
-            state.deliveries.insert(
-                delivery_id.clone(),
-                DeliveryRecord {
+            state
+                .deliveries
+                .entry(delivery_id.clone())
+                .or_insert(DeliveryRecord {
                     schema_version: 1,
                     delivery_id: delivery_id.clone(),
                     saga_id: saga_id.clone(),
@@ -2502,8 +3290,7 @@ impl DaemonApplication {
                     state: DeliveryState::IntentRecorded,
                     created_at: intent_now.clone(),
                     updated_at: intent_now,
-                },
-            );
+                });
             append_event(
                 state,
                 "assignment.delivery_intent_recorded",
@@ -2521,6 +3308,10 @@ impl DaemonApplication {
         self.store.check_failpoint("after_delivery_intent")?;
         let committed = match self.execute_session_turn(prepared, &bootstrap) {
             Ok(committed) => committed,
+            Err(error) if is_ambiguous_provider_outcome(&error) => {
+                self.mark_bootstrap_delivery_uncertain(&saga_id, &delivery_id, &error)?;
+                return Err(error);
+            }
             Err(error) => {
                 self.compensate_failed_bootstrap_delivery(
                     &core,
@@ -2563,6 +3354,183 @@ impl DaemonApplication {
         })
     }
 
+    fn mark_bootstrap_delivery_uncertain(
+        &self,
+        saga_id: &str,
+        delivery_id: &str,
+        error: &PulseError,
+    ) -> Result<()> {
+        self.store.with_state(true, |state| {
+            if let Some(saga) = state.assignment_sagas.get_mut(saga_id) {
+                saga.state = AssignmentSagaState::DeliveryPending;
+                saga.last_error = Some(DELIVERY_UNCERTAIN_MESSAGE.to_string());
+                saga.updated_at = chrono::Utc::now().to_rfc3339();
+            }
+            if let Some(delivery) = state.deliveries.get_mut(delivery_id) {
+                delivery.state = DeliveryState::Uncertain;
+                delivery.updated_at = chrono::Utc::now().to_rfc3339();
+            }
+            append_event(
+                state,
+                "assignment.delivery_uncertain",
+                None,
+                None,
+                None,
+                json!({"saga_id": saga_id, "delivery_id": delivery_id, "error": error.to_string()}),
+            );
+            Ok(())
+        })
+    }
+
+    fn persist_bootstrap_uncertainty(
+        &self,
+        saga_id: &str,
+        delivery_id: &str,
+        session_id: &str,
+        payload: &str,
+        error: &PulseError,
+    ) -> Result<()> {
+        self.store.with_state(true, |state| {
+            let now = chrono::Utc::now().to_rfc3339();
+            if let Some(saga) = state.assignment_sagas.get_mut(saga_id) {
+                saga.delivery_id = Some(delivery_id.to_string());
+                saga.state = AssignmentSagaState::DeliveryPending;
+                saga.last_error = Some(DELIVERY_UNCERTAIN_MESSAGE.to_string());
+                saga.updated_at = now.clone();
+            }
+            state
+                .deliveries
+                .entry(delivery_id.to_string())
+                .or_insert(DeliveryRecord {
+                    schema_version: 1,
+                    delivery_id: delivery_id.to_string(),
+                    saga_id: saga_id.to_string(),
+                    session_id: session_id.to_string(),
+                    payload: payload.to_string(),
+                    correlation_request_id: None,
+                    correlation_turn_id: None,
+                    state: DeliveryState::Uncertain,
+                    created_at: now.clone(),
+                    updated_at: now,
+                });
+            append_event(
+                state,
+                "assignment.delivery_uncertain",
+                None,
+                None,
+                Some(session_id),
+                json!({"saga_id": saga_id, "delivery_id": delivery_id, "error": error.to_string()}),
+            );
+            Ok(())
+        })
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn handle_provisioning_failure(
+        &self,
+        core: &crate::JsonGraphStore,
+        saga_id: &str,
+        actor: &str,
+        lease_id: &str,
+        workspace_id: Option<&str>,
+        session_id: Option<&str>,
+        operation: &str,
+        error: &PulseError,
+    ) -> Result<()> {
+        if !self.provisioning_effects_are_definitively_safe(workspace_id, session_id)? {
+            return self.mark_provisioning_uncertain(saga_id, operation, error);
+        }
+        if let Some(session_id) = session_id {
+            let _ = self.session_close(session_id);
+        }
+        if let Some(workspace_id) = workspace_id {
+            let _ = self.workspace_archive(workspace_id);
+        }
+        let released = core.release_reservation(lease_id, actor, operation).is_ok();
+        self.mark_saga_error(
+            saga_id,
+            if released {
+                AssignmentSagaState::Released
+            } else {
+                AssignmentSagaState::Recoverable
+            },
+            error,
+        )
+    }
+
+    fn provisioning_effects_are_definitively_safe(
+        &self,
+        workspace_id: Option<&str>,
+        session_id: Option<&str>,
+    ) -> Result<bool> {
+        self.store.with_state(false, |state| {
+            Ok(state
+                .external_effects
+                .values()
+                .filter(|effect| {
+                    workspace_id.is_some_and(|id| {
+                        effect.owner_id == id
+                            && matches!(effect.kind, ExternalEffectKind::WorktreeCreate)
+                    }) || session_id.is_some_and(|id| {
+                        effect.owner_id == id
+                            && matches!(
+                                effect.kind,
+                                ExternalEffectKind::ProviderProcessCreate
+                                    | ExternalEffectKind::ProviderSessionCreate
+                                    | ExternalEffectKind::ProviderSessionResume
+                                    | ExternalEffectKind::SessionSend
+                            )
+                    })
+                })
+                .all(|effect| {
+                    matches!(
+                        effect.state,
+                        ExternalEffectState::NotSent | ExternalEffectState::DefinitivelyFailed
+                    )
+                }))
+        })
+    }
+
+    fn mark_provisioning_uncertain(
+        &self,
+        saga_id: &str,
+        operation: &str,
+        error: &PulseError,
+    ) -> Result<()> {
+        let detail = format!(
+            "{operation} outcome is uncertain; Core lease retained. Reconcile or clean up all external effects before retrying: {error}"
+        );
+        self.store.with_state(true, |state| {
+            let saga =
+                state
+                    .assignment_sagas
+                    .get_mut(saga_id)
+                    .ok_or_else(|| PulseError::NotFound {
+                        subject: format!("assignment saga {saga_id}"),
+                    })?;
+            saga.state = AssignmentSagaState::Recoverable;
+            saga.last_error = Some(detail.clone());
+            saga.updated_at = chrono::Utc::now().to_rfc3339();
+            let project_id = saga.project_id.clone();
+            let workspace_id = saga.workspace_id.clone();
+            let session_id = saga.session_id.clone();
+            append_event(
+                state,
+                "assignment.provisioning_uncertain",
+                Some(&project_id),
+                workspace_id.as_deref(),
+                session_id.as_deref(),
+                json!({
+                    "saga_id": saga_id,
+                    "operation": operation,
+                    "error": error.to_string(),
+                    "operator_action": "reconcile_or_cleanup_external_effects_before_retry"
+                }),
+            );
+            Ok(())
+        })
+    }
+
     /// Records the delivery as failed and applies the existing delivery-failure
     /// compensation: close the session, archive the workspace and release the
     /// Core reservation. This is only safe while the daemon is live and the
@@ -2580,6 +3548,9 @@ impl DaemonApplication {
         delivery_id: &str,
         error: &PulseError,
     ) -> Result<()> {
+        if !self.provisioning_effects_are_definitively_safe(Some(workspace_id), Some(session_id))? {
+            return self.mark_bootstrap_delivery_uncertain(saga_id, delivery_id, error);
+        }
         let _ = self.store.with_state(true, |state| {
             if let Some(delivery) = state.deliveries.get_mut(delivery_id) {
                 delivery.state = DeliveryState::Failed;
@@ -2959,11 +3930,7 @@ impl DaemonApplication {
                 .assignment_sagas
                 .get_mut(saga_id)
                 .expect("saga exists");
-            saga.state = match verification.disposition {
-                crate::execution::VerificationDisposition::Passed => AssignmentSagaState::Done,
-                crate::execution::VerificationDisposition::Rework => AssignmentSagaState::Rework,
-                crate::execution::VerificationDisposition::Blocked => AssignmentSagaState::Blocked,
-            };
+            saga.state = verification_saga_state(verification.disposition);
             saga.verification_id = Some(verification.verification_id.clone());
             saga.updated_at = chrono::Utc::now().to_rfc3339();
             let project_id = saga.project_id.clone();
@@ -3009,6 +3976,108 @@ impl DaemonApplication {
                 })
         })
     }
+
+    fn record_external_effect(
+        &self,
+        effect_id: &str,
+        kind: ExternalEffectKind,
+        owner_id: &str,
+        request_fingerprint: &str,
+        detail: String,
+        request_message: Option<String>,
+    ) -> Result<ExternalEffectRecord> {
+        let now = chrono::Utc::now().to_rfc3339();
+        self.store.with_state(true, |state| {
+            if let Some(existing) = state.external_effects.get(effect_id).cloned() {
+                if !existing.request_fingerprint.is_empty()
+                    && existing.request_fingerprint != request_fingerprint
+                {
+                    return Err(PulseError::validation(
+                        "external_effect_fingerprint_conflict",
+                        format!("external effect {effect_id} was requested with different inputs"),
+                    ));
+                }
+                if existing.kind != kind || existing.owner_id != owner_id {
+                    return Err(PulseError::validation(
+                        "external_effect_identity_conflict",
+                        format!("external effect {effect_id} belongs to a different resource"),
+                    ));
+                }
+                if let (Some(existing_message), Some(request_message)) =
+                    (existing.request_message.as_deref(), request_message.as_deref())
+                {
+                    if existing_message != request_message {
+                        return Err(PulseError::validation(
+                            "external_effect_request_conflict",
+                            format!("external effect {effect_id} was requested with different provider payloads"),
+                        ));
+                    }
+                }
+                if existing.state == ExternalEffectState::NotSent
+                    && (existing.request_fingerprint.is_empty()
+                        || (existing.request_message.is_none() && request_message.is_some()))
+                {
+                    let effect = state
+                        .external_effects
+                        .get_mut(effect_id)
+                        .expect("effect exists");
+                    if effect.request_fingerprint.is_empty() {
+                        effect.request_fingerprint = request_fingerprint.to_string();
+                    }
+                    if effect.request_message.is_none() {
+                        effect.request_message = request_message.clone();
+                    }
+                    effect.updated_at = now;
+                    return Ok(effect.clone());
+                }
+                return Ok(existing);
+            }
+            let record = ExternalEffectRecord {
+                schema_version: 1,
+                effect_id: effect_id.to_string(),
+                kind,
+                state: ExternalEffectState::NotSent,
+                owner_id: owner_id.to_string(),
+                request_fingerprint: request_fingerprint.to_string(),
+                resource_id: None,
+                request_message,
+                detail,
+                created_at: now.clone(),
+                updated_at: now,
+            };
+            state
+                .external_effects
+                .insert(effect_id.to_string(), record.clone());
+            Ok(record)
+        })
+    }
+
+    fn update_external_effect(
+        &self,
+        effect_id: &str,
+        state_value: ExternalEffectState,
+        resource_id: Option<String>,
+        detail: Option<String>,
+    ) -> Result<()> {
+        self.store.with_state(true, |state| {
+            let effect =
+                state
+                    .external_effects
+                    .get_mut(effect_id)
+                    .ok_or_else(|| PulseError::NotFound {
+                        subject: format!("external effect {effect_id}"),
+                    })?;
+            effect.state = state_value;
+            if resource_id.is_some() {
+                effect.resource_id = resource_id;
+            }
+            if let Some(detail) = detail {
+                effect.detail = detail;
+            }
+            effect.updated_at = chrono::Utc::now().to_rfc3339();
+            Ok(())
+        })
+    }
 }
 
 /// A turn prepared for provider I/O: the session lock is held, the session
@@ -3021,6 +4090,8 @@ struct PreparedSessionTurn {
     process_id: String,
     request_id: Option<String>,
     message: Option<String>,
+    effect_id: String,
+    committed_turn_id: Option<String>,
 }
 
 struct CommittedSessionTurn {
@@ -3059,6 +4130,93 @@ fn append_event(
     state.timeline.push(event);
 }
 
+fn persist_provider_event_batch(
+    store: &StateStore,
+    owner: &ProcessOwner,
+    process_id: &str,
+    snapshot: &SessionRecord,
+    session_id: &str,
+    events: Vec<Value>,
+) -> Result<()> {
+    let requeue = |error: PulseError| match owner.requeue_json(process_id, &events) {
+        Ok(()) => Err(error),
+        Err(requeue_error) => Err(PulseError::validation(
+            "provider_event_requeue_failed",
+            format!("provider event persistence failed: {error}; requeue failed: {requeue_error}"),
+        )),
+    };
+    if let Err(error) = store.check_failpoint("before_provider_event_commit") {
+        return requeue(error);
+    }
+    if let Err(error) = store.with_state(true, |state| {
+        for event in &events {
+            let method = event.get("method").and_then(Value::as_str);
+            if method == Some("turn/completed") {
+                let completed_turn = event.pointer("/params/turn/id").and_then(Value::as_str);
+                if let Some(session) = state.sessions.get_mut(session_id) {
+                    if completed_turn.is_none()
+                        || completed_turn == session.active_turn_id.as_deref()
+                    {
+                        session.lifecycle = SessionLifecycle::Idle;
+                        session.active_turn_id = None;
+                        session.updated_at = chrono::Utc::now().to_rfc3339();
+                    }
+                }
+            } else if method == Some("thread/started") {
+                let provider_handle = event.pointer("/params/thread/id").and_then(Value::as_str);
+                if let (Some(session), Some(provider_handle)) =
+                    (state.sessions.get_mut(session_id), provider_handle)
+                {
+                    session.provider_handle = Some(provider_handle.to_string());
+                    session.updated_at = chrono::Utc::now().to_rfc3339();
+                }
+            }
+            append_event(
+                state,
+                "provider.notification",
+                Some(&snapshot.project_id),
+                Some(&snapshot.workspace_id),
+                Some(session_id),
+                event.clone(),
+            );
+        }
+        Ok(())
+    }) {
+        return requeue(error);
+    }
+    Ok(())
+}
+
+/// Ingest provider output independently of request handling. This keeps
+/// delayed notifications durable even when no client reads the timeline.
+fn ingest_provider_events(store: &StateStore, owner: &ProcessOwner) -> Result<()> {
+    let session_ids = store.with_state(false, |state| {
+        Ok(state.sessions.keys().cloned().collect::<Vec<_>>())
+    })?;
+    for session_id in session_ids {
+        let _session_guard =
+            store.acquire_idempotency(&format!("session-operation:{session_id}"))?;
+        let snapshot =
+            store.with_state(false, |state| Ok(state.sessions.get(&session_id).cloned()))?;
+        let Some(snapshot) = snapshot else { continue };
+        let Some(process_id) = snapshot.managed_process_id.as_deref() else {
+            continue;
+        };
+        let events = owner.drain_json(process_id)?;
+        if events.is_empty() {
+            continue;
+        }
+        persist_provider_event_batch(store, owner, process_id, &snapshot, &session_id, events)?;
+    }
+    Ok(())
+}
+
+impl Drop for DaemonApplication {
+    fn drop(&mut self) {
+        self.shutdown.store(true, Ordering::SeqCst);
+    }
+}
+
 fn validate_name(name: &str) -> Result<()> {
     if name.trim().is_empty() || name.len() > 128 || name.chars().any(char::is_control) {
         return Err(PulseError::validation(
@@ -3069,6 +4227,10 @@ fn validate_name(name: &str) -> Result<()> {
     Ok(())
 }
 
+fn has_explicit_provider_launch(options: &Value) -> bool {
+    options.get("executable").is_some() || options.get("args").is_some()
+}
+
 fn deterministic_id(prefix: &str, idempotency_key: &str) -> String {
     let digest = hash_bytes(idempotency_key.as_bytes());
     let suffix = digest
@@ -3077,6 +4239,158 @@ fn deterministic_id(prefix: &str, idempotency_key: &str) -> String {
         .take(26)
         .collect::<String>();
     format!("{prefix}_{suffix}")
+}
+
+fn session_send_effect_id(session_id: &str, request_identity: &str) -> String {
+    let suffix = hash_bytes(request_identity.as_bytes())
+        .trim_start_matches("sha256:")
+        .chars()
+        .take(20)
+        .collect::<String>();
+    format!("effect-send-{session_id}-{suffix}")
+}
+
+fn assignment_bootstrap_payload(
+    ticket_id: &str,
+    lease_id: &str,
+    packet_fingerprint: &str,
+) -> String {
+    format!(
+        "Pulse assignment {ticket_id}\nlease={lease_id}\npacket_fingerprint={packet_fingerprint}\nload: pulse work packet {ticket_id} --lease {lease_id} --json\nAuthority: implement only the exact lease-bound contract. Submit typed handoff evidence; process exit is not completion."
+    )
+}
+
+fn provider_request_id(message: &str) -> Result<String> {
+    serde_json::from_str::<Value>(message)?
+        .get("id")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .ok_or_else(|| {
+            PulseError::validation(
+                "provider_protocol_invalid",
+                "durable provider request is missing its correlation id",
+            )
+        })
+}
+
+fn replace_provider_request_id(message: &str, request_id: &str) -> Result<String> {
+    let mut value = serde_json::from_str::<Value>(message)?;
+    let object = value.as_object_mut().ok_or_else(|| {
+        PulseError::validation(
+            "provider_protocol_invalid",
+            "provider request must be a JSON object",
+        )
+    })?;
+    object.insert("id".to_string(), Value::String(request_id.to_string()));
+    serde_json::to_string(&value).map_err(Into::into)
+}
+
+fn pending_bootstrap_delivery_is_retryable(
+    state: &crate::daemon::persistence::DaemonState,
+    saga: &AssignmentSagaRecord,
+    providers: &ProviderRegistry,
+) -> bool {
+    if !state.assignment_sagas.contains_key(&saga.saga_id) {
+        return false;
+    }
+    let (Some(lease_id), Some(workspace_id), Some(session_id), Some(delivery_id)) = (
+        saga.lease_id.as_deref(),
+        saga.workspace_id.as_deref(),
+        saga.session_id.as_deref(),
+        saga.delivery_id.as_deref(),
+    ) else {
+        return false;
+    };
+    if !state.projects.contains_key(&saga.project_id) {
+        return false;
+    }
+    let Some(workspace) = state.workspaces.get(workspace_id) else {
+        return false;
+    };
+    if workspace.project_id != saga.project_id {
+        return false;
+    }
+    let Some(delivery) = state.deliveries.get(delivery_id) else {
+        return false;
+    };
+    if delivery.delivery_id != delivery_id
+        || delivery.saga_id != saga.saga_id
+        || delivery.session_id != session_id
+        || delivery.state != DeliveryState::IntentRecorded
+        || delivery.correlation_turn_id.is_some()
+    {
+        return false;
+    }
+    if delivery.payload
+        != assignment_bootstrap_payload(&saga.ticket_id, lease_id, &saga.packet_fingerprint)
+    {
+        return false;
+    }
+    let Some(session) = state.sessions.get(session_id) else {
+        return false;
+    };
+    if session.project_id != saga.project_id
+        || session.workspace_id != workspace_id
+        || session.provider_handle.is_none()
+        || session.managed_process_id.is_none()
+        || delivery.correlation_request_id.is_none()
+    {
+        return false;
+    }
+    let process_id = session.managed_process_id.as_deref().unwrap();
+    let Some(process) = state.processes.get(process_id) else {
+        return false;
+    };
+    if process.owner_kind != "session"
+        || process.owner_id != session_id
+        || process.provider_id != session.provider_id
+    {
+        return false;
+    }
+    let effect_id = session_send_effect_id(session_id, &saga.idempotency_key);
+    let Some(effect) = state.external_effects.get(&effect_id) else {
+        return false;
+    };
+    let expected_detail = format!(
+        "request_id={:?} input_hash={}",
+        delivery.correlation_request_id,
+        hash_bytes(delivery.payload.as_bytes())
+    );
+    let Some(request_message) = effect.request_message.as_deref() else {
+        return false;
+    };
+    let Ok(request_message_id) = provider_request_id(request_message) else {
+        return false;
+    };
+    let Ok(provider) = providers.get(&session.provider_id) else {
+        return false;
+    };
+    let Some(provider_handle) = session.provider_handle.as_deref() else {
+        return false;
+    };
+    let Ok(expected_request) = provider.encode_send(provider_handle, &delivery.payload) else {
+        return false;
+    };
+    let Ok(expected_message) = replace_provider_request_id(
+        &expected_request.message,
+        delivery.correlation_request_id.as_deref().unwrap(),
+    ) else {
+        return false;
+    };
+    let Ok(stored_json) = serde_json::from_str::<Value>(request_message) else {
+        return false;
+    };
+    let Ok(expected_json) = serde_json::from_str::<Value>(&expected_message) else {
+        return false;
+    };
+    effect.kind == ExternalEffectKind::SessionSend
+        && effect.owner_id == session_id
+        && effect.state == ExternalEffectState::NotSent
+        && effect.resource_id.is_none()
+        && effect.request_fingerprint == hash_bytes(saga.idempotency_key.as_bytes())
+        && effect.detail == expected_detail
+        && Some(request_message_id) == delivery.correlation_request_id
+        && stored_json == expected_json
 }
 
 fn create_worktree(repo_root: &Path, workspace_root: &Path, base_commit: &str) -> Result<()> {
@@ -3105,10 +4419,234 @@ fn create_worktree(repo_root: &Path, workspace_root: &Path, base_commit: &str) -
     Ok(())
 }
 
+fn validate_owned_worktree(repo_root: &Path, workspace_root: &Path, base_commit: &str) -> bool {
+    if !workspace_root.is_dir() {
+        return false;
+    }
+    let head = Command::new("git")
+        .args(["-C"])
+        .arg(workspace_root)
+        .args(["rev-parse", "HEAD"])
+        .output();
+    let root = Command::new("git")
+        .args(["-C"])
+        .arg(repo_root)
+        .args(["worktree", "list", "--porcelain"])
+        .output();
+    let Ok(head) = head else { return false };
+    let Ok(root) = root else { return false };
+    head.status.success()
+        && root.status.success()
+        && String::from_utf8_lossy(&head.stdout).trim() == base_commit
+        && String::from_utf8_lossy(&root.stdout).contains(workspace_root.to_string_lossy().as_ref())
+}
+
+fn external_effect_blocked(effect_id: &str) -> PulseError {
+    PulseError::validation(
+        "external_effect_reconciliation_required",
+        format!(
+            "external effect {effect_id} has an unresolved resource; reconcile, adopt, or clean it up before retrying"
+        ),
+    )
+}
+
+fn is_ambiguous_provider_outcome(error: &PulseError) -> bool {
+    matches!(
+        error.code(),
+        "provider_response_timeout"
+            | "provider_transport_closed"
+            | "provider_transport_write_failed"
+            | "provider_protocol_invalid_after_transport"
+            | "io_error"
+    )
+}
+
+fn provider_protocol_after_transport(error: PulseError) -> PulseError {
+    if error.code() == "provider_protocol_invalid" {
+        PulseError::validation(
+            "provider_protocol_invalid_after_transport",
+            error.to_string(),
+        )
+    } else {
+        error
+    }
+}
+
+fn format_failure_detail(error: &PulseError, cleanup: Option<&str>) -> String {
+    match cleanup {
+        Some(cleanup) => format!("{error}; {cleanup}"),
+        None => error.to_string(),
+    }
+}
+
+fn effect_has_committed_owner(
+    state: &crate::daemon::persistence::DaemonState,
+    effect: &ExternalEffectRecord,
+) -> bool {
+    match &effect.kind {
+        ExternalEffectKind::WorktreeCreate => state.workspaces.contains_key(&effect.owner_id),
+        ExternalEffectKind::ProviderProcessCreate => effect
+            .resource_id
+            .as_ref()
+            .is_some_and(|id| state.processes.contains_key(id)),
+        ExternalEffectKind::ProviderSessionCreate => state
+            .sessions
+            .get(&effect.owner_id)
+            .is_some_and(|session| session.provider_handle.is_some()),
+        ExternalEffectKind::ProviderSessionResume => {
+            effect.resource_id.as_ref().is_some_and(|process_id| {
+                state
+                    .sessions
+                    .get(&effect.owner_id)
+                    .and_then(|session| session.managed_process_id.as_ref())
+                    == Some(process_id)
+                    && state
+                        .processes
+                        .get(process_id)
+                        .is_some_and(|process| process.state == ManagedProcessState::Running)
+            })
+        }
+        ExternalEffectKind::SessionSend => effect.resource_id.as_ref().is_some_and(|turn_id| {
+            state.timeline.iter().any(|event| {
+                event.event_type == "session.turn_started"
+                    && event.session_id.as_deref() == Some(effect.owner_id.as_str())
+                    && event.payload.get("turn_id").and_then(Value::as_str) == Some(turn_id)
+            })
+        }),
+        ExternalEffectKind::BootstrapDelivery => state
+            .deliveries
+            .get(&effect.owner_id)
+            .is_some_and(|delivery| delivery.state == DeliveryState::Delivered),
+    }
+}
+
+fn verification_saga_state(
+    disposition: crate::execution::VerificationDisposition,
+) -> AssignmentSagaState {
+    match disposition {
+        // Core intentionally leaves the ticket in `verifying` until its close
+        // gate proves the final transition. The daemon saga mirrors that
+        // nonterminal authority boundary.
+        crate::execution::VerificationDisposition::Passed => AssignmentSagaState::Verifying,
+        crate::execution::VerificationDisposition::Rework => AssignmentSagaState::Rework,
+        crate::execution::VerificationDisposition::Blocked => AssignmentSagaState::Blocked,
+    }
+}
+
+/// An explicitly closed session cannot resume an in-flight turn through the
+/// old provider transport. Retire only that acknowledged, interrupted intent
+/// so a later lifecycle retry can create a fresh intent. OutcomeUnknown is
+/// deliberately never removed: it remains the operator-reconciliation fence.
+fn clear_interrupted_session_send_effect(
+    state: &mut crate::daemon::persistence::DaemonState,
+    session_id: &str,
+    active_turn_id: Option<&str>,
+) {
+    let Some(active_turn_id) = active_turn_id else {
+        return;
+    };
+    state.external_effects.retain(|_, effect| {
+        !(effect.kind == ExternalEffectKind::SessionSend
+            && effect.owner_id == session_id
+            && effect.state == ExternalEffectState::Acknowledged
+            && effect.resource_id.as_deref() == Some(active_turn_id))
+    });
+}
+
 fn protocol_error_from_pulse(error: PulseError) -> ProtocolError {
     let retryable = matches!(
         error.code(),
         "lock_timeout" | "io_error" | "provider_transport_closed"
     );
     ProtocolError::new(error.code(), error.to_string(), retryable)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::daemon::persistence::StateStore;
+
+    #[test]
+    fn passed_verification_waits_for_core_close_gate() {
+        assert_eq!(
+            verification_saga_state(crate::execution::VerificationDisposition::Passed),
+            AssignmentSagaState::Verifying
+        );
+        assert_ne!(
+            verification_saga_state(crate::execution::VerificationDisposition::Passed),
+            AssignmentSagaState::Done
+        );
+    }
+
+    #[test]
+    fn accepted_bootstrap_timeout_keeps_lease_and_delivery_pending() {
+        let home = tempfile::tempdir().expect("daemon home");
+        let app = DaemonApplication::new(StateStore::new(home.path()), "test").unwrap();
+        let now = chrono::Utc::now().to_rfc3339();
+        app.store
+            .with_state(true, |state| {
+                state.assignment_sagas.insert(
+                    "saga-timeout".to_string(),
+                    AssignmentSagaRecord {
+                        schema_version: 1,
+                        saga_id: "saga-timeout".to_string(),
+                        idempotency_key: "timeout".to_string(),
+                        request_fingerprint: "fingerprint".to_string(),
+                        project_id: "project".to_string(),
+                        ticket_id: "ticket".to_string(),
+                        actor: "actor".to_string(),
+                        assignee: "assignee".to_string(),
+                        ticket_revision: 1,
+                        packet_fingerprint: "packet".to_string(),
+                        lease_id: Some("lease-keep".to_string()),
+                        workspace_id: Some("workspace".to_string()),
+                        session_id: Some("session".to_string()),
+                        delivery_id: Some("delivery-timeout".to_string()),
+                        acknowledgement_id: None,
+                        handoff_id: None,
+                        verification_id: None,
+                        state: AssignmentSagaState::DeliveryPending,
+                        last_error: None,
+                        created_at: now.clone(),
+                        updated_at: now.clone(),
+                    },
+                );
+                state.deliveries.insert(
+                    "delivery-timeout".to_string(),
+                    DeliveryRecord {
+                        schema_version: 1,
+                        delivery_id: "delivery-timeout".to_string(),
+                        saga_id: "saga-timeout".to_string(),
+                        session_id: "session".to_string(),
+                        payload: "bootstrap".to_string(),
+                        correlation_request_id: Some("request".to_string()),
+                        correlation_turn_id: None,
+                        state: DeliveryState::IntentRecorded,
+                        created_at: now.clone(),
+                        updated_at: now,
+                    },
+                );
+                Ok(())
+            })
+            .unwrap();
+        app.mark_bootstrap_delivery_uncertain(
+            "saga-timeout",
+            "delivery-timeout",
+            &PulseError::validation("provider_response_timeout", "accepted then timed out"),
+        )
+        .unwrap();
+        let state = app.store.load().unwrap();
+        assert_eq!(
+            state.assignment_sagas["saga-timeout"].lease_id.as_deref(),
+            Some("lease-keep")
+        );
+        assert_eq!(
+            state.deliveries["delivery-timeout"].state,
+            DeliveryState::Uncertain
+        );
+        assert_eq!(
+            state.assignment_sagas["saga-timeout"].state,
+            AssignmentSagaState::DeliveryPending
+        );
+    }
 }

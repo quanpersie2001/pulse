@@ -25,7 +25,7 @@ Review this changeset for security weaknesses introduced or exposed by the imple
 ## Evidence and implementation-gap reviewer
 
 ```text
-Validate whether verification evidence is fresh, specific, reproducible enough, and mapped to each closed TASK/BUG. Review every implement-gap.md file and flag unapproved deviations, hidden decisions, missing gap logs, stale evidence, or unresolved gaps. Include severity, affected item, evidence path, and required repair. Do not rewrite code.
+Validate whether verification evidence is fresh, specific, reproducible enough, and mapped to each closed Ticket. Review every implement-gap.md file and flag unapproved deviations, hidden decisions, missing gap logs, stale evidence, or unresolved gaps. Include severity, affected item, evidence path, and required repair. Do not rewrite code.
 ```
 
 ## Release-readiness synthesizer

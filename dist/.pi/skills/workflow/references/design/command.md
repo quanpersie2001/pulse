@@ -59,7 +59,7 @@ Read in this order when present:
 3. story `discovery.md`
 4. story `references/*.md`
 5. existing story `solution-design.md` when revising
-6. `.pulse/runtime/STATE.md` and `.pulse/runtime/state.json`
+6. daemon posture from `pulse daemon status`
 7. targeted repo files only as needed to clarify discovery evidence, not to redo discovery broadly
 
 ## Phase model
@@ -123,7 +123,7 @@ Decisions are binding for plan. If a later command finds a decision wrong or inc
 Write:
 
 ```text
-works/epics/<epic-id>-<epic-slug>/<story-id>-<story-slug>/solution-design.md
+works/<story-id>/solution-design.md
 ```
 
 Use [solution-design.template.md](./solution-design.template.md) as the required starting structure. Preserve its section order unless a story-specific reason requires an explicit deviation.
@@ -164,7 +164,7 @@ After self-review, ask the user to approve `solution-design.md`.
 
 After approval:
 
-1. Update runtime mirrors together if recording workflow posture:
+1. Record workflow posture in the work artifact:
    ```text
    Current: solution design approved for <work>
    Solution design: <works story solution-design.md path>

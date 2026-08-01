@@ -7,11 +7,11 @@ Use this appendix for operational detail referenced by `command.md`. The command
 Read from these sources for the completed slice:
 
 - story artifacts: `README.md`, `work-brief.md`, `discovery.md`, `solution-design.md`
-- task/bug artifacts: `README.md`, `verification.md`
+- Ticket artifacts: `README.md`, `verification.md`
 - optional when present: `approach.md`, `execplan.md`, `validation.md`, `lifecycle-summary.md`, `references/`
-- `.pulse/runtime/STATE.md` and `.pulse/runtime/state.json`
-- `.pulse/runtime/handoffs/manifest.json` and relevant owner handoff files
-- `.pulse/workgraph/items.jsonl` or `.pulse/workgraph/views/graph.json`
+- daemon posture from `pulse daemon status`
+- the owning work artifact and relevant handoff note
+- `.pulse/workgraph/nodes/` or `derived graph projection`
 - review findings, note outputs, and relevant verification artifacts
 
 Fallback if work artifacts are partial: session summary plus recent diff.
@@ -41,15 +41,15 @@ Reject vague guidance. If `applicable-when` cannot name a specific trigger state
 
 Classify each learning into exactly one route:
 
-- `global-critical` — cross-feature planner-visible rule; candidate for `.pulse/memory/critical-patterns.md`
-- `correction` — tactical guardrail for a repeated or expensive mistake; write under `.pulse/memory/corrections/`
-- `ratchet` — non-regression must-check from repeated or costly miss; write under `.pulse/memory/ratchet/`
+- `global-critical` — cross-feature planner-visible rule; candidate for the owning learning artifact
+- `correction` — tactical guardrail for a repeated or expensive mistake; write under the owning learning artifact/corrections/
+- `ratchet` — non-regression must-check from repeated or costly miss; write under the owning learning artifact/ratchet/
 - `work-item-local` — attach to future work through item `memory_hooks.learnings`
 - `planner-only` — planning/decomposition heuristic; not worker default context
 
 ## Promotion rules
 
-Promote to `.pulse/memory/critical-patterns.md` only when all are true:
+Promote to the owning learning artifact only when all are true:
 
 - cross-feature value
 - meaningful waste prevented if known earlier
@@ -63,10 +63,10 @@ Append promoted entries with a link back to the full learnings file.
 
 | Destination | Meaning |
 |-------------|---------|
-| `.pulse/memory/learnings/` | per-feature durable learning bundle |
-| `.pulse/memory/critical-patterns.md` | compact planner-read global-critical index |
-| `.pulse/memory/corrections/` | tactical corrective rules for repeated mistakes |
-| `.pulse/memory/ratchet/` | trigger-bound must-check non-regression rules |
+| owning learning artifact/learnings/ | per-feature durable learning bundle |
+| owning learning artifact/ | compact planner-read global-critical index |
+| owning learning artifact/corrections/ | tactical corrective rules for repeated mistakes |
+| owning learning artifact/ratchet/ | trigger-bound must-check non-regression rules |
 
 Propagation behavior:
 
@@ -76,7 +76,7 @@ Propagation behavior:
 
 ## State update
 
-Update `.pulse/runtime/STATE.md` and `.pulse/runtime/state.json` with:
+Record the corresponding work-artifact note with:
 
 - feature or completed slice
 - date

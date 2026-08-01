@@ -13,17 +13,18 @@ metadata:
 
 `pulse:workflow` is the single public workflow entrypoint for Pulse.
 
-It owns command routing for the Pulse workflow surface.
-It does **not** replace the rendered runtime command.
+It owns command routing for the Pulse workflow surface. The installed skill is
+guidance only: the Rust `pulse` CLI and daemon are the only mutable authorities
+for runtime, reservations, and workgraph state.
 
 - `pulse:workflow ...` chooses the workflow move.
-- `node .rovodev/skills/workflow/scripts/pulse.mjs ...` reads and coordinates runtime state through the installed workflow skill.
+- `pulse ...` reads or mutates state through the Rust CLI/daemon contracts.
 
 ## Setup before routing
 
 Before choosing or executing a command:
 
-1. If repo readiness, runtime posture, or session context is unclear, start with [use](references/use/command.md).
+1. If repo readiness, daemon posture, or session context is unclear, start with [use](references/use/command.md).
 2. If the session is resuming active work, let `use` inspect the current runtime and handoff posture before routing onward.
 3. When a command is matched, load its command reference before acting.
 4. Load command-local or shared references only when the active section points to them, for example workgraph semantics, verification, handoff rules, or swarm coordination details.
@@ -35,7 +36,7 @@ Unknown input should not trigger hidden dispatch behavior.
 
 | Command | Category | Use when... | Reference | Usually next |
 | --- | --- | --- | --- | --- |
-| `use` | Session entrypoint | the repo needs readiness/onboarding if stale, session restoration, resume routing, repair, or runtime posture | [references/use/command.md](references/use/command.md) | `intake`, `brainstorm`, `explore`, `design`, `plan` |
+| `use` | Session entrypoint | the repo needs readiness, session restoration, resume routing, repair, or daemon posture | [references/use/command.md](references/use/command.md) | `intake`, `brainstorm`, `explore`, `design`, `plan` |
 | `intake` | New-work admission | `use` reports an empty session and the user has new input to classify before direction, discovery, design, or planning | [references/intake/command.md](references/intake/command.md) | `brainstorm`, `explore`, `design` |
 | `brainstorm` | Direction | the user goal is real but the work direction is still open | [references/brainstorm/command.md](references/brainstorm/command.md) | `explore` |
 | `explore` | Discovery | approved direction needs repo/domain/external evidence before solution decisions | [references/explore/command.md](references/explore/command.md) | `design` |
@@ -56,12 +57,12 @@ Unknown input should not trigger hidden dispatch behavior.
 ## Router boundary
 
 The router owns conversational workflow selection.
-The runtime owns canonical mutable state.
+The Rust CLI and daemon own canonical mutable state.
 
 | Surface | Responsibility |
 | --- | --- |
 | `pulse:workflow` | choose the workflow move, load command guidance, preserve gate discipline |
-| `node .rovodev/skills/workflow/scripts/pulse.mjs` | inspect readiness and coordinate reservations through the installed workflow runtime |
+| Rust `pulse` CLI/daemon | inspect readiness and coordinate runtime reservations |
 | `references/<command>/command.md` | command-specific behavioral entrypoint |
 | `references/shared/*.md` | cross-cutting workflow contracts |
 
@@ -69,7 +70,7 @@ Do not flatten these layers into one file or one command.
 
 ## Approval gates
 
-Pulse keeps human approval attached to artifacts and runtime state.
+Pulse keeps human approval attached to artifacts and daemon posture.
 
 `intake` is pre-gate admission: it may classify or confirm a boundary package, but it never approves direction, solution, plan, execution, or review.
 
@@ -84,7 +85,7 @@ Pulse keeps human approval attached to artifacts and runtime state.
 Gate rules:
 
 - A gate must never be marked approved without explicit user sign-off.
-- Runtime state should record the current gate, gate status, active command, recommended next command, and next action when a gate is approved or pending.
+- Work artifacts should record the current gate, gate status, recommended next command, and next action when a gate is approved or pending; confirm live runtime posture with `pulse daemon status`.
 - `brainstorm` may ask for direction approval, but it does not approve solution design.
 - `explore` produces evidence, but it does not approve final solution design.
 - `design` prepares Gate 1; it does not auto-approve it.

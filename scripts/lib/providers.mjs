@@ -1,5 +1,3 @@
-import path from "node:path";
-
 export const WORKFLOW_SKILL_NAME = "workflow";
 
 export const PROVIDERS = [
@@ -84,8 +82,7 @@ export const PROVIDERS = [
 ];
 
 export function getPulseCommand(provider) {
-  return [
-    "node",
-    path.posix.join(provider.configDir, "skills", WORKFLOW_SKILL_NAME, "scripts", "pulse.mjs"),
-  ].join(" ");
+  // The installed plugin is guidance only. Mutable workgraph and runtime
+  // authority lives in the Rust executable and daemon available on PATH.
+  return "pulse";
 }

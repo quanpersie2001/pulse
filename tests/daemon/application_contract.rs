@@ -1,6 +1,6 @@
 use pulse::daemon::application::DaemonApplication;
 use pulse::daemon::permissions::RuntimePrincipal;
-use pulse::daemon::persistence::StateStore;
+use pulse::daemon::persistence::{FailpointMode, StateStore};
 #[cfg(unix)]
 use pulse::daemon::process::{ProcessOwner, SpawnRequest};
 use pulse::daemon::protocol::{DaemonRequest, DaemonResponse, RequestEnvelope};
@@ -11,6 +11,15 @@ use serde_json::json;
 use std::sync::{Arc, Barrier};
 #[cfg(unix)]
 use std::time::{Duration, Instant};
+
+#[path = "../graph/assignment_fixture.rs"]
+#[allow(dead_code)]
+mod assignment_fixture;
+#[path = "../common/git.rs"]
+mod common_git;
+use super::common_fixture_repo;
+use assignment_fixture::{bootstrap_repo, setup_ready_ticket, write_policy};
+use common_fixture_repo::TestRepo;
 
 fn application() -> (tempfile::TempDir, tempfile::TempDir, Arc<DaemonApplication>) {
     let home = tempfile::tempdir().unwrap();
@@ -52,6 +61,49 @@ fn create_workspace(app: &DaemonApplication, project_id: &str) -> String {
     ) {
         DaemonResponse::Workspace { workspace } => workspace.workspace_id,
         other => panic!("unexpected response: {other:?}"),
+    }
+}
+
+fn assignment_application() -> (
+    TestRepo,
+    pulse::JsonGraphStore,
+    tempfile::TempDir,
+    DaemonApplication,
+    String,
+    String,
+) {
+    let repo = TestRepo::from_fixture("minimal-service");
+    let store = pulse::JsonGraphStore::new(repo.path());
+    bootstrap_repo(&repo, &store);
+    write_policy(repo.path(), &["work.assignment.release"]);
+    let ticket_id = setup_ready_ticket(repo.path(), &store);
+    let home = tempfile::tempdir().unwrap();
+    let app = DaemonApplication::new(StateStore::new(home.path()), "test").unwrap();
+    let project_id = open_project(&app, repo.path());
+    (repo, store, home, app, project_id, ticket_id)
+}
+
+fn assignment_start_request(
+    project_id: &str,
+    ticket_id: &str,
+    provider_options: serde_json::Value,
+) -> DaemonRequest {
+    DaemonRequest::AssignmentStart {
+        project_id: project_id.to_string(),
+        ticket_id: ticket_id.to_string(),
+        actor: "agent:tester".to_string(),
+        assignee: "agent:codex-local".to_string(),
+        capabilities: vec![
+            "repository.inspect".to_string(),
+            "source.read".to_string(),
+            "source.write".to_string(),
+            "test.run".to_string(),
+            "workspace.worktree".to_string(),
+        ],
+        isolation: IsolationMode::Local,
+        provider_id: "codex".to_string(),
+        provider_options,
+        ttl_seconds: 1800,
     }
 }
 
@@ -114,6 +166,7 @@ fn high_volume_turn_preserves_completion_and_returns_idle_with_loss_marker() {
     };
     assert_eq!(sent.lifecycle, SessionLifecycle::Idle);
     assert!(sent.active_turn_id.is_none());
+    std::thread::sleep(Duration::from_millis(100));
     let timeline = app.store().load().unwrap().timeline;
     assert!(timeline.iter().any(|event| {
         event.event_type == "provider.notification"
@@ -1059,6 +1112,22 @@ fn session_resume_replaces_transport_while_preserving_session_and_provider_handl
     );
     assert_eq!(resumed.lifecycle, SessionLifecycle::Idle);
     assert!(resumed.last_error.is_none());
+    let state = app.store().load().unwrap();
+    let resume_effect = state
+        .external_effects
+        .values()
+        .find(|effect| {
+            effect.kind == pulse::daemon::persistence::ExternalEffectKind::ProviderSessionResume
+        })
+        .expect("session resume effect");
+    assert_eq!(
+        resume_effect.state,
+        pulse::daemon::persistence::ExternalEffectState::Acknowledged
+    );
+    assert_eq!(
+        resume_effect.resource_id.as_deref(),
+        resumed.managed_process_id.as_deref()
+    );
 
     // Timeline shows the resume event.
     let timeline = handle(
@@ -1453,30 +1522,19 @@ fn session_resume_handle_mismatch_persists_error_and_terminates_candidate() {
     );
     assert_ne!(candidate_process_id, old_process_id);
 
-    // A failed resume must leave the session resumable again (Error lifecycle,
-    // stable handle preserved) — retrying against a healthy provider succeeds.
-    let resumed = match handle(
-        &app,
-        DaemonRequest::SessionResume {
-            session_id: session_id.clone(),
-            provider_options: resumable_provider_options(),
-        },
-        "resume-mismatch-retry",
-    ) {
-        DaemonResponse::Session { session } => session,
-        other => panic!("unexpected response: {other:?}"),
-    };
-    assert_eq!(resumed.session_id, session_id);
-    assert_eq!(resumed.lifecycle, SessionLifecycle::Idle);
-    assert_eq!(
-        resumed.provider_handle.as_deref(),
-        Some("thread-pulse-test")
-    );
-    handle(
-        &app,
-        DaemonRequest::SessionClose { session_id },
-        "resume-mismatch-cleanup",
-    );
+    // The provider answered, but with a different native resource identity.
+    // That is not safe to classify as a retryable rejection: automatic retry
+    // is blocked until the candidate/session relationship is reconciled.
+    let retry_error = app
+        .handle(
+            &DaemonRequest::SessionResume {
+                session_id,
+                provider_options: resumable_provider_options(),
+            },
+            "resume-mismatch-retry",
+        )
+        .unwrap_err();
+    assert_eq!(retry_error.code, "external_effect_reconciliation_required");
 }
 
 #[cfg(unix)]
@@ -1947,4 +2005,1479 @@ fn mcp_adapter_shares_mutation_idempotency_and_enforces_runtime_permissions() {
         "daemon_capability_missing"
     );
     assert_eq!(app.store().load().unwrap().projects.len(), 1);
+}
+
+#[test]
+fn action_scoped_runtime_roles_cannot_register_or_create_runtime_resources() {
+    let (_home, project_root, app) = application();
+    let writer = RuntimePrincipal {
+        principal_id: "worker:write-only".to_string(),
+        session_id: None,
+        capabilities: ["runtime.write".to_string()].into_iter().collect(),
+    };
+    let project_open = app.handle_as(
+        &writer,
+        &DaemonRequest::ProjectOpen {
+            root: project_root.path().to_string_lossy().to_string(),
+        },
+        "role-project-open",
+    );
+    assert_eq!(project_open.unwrap_err().code, "runtime_permission_denied");
+    let workspace_create = app.handle_as(
+        &writer,
+        &DaemonRequest::WorkspaceCreate {
+            project_id: "prj_missing".to_string(),
+            name: "worker-workspace".to_string(),
+            isolation: IsolationMode::Local,
+            base_commit: None,
+        },
+        "role-workspace-create",
+    );
+    assert_eq!(
+        workspace_create.unwrap_err().code,
+        "runtime_permission_denied"
+    );
+    let session_create = app.handle_as(
+        &writer,
+        &DaemonRequest::SessionCreate {
+            workspace_id: "wks_missing".to_string(),
+            provider_id: "codex".to_string(),
+            parent_session_id: None,
+            provider_options: json!({}),
+        },
+        "role-session-create",
+    );
+    assert_eq!(
+        session_create.unwrap_err().code,
+        "runtime_permission_denied"
+    );
+    assert!(app.store().load().unwrap().projects.is_empty());
+}
+
+#[cfg(unix)]
+#[test]
+fn provider_process_intent_failpoint_leaves_not_sent_recoverable_record() {
+    let (_home, project_root, app) = application();
+    let project_id = open_project(&app, project_root.path());
+    let workspace_id = create_workspace(&app, &project_id);
+    app.store()
+        .arm_failpoint("after_provider_process_intent", FailpointMode::Error)
+        .unwrap();
+    let error = app
+        .handle(
+            &DaemonRequest::SessionCreate {
+                workspace_id,
+                provider_id: "codex".to_string(),
+                parent_session_id: None,
+                provider_options: provider_options(),
+            },
+            "effect-intent-failpoint",
+        )
+        .unwrap_err();
+    assert_eq!(error.code, "injected_failpoint");
+    let state = app.store().load().unwrap();
+    assert!(state.external_effects.values().any(|effect| {
+        effect.kind == pulse::daemon::persistence::ExternalEffectKind::ProviderProcessCreate
+            && effect.state == pulse::daemon::persistence::ExternalEffectState::NotSent
+    }));
+}
+
+#[cfg(unix)]
+#[test]
+fn provider_process_success_before_ack_is_attempting_and_blocks_retry() {
+    let (_home, project_root, app) = application();
+    let project_id = open_project(&app, project_root.path());
+    let workspace_id = create_workspace(&app, &project_id);
+    let retry_workspace_id = workspace_id.clone();
+    app.store()
+        .arm_failpoint(
+            "after_provider_process_success_before_ack",
+            FailpointMode::Error,
+        )
+        .unwrap();
+    let error = app
+        .handle(
+            &DaemonRequest::SessionCreate {
+                workspace_id,
+                provider_id: "codex".to_string(),
+                parent_session_id: None,
+                provider_options: json!({
+                    "executable": "/bin/sleep",
+                    "args": ["5"],
+                    "protocol_mode": "opaque_test"
+                }),
+            },
+            "effect-process-success-failpoint",
+        )
+        .unwrap_err();
+    assert_eq!(error.code, "injected_failpoint");
+    let state = app.store().load().unwrap();
+    let effect = state
+        .external_effects
+        .values()
+        .find(|effect| {
+            effect.kind == pulse::daemon::persistence::ExternalEffectKind::ProviderProcessCreate
+        })
+        .expect("provider process effect");
+    assert_eq!(
+        effect.state,
+        pulse::daemon::persistence::ExternalEffectState::Attempting
+    );
+    assert!(effect.resource_id.is_some());
+    app.store()
+        .disarm_failpoint(
+            "after_provider_process_success_before_ack",
+            FailpointMode::Error,
+        )
+        .unwrap();
+    let retry = app
+        .handle(
+            &DaemonRequest::SessionCreate {
+                workspace_id: retry_workspace_id,
+                provider_id: "codex".to_string(),
+                parent_session_id: None,
+                provider_options: json!({
+                    "executable": "/bin/sleep",
+                    "args": ["5"],
+                    "protocol_mode": "opaque_test"
+                }),
+            },
+            "effect-process-success-failpoint",
+        )
+        .unwrap_err();
+    assert_eq!(
+        retry.code, "external_effect_reconciliation_required",
+        "{}",
+        retry.message
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn provider_session_transport_ambiguity_remains_operator_actionable() {
+    let (_home, project_root, app) = application();
+    let project_id = open_project(&app, project_root.path());
+    let workspace_id = create_workspace(&app, &project_id);
+    let error = app
+        .handle(
+            &DaemonRequest::SessionCreate {
+                workspace_id,
+                provider_id: "codex".to_string(),
+                parent_session_id: None,
+                provider_options: json!({
+                    "executable": "/bin/sh",
+                    "args": ["-c", "exec 1>&-; sleep 5"]
+                }),
+            },
+            "provider-session-ambiguity",
+        )
+        .unwrap_err();
+    assert!(matches!(
+        error.code.as_str(),
+        "provider_transport_closed" | "io_error" | "provider_response_timeout"
+    ));
+    let state = app.store().load().unwrap();
+    let effect = state
+        .external_effects
+        .values()
+        .find(|effect| {
+            effect.kind == pulse::daemon::persistence::ExternalEffectKind::ProviderSessionCreate
+        })
+        .expect("provider session effect");
+    assert_eq!(
+        effect.state,
+        pulse::daemon::persistence::ExternalEffectState::OutcomeUnknown
+    );
+    assert!(effect.detail.contains("provider") || effect.detail.contains("cleanup"));
+}
+
+#[cfg(unix)]
+#[test]
+fn identical_messages_with_distinct_request_ids_create_distinct_effects() {
+    let (_home, project_root, app) = application();
+    let project_id = open_project(&app, project_root.path());
+    let workspace_id = create_workspace(&app, &project_id);
+    let session = match handle(
+        &app,
+        DaemonRequest::SessionCreate {
+            workspace_id,
+            provider_id: "codex".to_string(),
+            parent_session_id: None,
+            provider_options: high_volume_provider_options(),
+        },
+        "identical-message-session",
+    ) {
+        DaemonResponse::Session { session } => session,
+        other => panic!("unexpected response: {other:?}"),
+    };
+    handle(
+        &app,
+        DaemonRequest::SessionSend {
+            session_id: session.session_id.clone(),
+            input: "same input".to_string(),
+        },
+        "identical-message-one",
+    );
+    std::thread::sleep(std::time::Duration::from_millis(100));
+    handle(
+        &app,
+        DaemonRequest::SessionSend {
+            session_id: session.session_id,
+            input: "same input".to_string(),
+        },
+        "identical-message-two",
+    );
+    let effects = app.store().load().unwrap();
+    assert_eq!(
+        effects
+            .external_effects
+            .values()
+            .filter(|effect| {
+                effect.kind == pulse::daemon::persistence::ExternalEffectKind::SessionSend
+            })
+            .count(),
+        2
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn acknowledged_turn_commit_failure_is_unknown_and_retry_is_blocked() {
+    let (_home, project_root, app) = application();
+    let project_id = open_project(&app, project_root.path());
+    let workspace_id = create_workspace(&app, &project_id);
+    let session = match handle(
+        &app,
+        DaemonRequest::SessionCreate {
+            workspace_id,
+            provider_id: "codex".to_string(),
+            parent_session_id: None,
+            provider_options: high_volume_provider_options(),
+        },
+        "turn-commit-failure-session",
+    ) {
+        DaemonResponse::Session { session } => session,
+        other => panic!("unexpected response: {other:?}"),
+    };
+    app.store()
+        .arm_failpoint("before_session_turn_commit", FailpointMode::Error)
+        .unwrap();
+    let request = DaemonRequest::SessionSend {
+        session_id: session.session_id.clone(),
+        input: "commit failure".to_string(),
+    };
+    let first = app.handle(&request, "turn-commit-failure").unwrap_err();
+    assert_eq!(first.code, "injected_failpoint");
+    let state = app.store().load().unwrap();
+    let effect = state
+        .external_effects
+        .values()
+        .find(|effect| effect.kind == pulse::daemon::persistence::ExternalEffectKind::SessionSend)
+        .expect("session send effect");
+    assert_eq!(
+        effect.state,
+        pulse::daemon::persistence::ExternalEffectState::OutcomeUnknown
+    );
+    app.store()
+        .disarm_failpoint("before_session_turn_commit", FailpointMode::Error)
+        .unwrap();
+    let retry = app.handle(&request, "turn-commit-failure").unwrap_err();
+    assert_eq!(retry.code, "external_effect_reconciliation_required");
+}
+
+#[cfg(unix)]
+#[test]
+fn provider_send_success_before_ack_is_attempting_and_blocks_retry() {
+    let (_home, project_root, app) = application();
+    let project_id = open_project(&app, project_root.path());
+    let workspace_id = create_workspace(&app, &project_id);
+    let session = match handle(
+        &app,
+        DaemonRequest::SessionCreate {
+            workspace_id,
+            provider_id: "codex".to_string(),
+            parent_session_id: None,
+            provider_options: high_volume_provider_options(),
+        },
+        "send-attempting-session",
+    ) {
+        DaemonResponse::Session { session } => session,
+        other => panic!("unexpected response: {other:?}"),
+    };
+    app.store()
+        .arm_failpoint(
+            "after_session_send_success_before_ack",
+            FailpointMode::Error,
+        )
+        .unwrap();
+    let request = DaemonRequest::SessionSend {
+        session_id: session.session_id.clone(),
+        input: "attempting send".to_string(),
+    };
+    let error = app.handle(&request, "send-attempting").unwrap_err();
+    assert_eq!(error.code, "injected_failpoint");
+    let state = app.store().load().unwrap();
+    let effect = state
+        .external_effects
+        .values()
+        .find(|effect| effect.kind == pulse::daemon::persistence::ExternalEffectKind::SessionSend)
+        .expect("session send effect");
+    assert_eq!(
+        effect.state,
+        pulse::daemon::persistence::ExternalEffectState::Attempting
+    );
+    assert!(effect.resource_id.is_some());
+    app.store()
+        .disarm_failpoint(
+            "after_session_send_success_before_ack",
+            FailpointMode::Error,
+        )
+        .unwrap();
+    let retry = app.handle(&request, "send-attempting").unwrap_err();
+    assert_eq!(retry.code, "external_effect_reconciliation_required");
+    let _ = app.handle(
+        &DaemonRequest::SessionClose {
+            session_id: session.session_id,
+        },
+        "send-attempting-close",
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn malformed_accepted_turn_response_is_unknown_and_not_resendable() {
+    let (_home, project_root, app) = application();
+    let script = tempfile::NamedTempFile::new().unwrap();
+    std::fs::write(
+        script.path(),
+        r#"import readline from "node:readline";
+const lines = readline.createInterface({ input: process.stdin });
+for await (const raw of lines) {
+  const request = JSON.parse(raw);
+  if (request.method === "initialize") {
+    process.stdout.write(JSON.stringify({ id: request.id, result: {} }) + "\n");
+  } else if (request.method === "thread/start") {
+    process.stdout.write(JSON.stringify({ id: request.id, result: { thread: { id: "malformed-thread" } } }) + "\n");
+  } else if (request.method === "turn/start") {
+    process.stdout.write(JSON.stringify({ id: request.id, result: { turn: {} } }) + "\n");
+  }
+}
+"#,
+    )
+    .unwrap();
+    let project_id = open_project(&app, project_root.path());
+    let workspace_id = create_workspace(&app, &project_id);
+    let session = match handle(
+        &app,
+        DaemonRequest::SessionCreate {
+            workspace_id,
+            provider_id: "codex".to_string(),
+            parent_session_id: None,
+            provider_options: json!({
+                "executable": std::env::var("NODE").unwrap_or_else(|_| "node".to_string()),
+                "args": [script.path()]
+            }),
+        },
+        "malformed-turn-session",
+    ) {
+        DaemonResponse::Session { session } => session,
+        other => panic!("unexpected response: {other:?}"),
+    };
+    let request = DaemonRequest::SessionSend {
+        session_id: session.session_id,
+        input: "malformed turn".to_string(),
+    };
+    let error = app.handle(&request, "malformed-turn-send").unwrap_err();
+    assert_eq!(error.code, "provider_protocol_invalid_after_transport");
+    let state = app.store().load().unwrap();
+    let effect = state
+        .external_effects
+        .values()
+        .find(|effect| effect.kind == pulse::daemon::persistence::ExternalEffectKind::SessionSend)
+        .expect("session send effect");
+    assert_eq!(
+        effect.state,
+        pulse::daemon::persistence::ExternalEffectState::OutcomeUnknown
+    );
+    let retry = app.handle(&request, "malformed-turn-send").unwrap_err();
+    assert_eq!(retry.code, "external_effect_reconciliation_required");
+}
+
+#[cfg(unix)]
+#[test]
+fn delayed_provider_event_is_durable_without_session_or_timeline_read() {
+    let (_home, project_root, app) = application();
+    let provider_script = tempfile::NamedTempFile::new().unwrap();
+    std::fs::write(
+        provider_script.path(),
+        r#"import readline from "node:readline";
+const lines = readline.createInterface({ input: process.stdin });
+for await (const raw of lines) {
+  const request = JSON.parse(raw);
+  if (request.method === "initialize") {
+    process.stdout.write(JSON.stringify({ id: request.id, result: {} }) + "\n");
+  } else if (request.method === "thread/start") {
+    process.stdout.write(JSON.stringify({ id: request.id, result: { thread: { id: "delayed-thread" } } }) + "\n");
+  } else if (request.method === "turn/start") {
+    process.stdout.write(JSON.stringify({ id: request.id, result: { turn: { id: "delayed-turn" } } }) + "\n");
+    setTimeout(() => process.stdout.write(JSON.stringify({ method: "delayed/event", params: { durable: true } }) + "\n"), 80);
+  }
+}
+"#,
+    )
+    .unwrap();
+    let project_id = open_project(&app, project_root.path());
+    let workspace_id = create_workspace(&app, &project_id);
+    let session = match handle(
+        &app,
+        DaemonRequest::SessionCreate {
+            workspace_id,
+            provider_id: "codex".to_string(),
+            parent_session_id: None,
+            provider_options: json!({
+                "executable": std::env::var("NODE").unwrap_or_else(|_| "node".to_string()),
+                "args": [provider_script.path()]
+            }),
+        },
+        "delayed-event-session",
+    ) {
+        DaemonResponse::Session { session } => session,
+        other => panic!("unexpected response: {other:?}"),
+    };
+    handle(
+        &app,
+        DaemonRequest::SessionSend {
+            session_id: session.session_id,
+            input: "delayed".to_string(),
+        },
+        "delayed-event-send",
+    );
+    app.store()
+        .arm_failpoint("before_provider_event_commit", FailpointMode::Error)
+        .unwrap();
+    std::thread::sleep(Duration::from_millis(120));
+    app.store()
+        .disarm_failpoint("before_provider_event_commit", FailpointMode::Error)
+        .unwrap();
+    std::thread::sleep(Duration::from_millis(180));
+    let state = app.store().load().unwrap();
+    assert_eq!(
+        state
+            .timeline
+            .iter()
+            .filter(|event| {
+                event.event_type == "provider.notification"
+                    && event.payload.get("method").and_then(|value| value.as_str())
+                        == Some("delayed/event")
+            })
+            .count(),
+        1
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn concurrent_close_requeues_provider_event_before_handle_release() {
+    let (_home, project_root, app) = application();
+    let provider_script = tempfile::NamedTempFile::new().unwrap();
+    std::fs::write(
+        provider_script.path(),
+        r#"import readline from "node:readline";
+const lines = readline.createInterface({ input: process.stdin });
+for await (const raw of lines) {
+  const request = JSON.parse(raw);
+  if (request.method === "initialize") {
+    process.stdout.write(JSON.stringify({ id: request.id, result: {} }) + "\n");
+  } else if (request.method === "thread/start") {
+    process.stdout.write(JSON.stringify({ id: request.id, result: { thread: { id: "fenced-thread" } } }) + "\n");
+  } else if (request.method === "turn/start") {
+    process.stdout.write(JSON.stringify({ id: request.id, result: { turn: { id: "fenced-turn" } } }) + "\n");
+    setTimeout(() => process.stdout.write(JSON.stringify({ method: "fenced/event", params: { once: true } }) + "\n"), 60);
+  } else if (request.method === "turn/interrupt") {
+    process.stdout.write(JSON.stringify({ id: request.id, result: {} }) + "\n");
+  }
+}
+"#,
+    )
+    .unwrap();
+    let project_id = open_project(&app, project_root.path());
+    let workspace_id = create_workspace(&app, &project_id);
+    let session = match handle(
+        &app,
+        DaemonRequest::SessionCreate {
+            workspace_id,
+            provider_id: "codex".to_string(),
+            parent_session_id: None,
+            provider_options: json!({
+                "executable": std::env::var("NODE").unwrap_or_else(|_| "node".to_string()),
+                "args": [provider_script.path()]
+            }),
+        },
+        "fenced-event-session",
+    ) {
+        DaemonResponse::Session { session } => session,
+        other => panic!("unexpected response: {other:?}"),
+    };
+    handle(
+        &app,
+        DaemonRequest::SessionSend {
+            session_id: session.session_id.clone(),
+            input: "fenced".to_string(),
+        },
+        "fenced-event-send",
+    );
+    app.store()
+        .arm_failpoint("before_provider_event_commit", FailpointMode::Error)
+        .unwrap();
+    std::thread::sleep(Duration::from_millis(100));
+    let close_app = Arc::clone(&app);
+    let close_session_id = session.session_id.clone();
+    let close = std::thread::spawn(move || {
+        close_app.handle(
+            &DaemonRequest::SessionClose {
+                session_id: close_session_id,
+            },
+            "fenced-event-close",
+        )
+    })
+    .join()
+    .unwrap();
+    assert_eq!(close.unwrap_err().code, "injected_failpoint");
+    app.store()
+        .disarm_failpoint("before_provider_event_commit", FailpointMode::Error)
+        .unwrap();
+    let closed = handle(
+        &app,
+        DaemonRequest::SessionClose {
+            session_id: session.session_id.clone(),
+        },
+        "fenced-event-close-retry",
+    );
+    assert!(matches!(
+        closed,
+        DaemonResponse::Session {
+            session: pulse::daemon::session::SessionRecord {
+                lifecycle: SessionLifecycle::Closed,
+                ..
+            }
+        }
+    ));
+    let state = app.store().load().unwrap();
+    assert_eq!(
+        state
+            .timeline
+            .iter()
+            .filter(|event| {
+                event.event_type == "provider.notification"
+                    && event.payload.get("method").and_then(|value| value.as_str())
+                        == Some("fenced/event")
+            })
+            .count(),
+        1
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn close_retry_skips_interrupt_for_dead_child_with_shutdown_notification() {
+    let (_home, project_root, app) = application();
+    let provider_script = tempfile::NamedTempFile::new().unwrap();
+    std::fs::write(
+        provider_script.path(),
+        r#"import readline from "node:readline";
+process.on("SIGTERM", () => {
+  process.stdout.write(JSON.stringify({ method: "shutdown/notification", params: { once: true } }) + "\n", () => process.exit(0));
+});
+const lines = readline.createInterface({ input: process.stdin });
+for await (const raw of lines) {
+  const request = JSON.parse(raw);
+  if (request.method === "initialize") {
+    process.stdout.write(JSON.stringify({ id: request.id, result: {} }) + "\n");
+  } else if (request.method === "thread/start") {
+    process.stdout.write(JSON.stringify({ id: request.id, result: { thread: { id: "shutdown-thread" } } }) + "\n");
+  } else if (request.method === "turn/start") {
+    process.stdout.write(JSON.stringify({ id: request.id, result: { turn: { id: "shutdown-turn" } } }) + "\n");
+  } else if (request.method === "turn/interrupt") {
+    process.stdout.write(JSON.stringify({ id: request.id, result: {} }) + "\n");
+  }
+}
+"#,
+    )
+    .unwrap();
+    let project_id = open_project(&app, project_root.path());
+    let workspace_id = create_workspace(&app, &project_id);
+    let session = match handle(
+        &app,
+        DaemonRequest::SessionCreate {
+            workspace_id,
+            provider_id: "codex".to_string(),
+            parent_session_id: None,
+            provider_options: json!({
+                "executable": std::env::var("NODE").unwrap_or_else(|_| "node".to_string()),
+                "args": [provider_script.path()]
+            }),
+        },
+        "shutdown-retry-session",
+    ) {
+        DaemonResponse::Session { session } => session,
+        other => panic!("unexpected response: {other:?}"),
+    };
+    handle(
+        &app,
+        DaemonRequest::SessionSend {
+            session_id: session.session_id.clone(),
+            input: "shutdown retry turn".to_string(),
+        },
+        "shutdown-retry-send",
+    );
+    app.store()
+        .arm_failpoint("before_provider_event_commit", FailpointMode::Error)
+        .unwrap();
+    let first_close = app.handle(
+        &DaemonRequest::SessionClose {
+            session_id: session.session_id.clone(),
+        },
+        "shutdown-retry-first-close",
+    );
+    assert_eq!(first_close.unwrap_err().code, "injected_failpoint");
+    app.store()
+        .disarm_failpoint("before_provider_event_commit", FailpointMode::Error)
+        .unwrap();
+    let closed = handle(
+        &app,
+        DaemonRequest::SessionClose {
+            session_id: session.session_id.clone(),
+        },
+        "shutdown-retry-second-close",
+    );
+    assert!(matches!(
+        closed,
+        DaemonResponse::Session {
+            session: pulse::daemon::session::SessionRecord {
+                lifecycle: SessionLifecycle::Closed,
+                ..
+            }
+        }
+    ));
+    let state = app.store().load().unwrap();
+    assert_eq!(
+        state
+            .timeline
+            .iter()
+            .filter(|event| {
+                event.event_type == "provider.notification"
+                    && event.payload.get("method").and_then(|value| value.as_str())
+                        == Some("shutdown/notification")
+            })
+            .count(),
+        1
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn close_completes_with_unmatched_response_pressure_and_preserves_notifications() {
+    let (_home, project_root, app) = application();
+    let provider_script = tempfile::NamedTempFile::new().unwrap();
+    std::fs::write(
+        provider_script.path(),
+        r#"import readline from "node:readline";
+const unmatched = (prefix) => {
+  for (let index = 0; index < 96; index += 1) {
+    process.stdout.write(JSON.stringify({ id: `${prefix}-${index}`, result: {} }) + "\n");
+  }
+};
+process.on("SIGTERM", () => {
+  process.stdout.write(JSON.stringify({ method: "pressure/notification", params: { durable: true } }) + "\n", () => process.exit(0));
+});
+const lines = readline.createInterface({ input: process.stdin });
+for await (const raw of lines) {
+  const request = JSON.parse(raw);
+  if (request.method === "initialize") {
+    process.stdout.write(JSON.stringify({ id: request.id, result: {} }) + "\n");
+  } else if (request.method === "thread/start") {
+    process.stdout.write(JSON.stringify({ id: request.id, result: { thread: { id: "pressure-thread" } } }) + "\n");
+  } else if (request.method === "turn/start") {
+    unmatched("turn-unmatched");
+    process.stdout.write(JSON.stringify({ id: request.id, result: { turn: { id: "pressure-turn" } } }) + "\n");
+  } else if (request.method === "turn/interrupt") {
+    unmatched("interrupt-unmatched");
+    process.stdout.write(JSON.stringify({ id: request.id, result: {} }) + "\n");
+  }
+}
+"#,
+    )
+    .unwrap();
+    let project_id = open_project(&app, project_root.path());
+    let workspace_id = create_workspace(&app, &project_id);
+    let session = match handle(
+        &app,
+        DaemonRequest::SessionCreate {
+            workspace_id,
+            provider_id: "codex".to_string(),
+            parent_session_id: None,
+            provider_options: json!({
+                "executable": std::env::var("NODE").unwrap_or_else(|_| "node".to_string()),
+                "args": [provider_script.path()]
+            }),
+        },
+        "pressure-session",
+    ) {
+        DaemonResponse::Session { session } => session,
+        other => panic!("unexpected response: {other:?}"),
+    };
+    handle(
+        &app,
+        DaemonRequest::SessionSend {
+            session_id: session.session_id.clone(),
+            input: "response pressure".to_string(),
+        },
+        "pressure-send",
+    );
+    let (sender, receiver) = std::sync::mpsc::channel();
+    let close_app = Arc::clone(&app);
+    let close_session_id = session.session_id.clone();
+    std::thread::spawn(move || {
+        sender
+            .send(close_app.handle(
+                &DaemonRequest::SessionClose {
+                    session_id: close_session_id,
+                },
+                "pressure-close",
+            ))
+            .unwrap();
+    });
+    let closed = receiver
+        .recv_timeout(Duration::from_secs(3))
+        .expect("session close must not deadlock on unmatched responses")
+        .unwrap();
+    assert!(matches!(
+        closed,
+        DaemonResponse::Session {
+            session: pulse::daemon::session::SessionRecord {
+                lifecycle: SessionLifecycle::Closed,
+                ..
+            }
+        }
+    ));
+    let state = app.store().load().unwrap();
+    assert_eq!(
+        state
+            .timeline
+            .iter()
+            .filter(|event| {
+                event.event_type == "provider.notification"
+                    && event.payload.get("method").and_then(|value| value.as_str())
+                        == Some("pressure/notification")
+            })
+            .count(),
+        1
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn close_persists_interrupt_and_stdout_close_notifications_once() {
+    let (_home, project_root, app) = application();
+    let provider_script = tempfile::NamedTempFile::new().unwrap();
+    std::fs::write(
+        provider_script.path(),
+        r#"import readline from "node:readline";
+let interrupts = 0;
+process.on("SIGTERM", () => {
+  process.stdout.write(JSON.stringify({ method: "close/notification", params: { phase: "stdout-close" } }) + "\n", () => process.exit(0));
+});
+const lines = readline.createInterface({ input: process.stdin });
+for await (const raw of lines) {
+  const request = JSON.parse(raw);
+  if (request.method === "initialize") {
+    process.stdout.write(JSON.stringify({ id: request.id, result: {} }) + "\n");
+  } else if (request.method === "thread/start") {
+    process.stdout.write(JSON.stringify({ id: request.id, result: { thread: { id: "close-thread" } } }) + "\n");
+  } else if (request.method === "turn/start") {
+    process.stdout.write(JSON.stringify({ id: request.id, result: { turn: { id: "close-turn" } } }) + "\n");
+  } else if (request.method === "turn/interrupt") {
+    interrupts += 1;
+    if (interrupts === 1) {
+      process.stdout.write(JSON.stringify({ method: "close/notification", params: { phase: "interrupt-response" } }) + "\n");
+    }
+    process.stdout.write(JSON.stringify({ id: request.id, result: {} }) + "\n");
+  }
+}
+"#,
+    )
+    .unwrap();
+    let project_id = open_project(&app, project_root.path());
+    let workspace_id = create_workspace(&app, &project_id);
+    let session = match handle(
+        &app,
+        DaemonRequest::SessionCreate {
+            workspace_id,
+            provider_id: "codex".to_string(),
+            parent_session_id: None,
+            provider_options: json!({
+                "executable": std::env::var("NODE").unwrap_or_else(|_| "node".to_string()),
+                "args": [provider_script.path()]
+            }),
+        },
+        "close-notification-session",
+    ) {
+        DaemonResponse::Session { session } => session,
+        other => panic!("unexpected response: {other:?}"),
+    };
+    handle(
+        &app,
+        DaemonRequest::SessionSend {
+            session_id: session.session_id.clone(),
+            input: "close notification turn".to_string(),
+        },
+        "close-notification-send",
+    );
+    app.store()
+        .arm_failpoint("before_provider_event_commit", FailpointMode::Error)
+        .unwrap();
+    let first_close = app.handle(
+        &DaemonRequest::SessionClose {
+            session_id: session.session_id.clone(),
+        },
+        "close-notification-first",
+    );
+    assert_eq!(first_close.unwrap_err().code, "injected_failpoint");
+    app.store()
+        .disarm_failpoint("before_provider_event_commit", FailpointMode::Error)
+        .unwrap();
+    let closed = handle(
+        &app,
+        DaemonRequest::SessionClose {
+            session_id: session.session_id.clone(),
+        },
+        "close-notification-retry",
+    );
+    assert!(matches!(
+        closed,
+        DaemonResponse::Session {
+            session: pulse::daemon::session::SessionRecord {
+                lifecycle: SessionLifecycle::Closed,
+                ..
+            }
+        }
+    ));
+    let state = app.store().load().unwrap();
+    for phase in ["interrupt-response", "stdout-close"] {
+        assert_eq!(
+            state
+                .timeline
+                .iter()
+                .filter(|event| {
+                    event.event_type == "provider.notification"
+                        && event.payload.get("method").and_then(|value| value.as_str())
+                            == Some("close/notification")
+                        && event
+                            .payload
+                            .pointer("/params/phase")
+                            .and_then(|value| value.as_str())
+                            == Some(phase)
+                })
+                .count(),
+            1,
+            "notification phase {phase} should be durable exactly once"
+        );
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn acknowledged_worktree_ledger_failure_blocks_retry_with_owned_path_visible() {
+    let home = tempfile::tempdir().unwrap();
+    let project_root = tempfile::tempdir().unwrap();
+    let run = |args: &[&str]| {
+        let status = std::process::Command::new("git")
+            .args(["-C", project_root.path().to_str().unwrap()])
+            .args(args)
+            .status()
+            .unwrap();
+        assert!(status.success(), "git command failed: {args:?}");
+    };
+    run(&["init", "-q"]);
+    run(&["config", "user.email", "pulse@test.invalid"]);
+    run(&["config", "user.name", "Pulse Test"]);
+    std::fs::write(project_root.path().join("README"), b"fixture").unwrap();
+    run(&["add", "README"]);
+    run(&["commit", "-qm", "initial"]);
+    let app = DaemonApplication::new(StateStore::new(home.path()), "test").unwrap();
+    let project_id = open_project(&app, project_root.path());
+    app.store()
+        .arm_failpoint("before_workspace_ledger_commit", FailpointMode::Error)
+        .unwrap();
+    let request = DaemonRequest::WorkspaceCreate {
+        project_id,
+        name: "owned-worktree".to_string(),
+        isolation: IsolationMode::Worktree,
+        base_commit: None,
+    };
+    let error = app.handle(&request, "worktree-ledger-failure").unwrap_err();
+    assert_eq!(error.code, "injected_failpoint");
+    let state = app.store().load().unwrap();
+    let effect = state
+        .external_effects
+        .values()
+        .find(|effect| {
+            effect.kind == pulse::daemon::persistence::ExternalEffectKind::WorktreeCreate
+        })
+        .expect("worktree effect");
+    assert_eq!(
+        effect.state,
+        pulse::daemon::persistence::ExternalEffectState::OutcomeUnknown
+    );
+    let root = effect
+        .resource_id
+        .as_ref()
+        .expect("worktree resource identity");
+    assert!(std::path::Path::new(root).is_dir());
+    app.store()
+        .disarm_failpoint("before_workspace_ledger_commit", FailpointMode::Error)
+        .unwrap();
+    let retry = app.handle(&request, "worktree-ledger-failure").unwrap_err();
+    assert_eq!(retry.code, "external_effect_reconciliation_required");
+}
+
+#[cfg(unix)]
+#[test]
+fn worktree_success_before_ack_is_attempting_and_blocks_retry() {
+    let home = tempfile::tempdir().unwrap();
+    let project_root = tempfile::tempdir().unwrap();
+    let run = |args: &[&str]| {
+        let status = std::process::Command::new("git")
+            .args(["-C", project_root.path().to_str().unwrap()])
+            .args(args)
+            .status()
+            .unwrap();
+        assert!(status.success(), "git command failed: {args:?}");
+    };
+    run(&["init", "-q"]);
+    run(&["config", "user.email", "pulse@test.invalid"]);
+    run(&["config", "user.name", "Pulse Test"]);
+    std::fs::write(project_root.path().join("README"), b"fixture").unwrap();
+    run(&["add", "README"]);
+    run(&["commit", "-qm", "initial"]);
+    let app = DaemonApplication::new(StateStore::new(home.path()), "test").unwrap();
+    let project_id = open_project(&app, project_root.path());
+    app.store()
+        .arm_failpoint("after_worktree_success_before_ack", FailpointMode::Error)
+        .unwrap();
+    let request = DaemonRequest::WorkspaceCreate {
+        project_id,
+        name: "attempting-worktree".to_string(),
+        isolation: IsolationMode::Worktree,
+        base_commit: None,
+    };
+    let error = app.handle(&request, "worktree-attempting").unwrap_err();
+    assert_eq!(error.code, "injected_failpoint");
+    let state = app.store().load().unwrap();
+    let effect = state
+        .external_effects
+        .values()
+        .find(|effect| {
+            effect.kind == pulse::daemon::persistence::ExternalEffectKind::WorktreeCreate
+        })
+        .expect("worktree effect");
+    assert_eq!(
+        effect.state,
+        pulse::daemon::persistence::ExternalEffectState::Attempting
+    );
+    assert!(effect
+        .resource_id
+        .as_ref()
+        .is_some_and(|root| { std::path::Path::new(root).is_dir() }));
+    app.store()
+        .disarm_failpoint("after_worktree_success_before_ack", FailpointMode::Error)
+        .unwrap();
+    let retry = app.handle(&request, "worktree-attempting").unwrap_err();
+    assert_eq!(retry.code, "external_effect_reconciliation_required");
+}
+
+#[cfg(unix)]
+#[test]
+fn assignment_malformed_thread_start_retains_release_authorized_lease() {
+    let (_repo, store, _home, app, project_id, ticket_id) = assignment_application();
+    let script = tempfile::NamedTempFile::new().unwrap();
+    std::fs::write(
+        script.path(),
+        r#"import readline from "node:readline";
+const lines = readline.createInterface({ input: process.stdin });
+for await (const raw of lines) {
+  const request = JSON.parse(raw);
+  if (request.method === "initialize") {
+    process.stdout.write(JSON.stringify({ id: request.id, result: {} }) + "\n");
+  } else if (request.method === "thread/start") {
+    process.stdout.write(JSON.stringify({ id: request.id, result: { thread: {} } }) + "\n");
+  }
+}
+"#,
+    )
+    .unwrap();
+    let request = assignment_start_request(
+        &project_id,
+        &ticket_id,
+        json!({
+            "executable": std::env::var("NODE").unwrap_or_else(|_| "node".to_string()),
+            "args": [script.path()]
+        }),
+    );
+    let error = app
+        .handle(&request, "assignment-malformed-thread")
+        .unwrap_err();
+    assert_eq!(error.code, "provider_protocol_invalid_after_transport");
+    let state = app.store().load().unwrap();
+    let saga = state
+        .assignment_sagas
+        .values()
+        .find(|saga| saga.idempotency_key == "assignment-malformed-thread")
+        .unwrap();
+    assert_eq!(
+        saga.state,
+        pulse::daemon::assignment::AssignmentSagaState::Recoverable
+    );
+    assert!(saga
+        .last_error
+        .as_deref()
+        .unwrap()
+        .contains("lease retained"));
+    let lease_id = saga.lease_id.as_deref().unwrap();
+    let reservation = pulse::kernel::reservation::list_reservations(store.repo_root())
+        .unwrap()
+        .into_iter()
+        .find(|reservation| reservation.lease_id == lease_id)
+        .unwrap();
+    assert_eq!(
+        reservation.state,
+        pulse::reservation::ReservationState::Reserved
+    );
+    let retry = app
+        .handle(&request, "assignment-malformed-thread")
+        .unwrap_err();
+    assert_eq!(retry.code, "external_effect_reconciliation_required");
+}
+
+#[cfg(unix)]
+#[test]
+fn assignment_provisioning_attempting_retains_release_authorized_lease() {
+    let (_repo, store, _home, app, project_id, ticket_id) = assignment_application();
+    app.store()
+        .arm_failpoint(
+            "after_provider_process_success_before_ack",
+            FailpointMode::Error,
+        )
+        .unwrap();
+    let request = assignment_start_request(
+        &project_id,
+        &ticket_id,
+        json!({
+            "executable": "/bin/sleep",
+            "args": ["1"],
+            "protocol_mode": "opaque_test"
+        }),
+    );
+    let error = app
+        .handle(&request, "assignment-process-attempting")
+        .unwrap_err();
+    assert_eq!(error.code, "injected_failpoint");
+    let state = app.store().load().unwrap();
+    let saga = state
+        .assignment_sagas
+        .values()
+        .find(|saga| saga.idempotency_key == "assignment-process-attempting")
+        .unwrap();
+    assert_eq!(
+        saga.state,
+        pulse::daemon::assignment::AssignmentSagaState::Recoverable
+    );
+    let lease_id = saga.lease_id.as_deref().unwrap();
+    let reservation = pulse::kernel::reservation::list_reservations(store.repo_root())
+        .unwrap()
+        .into_iter()
+        .find(|reservation| reservation.lease_id == lease_id)
+        .unwrap();
+    assert_eq!(
+        reservation.state,
+        pulse::reservation::ReservationState::Reserved
+    );
+    assert!(state.external_effects.values().any(|effect| {
+        effect.kind == pulse::daemon::persistence::ExternalEffectKind::ProviderProcessCreate
+            && effect.state == pulse::daemon::persistence::ExternalEffectState::Attempting
+    }));
+    app.store()
+        .disarm_failpoint(
+            "after_provider_process_success_before_ack",
+            FailpointMode::Error,
+        )
+        .unwrap();
+    let retry = app
+        .handle(&request, "assignment-process-attempting")
+        .unwrap_err();
+    assert_eq!(retry.code, "external_effect_reconciliation_required");
+}
+
+#[cfg(unix)]
+#[test]
+fn assignment_bootstrap_send_attempting_retains_lease_and_blocks_retry() {
+    let (_repo, store, _home, app, project_id, ticket_id) = assignment_application();
+    app.store()
+        .arm_failpoint(
+            "after_session_send_success_before_ack",
+            FailpointMode::Error,
+        )
+        .unwrap();
+    let request = assignment_start_request(&project_id, &ticket_id, high_volume_provider_options());
+    let error = app
+        .handle(&request, "assignment-bootstrap-send-attempting")
+        .unwrap_err();
+    assert_eq!(error.code, "injected_failpoint");
+    let state = app.store().load().unwrap();
+    let saga = state
+        .assignment_sagas
+        .values()
+        .find(|saga| saga.idempotency_key == "assignment-bootstrap-send-attempting")
+        .unwrap();
+    assert_ne!(
+        saga.state,
+        pulse::daemon::assignment::AssignmentSagaState::Released
+    );
+    assert!(saga
+        .last_error
+        .as_deref()
+        .is_some_and(|error| error.contains("not released")));
+    let lease_id = saga.lease_id.as_deref().unwrap();
+    let reservation = pulse::kernel::reservation::list_reservations(store.repo_root())
+        .unwrap()
+        .into_iter()
+        .find(|reservation| reservation.lease_id == lease_id)
+        .unwrap();
+    assert_eq!(
+        reservation.state,
+        pulse::reservation::ReservationState::Reserved
+    );
+    assert!(state.external_effects.values().any(|effect| {
+        effect.kind == pulse::daemon::persistence::ExternalEffectKind::SessionSend
+            && effect.state == pulse::daemon::persistence::ExternalEffectState::Attempting
+    }));
+    app.store()
+        .disarm_failpoint(
+            "after_session_send_success_before_ack",
+            FailpointMode::Error,
+        )
+        .unwrap();
+    let retry = app
+        .handle(&request, "assignment-bootstrap-send-attempting")
+        .unwrap_err();
+    assert_eq!(retry.code, "external_effect_reconciliation_required");
+}
+
+#[cfg(unix)]
+#[test]
+fn assignment_after_delivery_intent_restarts_and_resumes_not_sent_bootstrap() {
+    let (_repo, store, home, app, project_id, ticket_id) = assignment_application();
+    let provider_script = tempfile::NamedTempFile::new().unwrap();
+    let provider_log = tempfile::NamedTempFile::new().unwrap();
+    std::fs::write(
+        provider_script.path(),
+        r#"import fs from "node:fs";
+import readline from "node:readline";
+const log = process.argv[2];
+const lines = readline.createInterface({ input: process.stdin });
+for await (const raw of lines) {
+  const request = JSON.parse(raw);
+  if (request.method === "initialize") {
+    process.stdout.write(JSON.stringify({ id: request.id, result: {} }) + "\n");
+  } else if (request.method === "thread/start" || request.method === "thread/resume") {
+    process.stdout.write(JSON.stringify({ id: request.id, result: { thread: { id: "restart-thread" } } }) + "\n");
+  } else if (request.method === "turn/start") {
+    fs.appendFileSync(log, "turn/start\n");
+    process.stdout.write(JSON.stringify({ id: request.id, result: { turn: { id: "restart-turn" } } }) + "\n");
+  }
+}
+"#,
+    )
+    .unwrap();
+    let request = assignment_start_request(
+        &project_id,
+        &ticket_id,
+        json!({
+            "executable": std::env::var("NODE").unwrap_or_else(|_| "node".to_string()),
+            "args": [provider_script.path(), provider_log.path()]
+        }),
+    );
+    app.store()
+        .arm_failpoint("after_delivery_intent", FailpointMode::Panic)
+        .unwrap();
+    let crashed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        app.handle(&request, "assignment-restart-not-sent")
+    }));
+    assert!(
+        crashed.is_err(),
+        "delivery intent failpoint must crash the request"
+    );
+    app.store()
+        .disarm_failpoint("after_delivery_intent", FailpointMode::Panic)
+        .unwrap();
+    let before = app.store().load().unwrap();
+    let saga_before = before
+        .assignment_sagas
+        .values()
+        .find(|saga| saga.idempotency_key == "assignment-restart-not-sent")
+        .unwrap();
+    let lease_before = saga_before.lease_id.clone().unwrap();
+    let effect_id = format!(
+        "effect-send-{}-{}",
+        saga_before.session_id.as_deref().unwrap(),
+        pulse::canonical_json::hash_bytes(saga_before.idempotency_key.as_bytes())
+            .trim_start_matches("sha256:")
+            .chars()
+            .take(20)
+            .collect::<String>()
+    );
+    assert_eq!(
+        before.external_effects[&effect_id].state,
+        pulse::daemon::persistence::ExternalEffectState::NotSent
+    );
+    let delivery_id_before = saga_before.delivery_id.clone().unwrap();
+    let request_id_before = before.deliveries[&delivery_id_before]
+        .correlation_request_id
+        .clone()
+        .unwrap();
+    let request_message_before = before.external_effects[&effect_id]
+        .request_message
+        .clone()
+        .expect("bootstrap request body must be durable before provider I/O");
+    drop(app);
+
+    let restarted = DaemonApplication::new(StateStore::new(home.path()), "test-restarted").unwrap();
+    let delivered = match restarted
+        .handle(&request, "assignment-restart-not-sent")
+        .unwrap()
+    {
+        DaemonResponse::Assignment { saga } => saga,
+        other => panic!("unexpected response: {other:?}"),
+    };
+    assert_eq!(
+        delivered.state,
+        pulse::daemon::assignment::AssignmentSagaState::BootstrapDelivered
+    );
+    assert_eq!(delivered.lease_id.as_deref(), Some(lease_before.as_str()));
+    let after = restarted.store().load().unwrap();
+    assert_eq!(
+        after.external_effects[&effect_id].state,
+        pulse::daemon::persistence::ExternalEffectState::Acknowledged
+    );
+    assert_eq!(
+        after.deliveries[&delivery_id_before]
+            .correlation_request_id
+            .as_deref(),
+        Some(request_id_before.as_str())
+    );
+    assert_eq!(
+        after.external_effects[&effect_id]
+            .request_message
+            .as_deref(),
+        Some(request_message_before.as_str())
+    );
+    assert_eq!(
+        after.deliveries[delivered.delivery_id.as_ref().unwrap()].state,
+        pulse::daemon::assignment::DeliveryState::Delivered
+    );
+    assert_eq!(
+        std::fs::read_to_string(provider_log.path())
+            .unwrap()
+            .lines()
+            .filter(|line| *line == "turn/start")
+            .count(),
+        1
+    );
+    let reservation = pulse::kernel::reservation::list_reservations(store.repo_root())
+        .unwrap()
+        .into_iter()
+        .find(|reservation| reservation.lease_id == lease_before)
+        .unwrap();
+    assert_eq!(
+        reservation.state,
+        pulse::reservation::ReservationState::Reserved
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn not_sent_bootstrap_recovery_rejects_each_broken_identity_link_without_resend() {
+    for mismatch in [
+        "saga",
+        "delivery_session",
+        "process_provider",
+        "payload",
+        "correlation",
+        "effect_fingerprint",
+        "effect_detail",
+        "method",
+        "provider_thread",
+        "input",
+    ] {
+        let (_repo, _store, home, app, project_id, ticket_id) = assignment_application();
+        let provider_script = tempfile::NamedTempFile::new().unwrap();
+        let provider_log = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(
+            provider_script.path(),
+            r#"import fs from "node:fs";
+import readline from "node:readline";
+const log = process.argv[2];
+const lines = readline.createInterface({ input: process.stdin });
+for await (const raw of lines) {
+  const request = JSON.parse(raw);
+  fs.appendFileSync(log, request.method + "\n");
+  if (request.method === "initialize") {
+    process.stdout.write(JSON.stringify({ id: request.id, result: {} }) + "\n");
+  } else if (request.method === "thread/start" || request.method === "thread/resume") {
+    process.stdout.write(JSON.stringify({ id: request.id, result: { thread: { id: "link-thread" } } }) + "\n");
+  } else if (request.method === "turn/start") {
+    fs.appendFileSync(log, "turn/start\n");
+    process.stdout.write(JSON.stringify({ id: request.id, result: { turn: { id: "link-turn" } } }) + "\n");
+  }
+}
+"#,
+        )
+        .unwrap();
+        let request = assignment_start_request(
+            &project_id,
+            &ticket_id,
+            json!({
+                "executable": std::env::var("NODE").unwrap_or_else(|_| "node".to_string()),
+                "args": [provider_script.path(), provider_log.path()]
+            }),
+        );
+        app.store()
+            .arm_failpoint("after_delivery_intent", FailpointMode::Panic)
+            .unwrap();
+        let crashed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            app.handle(&request, &format!("identity-link-{mismatch}"))
+        }));
+        assert!(crashed.is_err());
+        app.store()
+            .disarm_failpoint("after_delivery_intent", FailpointMode::Panic)
+            .unwrap();
+        let before = app.store().load().unwrap();
+        let provider_writes_before = std::fs::read_to_string(provider_log.path()).unwrap();
+        let saga = before
+            .assignment_sagas
+            .values()
+            .find(|saga| saga.idempotency_key == format!("identity-link-{mismatch}"))
+            .unwrap();
+        let saga_id = saga.saga_id.clone();
+        let session_id = saga.session_id.clone().unwrap();
+        let delivery_id = saga.delivery_id.clone().unwrap();
+        let effect_id = format!(
+            "effect-send-{}-{}",
+            session_id,
+            pulse::canonical_json::hash_bytes(saga.idempotency_key.as_bytes())
+                .trim_start_matches("sha256:")
+                .chars()
+                .take(20)
+                .collect::<String>()
+        );
+        app.store()
+            .with_state(true, |state| {
+                match mismatch {
+                    "saga" => {
+                        state.deliveries.get_mut(&delivery_id).unwrap().saga_id =
+                            "wrong-saga".to_string()
+                    }
+                    "delivery_session" => {
+                        state.deliveries.get_mut(&delivery_id).unwrap().session_id =
+                            "wrong-session".to_string()
+                    }
+                    "process_provider" => {
+                        let process_id = state.sessions[&session_id]
+                            .managed_process_id
+                            .clone()
+                            .unwrap();
+                        state.processes.get_mut(&process_id).unwrap().provider_id =
+                            "wrong-provider".to_string();
+                    }
+                    "payload" => {
+                        state.deliveries.get_mut(&delivery_id).unwrap().payload =
+                            "wrong-payload".to_string();
+                    }
+                    "correlation" => {
+                        state
+                            .deliveries
+                            .get_mut(&delivery_id)
+                            .unwrap()
+                            .correlation_request_id = Some("wrong-request-id".to_string());
+                    }
+                    "effect_fingerprint" => {
+                        state
+                            .external_effects
+                            .get_mut(&effect_id)
+                            .unwrap()
+                            .request_fingerprint = "wrong-fingerprint".to_string();
+                    }
+                    "effect_detail" => {
+                        state.external_effects.get_mut(&effect_id).unwrap().detail =
+                            "wrong-detail".to_string();
+                    }
+                    "method" => {
+                        let effect = state.external_effects.get_mut(&effect_id).unwrap();
+                        let mut message: serde_json::Value =
+                            serde_json::from_str(effect.request_message.as_deref().unwrap())
+                                .unwrap();
+                        message["method"] = serde_json::Value::String("thread/start".to_string());
+                        effect.request_message = Some(serde_json::to_string(&message).unwrap());
+                    }
+                    "provider_thread" => {
+                        let effect = state.external_effects.get_mut(&effect_id).unwrap();
+                        let mut message: serde_json::Value =
+                            serde_json::from_str(effect.request_message.as_deref().unwrap())
+                                .unwrap();
+                        message["params"]["threadId"] =
+                            serde_json::Value::String("wrong-thread".to_string());
+                        effect.request_message = Some(serde_json::to_string(&message).unwrap());
+                    }
+                    "input" => {
+                        let effect = state.external_effects.get_mut(&effect_id).unwrap();
+                        let mut message: serde_json::Value =
+                            serde_json::from_str(effect.request_message.as_deref().unwrap())
+                                .unwrap();
+                        message["params"]["input"][0]["text"] =
+                            serde_json::Value::String("wrong-payload".to_string());
+                        effect.request_message = Some(serde_json::to_string(&message).unwrap());
+                    }
+                    _ => unreachable!(),
+                }
+                Ok(())
+            })
+            .unwrap();
+        drop(app);
+
+        let restarted =
+            DaemonApplication::new(StateStore::new(home.path()), "test-restarted").unwrap();
+        let response = restarted
+            .handle(&request, &format!("identity-link-{mismatch}"))
+            .unwrap();
+        let returned_saga = match response {
+            DaemonResponse::Assignment { saga } => saga,
+            other => panic!("unexpected response: {other:?}"),
+        };
+        assert_ne!(
+            returned_saga.state,
+            pulse::daemon::assignment::AssignmentSagaState::BootstrapDelivered,
+            "mismatch {mismatch} must not replay bootstrap"
+        );
+        assert_eq!(
+            std::fs::read_to_string(provider_log.path()).unwrap(),
+            provider_writes_before,
+            "mismatch {mismatch} must perform no provider writes"
+        );
+        assert_eq!(
+            restarted.store().load().unwrap().external_effects[&effect_id].state,
+            pulse::daemon::persistence::ExternalEffectState::NotSent,
+            "mismatch {mismatch} must not advance the effect"
+        );
+        assert_eq!(saga_id, returned_saga.saga_id);
+    }
 }

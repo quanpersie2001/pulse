@@ -10,9 +10,9 @@ use crate::event::{new_event_id, EventEnvelope};
 use crate::graph::node::{Node, NodeStatus};
 use crate::graph::store::JsonGraphStore;
 use crate::reservation::{
-    ActivateReservationArgs, CapabilityInventoryV1, CoreReservationV1, ReservationSource,
-    ReservationState, ReservationSubject, ReserveWorkArgs, ReserveWorkOutcome, CAP_MATCH_MATCHED,
-    MAX_TTL_SECONDS, MIN_TTL_SECONDS, RESERVATION_SCHEMA_VERSION,
+    AcknowledgeReservationArgs, ActivateReservationArgs, CapabilityInventoryV1, CoreReservationV1,
+    ReservationSource, ReservationState, ReservationSubject, ReserveWorkArgs, ReserveWorkOutcome,
+    CAP_MATCH_MATCHED, MAX_TTL_SECONDS, MIN_TTL_SECONDS, RESERVATION_SCHEMA_VERSION,
 };
 use crate::storage::transaction::{
     commit_prepared_multi_target_transaction, new_transaction_id, prepare_multi_target_transaction,
@@ -46,7 +46,14 @@ impl JsonGraphStore {
         let key_hash = hash_bytes(args.idempotency_key.as_bytes());
         for _ in 0..2 {
             let guard = WriteGuard::acquire(&self.repo_root)?;
+            authorize_assignment(&self.repo_root, &args.actor, "work.assignment.prepare")?;
             recover_prepared_transactions(&self.repo_root)?;
+            expire_reservations_under_fence(
+                &self.repo_root,
+                &args.actor,
+                Utc::now(),
+                self.failpoint,
+            )?;
             let mut matching = list_reservations(&self.repo_root)?
                 .into_iter()
                 .filter(|reservation| reservation.idempotency_key_hash == key_hash)
@@ -102,7 +109,6 @@ impl JsonGraphStore {
         inventory: &CapabilityInventoryV1,
         lease_id: &str,
     ) -> Result<ReserveWorkOutcome> {
-        authorize_assignment(&self.repo_root, &args.actor, "work.assignment.prepare")?;
         if let Some(existing) = find_live_reservation_for_ticket(&self.repo_root, &args.ticket_id)?
         {
             return Err(PulseError::validation(
@@ -198,10 +204,61 @@ impl JsonGraphStore {
         })
     }
 
+    pub fn acknowledge_reservation(
+        &self,
+        args: AcknowledgeReservationArgs,
+    ) -> Result<CoreReservationV1> {
+        let _guard = WriteGuard::acquire(&self.repo_root)?;
+        authorize_assignment(&self.repo_root, &args.actor, "work.assignment.prepare")?;
+        recover_prepared_transactions(&self.repo_root)?;
+        expire_reservations_under_fence(&self.repo_root, &args.actor, Utc::now(), self.failpoint)?;
+        let before = load_reservation(&self.repo_root, &args.lease_id)?;
+        if before.state == ReservationState::Acknowledged
+            && before.runtime_binding.as_ref() == Some(&args.runtime_binding)
+            && before.acknowledgement.as_ref() == Some(&args.acknowledgement)
+        {
+            return Ok(before);
+        }
+        if before.state != ReservationState::Reserved {
+            return Err(PulseError::validation(
+                "reservation_not_acknowledgeable",
+                "reservation is not awaiting acknowledgement",
+            ));
+        }
+        validate_reservation_acknowledgement(
+            &self.repo_root,
+            &before,
+            &args.runtime_binding,
+            &args.acknowledgement,
+        )?;
+        let mut after = before.clone();
+        after.state = ReservationState::Acknowledged;
+        after.runtime_binding = Some(args.runtime_binding.clone());
+        after.acknowledgement = Some(args.acknowledgement.clone());
+        after.reservation_fingerprint = after.compute_fingerprint()?;
+        commit_reservation_change(ReservationChange {
+            repo_root: &self.repo_root,
+            operation: "work.assignment.acknowledged",
+            actor: &args.actor,
+            ticket_id: &before.subject.ticket_id,
+            before: Some(&before),
+            after: &after,
+            packet: None,
+            payload: json!({
+                "lease_id": before.lease_id,
+                "packet_fingerprint": before.packet_fingerprint,
+                "acknowledgement_id": args.acknowledgement.acknowledgement_id,
+            }),
+            failpoint: self.failpoint,
+        })?;
+        Ok(after)
+    }
+
     pub fn activate_reservation(&self, args: ActivateReservationArgs) -> Result<CoreReservationV1> {
         let _guard = WriteGuard::acquire(&self.repo_root)?;
-        recover_prepared_transactions(&self.repo_root)?;
         authorize_assignment(&self.repo_root, &args.actor, "work.assignment.prepare")?;
+        recover_prepared_transactions(&self.repo_root)?;
+        expire_reservations_under_fence(&self.repo_root, &args.actor, Utc::now(), self.failpoint)?;
         let before = load_reservation(&self.repo_root, &args.lease_id)?;
         if before.state == ReservationState::Active {
             if before.runtime_binding.as_ref() == Some(&args.runtime_binding)
@@ -236,27 +293,12 @@ impl JsonGraphStore {
                 "reservation expired before activation",
             ));
         }
-        if args.acknowledgement.session_id != args.runtime_binding.session_id
-            || args.acknowledgement.packet_fingerprint != before.packet_fingerprint
-        {
-            return Err(PulseError::validation(
-                "assignment_acknowledgement_mismatch",
-                "acknowledgement does not bind the exact session and packet",
-            ));
-        }
-        let packet = load_packet(&self.repo_root, &args.lease_id)?;
-        if packet.packet_fingerprint != before.packet_fingerprint {
-            return Err(PulseError::validation(
-                "assignment_packet_invalid",
-                "stored packet does not match reservation",
-            ));
-        }
-        if crate::source::head_commit(&self.repo_root)? != before.source.commit {
-            return Err(PulseError::validation(
-                "work_packet_source_changed",
-                "source commit changed before assignment activation",
-            ));
-        }
+        validate_reservation_acknowledgement(
+            &self.repo_root,
+            &before,
+            &args.runtime_binding,
+            &args.acknowledgement,
+        )?;
         let node_path = self.node_path(&before.subject.ticket_id);
         let node_before_bytes =
             fs::read(&node_path).map_err(|error| PulseError::io(&node_path, error))?;
@@ -346,8 +388,8 @@ impl JsonGraphStore {
         reason: &str,
     ) -> Result<CoreReservationV1> {
         let _guard = WriteGuard::acquire(&self.repo_root)?;
-        recover_prepared_transactions(&self.repo_root)?;
         authorize_assignment(&self.repo_root, actor, "work.assignment.release")?;
+        recover_prepared_transactions(&self.repo_root)?;
         let before = load_reservation(&self.repo_root, lease_id)?;
         if before.state == ReservationState::Released {
             return Ok(before);
@@ -377,6 +419,20 @@ impl JsonGraphStore {
             failpoint: self.failpoint,
         })?;
         Ok(after)
+    }
+
+    /// Reconcile pre-run leases whose TTL has elapsed.  This is the Core
+    /// recovery boundary: callers supply the observation time, while the
+    /// mutation remains fenced, CAS-protected and event-backed.
+    pub fn recover_expired_reservations(
+        &self,
+        actor: &str,
+        now: DateTime<Utc>,
+    ) -> Result<Vec<CoreReservationV1>> {
+        let _guard = WriteGuard::acquire(&self.repo_root)?;
+        authorize_assignment(&self.repo_root, actor, "work.assignment.release")?;
+        recover_prepared_transactions(&self.repo_root)?;
+        expire_reservations_under_fence(&self.repo_root, actor, now, self.failpoint)
     }
 
     pub fn work_packet_for_reservation(
@@ -625,4 +681,84 @@ fn find_live_reservation_for_ticket(repo_root: &Path, ticket_id: &str) -> Result
         }
     }
     Ok(None)
+}
+
+fn validate_reservation_acknowledgement(
+    repo_root: &Path,
+    before: &CoreReservationV1,
+    runtime_binding: &crate::reservation::RuntimeBinding,
+    acknowledgement: &crate::reservation::AssignmentAcknowledgement,
+) -> Result<()> {
+    if acknowledgement.session_id != runtime_binding.session_id
+        || acknowledgement.packet_fingerprint != before.packet_fingerprint
+    {
+        return Err(PulseError::validation(
+            "assignment_acknowledgement_mismatch",
+            "acknowledgement does not bind the exact session and packet",
+        ));
+    }
+    let packet = load_packet(repo_root, &before.lease_id)?;
+    if packet.packet_fingerprint != before.packet_fingerprint {
+        return Err(PulseError::validation(
+            "assignment_packet_invalid",
+            "stored packet does not match reservation",
+        ));
+    }
+    if crate::source::head_commit(repo_root)? != before.source.commit {
+        return Err(PulseError::validation(
+            "work_packet_source_changed",
+            "source commit changed before assignment activation",
+        ));
+    }
+    Ok(())
+}
+
+fn expire_reservations_under_fence(
+    repo_root: &Path,
+    actor: &str,
+    now: DateTime<Utc>,
+    failpoint: Option<crate::storage::transaction::TransactionFailpoint>,
+) -> Result<Vec<CoreReservationV1>> {
+    let mut expired = Vec::new();
+    for before in list_reservations(repo_root)? {
+        if !matches!(
+            before.state,
+            ReservationState::Reserved | ReservationState::Acknowledged
+        ) {
+            continue;
+        }
+        let expires_at = DateTime::parse_from_rfc3339(&before.expires_at)
+            .map_err(|_| {
+                PulseError::validation(
+                    "reservation_record_invalid",
+                    "reservation expiry is invalid",
+                )
+            })?
+            .with_timezone(&Utc);
+        if expires_at > now {
+            continue;
+        }
+        let mut after = before.clone();
+        after.state = ReservationState::Expired;
+        after.released_at = Some(now.to_rfc3339());
+        after.release_reason = Some("reservation lease expired".to_string());
+        after.reservation_fingerprint = after.compute_fingerprint()?;
+        commit_reservation_change(ReservationChange {
+            repo_root,
+            operation: "work.assignment.expired",
+            actor,
+            ticket_id: &before.subject.ticket_id,
+            before: Some(&before),
+            after: &after,
+            packet: None,
+            payload: json!({
+                "lease_id": before.lease_id,
+                "expires_at": before.expires_at,
+                "reconciled_at": now.to_rfc3339(),
+            }),
+            failpoint,
+        })?;
+        expired.push(after);
+    }
+    Ok(expired)
 }

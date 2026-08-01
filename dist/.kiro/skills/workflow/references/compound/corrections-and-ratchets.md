@@ -2,8 +2,8 @@
 
 Use this file when writing either:
 
-- `.pulse/memory/corrections/YYYYMMDD-<slug>.md`
-- `.pulse/memory/ratchet/YYYYMMDD-<slug>.md`
+- owning learning artifact/corrections/YYYYMMDD-<slug>.md
+- owning learning artifact/ratchet/YYYYMMDD-<slug>.md
 
 Use YAML frontmatter so recall can score the entry reliably.
 

@@ -32,12 +32,12 @@ The contract lives in `skills/workflow/references/HARNESS.md`.
 - Suggested improvement: keep help text generated from the structured command metadata
 - Risk: medium
 - Status: new
-- Evidence: `skills/workflow/SKILL.md`, `skills/workflow/scripts/command-metadata.json`
+- Evidence: `skills/workflow/SKILL.md`, the Rust CLI command surface
 
 ### Runtime relocation follow-up
 - Discovered while: Phase 1 router build
-- Current pain: some onboarding and runtime logic still lives under legacy source paths until later phases
-- Suggested improvement: keep canonical runtime scripts flat under `skills/workflow/scripts/` while materializing the v2 layout under `.pulse/`
+- Current pain: coordination and readiness contracts need continued verification at the Rust CLI boundary
+- Suggested improvement: keep the Rust CLI and daemon as the only mutable authorities while materializing the target-repository layout under `target-repository Pulse data/`
 - Risk: high
 - Status: planned
 - Evidence: `plan.md`, `solution-design.md`

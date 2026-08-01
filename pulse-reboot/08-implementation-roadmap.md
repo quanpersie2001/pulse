@@ -74,7 +74,8 @@ Mỗi phần salvage phải đi qua contract/test mới; không kéo cả depend
 - Provider abstraction chưa có usage thật.
 - Implicit transition dựa trên chat text.
 - UI dispatch giả nhưng không tạo/điều phối Agent thật.
-- Hidden per-run supervisor sau khi daemon replacement pass.
+- Historical hidden per-run supervisor prototype and its Core-owned runtime
+  path; the current runtime path has removed them after replacement proof.
 - Core-owned worktree provisioning/session/process lifecycle.
 
 ## Phases
@@ -121,6 +122,13 @@ thành.
 
 **Current implementation inventory:**
 
+**Current-status note (2026-08-01):** The inventory below records the present
+Rust daemon boundary and focused/source evidence, not a full Phase 2 close
+claim. Verification remains `Verifying` until the complete Phase 3 close gate
+is installed and independently evidenced; no full-suite-green result is claimed
+here. The legacy hidden supervisor is historical prototype scope and is already
+removed from the current runtime path.
+
 - Slice 1 `WorkPacketV1` preview đã implement/verify.
 - Core reservation giữ exact Ticket revision/packet và chỉ activate sau typed
   daemon Session acknowledgement.
@@ -129,7 +137,8 @@ thành.
 - Codex provider dùng App Server `initialize`, `thread/start`, `turn/start` và
   `turn/interrupt`; Pulse Session ID tách khỏi provider thread handle.
 - Typed handoff và independent verification điều khiển
-  `active -> verifying -> done|rework|blocked`; process exit không close Ticket.
+  `active -> verifying`; the Phase 3 close gate decides `done|rework|blocked`,
+  and process exit không close Ticket.
 - Hidden supervisor, runner profiles, Core run store, assignment-owned
   Workspace records và public run/attempt contracts đã bị xóa một chiều.
 
@@ -150,8 +159,10 @@ Implementation và acceptance evidence được giữ tại
 - Thêm durable timeline + PubSub/WebSocket + authoritative cursor fetch.
 - Implement Core-Daemon assignment saga và compensation.
 - Route runtime CLI qua daemon.
-- Sau replacement proof, xóa hidden per-run supervisor và Core-owned runtime
-  path thay vì giữ compatibility mode.
+- Replacement proof đã hoàn tất cho current runtime path: hidden per-run
+  supervisor và Core-owned runtime path đã bị xóa, không giữ compatibility mode.
+  Remaining Phase 2/3 work is boundedness, native acceptance coverage,
+  verification/close evidence và các deferred risks được ghi ở proposal gap.
 
 #### Phase 2B - Proof-driven single-Agent completion
 
@@ -370,8 +381,8 @@ saga, timeline catch-up, receipt và close gate single-agent pass.
 ### Duy trì hai kiến trúc
 
 Giảm thiểu: migration một chiều sang daemon ownership; hidden supervisor và
-Core-owned workspace/session/process path bị xóa sau replacement proof, không có
-compatibility layer vô thời hạn.
+Core-owned workspace/session/process path đã bị xóa khỏi current runtime path
+sau replacement proof, không có compatibility layer vô thời hạn.
 
 ### Daemon trở thành work truth thứ hai
 

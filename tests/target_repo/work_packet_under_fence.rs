@@ -9,7 +9,12 @@
 
 use pulse::canonical_json::to_canonical_bytes;
 use pulse::graph::store::OperationContext;
+use pulse::storage::transaction::{
+    persist_multi_target_intent, FileState, MultiTargetTransactionIntent, TransactionTarget,
+};
 use pulse::JsonGraphStore;
+use serde_json::json;
+use std::fs;
 
 use crate::common::fixture_repo::TestRepo;
 
@@ -76,6 +81,57 @@ fn two_packets_from_same_state_produce_identical_canonical_bytes() -> TestResult
     Ok(())
 }
 
+#[test]
+fn packet_identity_observation_does_not_recover_until_packet_fence() -> TestResult {
+    let repo = TestRepo::from_fixture("minimal-service");
+    let ticket_id = test_setup_ready_ticket(&repo)?;
+    let root = repo.path();
+
+    let mut pending = Vec::new();
+    for (name, relative) in [
+        ("docs", ".pulse/docs/registry.json"),
+        ("evidence", ".pulse/evidence/manifest.json"),
+    ] {
+        let path = root.join(relative);
+        let bytes = fs::read(&path)?;
+        let target = TransactionTarget::new(
+            path,
+            FileState::Present {
+                hash: pulse::canonical_json::hash_bytes(&bytes),
+                revision: 1,
+            },
+            FileState::Present {
+                hash: pulse::canonical_json::hash_bytes(&bytes),
+                revision: 1,
+            },
+            &bytes,
+        );
+        let intent = MultiTargetTransactionIntent::prepared(
+            format!("evt_packet_{name}"),
+            format!("{name}.test"),
+            "test",
+            vec![target],
+            root.join(format!(".pulse/events/packet-{name}.json")),
+            json!({"event": format!("packet-{name}")}),
+        )?;
+        let intent_path = persist_multi_target_intent(root, &intent)?;
+        pending.push(intent_path);
+    }
+
+    let docs_before = fs::read(root.join(".pulse/docs/registry.json"))?;
+    pulse::source::check_repository_identity(root)?;
+    assert!(pending.iter().all(|path| path.exists()));
+    assert_eq!(
+        docs_before,
+        fs::read(root.join(".pulse/docs/registry.json"))?
+    );
+
+    JsonGraphStore::new(root).work_packet(&ticket_id)?;
+
+    assert!(pending.iter().all(|path| !path.exists()));
+    Ok(())
+}
+
 // -----------------------------------------------------------------------
 // Test setup helper (minimal ready ticket for packet tests)
 // -----------------------------------------------------------------------
@@ -93,7 +149,6 @@ use pulse::graph::node::NodeStatus;
 use pulse::graph::store::{ContractSetRequest, DocumentationImpactUpdate, QaImpactUpdate};
 use pulse::identity::ActorKind;
 use pulse::policy::{AuthorityPolicy, AuthorityPrincipal};
-use std::fs;
 use std::path::Path;
 
 type TestResult<T = ()> = Result<T, Box<dyn std::error::Error>>;

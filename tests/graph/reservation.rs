@@ -3,9 +3,10 @@ use pulse::execution::{
 };
 use pulse::graph::node::NodeStatus;
 use pulse::reservation::{
-    ActivateReservationArgs, AssignmentAcknowledgement, ReservationState, ReserveWorkArgs,
-    RuntimeBinding,
+    AcknowledgeReservationArgs, ActivateReservationArgs, AssignmentAcknowledgement,
+    ReservationState, ReserveWorkArgs, RuntimeBinding,
 };
+use pulse::storage::transaction::TransactionFailpoint;
 use pulse::JsonGraphStore;
 
 use super::assignment_fixture::{
@@ -30,8 +31,103 @@ fn reserve(
         .unwrap()
 }
 
+fn binding() -> RuntimeBinding {
+    RuntimeBinding {
+        project_id: "prj_test".to_string(),
+        workspace_id: "wks_test".to_string(),
+        session_id: "ses_test".to_string(),
+        provider_id: "codex".to_string(),
+    }
+}
+
+fn acknowledgement(packet_fingerprint: &str) -> AssignmentAcknowledgement {
+    AssignmentAcknowledgement {
+        acknowledgement_id: "ack_test".to_string(),
+        delivery_id: "delivery_test".to_string(),
+        session_id: "ses_test".to_string(),
+        packet_fingerprint: packet_fingerprint.to_string(),
+        acknowledged_at: chrono::Utc::now().to_rfc3339(),
+    }
+}
+
+fn assignment_bytes(repo: &std::path::Path) -> Vec<(String, Vec<u8>)> {
+    let mut files = Vec::new();
+    for directory in [
+        repo.join(".pulse/runtime/assignment/reservations"),
+        repo.join(".pulse/events"),
+    ] {
+        if !directory.exists() {
+            continue;
+        }
+        let mut pending = vec![directory];
+        while let Some(path) = pending.pop() {
+            for entry in std::fs::read_dir(&path).unwrap() {
+                let entry = entry.unwrap();
+                let entry_path = entry.path();
+                if entry_path.is_dir() {
+                    pending.push(entry_path);
+                } else if entry_path.extension().and_then(|ext| ext.to_str()) == Some("json") {
+                    files.push((
+                        entry_path
+                            .strip_prefix(repo)
+                            .unwrap()
+                            .to_string_lossy()
+                            .to_string(),
+                        std::fs::read(entry_path).unwrap(),
+                    ));
+                }
+            }
+        }
+    }
+    files.sort_by(|left, right| left.0.cmp(&right.0));
+    files
+}
+
+fn pulse_bytes(repo: &std::path::Path) -> Vec<(String, Vec<u8>)> {
+    let root = repo.join(".pulse");
+    let mut files = Vec::new();
+    let mut pending = vec![root];
+    while let Some(path) = pending.pop() {
+        for entry in std::fs::read_dir(&path).unwrap() {
+            let entry = entry.unwrap();
+            let entry_path = entry.path();
+            if entry_path.is_dir() {
+                pending.push(entry_path);
+            } else {
+                files.push((
+                    entry_path
+                        .strip_prefix(repo)
+                        .unwrap()
+                        .to_string_lossy()
+                        .to_string(),
+                    std::fs::read(entry_path).unwrap(),
+                ));
+            }
+        }
+    }
+    files.sort_by(|left, right| left.0.cmp(&right.0));
+    files
+}
+
+fn event_count(repo: &std::path::Path, event_type: &str, lease_id: &str) -> usize {
+    assignment_bytes(repo)
+        .into_iter()
+        .filter(|(path, _bytes)| path.starts_with(".pulse/events/"))
+        .filter_map(|(_, bytes)| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
+        .filter(|event| {
+            event["event_type"] == event_type && event["payload"]["lease_id"] == lease_id
+        })
+        .count()
+}
+
+fn reservation_state(repo: &std::path::Path, lease_id: &str) -> ReservationState {
+    pulse::kernel::reservation::load_reservation(repo, lease_id)
+        .unwrap()
+        .state
+}
+
 #[test]
-fn reservation_keeps_core_ready_until_typed_ack_activation() {
+fn zero_exit_check_without_receipt_keeps_ticket_nonterminal() {
     let repo = TestRepo::from_fixture("minimal-service");
     let store = JsonGraphStore::new(repo.path());
     bootstrap_repo(&repo, &store);
@@ -108,10 +204,374 @@ fn reservation_keeps_core_ready_until_typed_ack_activation() {
             idempotency_key: "verification-happy".to_string(),
         })
         .unwrap();
-    assert_eq!(verified.resulting_status, "done");
+    assert_eq!(verified.resulting_status, "verifying");
+    assert_ne!(verified.resulting_status, "done");
     assert_eq!(
         store.show_node(&ticket_id).unwrap().status,
-        NodeStatus::Done
+        NodeStatus::Verifying
+    );
+}
+
+#[test]
+fn unauthorized_release_does_not_recover_pending_transaction() {
+    let repo = TestRepo::from_fixture("minimal-service");
+    let store = JsonGraphStore::new(repo.path());
+    bootstrap_repo(&repo, &store);
+    write_policy(repo.path(), &["work.assignment.release"]);
+    let ticket_id = setup_ready_ticket(repo.path(), &store);
+    let first = reserve(&store, &ticket_id, "unauthorized-release-pending");
+    let crashing =
+        JsonGraphStore::with_failpoint(repo.path(), TransactionFailpoint::AfterMultiTargetAll);
+    assert!(crashing
+        .release_reservation(
+            &first.reservation.lease_id,
+            "agent:tester",
+            "prepare pending release",
+        )
+        .is_err());
+    let before = pulse_bytes(repo.path());
+
+    assert!(store
+        .release_reservation(
+            &first.reservation.lease_id,
+            "agent:intruder",
+            "unauthorized release",
+        )
+        .is_err());
+    assert_eq!(pulse_bytes(repo.path()), before);
+}
+
+#[test]
+fn unauthorized_handoff_does_not_recover_pending_transaction() {
+    let repo = TestRepo::from_fixture("minimal-service");
+    let store = JsonGraphStore::new(repo.path());
+    bootstrap_repo(&repo, &store);
+    write_policy(repo.path(), &["work.assignment.release"]);
+    add_reviewer_policy(repo.path());
+    let ticket_id = setup_ready_ticket(repo.path(), &store);
+    let first = reserve(&store, &ticket_id, "unauthorized-handoff-pending");
+    let active = store
+        .activate_reservation(ActivateReservationArgs {
+            lease_id: first.reservation.lease_id.clone(),
+            actor: "agent:tester".to_string(),
+            runtime_binding: binding(),
+            acknowledgement: acknowledgement(&first.reservation.packet_fingerprint),
+        })
+        .unwrap();
+    let args = SubmitHandoffArgs {
+        lease_id: active.lease_id,
+        actor: "agent:tester".to_string(),
+        session_id: "ses_test".to_string(),
+        source_commit: active.source.commit,
+        summary: "pending handoff".to_string(),
+        changed_paths: vec![],
+        evidence_receipt_ids: vec![],
+        idempotency_key: "unauthorized-handoff-pending-key".to_string(),
+    };
+    let crashing =
+        JsonGraphStore::with_failpoint(repo.path(), TransactionFailpoint::AfterMultiTargetAll);
+    assert!(crashing.submit_execution_handoff(args.clone()).is_err());
+    let before = pulse_bytes(repo.path());
+
+    let unauthorized = SubmitHandoffArgs {
+        actor: "agent:intruder".to_string(),
+        ..args
+    };
+    assert!(store.submit_execution_handoff(unauthorized).is_err());
+    assert_eq!(pulse_bytes(repo.path()), before);
+}
+
+#[test]
+fn unauthorized_verification_does_not_recover_pending_transaction() {
+    let repo = TestRepo::from_fixture("minimal-service");
+    let store = JsonGraphStore::new(repo.path());
+    bootstrap_repo(&repo, &store);
+    write_policy(repo.path(), &["work.assignment.release"]);
+    add_reviewer_policy(repo.path());
+    let ticket_id = setup_ready_ticket(repo.path(), &store);
+    let first = reserve(&store, &ticket_id, "unauthorized-verification-pending");
+    let active = store
+        .activate_reservation(ActivateReservationArgs {
+            lease_id: first.reservation.lease_id.clone(),
+            actor: "agent:tester".to_string(),
+            runtime_binding: binding(),
+            acknowledgement: acknowledgement(&first.reservation.packet_fingerprint),
+        })
+        .unwrap();
+    let handoff = store
+        .submit_execution_handoff(SubmitHandoffArgs {
+            lease_id: active.lease_id,
+            actor: "agent:tester".to_string(),
+            session_id: "ses_test".to_string(),
+            source_commit: active.source.commit,
+            summary: "handoff for pending verification".to_string(),
+            changed_paths: vec![],
+            evidence_receipt_ids: vec![],
+            idempotency_key: "unauthorized-verification-handoff".to_string(),
+        })
+        .unwrap();
+    let args = CompleteVerificationArgs {
+        handoff_id: handoff.handoff_id,
+        actor: "human:reviewer".to_string(),
+        source_commit: handoff.source_commit,
+        disposition: VerificationDisposition::Passed,
+        summary: "pending verification".to_string(),
+        checks: vec![VerificationCheck {
+            name: "focused".to_string(),
+            command: "true".to_string(),
+            exit_code: 0,
+            artifact_ids: vec![],
+        }],
+        idempotency_key: "unauthorized-verification-pending-key".to_string(),
+    };
+    let crashing =
+        JsonGraphStore::with_failpoint(repo.path(), TransactionFailpoint::AfterMultiTargetAll);
+    assert!(crashing
+        .complete_execution_verification(args.clone())
+        .is_err());
+    let before = pulse_bytes(repo.path());
+
+    let unauthorized = CompleteVerificationArgs {
+        actor: "human:intruder".to_string(),
+        ..args
+    };
+    assert!(store.complete_execution_verification(unauthorized).is_err());
+    assert_eq!(pulse_bytes(repo.path()), before);
+}
+
+#[test]
+fn expired_reserved_lease_is_recovered_through_core_and_replaced() {
+    let repo = TestRepo::from_fixture("minimal-service");
+    let store = JsonGraphStore::new(repo.path());
+    bootstrap_repo(&repo, &store);
+    write_policy(repo.path(), &["work.assignment.release"]);
+    let ticket_id = setup_ready_ticket(repo.path(), &store);
+    let first = reserve(&store, &ticket_id, "reservation-expiry-recovery");
+    let first_packet =
+        std::fs::read(packet_file(repo.path(), &first.reservation.lease_id)).unwrap();
+    let now = chrono::Utc::now() + chrono::Duration::hours(1);
+
+    let recovered = store
+        .recover_expired_reservations("agent:tester", now)
+        .unwrap();
+    assert_eq!(recovered.len(), 1);
+    assert_eq!(recovered[0].lease_id, first.reservation.lease_id);
+    assert_eq!(recovered[0].state, ReservationState::Expired);
+    assert_eq!(
+        event_count(
+            repo.path(),
+            "work.assignment.expired",
+            &first.reservation.lease_id
+        ),
+        1
+    );
+    let expired_bytes =
+        std::fs::read(reservation_file(repo.path(), &first.reservation.lease_id)).unwrap();
+
+    assert!(store
+        .recover_expired_reservations("agent:tester", now)
+        .unwrap()
+        .is_empty());
+    assert_eq!(
+        event_count(
+            repo.path(),
+            "work.assignment.expired",
+            &first.reservation.lease_id
+        ),
+        1
+    );
+
+    let replacement = reserve(&store, &ticket_id, "reservation-expiry-recovery");
+    assert_ne!(replacement.reservation.lease_id, first.reservation.lease_id);
+    assert_eq!(replacement.reservation.state, ReservationState::Reserved);
+    assert_eq!(
+        std::fs::read(reservation_file(repo.path(), &first.reservation.lease_id)).unwrap(),
+        expired_bytes
+    );
+    assert_eq!(
+        std::fs::read(packet_file(repo.path(), &first.reservation.lease_id)).unwrap(),
+        first_packet
+    );
+    assert_eq!(
+        store.show_node(&ticket_id).unwrap().status,
+        NodeStatus::Ready
+    );
+}
+
+#[test]
+fn acknowledged_lease_expiry_is_recovered_through_core_api() {
+    let repo = TestRepo::from_fixture("minimal-service");
+    let store = JsonGraphStore::new(repo.path());
+    bootstrap_repo(&repo, &store);
+    write_policy(repo.path(), &["work.assignment.release"]);
+    let ticket_id = setup_ready_ticket(repo.path(), &store);
+    let first = reserve(&store, &ticket_id, "reservation-ack-expiry");
+    let acknowledged = store
+        .acknowledge_reservation(AcknowledgeReservationArgs {
+            lease_id: first.reservation.lease_id.clone(),
+            actor: "agent:tester".to_string(),
+            runtime_binding: binding(),
+            acknowledgement: acknowledgement(&first.reservation.packet_fingerprint),
+        })
+        .unwrap();
+    assert_eq!(acknowledged.state, ReservationState::Acknowledged);
+
+    let recovered = store
+        .recover_expired_reservations(
+            "agent:tester",
+            chrono::Utc::now() + chrono::Duration::hours(1),
+        )
+        .unwrap();
+    assert_eq!(recovered.len(), 1);
+    assert_eq!(recovered[0].state, ReservationState::Expired);
+    assert_eq!(
+        event_count(
+            repo.path(),
+            "work.assignment.expired",
+            &first.reservation.lease_id
+        ),
+        1
+    );
+    assert_eq!(
+        reservation_state(repo.path(), &first.reservation.lease_id),
+        ReservationState::Expired
+    );
+}
+
+#[test]
+fn active_lease_is_not_ttl_expired_by_recovery() {
+    let repo = TestRepo::from_fixture("minimal-service");
+    let store = JsonGraphStore::new(repo.path());
+    bootstrap_repo(&repo, &store);
+    write_policy(repo.path(), &["work.assignment.release"]);
+    let ticket_id = setup_ready_ticket(repo.path(), &store);
+    let first = reserve(&store, &ticket_id, "reservation-active-no-expiry");
+    let active = store
+        .activate_reservation(ActivateReservationArgs {
+            lease_id: first.reservation.lease_id.clone(),
+            actor: "agent:tester".to_string(),
+            runtime_binding: binding(),
+            acknowledgement: acknowledgement(&first.reservation.packet_fingerprint),
+        })
+        .unwrap();
+    let before = assignment_bytes(repo.path());
+    let recovered = store
+        .recover_expired_reservations(
+            "agent:tester",
+            chrono::Utc::now() + chrono::Duration::hours(1),
+        )
+        .unwrap();
+    assert!(recovered.is_empty());
+    assert_eq!(
+        store.show_node(&ticket_id).unwrap().status,
+        NodeStatus::Active
+    );
+    assert_eq!(
+        reservation_state(repo.path(), &active.lease_id),
+        ReservationState::Active
+    );
+    assert_eq!(assignment_bytes(repo.path()), before);
+    assert_eq!(
+        event_count(repo.path(), "work.assignment.expired", &active.lease_id),
+        0
+    );
+}
+
+#[test]
+fn unauthorized_reserve_activate_and_recover_preserve_expired_lease_bytes() {
+    for operation in ["reserve", "activate", "recover"] {
+        let repo = TestRepo::from_fixture("minimal-service");
+        let store = JsonGraphStore::new(repo.path());
+        bootstrap_repo(&repo, &store);
+        write_policy(repo.path(), &["work.assignment.release"]);
+        let ticket_id = setup_ready_ticket(repo.path(), &store);
+        let first = reserve(&store, &ticket_id, &format!("unauthorized-{operation}"));
+        let before = assignment_bytes(repo.path());
+        let future = chrono::Utc::now() + chrono::Duration::hours(1);
+
+        let error = match operation {
+            "reserve" => store
+                .reserve_work(ReserveWorkArgs {
+                    ticket_id: ticket_id.clone(),
+                    actor: "agent:intruder".to_string(),
+                    assignee: "agent:codex-local".to_string(),
+                    capability_inventory_bytes: valid_inventory_bytes("agent:codex-local"),
+                    ttl_seconds: 1800,
+                    idempotency_key: format!("unauthorized-{operation}-replacement"),
+                })
+                .map(|_| ()),
+            "activate" => store
+                .activate_reservation(ActivateReservationArgs {
+                    lease_id: first.reservation.lease_id.clone(),
+                    actor: "agent:intruder".to_string(),
+                    runtime_binding: binding(),
+                    acknowledgement: acknowledgement(&first.reservation.packet_fingerprint),
+                })
+                .map(|_| ()),
+            "recover" => store
+                .recover_expired_reservations("agent:intruder", future)
+                .map(|_| ()),
+            _ => unreachable!(),
+        };
+        assert!(error.is_err(), "{operation} unexpectedly authorized");
+        assert_eq!(
+            assignment_bytes(repo.path()),
+            before,
+            "{operation} mutated state"
+        );
+        assert_eq!(
+            reservation_state(repo.path(), &first.reservation.lease_id),
+            ReservationState::Reserved
+        );
+    }
+}
+
+#[test]
+fn expiry_commit_failpoint_recovers_reservation_and_event_atomically() {
+    let repo = TestRepo::from_fixture("minimal-service");
+    let store = JsonGraphStore::new(repo.path());
+    bootstrap_repo(&repo, &store);
+    write_policy(repo.path(), &["work.assignment.release"]);
+    let ticket_id = setup_ready_ticket(repo.path(), &store);
+    let first = reserve(&store, &ticket_id, "reservation-expiry-failpoint");
+    let crashing =
+        JsonGraphStore::with_failpoint(repo.path(), TransactionFailpoint::AfterMultiTargetAll);
+    let result = crashing.recover_expired_reservations(
+        "agent:tester",
+        chrono::Utc::now() + chrono::Duration::hours(1),
+    );
+    assert!(result.is_err(), "result={result:?}");
+
+    JsonGraphStore::new(repo.path()).recover().unwrap();
+    assert_eq!(
+        reservation_state(repo.path(), &first.reservation.lease_id),
+        ReservationState::Expired
+    );
+    assert_eq!(
+        event_count(
+            repo.path(),
+            "work.assignment.expired",
+            &first.reservation.lease_id
+        ),
+        1
+    );
+    assert_eq!(
+        store
+            .recover_expired_reservations(
+                "agent:tester",
+                chrono::Utc::now() + chrono::Duration::hours(1),
+            )
+            .unwrap()
+            .len(),
+        0
+    );
+    assert_eq!(
+        event_count(
+            repo.path(),
+            "work.assignment.expired",
+            &first.reservation.lease_id
+        ),
+        1
     );
 }
 
@@ -847,7 +1307,7 @@ fn daemon_saga_requires_acknowledgement_before_core_activation() {
     assert!(matches!(verification, DaemonResponse::Verification { .. }));
     assert_eq!(
         store.show_node(&ticket_id).unwrap().status,
-        NodeStatus::Done
+        NodeStatus::Verifying
     );
 }
 

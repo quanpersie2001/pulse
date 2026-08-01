@@ -28,7 +28,7 @@
   "interface": {
     "displayName": "Pulse",
     "shortDescription": "One `pulse:workflow` router plus standalone utility skills",
-    "longDescription": "Packages one user-facing `pulse:workflow` router for session entry, planning, validation, execution, review, and follow-up, plus standalone utility skills outside that router, while the rendered workflow runtime command manages local status, readiness, and reservations.",
+    "longDescription": "Packages one user-facing `pulse:workflow` guidance router for session entry, planning, validation, execution, review, and follow-up, plus standalone utility skills outside that router. Mutable graph and daemon runtime operations belong to the Rust `pulse` CLI and daemon.",
     "developerName": "quanpersie2001",
     "category": "Productivity",
     "capabilities": [

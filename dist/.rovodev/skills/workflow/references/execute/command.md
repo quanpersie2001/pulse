@@ -4,7 +4,7 @@ Single-worker and swarm-worker execution manual for implementing Gate 3-approved
 
 Execute answers:
 
-> Can this validated TASK/BUG be implemented, verified with fresh evidence, closed, committed atomically, and reported without changing the approved plan or solution?
+> Can this validated Ticket be implemented, verified with fresh evidence, closed, committed atomically, and reported without changing the approved plan or solution?
 
 Execute is intentionally narrow. It implements approved executable items only. It does not admit new work, choose solution design, decompose tasks, validate readiness, review quality, or approve merge/release.
 
@@ -15,22 +15,22 @@ Supports both:
 
 ## Mission
 
-Implement one execution-ready `TASK` or `BUG` at a time from the approved current slice, within declared scope, with fresh verification evidence, atomic close/commit discipline, and safe handoff/reporting.
+Implement one execution-ready `Ticket` at a time from the approved current slice, within declared scope, with fresh verification evidence, atomic close/commit discipline, and safe handoff/reporting.
 
 ## Entry criteria
 
 Run `pulse:workflow execute` only when all are true:
 
 - Gate 3 is explicitly approved for the current slice
-- runtime state, workgraph metadata, and story artifacts agree on the active epic/story/slice
-- the executable unit is a `TASK` or `BUG`, not an `EPIC` or `STORY`
+- daemon posture, workgraph metadata, and story artifacts agree on the active epic/story/slice
+- the executable unit is a `Ticket`, not an `EPIC` or `STORY`
 - the item has a complete execution contract in its README
-- the item has concrete verification evidence target(s), normally its workgraph `verification_path`
+- the item has concrete verification evidence target(s) in its work artifacts
 - execution mode matches invocation:
   - standalone execute -> validate recommended `single-worker`
   - swarm worker -> invoked by `pulse:workflow swarm` with worker bootstrap context
 
-Do not execute when approvals, item contracts, runtime posture, reservations, or current-slice boundaries are ambiguous.
+Do not execute when approvals, item contracts, daemon posture, reservations, or current-slice boundaries are ambiguous.
 
 If entry fails, reroute precisely:
 
@@ -38,14 +38,14 @@ If entry fails, reroute precisely:
 | --- | --- |
 | Runtime/session posture unclear or stale | `pulse:workflow use` |
 | Gate 3 missing, pending, rejected, or not current | `pulse:workflow validate` |
-| TASK/BUG contract, file scope, dependencies, or verification plan are incomplete | `pulse:workflow plan` |
+| Ticket contract, file scope, dependencies, or verification plan are incomplete | `pulse:workflow plan` |
 | Solution decision refs are missing, contradictory, or infeasible | `pulse:workflow design` |
 | Discovery/evidence is missing for a blocking implementation fact | `pulse:workflow explore` |
 
 ## Loop overview
 
 ```text
-Initialize -> Select TASK/BUG -> Read Contract -> Reserve Scope -> Mark In Progress
+Initialize -> Select Ticket -> Read Contract -> Reserve Scope -> Mark In Progress
      -> Implement -> Verify Evidence -> Close -> Commit -> Release & Report
         ^                                                               |
         +---------------- Context OK? / More current-slice work? -------+
@@ -60,8 +60,8 @@ Initialize -> Select TASK/BUG -> Read Contract -> Reserve Scope -> Mark In Progr
 
 - `solution-design.md` and approved `plan.md` are immutable inputs.
 - Execute may not change solution decisions, task decomposition, dependency shape, docs impact, or verification strategy.
-- `TASK`/`BUG` README content is the human execution contract.
-- `.pulse/workgraph/items.jsonl` is mutated only through `node .rovodev/skills/workflow/scripts/pulse.mjs workgraph ...`.
+- `Ticket` README content is the human execution contract.
+- `.pulse/workgraph/nodes/` is mutated only through supported Rust `pulse work ...` commands.
 - Runtime reservations are short-lived execution leases; workgraph `owner` is durable responsibility.
 - Fresh verification evidence is mandatory before close.
 - Implementation gaps, deviations, unplanned decisions, and tradeoffs discovered during execution must be captured in the item's `implement-gap.md` and surfaced in completion reports.
@@ -69,7 +69,7 @@ Initialize -> Select TASK/BUG -> Read Contract -> Reserve Scope -> Mark In Progr
 
 ## Step 1 — Initialize
 
-Determine mode from invocation and runtime state:
+Determine mode from invocation and daemon posture:
 
 - if invoked by `pulse:workflow swarm`, run in worker mode
 - otherwise run in standalone single-worker mode
@@ -94,9 +94,9 @@ If required startup fields are missing, request clarification on the active coor
 Read in this order:
 
 1. `AGENTS.md`
-2. `node .rovodev/skills/workflow/scripts/pulse.mjs status --repo-root <repo> --json`
-3. `.pulse/runtime/state.json`
-4. `.pulse/runtime/STATE.md`
+2. `pulse daemon status`
+3. daemon posture from `pulse daemon status`
+4. the owning work artifact
 5. active handoff file when resuming
 6. active current-slice story artifacts only after the target item is known
 
@@ -116,7 +116,7 @@ Before selecting work, post `[ONLINE]` on the active coordination surface with:
 - `runtime_identity`
 - `AGENTS.md: read`
 - `pulse:workflow execute: loaded`
-- `Next step: node .rovodev/skills/workflow/scripts/pulse.mjs ready --repo-root <repo> --json`
+- `Next step: pulse work list --repo-root <repo> --json`
 
 Runtime mapping:
 
@@ -130,8 +130,8 @@ Do not claim work before this startup report.
 
 Use owner-scoped handoffs:
 
-- worker mode -> `.pulse/runtime/handoffs/worker-<runtime_identity>.json`
-- standalone mode -> `.pulse/runtime/handoffs/single-worker.json`
+- worker mode -> `pulse daemon status`
+- standalone mode -> `pulse daemon status`
 
 If a handoff exists and belongs to the same owner identity:
 
@@ -151,7 +151,7 @@ Before resuming a reassigned handoff, require coordinator confirmation that:
 - prior worker inactivity was confirmed
 - reservations for the prior owner were checked and safely transferred or released
 - shared-branch commit queue state was checked and safely transferred
-- `.pulse/runtime/handoffs/manifest.json` and the owner handoff file record previous owner, new owner, reason, and coordinator approval
+- `pulse daemon status` confirms live posture; the owner handoff file records previous owner, new owner, reason, and coordinator approval
 
 If those updates are missing, do not resume the handoff.
 
@@ -168,14 +168,14 @@ In worker mode, every loop starts with coordination visibility. Check the active
 Then inspect live ready queue:
 
 ```bash
-node .rovodev/skills/workflow/scripts/pulse.mjs ready --repo-root <repo> --json
+pulse work list --repo-root <repo> --json
 ```
 
 Select the highest-priority ready item that is all of:
 
-- kind `TASK` or `BUG`
+- kind `Ticket`
 - belongs to the active story or Gate 3-approved current slice
-- `OPEN`
+- `READY`
 - dependency-unblocked
 - not reserved by another active worker
 - compatible with current mode and coordination constraints
@@ -184,20 +184,20 @@ Ignore `EPIC` and `STORY` rows for execution. If only non-executable ready rows 
 
 ### Exceptional path: direct orchestrator hint
 
-If swarm suggests an item, treat it as a hint. Re-check `ready`, `workgraph show`, reservations, and the item README before claiming it.
+If swarm suggests an item, treat it as a hint. Re-check `pulse work ready <id> --repo-root <repo> --json`, `pulse work show <id> --repo-root <repo> --json`, reservations, and the item README before claiming it.
 
 ## Step 3 — Read and verify the item contract
 
 Read the selected item metadata:
 
 ```bash
-node .rovodev/skills/workflow/scripts/pulse.mjs workgraph show --repo-root <repo> <item-id> --json
+pulse work show --repo-root <repo> <item-id> --json
 ```
 
 Then read:
 
-- item `content_path` README
-- item `verification_path`
+- README under the item's `content_dir`
+- declared verification evidence path
 - parent story `plan.md`
 - parent story `solution-design.md`
 - parent story `discovery.md` when the item or plan cites discovery evidence
@@ -227,7 +227,7 @@ Use `solution-design.md`, `plan.md`, the item README, and workgraph metadata as 
 In worker mode, reserve all declared file paths before editing:
 
 ```bash
-node .rovodev/skills/workflow/scripts/pulse.mjs reservation reserve \
+pulse daemon status
   --repo-root <repo> \
   --agent <runtime_identity> \
   --item <item-id> \
@@ -254,7 +254,7 @@ Do not proceed without safe reservations. Do not edit around conflicts.
 After contract and reservation checks pass, mark the item active:
 
 ```bash
-node .rovodev/skills/workflow/scripts/pulse.mjs workgraph update --repo-root <repo> <item-id> --status IN_PROGRESS --json
+pulse work transition <item-id> --repo-root <repo> --to active --expected-revision <revision> --actor <actor> --json
 ```
 
 If the item is no longer eligible, re-read `ready` and reroute or select another item. Do not implement an item that another actor already changed out from under you.
@@ -282,7 +282,7 @@ If ambiguity remains across plausible interpretations, stop and route the contra
 
 ### Follow existing patterns
 
-Match repository conventions for naming, imports, error handling, tests, runtime state handling, CLI patterns, docs style, and generated-artifact rules.
+Match repository conventions for naming, imports, error handling, tests, daemon posture handling, CLI patterns, docs style, and generated-artifact rules.
 
 Do not introduce temporary architecture that violates approved boundaries.
 
@@ -293,7 +293,7 @@ During implementation, keep an item-local gap log when execution reveals anythin
 Default path:
 
 ```text
-<dirname(item content_path)>/implement-gap.md
+<value.content_dir>/implement-gap.md
 ```
 
 Create or update this file whenever any of these occur:
@@ -350,7 +350,7 @@ Before running, state what success looks like in one or two lines. If you cannot
 Verification completes only when:
 
 - contracted commands pass in a fresh run
-- evidence artifacts at the workgraph `verification_path` or declared equivalent are updated for this run
+- evidence artifacts at the declared verification path are updated for this run
 - outcomes are traceable to the current execution pass
 
 Use the verification evidence contract in [runtime-appendix.md](runtime-appendix.md#verification-evidence-contract).
@@ -379,15 +379,15 @@ Before closing the item, confirm all true:
 - no unresolved blocker, review finding, failed command, required approval, or follow-up is being hidden
 - unrelated working-tree changes are not staged into this item commit
 
-## Step 9 — Close the workgraph item
+## Step 9 — Route to the close gate
 
-Close the completed item only after verification evidence is complete:
-
-```bash
-node .rovodev/skills/workflow/scripts/pulse.mjs workgraph close --repo-root <repo> <item-id> --json
-```
-
-If close fails because children remain open, evidence is missing, or workgraph validation fails, stop and repair/reroute rather than bypassing the workgraph.
+Do not present final completion as a normal execution transition. Route the
+item to the current verification/review surface and provide the fresh evidence
+required by the close gate. A passed verification result remains `Verifying`
+until the full close gate exists; only close-gate authority may finalize `Done`.
+If verification or review fails because children remain open, evidence is
+missing, or graph validation fails, stop and reroute rather than bypassing the
+close gate.
 
 ## Step 10 — Atomic commit
 
@@ -422,7 +422,7 @@ Commit directly with the same one-item discipline only when no active swarm comm
 Release reservations before `[DONE]` so other workers can acquire paths:
 
 ```bash
-node .rovodev/skills/workflow/scripts/pulse.mjs reservation release --repo-root <repo> --agent <runtime_identity> --json
+pulse daemon status
 ```
 
 Then post `[DONE]` with:
@@ -440,7 +440,7 @@ After reporting, inspect the coordination surface once before selecting another 
 
 ### Standalone mode
 
-Record equivalent completion details in `.pulse/runtime/STATE.md`, including the implementation gap path and summary when `implement-gap.md` exists, and keep `.pulse/runtime/state.json` aligned when runtime posture changes.
+Record equivalent completion details in the owning work artifact, including the implementation gap path and summary when `implement-gap.md` exists, and confirm daemon posture with `pulse daemon status`.
 
 If current-slice execution is complete, recommend `pulse:workflow review` with manual invocation by default.
 
@@ -450,14 +450,14 @@ After each item:
 
 1. refresh ready work:
    ```bash
-   node .rovodev/skills/workflow/scripts/pulse.mjs ready --repo-root <repo> --json
+   pulse work list --repo-root <repo> --json
    ```
-2. filter to Gate 3-approved current-slice `TASK`/`BUG` items
+2. filter to Gate 3-approved current-slice `Ticket` items
 3. if more executable items remain and context is safe, loop to Step 2
 4. if no current-slice executable items remain, confirm no open blockers/conflicts/evidence gaps/unsurfaced implementation gaps, then recommend `pulse:workflow review`
 5. if context is critical, write an owner-scoped handoff and stop cleanly
 
-Empty ready queue is a signal, not proof of completion. Completion requires current-slice artifacts, workgraph metadata, verification evidence, and runtime state to agree.
+Empty ready queue is a signal, not proof of completion. Completion requires current-slice artifacts, workgraph metadata, verification evidence, and daemon posture to agree.
 
 ## Step 13 — Handoff
 
@@ -465,7 +465,7 @@ Use the shared owner-scoped handoff envelope from [`../use/handoff-contract.md`]
 
 Required execute payload details are listed in [runtime-appendix.md](runtime-appendix.md#handoff-payload-for-execute).
 
-Register the handoff in `.pulse/runtime/handoffs/manifest.json` with matching owner, active command, item, phase, summary, next action, and path.
+Record the handoff in the owning work artifact with matching owner, active command, item, phase, summary, next action, and path.
 
 Worker mode: notify coordinator after writing the handoff.
 
@@ -476,15 +476,15 @@ If context compaction/summarization is detected, stop immediately. Do not contin
 Re-read in this order:
 
 1. `AGENTS.md`
-2. `node .rovodev/skills/workflow/scripts/pulse.mjs status --repo-root <repo> --json`
-3. `.pulse/runtime/state.json`
-4. current item metadata via `node .rovodev/skills/workflow/scripts/pulse.mjs workgraph show --repo-root <repo> <item-id> --json`
+2. `pulse daemon status`
+3. daemon posture from `pulse daemon status`
+4. current item metadata via `pulse work show --repo-root <repo> <item-id> --json`
 5. current item README and verification path
 6. parent story `plan.md` and `solution-design.md`
 7. `discovery.md` or references only when required by the item contract
 8. active reservations:
    ```bash
-   node .rovodev/skills/workflow/scripts/pulse.mjs reservation list --repo-root <repo> --active-only --json
+   pulse daemon status
    ```
 9. latest coordinator updates on active coordination surface when in worker mode
 
@@ -501,7 +501,7 @@ After execution completes for the current slice, the normal next command is `pul
 Stop and reassess if you catch yourself:
 
 - executing without explicit current Gate 3 approval
-- implementing an `EPIC` or `STORY` summary instead of a `TASK`/`BUG`
+- implementing an `EPIC` or `STORY` summary instead of a `Ticket`
 - executing without reading the full item README contract
 - executing with missing canonical contract fields or placeholders
 - editing outside declared/reserved scope

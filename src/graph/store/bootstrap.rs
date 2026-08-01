@@ -40,6 +40,7 @@ pub struct BootstrapOutcome {
 
 pub fn bootstrap(repo_root: &Path) -> Result<BootstrapOutcome> {
     let repo_root = crate::storage::paths::canonicalize_existing_dir(repo_root)?;
+    ensure_bootstrap_state(&repo_root)?;
     let pulse = repo_root.join(".pulse");
     let workgraph = pulse.join("workgraph");
     let schemas = workgraph.join("schemas");
@@ -89,6 +90,32 @@ pub fn bootstrap(repo_root: &Path) -> Result<BootstrapOutcome> {
         preserved,
         proposed_ignore_entries: vec![".pulse/runtime/".into(), ".pulse/cache/".into()],
     })
+}
+
+/// Fail closed before any compatibility bootstrap entrypoint writes bytes.
+///
+/// The store implementation and the historical `storage::bootstrap` path both
+/// use this graph-owned classification. Safe partial initialization is allowed;
+/// unknown, drifted, or stateful partial layouts are never repaired implicitly.
+pub(crate) fn ensure_bootstrap_state(repo_root: &Path) -> Result<()> {
+    use super::repository::{classify_workgraph_bootstrap_state, WorkgraphBootstrapState};
+
+    match classify_workgraph_bootstrap_state(&repo_root.join(".pulse/workgraph"))? {
+        WorkgraphBootstrapState::Empty | WorkgraphBootstrapState::SafePartialCurrent => Ok(()),
+        WorkgraphBootstrapState::ExistingCurrent => Ok(()),
+        WorkgraphBootstrapState::MissingNodeSchemaWithState => Err(PulseError::validation(
+            "node_schema_missing_refused",
+            "node schema is missing while existing workgraph state is present; refusing bootstrap without overwrite",
+        )),
+        WorkgraphBootstrapState::NodeSchemaDrift { hash } => Err(PulseError::validation(
+            "node_schema_drift_refused",
+            format!("refusing to overwrite node schema drift {hash}; resolve schema state explicitly"),
+        )),
+        WorkgraphBootstrapState::UnexpectedPartialState => Err(PulseError::validation(
+            "workgraph_partial_state_refused",
+            "workgraph contains partial state that is not a safe current baseline initialization; refusing bootstrap without overwrite",
+        )),
+    }
 }
 
 fn create_dir_if_missing(

@@ -4,7 +4,10 @@ use pulse::id::WorkKind;
 use pulse::knowledge::model::*;
 use pulse::knowledge::relation::EndpointKind;
 use pulse::knowledge::store::{KnowledgeStore, OperationContext};
+use pulse::storage::transaction::{persist_intent, FileState, TransactionIntent};
 use pulse::JsonGraphStore;
+use serde_json::json;
+use std::fs;
 
 type Repo = tempfile::TempDir;
 
@@ -67,6 +70,51 @@ fn ctx(sec: i64) -> OperationContext {
         actor: "human:test".to_string(),
         now: Utc.timestamp_opt(sec, 0).unwrap(),
     }
+}
+
+#[test]
+fn status_on_absent_plane_is_observational_and_not_installed() {
+    let repo = tempfile::tempdir().unwrap();
+    let knowledge = KnowledgeStore::new(repo.path());
+    let before = fs::read_dir(repo.path()).unwrap().count();
+
+    let status = knowledge.status().unwrap();
+
+    assert_eq!(status.code, "not_installed");
+    assert_eq!(status.manifest, "not_installed");
+    assert_eq!(fs::read_dir(repo.path()).unwrap().count(), before);
+    assert!(!repo.path().join(".pulse").exists());
+}
+
+#[test]
+fn status_refuses_to_observe_while_transaction_recovery_is_pending() {
+    let (repo, _graph, knowledge, _work) = setup();
+    knowledge.bootstrap().unwrap();
+    let target = repo.path().join(".pulse/knowledge/entries/LRN-999.json");
+    let intent = TransactionIntent::prepared(
+        "evt_status_pending",
+        "knowledge.test",
+        "test",
+        target,
+        repo.path().join(".pulse/events/test.json"),
+        FileState::Absent,
+        FileState::Present {
+            hash: "sha256:test".to_string(),
+            revision: 1,
+        },
+        json!({"event": "pending"}),
+    )
+    .unwrap();
+    persist_intent(repo.path(), &intent).unwrap();
+
+    let error = knowledge.status().unwrap_err();
+
+    assert_eq!(error.code(), "knowledge_recovery_required");
+    assert!(repo
+        .path()
+        .join(".pulse/runtime/transactions")
+        .join(format!("{}.json", intent.transaction_id))
+        .exists());
 }
 
 #[test]
