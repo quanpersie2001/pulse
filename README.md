@@ -4,7 +4,7 @@
 
 # Pulse
 
-<p><strong>A gated delivery router for Claude Code and Codex</strong></p>
+<p><strong>A local-first harness for understandable, verifiable agent delivery</strong></p>
 
 <p>
   <a href=".codex-plugin/plugin.json">
@@ -24,11 +24,54 @@
 
 ## What is Pulse?
 
-Pulse ships one public workflow router skill, **`pulse:workflow`**, plus packaged standalone utility skills outside that router.
+Pulse is a local-first harness engineering system. It combines a workflow
+router, durable repository knowledge, a local work graph, evidence and review
+loops, and executable repository capabilities. The public workflow skill is
+**`pulse:workflow`**; its subcommands guide use, intake, exploration, design,
+planning, validation, execution, review, and compounding. Standalone utility
+skills remain packaged separately for focused non-router tasks.
 
-Workflow subcommands are: use, intake, brainstorm, explore, design, plan, validate, swarm, execute, review, and compound. Runtime status and session/lease coordination run through the Rust **`pulse`** CLI and daemon. The graph authority is **`.pulse/workgraph/`**, with nodes and edges owned by Rust commands.
+## Architecture
 
-Standalone utility skills remain packaged separately for focused non-router tasks: `architecture-rescue`, `systematic-debug-fix`, `dev-note`, `dev-note-distil`, `prompt-leverage`.
+Pulse is one product, executable, and release unit:
+
+```text
+Pulse product
+├── local `pulse` executable
+│   ├── Core — work graph/contracts, docs/knowledge/policy, reservations, evidence and proof gates
+│   ├── Daemon Runtime — host-local projects, workspaces, sessions, providers and timeline
+│   └── future Orchestration — composes Core and Runtime; not implemented
+└── repository harness assets — stateless skills, scripts, hooks and evals
+```
+
+Core is independently usable for repository work. The Daemon Runtime owns
+host-local lifecycle and external process effects. Future Orchestration may
+coordinate independent runtime sessions, but has no semantic authority. A
+single writer owns each mutable authority, and proof—not liveness—advances
+repository meaning: a process exit, provider idle state, or delivered message
+does not by itself complete work.
+
+### Daemon application boundary
+
+The runtime path is deliberately one facade and one persistence authority:
+
+```text
+CLI / local protocol / MCP transports
+        -> one DaemonApplication facade
+        -> private flat use-case modules
+        -> one StateStore + ProcessOwner + provider registry
+```
+
+The facade and module tree are rooted at [`src/daemon/application/mod.rs`](src/daemon/application/mod.rs); transport envelopes and requests live in [`src/daemon/protocol/mod.rs`](src/daemon/protocol/mod.rs), durable runtime state in [`src/daemon/persistence/mod.rs`](src/daemon/persistence/mod.rs), and host process ownership in [`src/daemon/process/mod.rs`](src/daemon/process/mod.rs). The private application tree owns project, workspace, session, turn, communication, timeline, assignment, recovery, dispatch, and effect mechanics. Daemon may call typed public Core reservation/proof gates; Core never imports daemon. The detailed record is [`proposals/daemon-application-decomposition.md`](proposals/daemon-application-decomposition.md), with [Decision 0005](docs/decisions/0005-rust-daemon-runtime-control-plane.md) and [Decision 0006](docs/decisions/0006-peer-agent-assurance-topology.md) as governing context.
+
+To add a daemon use case: define the protocol request, add authorization and
+routing in dispatch, place the behavior in one cohesive private owner, keep
+state mutation and its timeline event atomic, add focused contract coverage
+under the single [`tests/daemon.rs`](tests/daemon.rs) crate, and extend the
+explicit architecture inventory. This is internal Daemon decomposition, not
+Orchestration; future Orchestration remains unimplemented. Core/kernel/graph
+ownership remains documented by [`src/kernel/`](src/kernel/) and
+[`src/graph/`](src/graph/).
 
 ## The Delivery Chain
 

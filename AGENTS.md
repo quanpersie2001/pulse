@@ -20,6 +20,86 @@ Pulse is **not** Jira-lite, a fixed phase workflow, a cloud-first service, or a 
 Primary design source: [`PULSE_REBOOT.md`](PULSE_REBOOT.md).
 Detailed owners live under [`pulse-reboot/`](pulse-reboot/).
 
+## Rust engineering standards
+
+Use Rust modules to make ownership and privacy legible. Keep stable public
+paths deliberate and private-by-default; expose only the smallest surface
+needed by a caller. When a module is split into files, preserve its public
+path unless the change explicitly updates the contract. See the Rust Book on
+[module scope and privacy](https://doc.rust-lang.org/book/ch07-02-defining-modules-to-control-scope-and-privacy.html)
+and [separating modules into files](https://doc.rust-lang.org/stable/book/ch07-05-separating-modules-into-different-files.html).
+
+Modules with non-obvious ownership or invariants start with `//!` rustdoc
+stating their purpose, state touched, invariant, and allowed dependencies.
+Public APIs use concise `///` rustdoc and render relevant sections literally
+as `# Errors`, `# Panics`, and `# Safety`.
+Comments explain intent, ordering, and failure posture; they do not narrate
+obvious code. Follow the repository's [Source Architecture](#source-architecture)
+and [validation commands](#validation-commands-for-this-repo) rather than
+duplicating those rules in local designs. Rust's [documentation guidance](https://doc.rust-lang.org/rustdoc/how-to-write-documentation.html)
+and [API documentation guidelines](https://rust-lang.github.io/api-guidelines/documentation.html)
+are the reference standard.
+
+Return `Result` for recoverable, expected, or boundary failures. Use `panic!`
+only for an invariant that is genuinely impossible to recover from and make
+that contract explicit; never use it for user input, provider outcomes,
+filesystem state, or process uncertainty. Clippy's default
+`too_many_lines` threshold is a review signal, not a file-size quota; see the
+[official configuration](https://doc.rust-lang.org/nightly/clippy/lint_configuration.html#too-many-lines-threshold).
+Use [Rust error-handling guidance](https://doc.rust-lang.org/book/ch09-00-error-handling.html)
+when choosing between propagation, recovery, and termination.
+
+Decompose when a unit has multiple responsibilities, broad visibility,
+unrelated lock/effect/Core boundaries, or poor focused testability. Do not
+split solely to satisfy a line count. Tests should mirror use cases and
+failure boundaries, with focused coverage near the owning module and the
+existing integration-crate layout retained.
+
+### Daemon application rules
+
+The daemon is the sole host-local lifecycle authority. Keep one concrete
+`DaemonApplication` and one `StateStore`; child application modules are private
+implementation details in a flat tree, and use `pub(super)` only for proven
+sibling collaboration. Decompose by one responsibility and change reason, not
+by a LOC quota. Keep the public facade path stable. Do not add a second facade,
+store, repository hierarchy, service, command bus, trait/DI layer, generic
+effect or saga engine, or empty `support.rs` namespace. Move a crash-sensitive
+saga intact before considering phase-specific nesting. Core never imports
+daemon; future orchestration composes Core and Runtime without owning either
+side's semantics.
+
+For every runtime saga, make durable preconditions explicit, commit the state
+needed for recovery before external I/O, and record idempotency and uncertainty.
+A provider acknowledgement or terminal observation may advance daemon runtime
+state only as defined by the runtime
+protocol; repository work transitions require typed Core gates and evidence,
+never runtime liveness. Recovery must fail closed when an external outcome
+cannot be proven; retry only when the durable record says it is safe and
+idempotent. Dispatch keeps authorization before mutating-key validation,
+idempotency locking, replay fingerprint/principal checks, shutdown gating,
+routing, the post-mutation failpoint, and response-cache persistence. The
+effects owner contains ledger mechanics only; timeline keeps state/event
+atomicity and requeues drained provider events on failure. Turn code retains the
+session-operation guard through intent, provider I/O, acknowledgement, and
+commit. Assignment remains one intact saga; recovery completes host startup
+classification and durable uncertainty before assignment reconciliation.
+Preserve lock ordering, failpoint placement, stable paths, and public behavior
+during moves. Uncertain outcomes fail closed: no blind resend, release, or
+adoption without durable proof.
+
+Use module-level rustdoc for daemon ownership and allowed dependencies. A
+private saga comment should say why an ordering exists and what happens after
+failure. Public daemon APIs document a summary plus relevant literal `# Errors`,
+`# Panics`, or `# Safety` sections. The decomposition checkpoint is
+[`proposals/daemon-application-decomposition.md`](proposals/daemon-application-decomposition.md).
+
+When extending the application, update the explicit daemon authority inventory
+for every new child, keep focused tests under the existing `tests/daemon.rs`
+integration crate, and run them at default threading. Before handback, run the
+required formatting, architecture/public-path, focused behavior, Clippy, and
+all-target reliability gates appropriate to the change; never lower threading
+to hide a race.
+
 ## Repository Role And Self-Hosting Boundary
 
 This repository **develops the Pulse harness**. It is not currently enrolled as
