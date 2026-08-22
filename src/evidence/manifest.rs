@@ -6,15 +6,14 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 pub const RECEIPT_ENVELOPE_SCHEMA: &str =
-    include_str!("../schema/evidence/receipt-envelope.v1.schema.json");
+    include_str!("../schema/evidence/receipt-envelope.schema.json");
 pub const SUPERSESSION_SCHEMA: &str =
-    include_str!("../schema/evidence/supersession-reconciliation.v1.schema.json");
-pub const SHAPING_SCHEMA: &str =
-    include_str!("../schema/evidence/shaping-validation.v1.schema.json");
+    include_str!("../schema/evidence/supersession-reconciliation.schema.json");
+pub const SHAPING_SCHEMA: &str = include_str!("../schema/evidence/shaping-validation.schema.json");
 pub const DECISION_ACCEPTANCE_SCHEMA: &str =
-    include_str!("../schema/evidence/decision-acceptance.v1.schema.json");
+    include_str!("../schema/evidence/decision-acceptance.schema.json");
 pub const DOCUMENTATION_SCHEMA: &str =
-    include_str!("../schema/evidence/documentation-validation.v1.schema.json");
+    include_str!("../schema/evidence/documentation-validation.schema.json");
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
@@ -61,31 +60,31 @@ pub fn bootstrap(repo_root: &Path) -> Result<EvidenceBootstrapOutcome> {
     }
 
     write_schema_if_absent(
-        &schemas.join("receipt-envelope.v1.schema.json"),
+        &schemas.join("receipt-envelope.schema.json"),
         RECEIPT_ENVELOPE_SCHEMA,
         &mut created,
         &mut preserved,
     )?;
     write_schema_if_absent(
-        &schemas.join("supersession-reconciliation.v1.schema.json"),
+        &schemas.join("supersession-reconciliation.schema.json"),
         SUPERSESSION_SCHEMA,
         &mut created,
         &mut preserved,
     )?;
     write_schema_if_absent(
-        &schemas.join("shaping-validation.v1.schema.json"),
+        &schemas.join("shaping-validation.schema.json"),
         SHAPING_SCHEMA,
         &mut created,
         &mut preserved,
     )?;
     write_schema_if_absent(
-        &schemas.join("decision-acceptance.v1.schema.json"),
+        &schemas.join("decision-acceptance.schema.json"),
         DECISION_ACCEPTANCE_SCHEMA,
         &mut created,
         &mut preserved,
     )?;
     write_schema_if_absent(
-        &schemas.join("documentation-validation.v1.schema.json"),
+        &schemas.join("documentation-validation.schema.json"),
         DOCUMENTATION_SCHEMA,
         &mut created,
         &mut preserved,
@@ -147,7 +146,7 @@ fn default_manifest(repo_root: &Path) -> Result<EvidenceManifest> {
     receipt_schemas.insert(
         "1".to_string(),
         SchemaRef {
-            schema: "schemas/receipt-envelope.v1.schema.json".to_string(),
+            schema: "schemas/receipt-envelope.schema.json".to_string(),
             schema_hash: schema_hash(RECEIPT_ENVELOPE_SCHEMA)?,
         },
     );
@@ -156,25 +155,25 @@ fn default_manifest(repo_root: &Path) -> Result<EvidenceManifest> {
         (
             "supersession_reconciliation",
             "1",
-            "schemas/supersession-reconciliation.v1.schema.json",
+            "schemas/supersession-reconciliation.schema.json",
             SUPERSESSION_SCHEMA,
         ),
         (
             "shaping_validation",
             "1",
-            "schemas/shaping-validation.v1.schema.json",
+            "schemas/shaping-validation.schema.json",
             SHAPING_SCHEMA,
         ),
         (
             "decision_acceptance",
             "1",
-            "schemas/decision-acceptance.v1.schema.json",
+            "schemas/decision-acceptance.schema.json",
             DECISION_ACCEPTANCE_SCHEMA,
         ),
         (
             "documentation_validation",
             "1",
-            "schemas/documentation-validation.v1.schema.json",
+            "schemas/documentation-validation.schema.json",
             DOCUMENTATION_SCHEMA,
         ),
     ] {

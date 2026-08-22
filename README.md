@@ -7,13 +7,9 @@
 <p><strong>A local-first harness for understandable, verifiable agent delivery</strong></p>
 
 <p>
-  <a href=".codex-plugin/plugin.json">
-    <img alt="Version" src="https://img.shields.io/badge/version-3.5.3-0F766E?style=flat-square" />
-  </a>
+  <img alt="Version" src="https://img.shields.io/badge/version-0.1.0-0F766E?style=flat-square" />
   <img alt="License" src="https://img.shields.io/badge/license-MIT-blue?style=flat-square" />
-  <a href="skills/workflow">
-    <img alt="Router" src="https://img.shields.io/badge/router-pulse%3Aworkflow-8B5CF6?style=flat-square" />
-  </a>
+  <img alt="Runtime" src="https://img.shields.io/badge/runtime-Rust-8B5CF6?style=flat-square" />
 </p>
 
 <p><em>Keep agents aligned to approved scope, verified execution, and auditable outcomes.</em></p>
@@ -24,12 +20,11 @@
 
 ## What is Pulse?
 
-Pulse is a local-first harness engineering system. It combines a workflow
-router, durable repository knowledge, a local work graph, evidence and review
-loops, and executable repository capabilities. The public workflow skill is
-**`pulse:workflow`**; its subcommands guide use, intake, exploration, design,
-planning, validation, execution, review, and compounding. Standalone utility
-skills remain packaged separately for focused non-router tasks.
+Pulse is a local-first harness engineering system. It combines durable
+repository knowledge, a local work graph, evidence and review loops, and a
+host-local daemon for project, workspace, session, provider, and process
+lifecycle. Its supported public surface is the Rust `pulse` executable; the
+repository no longer packages an agent workflow router or standalone skills.
 
 ## Architecture
 
@@ -41,7 +36,7 @@ Pulse product
 │   ├── Core — work graph/contracts, docs/knowledge/policy, reservations, evidence and proof gates
 │   ├── Daemon Runtime — host-local projects, workspaces, sessions, providers and timeline
 │   └── future Orchestration — composes Core and Runtime; not implemented
-└── repository harness assets — stateless skills, scripts, hooks and evals
+└── target-repository harness — docs, policies, scripts, hooks, checks and evals
 ```
 
 Core is independently usable for repository work. The Daemon Runtime owns
@@ -75,13 +70,13 @@ ownership remains documented by [`src/kernel/`](src/kernel/) and
 
 ## The Delivery Chain
 
-1. `pulse:workflow use` guides the operator through runtime and graph readiness; it does not perform the operation.
-2. `pulse:workflow explore` locks decisions in feature context artifacts.
-3. `pulse:workflow plan` selects shape and execution contract.
-4. `pulse:workflow validate` proves feasibility before implementation.
-5. `pulse:workflow swarm` or `pulse:workflow execute` delivers approved work.
-6. `pulse:workflow review` enforces merge quality gates.
-7. `pulse:workflow compound` captures reusable learnings.
+1. Core reads the graph, contracts, applicable docs, evidence, policy, and source state.
+2. `pulse work packet` builds a revision- and source-fenced execution packet.
+3. `pulse session assign` reserves approved work and durably delivers its bootstrap to a provider session.
+4. A bound acknowledgement activates the reserved Ticket.
+5. The worker implements and verifies the lease-bound packet in its workspace.
+6. Typed handoff moves the Ticket to independent verification.
+7. Verification may request rework or block the Ticket; the typed QA/close authority remains planned work.
 
 ### The 4 Human Gates
 
@@ -103,29 +98,22 @@ ownership remains documented by [`src/kernel/`](src/kernel/) and
 
 ## Installation
 
-### Claude Code
+Pulse currently ships from source:
 
 ```bash
-/plugin marketplace add quanpersie2001/pulse
-/plugin install pulse@pulse
+cargo install --path .
+pulse --help
 ```
 
-### Codex
+Initialize only an explicit target repository, never this development
+repository:
 
 ```bash
-codex plugin marketplace add quanpersie2001/pulse
+pulse graph bootstrap --repo-root <target-repo> --json
+pulse daemon start
 ```
 
-Codex reads the marketplace name from [`.agents/plugins/marketplace.json`](.agents/plugins/marketplace.json), so the installed plugin key is `pulse@pulse-dev`.
-
-### After Install
-
-Start with **`pulse:workflow use`** in the target repo as guidance. The installed skill does not initialize state; with operator approval, use the existing Rust commands `pulse graph bootstrap --repo-root <repo> --json` and `pulse daemon start` for those operations.
-
-Operational commands require the Rust `pulse` CLI to be available on the
-target environment's `PATH`. The plugin does not install or package that
-binary; binary installation and distribution remain an unresolved product
-decision.
+Prebuilt binary distribution remains an unresolved product decision.
 
 ## Project Docs
 
@@ -136,15 +124,17 @@ decision.
 
 ## Maintainer Notes
 
-When public docs or `pulse:workflow` router metadata change:
+Before handing back a change:
 
 ```bash
-bash scripts/check-markdown-links.sh
+cargo fmt --check
+cargo clippy --all-targets --quiet -- -D warnings
+cargo test --all-targets
 ```
 
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for skill structure, versioning, and PR process.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for source ownership, validation, and PR process.
 
 <div align="center">
 

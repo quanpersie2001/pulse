@@ -340,7 +340,7 @@ fn setup_ready_ticket(repo: &TestRepo) -> String {
 }
 
 // -----------------------------------------------------------------------
-// A. Happy path — target-repo produces full schema v1 packet
+// A. Happy path — target-repo produces the full current packet schema
 // -----------------------------------------------------------------------
 
 #[test]

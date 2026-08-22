@@ -40,14 +40,14 @@ pub enum SourceBindingStatus {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
-pub enum WorkspaceModeV1 {
+pub enum WorkspaceMode {
     InPlace,
     IsolatedWorktree,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
-pub enum WorkspaceOperationStateV1 {
+pub enum WorkspaceOperationState {
     None,
     Merge,
     Rebase,
@@ -59,7 +59,7 @@ pub enum WorkspaceOperationStateV1 {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
-pub enum WorkspaceCleanlinessV1 {
+pub enum WorkspaceCleanliness {
     Clean,
     Dirty,
     Unknown,
@@ -67,7 +67,7 @@ pub enum WorkspaceCleanlinessV1 {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
-pub enum WorkspaceSnapshotStatusV1 {
+pub enum WorkspaceSnapshotStatus {
     Complete,
     Unsupported,
     BoundedOut,
@@ -75,25 +75,25 @@ pub enum WorkspaceSnapshotStatusV1 {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
-pub struct WorkspaceSnapshotV1 {
+pub struct WorkspaceSnapshot {
     pub schema_version: u32,
     pub repository_id: String,
     pub workspace_id: String,
-    pub workspace_mode: WorkspaceModeV1,
+    pub workspace_mode: WorkspaceMode,
     pub base_commit: String,
     pub head_commit: String,
     pub diff_base_commit: String,
-    pub operation_state: WorkspaceOperationStateV1,
-    pub cleanliness: WorkspaceCleanlinessV1,
+    pub operation_state: WorkspaceOperationState,
+    pub cleanliness: WorkspaceCleanliness,
     pub tracked_diff_identity: String,
     pub untracked_manifest_identity: String,
     pub status_identity: String,
-    pub snapshot_status: WorkspaceSnapshotStatusV1,
+    pub snapshot_status: WorkspaceSnapshotStatus,
     pub captured_at: String,
     pub snapshot_identity: String,
 }
 
-impl WorkspaceSnapshotV1 {
+impl WorkspaceSnapshot {
     pub fn compute_identity(&self) -> Result<String> {
         let mut projection = serde_json::to_value(self)?;
         let object = projection.as_object_mut().ok_or_else(|| {
@@ -184,11 +184,11 @@ impl RepositoryOperationState {
 }
 
 /// P2S3 workspace snapshot result used by I0 feasibility callers. The full
-/// contract is [`WorkspaceSnapshotV1`]; this compatibility wrapper
+/// contract is [`WorkspaceSnapshot`]; this compatibility wrapper
 /// omits volatile `captured_at` and `snapshot_identity` fields for older tests.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
-pub struct WorkspaceSnapshotFeasibilityV1 {
+pub struct WorkspaceSnapshotFeasibility {
     pub schema_version: u64,
     pub repository_id: String,
     pub workspace_id: String,
@@ -248,7 +248,7 @@ impl WorkspaceSnapshotOptions {
 pub fn workspace_snapshot(
     repo_root: &Path,
     options: &WorkspaceSnapshotOptions,
-) -> Result<WorkspaceSnapshotV1> {
+) -> Result<WorkspaceSnapshot> {
     if options.diff_base_commit != options.base_commit {
         return bounded_snapshot(
             repo_root,
@@ -282,16 +282,16 @@ pub fn workspace_snapshot(
 
     let snapshot_status = snapshot_status_from_reasons(&reason_codes);
     let cleanliness = if status.dirty || untracked.dirty || tracked.dirty {
-        WorkspaceCleanlinessV1::Dirty
+        WorkspaceCleanliness::Dirty
     } else {
-        WorkspaceCleanlinessV1::Clean
+        WorkspaceCleanliness::Clean
     };
 
     build_workspace_snapshot(
         options,
         WorkspaceSnapshotBuildParts {
             head,
-            operation_state: operation_state_to_v1(&operation_state),
+            operation_state: operation_state_for_snapshot(&operation_state),
             cleanliness,
             tracked_diff_identity: tracked.identity,
             untracked_manifest_identity: untracked.identity,
@@ -305,14 +305,14 @@ fn bounded_snapshot(
     repo_root: &Path,
     options: &WorkspaceSnapshotOptions,
     reason_codes: Vec<String>,
-) -> Result<WorkspaceSnapshotV1> {
+) -> Result<WorkspaceSnapshot> {
     let head = head_commit(repo_root)?;
     build_workspace_snapshot(
         options,
         WorkspaceSnapshotBuildParts {
             head,
-            operation_state: WorkspaceOperationStateV1::Unknown,
-            cleanliness: WorkspaceCleanlinessV1::Unknown,
+            operation_state: WorkspaceOperationState::Unknown,
+            cleanliness: WorkspaceCleanliness::Unknown,
             tracked_diff_identity: hash_bytes(&[]),
             untracked_manifest_identity: hash_bytes(&[]),
             status_identity: hash_bytes(&[]),
@@ -324,40 +324,40 @@ fn bounded_snapshot(
 pub fn workspace_snapshot_feasibility(
     repo_root: &Path,
     options: &WorkspaceSnapshotOptions,
-) -> Result<WorkspaceSnapshotFeasibilityV1> {
+) -> Result<WorkspaceSnapshotFeasibility> {
     let snapshot = workspace_snapshot(repo_root, options)?;
-    Ok(WorkspaceSnapshotFeasibilityV1 {
+    Ok(WorkspaceSnapshotFeasibility {
         schema_version: snapshot.schema_version as u64,
         repository_id: snapshot.repository_id,
         workspace_id: snapshot.workspace_id,
         workspace_mode: match snapshot.workspace_mode {
-            WorkspaceModeV1::InPlace => "in_place".to_string(),
-            WorkspaceModeV1::IsolatedWorktree => "isolated_worktree".to_string(),
+            WorkspaceMode::InPlace => "in_place".to_string(),
+            WorkspaceMode::IsolatedWorktree => "isolated_worktree".to_string(),
         },
         base_commit: snapshot.base_commit,
         head_commit: snapshot.head_commit,
         diff_base_commit: snapshot.diff_base_commit,
         operation_state: match snapshot.operation_state {
-            WorkspaceOperationStateV1::None => "normal".to_string(),
-            WorkspaceOperationStateV1::Merge => "merge_in_progress".to_string(),
-            WorkspaceOperationStateV1::Rebase => "rebase_in_progress".to_string(),
-            WorkspaceOperationStateV1::CherryPick => "cherry_pick_in_progress".to_string(),
-            WorkspaceOperationStateV1::Revert => "revert_in_progress".to_string(),
-            WorkspaceOperationStateV1::Bisect => "bisect_in_progress".to_string(),
-            WorkspaceOperationStateV1::Unknown => "unknown".to_string(),
+            WorkspaceOperationState::None => "normal".to_string(),
+            WorkspaceOperationState::Merge => "merge_in_progress".to_string(),
+            WorkspaceOperationState::Rebase => "rebase_in_progress".to_string(),
+            WorkspaceOperationState::CherryPick => "cherry_pick_in_progress".to_string(),
+            WorkspaceOperationState::Revert => "revert_in_progress".to_string(),
+            WorkspaceOperationState::Bisect => "bisect_in_progress".to_string(),
+            WorkspaceOperationState::Unknown => "unknown".to_string(),
         },
         cleanliness: match snapshot.cleanliness {
-            WorkspaceCleanlinessV1::Clean => "clean".to_string(),
-            WorkspaceCleanlinessV1::Dirty => "dirty".to_string(),
-            WorkspaceCleanlinessV1::Unknown => "unknown".to_string(),
+            WorkspaceCleanliness::Clean => "clean".to_string(),
+            WorkspaceCleanliness::Dirty => "dirty".to_string(),
+            WorkspaceCleanliness::Unknown => "unknown".to_string(),
         },
         tracked_diff_identity: snapshot.tracked_diff_identity,
         untracked_manifest_identity: snapshot.untracked_manifest_identity,
         status_identity: snapshot.status_identity,
         snapshot_status: match snapshot.snapshot_status {
-            WorkspaceSnapshotStatusV1::Complete => "complete".to_string(),
-            WorkspaceSnapshotStatusV1::Unsupported => "unsupported".to_string(),
-            WorkspaceSnapshotStatusV1::BoundedOut => "bounded_out".to_string(),
+            WorkspaceSnapshotStatus::Complete => "complete".to_string(),
+            WorkspaceSnapshotStatus::Unsupported => "unsupported".to_string(),
+            WorkspaceSnapshotStatus::BoundedOut => "bounded_out".to_string(),
         },
         reason_codes: Vec::new(),
     })
@@ -1148,33 +1148,33 @@ fn extend_reason(reason_codes: &mut Vec<String>, prefix: &str, status: &Componen
     }
 }
 
-fn snapshot_status_from_reasons(reason_codes: &[String]) -> WorkspaceSnapshotStatusV1 {
+fn snapshot_status_from_reasons(reason_codes: &[String]) -> WorkspaceSnapshotStatus {
     if reason_codes.is_empty() {
-        WorkspaceSnapshotStatusV1::Complete
+        WorkspaceSnapshotStatus::Complete
     } else if reason_codes.iter().any(|code| code.contains("bounded_out")) {
-        WorkspaceSnapshotStatusV1::BoundedOut
+        WorkspaceSnapshotStatus::BoundedOut
     } else {
-        WorkspaceSnapshotStatusV1::Unsupported
+        WorkspaceSnapshotStatus::Unsupported
     }
 }
 
 struct WorkspaceSnapshotBuildParts {
     head: String,
-    operation_state: WorkspaceOperationStateV1,
-    cleanliness: WorkspaceCleanlinessV1,
+    operation_state: WorkspaceOperationState,
+    cleanliness: WorkspaceCleanliness,
     tracked_diff_identity: String,
     untracked_manifest_identity: String,
     status_identity: String,
-    snapshot_status: WorkspaceSnapshotStatusV1,
+    snapshot_status: WorkspaceSnapshotStatus,
 }
 
 fn build_workspace_snapshot(
     options: &WorkspaceSnapshotOptions,
     parts: WorkspaceSnapshotBuildParts,
-) -> Result<WorkspaceSnapshotV1> {
+) -> Result<WorkspaceSnapshot> {
     let workspace_mode = match options.workspace_mode.as_str() {
-        "in_place" => WorkspaceModeV1::InPlace,
-        "isolated_worktree" => WorkspaceModeV1::IsolatedWorktree,
+        "in_place" => WorkspaceMode::InPlace,
+        "isolated_worktree" => WorkspaceMode::IsolatedWorktree,
         _ => {
             return Err(PulseError::validation(
                 "run_workspace_snapshot_unsupported",
@@ -1182,7 +1182,7 @@ fn build_workspace_snapshot(
             ));
         }
     };
-    let mut snapshot = WorkspaceSnapshotV1 {
+    let mut snapshot = WorkspaceSnapshot {
         schema_version: 1,
         repository_id: options.repository_id.clone(),
         workspace_id: options.workspace_id.clone(),
@@ -1203,14 +1203,14 @@ fn build_workspace_snapshot(
     Ok(snapshot)
 }
 
-fn operation_state_to_v1(state: &RepositoryOperationState) -> WorkspaceOperationStateV1 {
+fn operation_state_for_snapshot(state: &RepositoryOperationState) -> WorkspaceOperationState {
     match state {
-        RepositoryOperationState::Normal => WorkspaceOperationStateV1::None,
-        RepositoryOperationState::MergeInProgress => WorkspaceOperationStateV1::Merge,
-        RepositoryOperationState::RebaseInProgress => WorkspaceOperationStateV1::Rebase,
-        RepositoryOperationState::CherryPickInProgress => WorkspaceOperationStateV1::CherryPick,
-        RepositoryOperationState::RevertInProgress => WorkspaceOperationStateV1::Revert,
-        RepositoryOperationState::BisectInProgress => WorkspaceOperationStateV1::Bisect,
+        RepositoryOperationState::Normal => WorkspaceOperationState::None,
+        RepositoryOperationState::MergeInProgress => WorkspaceOperationState::Merge,
+        RepositoryOperationState::RebaseInProgress => WorkspaceOperationState::Rebase,
+        RepositoryOperationState::CherryPickInProgress => WorkspaceOperationState::CherryPick,
+        RepositoryOperationState::RevertInProgress => WorkspaceOperationState::Revert,
+        RepositoryOperationState::BisectInProgress => WorkspaceOperationState::Bisect,
     }
 }
 

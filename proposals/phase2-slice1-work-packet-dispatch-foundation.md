@@ -4,7 +4,7 @@
 > landed across commits `ed68c08`, `823607e`, `e47f90d`, `cf65ec4`,
 > `d236774`, `7f62545`, `e28c5c0`, `ddef30a` and verification hardening commit
 > `6d3076b`; supporting fix/verification commits are listed in the completion
-> evidence below. This remains a pre-Core-v1 current baseline, not a released
+> evidence below. This remains a pre-Core current baseline, not a released
 > compatibility contract.
 > Tiền đề:
 > [`phase1-slice7-shaping-readiness-frontier.md`](phase1-slice7-shaping-readiness-frontier.md)
@@ -98,7 +98,7 @@ Repository hiện đã có:
   `contract_revision`;
 - structural executability, lifecycle, supersession, traversal và deterministic
   graph projection/fingerprint;
-- completed shaping receipt v1, current shaping pointer/map, immutable Decision
+- completed shaping receipt, current shaping pointer/map, immutable Decision
   acceptance receipt;
 - default-deny authority policy và deterministic policy fingerprint;
 - Phase 1 readiness profile/fingerprint, stale-ready semantics và gated
@@ -154,7 +154,7 @@ ready implementation Ticket
   + docs lexical suggestions
   + authority policy
   + clean Git HEAD + repository identity
-  -> coherent bounded WorkPacketV1
+  -> coherent bounded WorkPacket
   -> reservation_candidate=true|false
   -> Slice 2 revalidation/reservation/workspace binding
 ```
@@ -166,7 +166,7 @@ ready implementation Ticket
 Triển khai để một caller có thể:
 
 1. gọi `pulse work packet TK-... --json` trên target repository đã bootstrap;
-2. nhận packet schema v1 có stable field names và deterministic ordering;
+2. nhận current packet schema có stable field names và deterministic ordering;
 3. biết chính xác Ticket/revisions/readiness/graph/docs/source nào packet bind;
 4. đọc objective, target, anchors, invariants, acceptance, expected proof và
    handoff mà không scan raw workgraph;
@@ -195,7 +195,7 @@ Slice này không triển khai:
 - `pulse run`, Codex adapter, prompt transport, stream, timeout, cancel/resume;
 - handoff receipt, verification runner, review, `active -> verifying`;
 - close gate hoặc `done|rework|blocked` proof transition;
-- full conversational `pulse-shape` hay automatic reconciliation;
+- full conversational shaping flow hay automatic reconciliation;
 - Story QA baseline/case resolver, QA executor hoặc QA receipt;
 - `knowledge applicable`, knowledge BM25, packet learning injection;
 - Agent Registry, typed mailbox, peer-agent orchestration;
@@ -217,7 +217,7 @@ workspace. Output có:
 
 - `reservation_candidate`: pre-reservation gates do Slice 1 sở hữu có pass hay
   không;
-- `dispatch_authorized`: luôn `false` trong packet profile v1;
+- `dispatch_authorized`: luôn `false` trong current packet profile;
 - `authorization_status`: luôn `not_reserved` khi packet build thành công.
 
 Packet không dùng field `unclaimed=true`; lease state là `not_evaluated` vì
@@ -239,7 +239,7 @@ Command chỉ build packet executable khi subject:
 - role `implementation`;
 - lifecycle `ready`;
 - current readiness report status `ready`;
-- `transition_eligible=true` dưới `phase1_contract_readiness_v1`.
+- `transition_eligible=true` dưới `contract_readiness`.
 
 Decision-work Ticket dùng decision frontier/shaping workflow, không dùng
 implementation packet profile này. Ticket `draft|shaped|blocked|rework` nhận
@@ -351,7 +351,7 @@ Packet derive required capability names từ typed contract:
 - expected `documentation_diff`: `docs.write`;
 - expected `decision_record`: `decision.propose`, không phải accept authority.
 
-Vocab trên là current packet requirement vocabulary v1. Requirements được sort,
+Vocab trên là current packet requirement vocabulary. Requirements được sort,
 dedup và fingerprint. `capability_evaluation.status=not_evaluated` vì chưa có
 concrete assignee inventory. `reservation_candidate` không fail chỉ vì concrete
 inventory chưa tồn tại; Slice 2 phải match toàn bộ required capabilities trước
@@ -363,7 +363,7 @@ chứng minh runtime có tool; capability không cấp business authority.
 ### P2S1-D8 — Không fabricate enforced writable scope
 
 Current contract có typed anchors nhưng chưa có canonical path ACL. Vì vậy
-packet v1 output hai khái niệm:
+current packet output hai khái niệm:
 
 - `scope_hints`: deterministic source/docs/config/data anchor paths và free-text
   included/excluded scope để Agent định hướng;
@@ -448,7 +448,7 @@ soft preferences được report như context, không trở thành blocker.
 
 ### P2S1-D13 — Packet JSON không có float
 
-Existing canonical JSON rejects floating-point values. `WorkPacketV1` vì vậy
+Existing canonical JSON rejects floating-point values. `WorkPacket` vì vậy
 không copy `f64 score` trực tiếp từ `SearchReport`.
 
 Mapping bắt buộc:
@@ -545,7 +545,7 @@ Optional lexical search không có hit vẫn exit `0` với `suggested=[]`.
 
 ---
 
-## WorkPacketV1 JSON contract
+## WorkPacket JSON contract
 
 Current packet family dùng một baseline `schema_version: 1`; không tạo v2 cho
 các internal Slice sau nếu pre-release contract được amended in place theo D-68.
@@ -554,7 +554,7 @@ Nếu sau release cần compatibility family mới mới xem xét version bump.
 ```json
 {
   "schema_version": 1,
-  "profile": "phase2_work_packet_preview_v1",
+  "profile": "work_packet_preview",
   "code": "reservation_candidate",
   "subject": {},
   "snapshot": {},
@@ -603,7 +603,7 @@ tests/internal round-trip. Collections được normalize trước canonical has
 ```json
 {
   "graph_fingerprint": "sha256:...",
-  "readiness_profile": "phase1_contract_readiness_v1",
+  "readiness_profile": "contract_readiness",
   "readiness_fingerprint": "sha256:...",
   "readiness_status": "ready",
   "authority_policy_revision": 1,
@@ -619,7 +619,7 @@ tests/internal round-trip. Collections được normalize trước canonical has
 
 ### `contract`
 
-Packet dùng một explicit `PacketImplementationContractV1` DTO, không serialize
+Packet dùng một explicit `PacketImplementationContract` DTO, không serialize
 thẳng `ImplementationContract`. DTO map one-to-one từ current normalized model,
 không parse `ticket.md` để reconstruct semantics. Mọi field dưới đây là
 **required trong packet JSON**; absent/default canonical model values được emit
@@ -1079,7 +1079,7 @@ profile requirement từ contract. Profile execution belongs later Phase 2.
 Command success contract means every returned packet has
 `reservation_candidate=true`. Pre-reservation family failure returns non-zero
 packet error and no partial packet; therefore schema constrains this field to
-`true` in preview profile v1. Field tồn tại để Slice 2 final assignment wrapper
+`true` in current preview profile. Field tồn tại để Slice 2 final assignment wrapper
 có thể preserve explicit stage semantics, không phải để represent a false
 preview result.
 
@@ -1103,7 +1103,7 @@ Slice 2 compares after recomputing projection.
 
 ```json
 {
-  "profile": "phase2_work_packet_preview_budget_v1",
+  "profile": "work_packet_preview_budget",
   "max_canonical_json_bytes": 131072,
   "max_incident_relations": 128,
   "max_decision_frontier_items": 16,
@@ -1116,7 +1116,7 @@ Slice 2 compares after recomputing projection.
 }
 ```
 
-128 KiB là hard ceiling cho canonical packet JSON v1. Lý do:
+128 KiB là hard ceiling cho canonical packet JSON. Lý do:
 
 - current typed contract collections đã bounded;
 - 8 snippets x 500 bytes giữ lexical context nhỏ;
@@ -1151,7 +1151,7 @@ Truncation policy:
 - optional docs metadata không truncate vì applicability max phải được contract
   limits/registry validation giữ hợp lý; nếu aggregate vượt ceiling thì fail;
 - output >128 KiB => `work_packet_budget_exceeded` với size và dominant sections;
-- `truncations` v1 luôn empty; field reserved để future explicitly safe advisory
+- `truncations` currently luôn empty; field reserved để future explicitly safe advisory
   truncation, không dùng silent truncation.
 
 ---
@@ -1314,7 +1314,7 @@ Ownership khóa:
 - `src/work_packet.rs` là public neutral value owner; export `pub mod
   work_packet` từ `src/lib.rs` và add public API compile guard;
 - `src/kernel/packet.rs` owns I/O/composition and returns
-  `work_packet::WorkPacketV1`;
+  `work_packet::WorkPacket`;
 - do not place packet types in `graph::model`, because packet composes docs,
   source and future runtime planes;
 - do not place source/workspace/lease state in node schema;
@@ -1328,7 +1328,7 @@ Recommended concrete API:
 
 ```rust
 impl JsonGraphStore {
-    pub fn work_packet(&self, id: &str) -> PulseResult<WorkPacketV1>;
+    pub fn work_packet(&self, id: &str) -> PulseResult<WorkPacket>;
 }
 ```
 
@@ -1597,7 +1597,7 @@ Every integration scenario uses `TestRepo::from_fixture` or an external
 
 ### A. Happy path
 
-1. Bootstrapped temp copy with ready implementation Ticket produces schema v1.
+1. Bootstrapped temp copy with ready implementation Ticket produces current schema.
 2. Output has exact subject revision/contract revision/readiness fingerprint.
 3. Output binds full clean Git HEAD and repository ID.
 4. Required docs/applicable docs and top lexical sections are routed.
@@ -1713,7 +1713,7 @@ packet belongs Slice 2, và không claim run/close scenarios.
 
 ## Definition of Done
 
-- [x] Public `pulse::work_packet::WorkPacketV1` schema/types, explicit packet
+- [x] Public `pulse::work_packet::WorkPacket` schema/types, explicit packet
       contract DTO, deny-unknown round-trip và non-self-referential canonical
       fingerprint implemented.
 - [x] `pulse work packet <ticket-id> --json` stable command implemented.
@@ -1780,8 +1780,8 @@ Final P2S1-I8 verification evidence before marking complete:
   executable also passed.
 - `git diff --check` — pass.
 
-This completes only the Phase 2 Slice 1 preview `WorkPacketV1` foundation. It
-still does not acquire leases, allocate workspaces, emit `PreparedAssignmentV1`,
+This completes only the Phase 2 Slice 1 preview `WorkPacket` foundation. It
+still does not acquire leases, allocate workspaces, emit `PreparedAssignment`,
 open `ready -> active`, run agents, perform handoff/verification, or close work;
 those remain the Slice 2+ responsibilities below.
 
@@ -1852,7 +1852,7 @@ Mitigation: name `scope_hints`, enforcement typed not installed; do not expose
 
 ### Capability vocabulary khóa v2 quá sớm
 
-Mitigation: small v1 requirement vocabulary, no Agent Registry/inventory schema;
+Mitigation: small requirement vocabulary, no Agent Registry/inventory schema;
 future inventory maps to stable requirement strings.
 
 ### Packet fingerprint thay đổi vì Tantivy float/cache generation
@@ -1882,7 +1882,7 @@ packet preconditions này. Minimum follow-up contract:
 5. revalidate graph/readiness/docs/source/policy under repository fence before
    committing lease;
 6. materialize isolated worktree when required, with rollback on failure;
-7. final `PreparedAssignmentV1` wrapper, owned by a new neutral runtime value
+7. final `PreparedAssignment` wrapper, owned by a new neutral runtime value
    module, containing:
    - `schema_version: 1`;
    - exact preview `packet_fingerprint` and revalidated snapshot;
@@ -1890,7 +1890,7 @@ packet preconditions này. Minimum follow-up contract:
    - allocated workspace identity/binding;
    - concrete capability inventory/match report;
    - `dispatch_authorized=true` only after all gates pass;
-   - reference to WorkPacketV1 context rather than mutating preview semantics;
+   - reference to WorkPacket context rather than mutating preview semantics;
 8. gated `ready -> active`, no `--force`;
 9. claim/release concurrency, TTL/ghost lease recovery and process crash tests;
 10. frontier claim-state composition from runtime without persisting claim into
@@ -1898,7 +1898,7 @@ packet preconditions này. Minimum follow-up contract:
 
 Slice 2 proposal must lock transaction ordering between runtime lease file, Git
 worktree creation, event and lifecycle transition before implementation. Slice
-2 không được mutate preview `WorkPacketV1` thành post-lease shape, weaken packet
+2 không được mutate preview `WorkPacket` thành post-lease shape, weaken packet
 preconditions hoặc coi preview packet như bearer authorization.
 
 ---
@@ -1924,8 +1924,8 @@ Proposal này đã khóa:
 - packet budget: **128 KiB hard ceiling with fixed-point actual size**;
 - required context overflow: **fail, never silently truncate**;
 - fingerprint: **separate aggregate packet fingerprint**;
-- schema strategy: **single current v1 baseline pre-release**;
-- final Slice 2 artifact family: **`PreparedAssignmentV1` wrapper, không mutate
+- schema strategy: **single current baseline pre-release**;
+- final Slice 2 artifact family: **`PreparedAssignment` wrapper, không mutate
   preview packet**.
 
 ## Những gì cố ý để Slice 2/3/4 quyết định
@@ -1935,7 +1935,7 @@ Proposal này đã khóa:
 - workspace ID generation and runtime record lifecycle;
 - worktree branch/ref naming and cleanup/adoption;
 - exact transaction protocol spanning lease/worktree/event/status (artifact
-  family đã khóa là `PreparedAssignmentV1`, transaction ordering chưa thuộc
+  family đã khóa là `PreparedAssignment`, transaction ordering chưa thuộc
   Slice 1);
 - concrete capability inventory source;
 - enforceable writable path policy;

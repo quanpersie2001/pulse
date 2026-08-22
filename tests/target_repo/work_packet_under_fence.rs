@@ -47,7 +47,7 @@ fn public_work_packet_builds_after_refactoring() -> TestResult {
     // Verify preview semantics (P2S2-D1)
     assert_eq!(packet.code, "reservation_candidate");
     assert_eq!(packet.schema_version, 1);
-    assert_eq!(packet.profile, "phase2_work_packet_preview_v1");
+    assert_eq!(packet.profile, "work_packet_preview");
     assert!(!packet.dispatch.dispatch_authorized);
     assert_eq!(packet.dispatch.authorization_status, "not_reserved");
     assert!(packet.dispatch.reservation_candidate);

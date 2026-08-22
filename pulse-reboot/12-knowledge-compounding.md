@@ -20,7 +20,7 @@ work / review / QA / failure / recovery
   -> validate provenance/applicability
   -> deduplicate/reconcile
   -> publish learning records
-  -> promote to docs/Decision/skill/check/eval/policy
+  -> promote to docs/Decision/guidance/check/eval/policy
   -> retrieve for applicable future work
   -> observe usefulness and repeated failures
   -> reinforce/revise/supersede/retire
@@ -75,7 +75,7 @@ Enforcement loop giảm lỗi lặp lại:
 observation/failure
   -> failure pattern or correction
   -> ratchet with required checks
-  -> skill/reviewer guidance
+  -> reviewed agent/reviewer guidance
   -> deterministic script/check
   -> regression eval
   -> blocking hook/policy when signal is stable
@@ -100,7 +100,7 @@ Candidate có thể được tạo ngay khi observation còn tươi, nhưng mặ
 
 ### Post-cycle compound
 
-Sau review/Story close hoặc một costly failure resolution, `pulse-compound`:
+Sau review/Story close hoặc một costly failure resolution, compound actor:
 
 1. Gather work, Decisions, diffs, receipts, findings, QA, review và prior related learnings.
 2. Extract distinct candidate insights.
@@ -120,19 +120,19 @@ Compounding là judgment capability; storage, validation, retrieval và mutation
 
 | Kind | Dùng khi | Typical routing |
 |---|---|---|
-| `success_pattern` | Approach đã hiệu quả và reusable | docs, skill guidance, work context |
+| `success_pattern` | Approach đã hiệu quả và reusable | docs, reviewed guidance, work context |
 | `failure_pattern` | Failure signature/root cause có thể tái diễn | correction, ratchet, eval |
 | `correction` | Tactical replacement cho wrong move cụ thể | implementer/reviewer context |
 | `ratchet` | Non-regression must-check đã earned | verification/review, script/eval/hook |
 | `decision_heuristic` | Cách nhận biết trade-off/direction tương tự | planner/shaper context; Decision khi hard rule |
 | `debugging_technique` | Repro/isolation/diagnostic technique hiệu quả | debugger context, operations docs |
 | `verification_technique` | Check/evidence strategy bắt được gap | verification profile, eval |
-| `tooling_constraint` | Tool/runtime behavior ảnh hưởng execution | harness docs/skill/script |
+| `tooling_constraint` | Tool/runtime behavior ảnh hưởng execution | harness docs/guidance/script |
 | `environment_constraint` | Fixture/platform/service condition quan trọng | operations/QA environment |
 | `integration_constraint` | Boundary/protocol/order/idempotency constraint | architecture/domain docs + tests |
 | `performance_insight` | Load/latency/resource behavior reusable | performance docs/eval |
 | `security_insight` | Security boundary/failure mode | security docs/policy/check |
-| `process_insight` | Work shaping/review/coordination practice | planner/orchestrator skill |
+| `process_insight` | Work shaping/review/coordination practice | planner/orchestrator guidance |
 | `context_routing_insight` | Agent thiếu/sai context và cách route đúng | docs registry, work packet, eval |
 
 Taxonomy phải đủ nhỏ để ổn định. Nếu một candidate chỉ là event-specific implementation detail không reusable, classify `non_durable` thay vì tạo learning record.
@@ -366,7 +366,7 @@ Relations tối thiểu:
 - `corroborates`: learning -> learning.
 - `contradicts`: learning -> learning/doc/Decision.
 - `superseded_by`: old learning -> replacement.
-- `promoted_to`: learning -> document/Decision/skill/script/check/hook/policy/eval.
+- `promoted_to`: learning -> document/Decision/guidance/script/check/hook/policy/eval.
 - `implemented_by`: learning -> Ticket.
 - `applied_to`: learning -> future work/run.
 - `caused_by`: correction/ratchet -> failure pattern khi evidence đủ.
@@ -395,7 +395,7 @@ Learning phải có đúng một current disposition, nhưng có thể nhiều p
 | Repository navigation/context gap | `AGENTS.md`, docs registry/index |
 | Authority/risk/verification rule | `PULSE.md` hoặc policy config |
 | Hard-to-reverse rationale | Decision |
-| Reusable agent judgment process | Skill guidance |
+| Reusable agent judgment process | Reviewed guidance + typed contract |
 | Stable mechanical invariant | Script/check/hook |
 | Historical failure prevention | Eval/replay fixture |
 | Future implementation work | Ticket trong same work graph |
@@ -407,7 +407,7 @@ observation
   -> candidate learning
   -> reviewed learning
   -> validated pattern/correction
-  -> docs/Decision/skill guidance
+  -> docs/Decision/reviewed guidance
   -> deterministic check + regression eval
   -> blocking guardrail/policy
 ```
@@ -465,7 +465,7 @@ Cache phải:
 - Exclude candidate/superseded/retired/disputed theo default policy.
 - Rebuild deterministic về eligible set và stable tie-break semantics.
 
-Core v1 có thể reuse Tantivy abstraction của docs retrieval, nhưng field weights/filter schema khác.
+Core có thể reuse Tantivy abstraction của docs retrieval, nhưng field weights/filter schema khác.
 
 ## CLI contract
 
@@ -492,7 +492,7 @@ pulse knowledge retire <learning-id> --reason <text>
 pulse knowledge index|status
 ```
 
-`pulse compound`/`pulse-compound` thực hiện semantic synthesis. `pulse knowledge ...` là deterministic query/mutation surface.
+Compound actor thực hiện semantic synthesis. `pulse knowledge ...` là deterministic query/mutation surface.
 
 ### Search và get
 

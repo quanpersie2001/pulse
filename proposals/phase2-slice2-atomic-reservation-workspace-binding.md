@@ -5,16 +5,16 @@
 > `e1f86e6`, `1dc2473`, `7108e9e`, `f8a747b`, `367dfed`, verification
 > hardening commit `e6c6402`, I11 documentation commit `d21282c`, and final
 > verifier/fixer commit `428f149`; supporting fix/verification commits are
-> listed in the completion evidence below. This remains a pre-Core-v1 current baseline,
+> listed in the completion evidence below. This remains a pre-Core current baseline,
 > not a released compatibility contract.
 > Tiền đề:
 > [`phase2-slice1-work-packet-dispatch-foundation.md`](phase2-slice1-work-packet-dispatch-foundation.md)
 > is implemented and verified through commit `6d3076b`. Slice 1 owns the
-> read-only `WorkPacketV1` preview packet. This Slice 2 implementation does not
-> mutate `WorkPacketV1` semantics.
+> read-only `WorkPacket` preview packet. This Slice 2 implementation does not
+> mutate `WorkPacket` semantics.
 > Sở hữu: implemented Slice 2 behavior for the second Phase 2 slice:
 > atomic assignment reservation, runtime lease record, workspace
-> binding record, concrete capability match, `PreparedAssignmentV1`, gated
+> binding record, concrete capability match, `PreparedAssignment`, gated
 > `ready -> active`, release/recovery of prepared-but-not-runnable assignments,
 > and claim-state projection from runtime.
 > Tham chiếu normative:
@@ -56,23 +56,23 @@ pulse --repo-root <repo> work claim <ticket-id> \
   --json
 ```
 
-On success it returns a new wrapper, **`PreparedAssignmentV1`**, that references
+On success it returns a new wrapper, **`PreparedAssignment`**, that references
 and embeds the revalidated preview packet without changing its semantics:
 
 ```text
-WorkPacketV1 preview
+WorkPacket preview
   + atomically revalidate packet preconditions
   + acquire exclusive runtime lease for a concrete assignee
   + materialize/adopt a bound workspace
   + match concrete capability inventory
   + transition Ticket ready -> active under the same repository fence
   + record assignment-prepared event
-  -> PreparedAssignmentV1(dispatch_authorized=true)
+  -> PreparedAssignment(dispatch_authorized=true)
 ```
 
 The wrapper is the first artifact allowed to say `dispatch_authorized=true`.
-`WorkPacketV1` remains a preview with `dispatch_authorized=false` even when it is
-nested inside `PreparedAssignmentV1`.
+`WorkPacket` remains a preview with `dispatch_authorized=false` even when it is
+nested inside `PreparedAssignment`.
 
 This slice still does **not** start Codex or any Worker, send prompts, manage
 acknowledgement/mailbox delivery, stream events, create handoff receipts, run
@@ -85,8 +85,8 @@ Phase 2 slices.
 
 Implemented Slice 1 provides:
 
-- public `pulse::work_packet::WorkPacketV1` DTO/schema/fingerprint;
-- `JsonGraphStore::work_packet(&self, id: &str) -> PulseResult<WorkPacketV1>`;
+- public `pulse::work_packet::WorkPacket` DTO/schema/fingerprint;
+- `JsonGraphStore::work_packet(&self, id: &str) -> PulseResult<WorkPacket>`;
 - `src/kernel/packet.rs` coherent two-fence read algorithm;
 - `src/source.rs::packet_base_snapshot` and `revalidate_packet_base` for exact
   clean Git `HEAD` binding;
@@ -128,7 +128,7 @@ Implement enough assignment preparation that a caller can:
    match the packet;
 6. atomically persist the runtime lease record, workspace record and
    `ready -> active` lifecycle mutation ordering so recovery is deterministic;
-7. receive a `PreparedAssignmentV1` wrapper that sets `dispatch_authorized=true`
+7. receive a `PreparedAssignment` wrapper that sets `dispatch_authorized=true`
    only after lease, workspace, capability, source and lifecycle gates pass;
 8. release/recover stale prepared assignments without corrupting graph or
    worktree state;
@@ -155,7 +155,7 @@ Slice 2 does not implement:
 - multi-worker orchestration, peer-agent dispatch batches or conflict advisory;
 - knowledge injection or learning retrieval;
 - release/merge/deploy authority;
-- changing the `WorkPacketV1` schema/profile/meaning.
+- changing the `WorkPacket` schema/profile/meaning.
 
 If implementation discovers a need for runner/acknowledgement/proof semantics,
 that should become a later Slice 2+ proposal rather than being folded into this
@@ -165,14 +165,14 @@ slice.
 
 ## Key decisions for this proposal
 
-### P2S2-D1 — `PreparedAssignmentV1` is a wrapper, not WorkPacketV1 v2
+### P2S2-D1 — `PreparedAssignment` is a wrapper, not WorkPacket v2
 
-`PreparedAssignmentV1` references the exact preview packet and repeats only the
+`PreparedAssignment` references the exact preview packet and repeats only the
 runtime binding data needed to authorize dispatch. It may embed the full
-`WorkPacketV1` for caller convenience, but it must not mutate preview fields:
+`WorkPacket` for caller convenience, but it must not mutate preview fields:
 
 - nested packet keeps `schema_version=1`;
-- nested packet keeps `profile="phase2_work_packet_preview_v1"`;
+- nested packet keeps `profile="work_packet_preview"`;
 - nested packet keeps `code="reservation_candidate"`;
 - nested packet keeps `dispatch.reservation_candidate=true`;
 - nested packet keeps `dispatch.dispatch_authorized=false`;
@@ -182,7 +182,7 @@ runtime binding data needed to authorize dispatch. It may embed the full
 - nested packet keeps `capabilities.evaluation_status="not_evaluated"`;
 - nested packet keeps `capabilities.inventory_identity=null`.
 
-`PreparedAssignmentV1.dispatch.dispatch_authorized=true` is the authorization
+`PreparedAssignment.dispatch.dispatch_authorized=true` is the authorization
 claim. This prevents callers and tests from treating old preview packet bytes as
 a bearer token.
 
@@ -230,14 +230,14 @@ layer owns any enriched frontier view:
 This slice installs one new lifecycle gate:
 
 ```text
-ready -> active requires phase2_prepared_assignment_v1
+ready -> active requires prepared_assignment
 ```
 
 The gate passes only for the claim pipeline's in-memory prepared-assignment
 context. The public/generic transition path cannot accept a user-supplied JSON
 blob as proof, because that would turn a stale local artifact into an authority
 bypass. The claim operation internally creates and validates a live
-`PreparedAssignmentV1` whose subject, ticket revision, readiness fingerprint,
+`PreparedAssignment` whose subject, ticket revision, readiness fingerprint,
 packet fingerprint, lease, workspace, capability match, repository identity and
 source base all match current state.
 
@@ -749,14 +749,14 @@ In-place binding rules:
 
 ---
 
-## PreparedAssignmentV1 JSON contract
+## PreparedAssignment JSON contract
 
 Top-level shape:
 
 ```json
 {
   "schema_version": 1,
-  "profile": "phase2_prepared_assignment_v1",
+  "profile": "prepared_assignment",
   "code": "prepared_assignment",
   "prepared_assignment_id": "pa_01J...",
   "subject": {
@@ -782,7 +782,7 @@ Top-level shape:
 }
 ```
 
-`packet` is the exact `WorkPacketV1` returned by the internal Slice 1 builder in
+`packet` is the exact `WorkPacket` returned by the internal Slice 1 builder in
 this claim attempt, after revalidation. Its preview semantics remain unchanged.
 
 ### `revalidated_snapshot`
@@ -790,7 +790,7 @@ this claim attempt, after revalidation. Its preview semantics remain unchanged.
 ```json
 {
   "graph_fingerprint": "sha256:...",
-  "readiness_profile": "phase1_contract_readiness_v1",
+  "readiness_profile": "contract_readiness",
   "readiness_fingerprint": "sha256:...",
   "authority_policy_fingerprint": "sha256:...",
   "docs_registry_fingerprint": "sha256:...",
@@ -843,7 +843,7 @@ Uses the report described above. `status` must be `matched` for claim success.
 ```json
 {
   "transition": "ready_to_active",
-  "gate_profile": "phase2_prepared_assignment_v1",
+  "gate_profile": "prepared_assignment",
   "gate_status": "passed",
   "expected_revision": 8,
   "new_revision": 9,
@@ -893,12 +893,12 @@ work is complete.
 
 ### Fingerprints, schema boundaries and determinism
 
-`PreparedAssignmentV1`, lease records, workspace records, prepared-assignment
+`PreparedAssignment`, lease records, workspace records, prepared-assignment
 records and capability inventory reports are new public DTO/schema contracts for
 Slice 2. They are not canonical graph node/edge schema extensions and they are
-not a `WorkPacketV1` schema change. Rust DTOs must use `#[serde(deny_unknown_fields)]`
+not a `WorkPacket` schema change. Rust DTOs must use `#[serde(deny_unknown_fields)]`
 in round-trip tests, and schema fixtures must reject unknown runner/mailbox/proof
-fields unless those fields are explicitly present as nullable `not_installed` v1
+fields unless those fields are explicitly present as nullable `not_installed` in the current contract
 placeholders.
 
 `prepared_assignment_fingerprint` hashes a projection containing:
@@ -914,7 +914,7 @@ placeholders.
 - lifecycle event ID and transition profile;
 - dispatch gate statuses.
 
-It excludes itself and any non-semantic rendering fields. Unlike `WorkPacketV1`,
+It excludes itself and any non-semantic rendering fields. Unlike `WorkPacket`,
 lease issue/expiry times are semantically part of assignment identity and may be
 included. If issue/expiry times are included, the same values must appear in the
 lease record, prepared assignment record, event payload and returned JSON. No
@@ -935,7 +935,7 @@ Update lifecycle policy:
 ready -> active
   supported target: yes
   required reason: no by default, because claim event carries assignment reason
-  installed gate: phase2_prepared_assignment_v1
+  installed gate: prepared_assignment
   public transition CLI without claim context: reject with prepared_assignment_required
 ```
 
@@ -986,7 +986,7 @@ assignment event together.
 2. Recover graph/runtime prepared transactions.
 3. Authorize the claim actor for `work.assignment.prepare`.
 4. Reject live exclusive lease for subject.
-5. Build fresh WorkPacketV1 using an internal no-deadlock packet builder or an
+5. Build fresh WorkPacket using an internal no-deadlock packet builder or an
    extracted builder that can run under the existing fence.
 6. Revalidate packet candidate status, source, docs, policy and readiness.
 7. Load and hash capability inventory; require full capability match.
@@ -996,7 +996,7 @@ assignment event together.
 11. Mutate Ticket ready -> active in memory; validate graph.
 12. Prepare one multi-target transaction for runtime records + node + event.
 13. Commit transaction.
-14. Return PreparedAssignmentV1.
+14. Return PreparedAssignment.
 ```
 
 ### Lock ordering and WriteGuard self-deadlock prevention
@@ -1018,13 +1018,13 @@ Implementation must therefore extract a fence-aware packet builder, for example:
 
 ```rust
 impl JsonGraphStore {
-    pub fn work_packet(&self, id: &str) -> PulseResult<WorkPacketV1>;
+    pub fn work_packet(&self, id: &str) -> PulseResult<WorkPacket>;
 
     pub(crate) fn work_packet_under_claim_fence(
         &self,
         id: &str,
         claim_ctx: &ClaimRevalidationContext,
-    ) -> PulseResult<WorkPacketV1>;
+    ) -> PulseResult<WorkPacket>;
 }
 ```
 
@@ -1057,7 +1057,7 @@ Do not call public `work_packet()` while already holding `WriteGuard`.
   inconsistently with graph recovery.
 - Load runtime lease index from `.pulse/runtime/assignment/leases`.
 - Reject any live exclusive implementation lease for subject.
-- Build/revalidate `WorkPacketV1`; require:
+- Build/revalidate `WorkPacket`; require:
   - `code="reservation_candidate"`;
   - nested preview `dispatch.dispatch_authorized=false`;
   - packet source clean/current;
@@ -1136,7 +1136,7 @@ for affected subjects are blocked until operator repair.
 
 #### Phase F — post-commit return
 
-- Return in-memory `PreparedAssignmentV1` matching committed bytes.
+- Return in-memory `PreparedAssignment` matching committed bytes.
 - Do not start a runner.
 - Do not send assignment to assignee.
 - Do not mark delivered/acknowledged.
@@ -1277,7 +1277,7 @@ Lower-layer `work_packet_*` and `source` errors should be preserved as
 ## Security and authority boundaries
 
 - Prepared assignment is local coordination state, not cryptographic authority.
-- Possession of `PreparedAssignmentV1` does not grant permission to close work,
+- Possession of `PreparedAssignment` does not grant permission to close work,
   change acceptance, merge, deploy or edit approved docs.
 - Claim actor must be authorized for a new grant, e.g.
   `work.assignment.prepare`, under existing default-deny policy.
@@ -1304,7 +1304,7 @@ Proposed new modules:
 
 ```text
 src/assignment.rs
-  # PreparedAssignmentV1, lease/workspace/capability DTOs,
+  # PreparedAssignment, lease/workspace/capability DTOs,
   # schema projections and fingerprints.
 src/kernel/assignment.rs
   # Claim/release/recover orchestration under repository fence.
@@ -1362,14 +1362,14 @@ pub mod assignment;
 pub mod workspace;
 ```
 
-`pulse::work_packet` remains the owner of `WorkPacketV1`; Slice 2 must not move,
+`pulse::work_packet` remains the owner of `WorkPacket`; Slice 2 must not move,
 rename or re-export a mutated packet type from `pulse::assignment`.
 
 Recommended store API:
 
 ```rust
 impl JsonGraphStore {
-    pub fn claim_work(&self, request: ClaimWorkRequest) -> PulseResult<PreparedAssignmentV1>;
+    pub fn claim_work(&self, request: ClaimWorkRequest) -> PulseResult<PreparedAssignment>;
     pub fn release_work(&self, request: ReleaseWorkRequest) -> PulseResult<AssignmentReleaseReport>;
     pub fn list_leases(&self, filter: LeaseFilter) -> PulseResult<LeaseListReport>;
     pub fn recover_assignments(&self, actor: ActorRef) -> PulseResult<AssignmentRecoveryReport>;
@@ -1378,7 +1378,7 @@ impl JsonGraphStore {
 
 `ClaimWorkRequest`, `ReleaseWorkRequest` and mutating recovery requests carry an
 actor/principal for authority evaluation. `LeaseFilter` is read-only and carries
-no authority grant. `claim_work` returns the committed `PreparedAssignmentV1`
+no authority grant. `claim_work` returns the committed `PreparedAssignment`
 record or a lossless projection with the same fingerprint; it must not return an
 uncommitted in-memory-only value.
 
@@ -1430,8 +1430,8 @@ assignment path assertions.
 ### A. Happy path
 
 1. Ready implementation Ticket with current Slice 1 packet can be claimed.
-2. Claim returns `PreparedAssignmentV1` schema v1.
-3. Nested `WorkPacketV1` remains preview with `dispatch_authorized=false`.
+2. Claim returns `PreparedAssignment` current schema.
+3. Nested `WorkPacket` remains preview with `dispatch_authorized=false`.
 4. Top-level prepared assignment has `dispatch_authorized=true` and
    `runner_status=not_started`.
 5. Lease record exists with subject revision, assignee, TTL, packet fingerprint
@@ -1443,9 +1443,9 @@ assignment path assertions.
    fingerprint.
 10. No runner, mailbox, handoff, verification or QA state is created.
 
-### B. WorkPacketV1 boundary
+### B. WorkPacket boundary
 
-1. Claim does not change `WorkPacketV1` schema/profile.
+1. Claim does not change `WorkPacket` schema/profile.
 2. Claim does not set nested packet workspace ID.
 3. Claim does not set nested packet capability evaluation to matched.
 4. Claim rejects if internal packet builder returns a non-preview profile.
@@ -1527,7 +1527,7 @@ assignment path assertions.
 3. Prepared assignment fingerprint excludes itself.
 4. Same committed assignment record validates against schema.
 5. Lease/workspace/prepared records validate independently.
-6. Unknown future runner fields are rejected unless explicitly nullable in v1.
+6. Unknown future runner fields are rejected unless explicitly nullable in the current contract.
 
 ### J. Architecture
 
@@ -1536,7 +1536,7 @@ assignment path assertions.
 3. Node/edge schemas gain no lease/workspace fields.
 4. `pulse::source` public path remains valid and reused.
 5. Storage transaction extensions stay domain-neutral.
-6. Public API compile guard covers `pulse::assignment::PreparedAssignmentV1`.
+6. Public API compile guard covers `pulse::assignment::PreparedAssignment`.
 
 ---
 
@@ -1544,14 +1544,14 @@ assignment path assertions.
 
 ### P2S2-I1 — Lock assignment value contracts
 
-- Add `PreparedAssignmentV1`, lease, workspace, capability inventory and
+- Add `PreparedAssignment`, lease, workspace, capability inventory and
   capability match DTOs.
 - Add JSON Schemas and deny-unknown round-trip tests for every public Slice 2
   DTO, including fixture cases that reject runner/mailbox/proof fields not
   explicitly represented as nullable `not_installed` placeholders.
 - Implement normalization, canonical fingerprint and no-float guarantees.
 - Export `pulse::assignment` and add/extend public API compile guards without
-  changing `pulse::work_packet::WorkPacketV1`.
+  changing `pulse::work_packet::WorkPacket`.
 
 ### P2S2-I2 — Add runtime assignment store and recovery skeleton
 
@@ -1609,7 +1609,7 @@ assignment path assertions.
 
 - Add CLI args and thin handler.
 - Implement `JsonGraphStore::claim_work` orchestration and transaction ordering.
-- Return committed `PreparedAssignmentV1` bytes/projection.
+- Return committed `PreparedAssignment` bytes/projection.
 - Add happy path integration tests.
 - Verify JSON errors preserve assignment top-level codes and lower-layer packet
   or source `cause_code` values.
@@ -1680,9 +1680,9 @@ verification or close gate exists yet.
 All DoD items are verified complete through the implementation commits listed
 in the completion evidence below.
 
-- [x] `PreparedAssignmentV1`, assignment lease, workspace and capability match
+- [x] `PreparedAssignment`, assignment lease, workspace and capability match
       DTOs/schemas exist with deny-unknown tests and canonical fingerprints.
-- [x] `WorkPacketV1` preview semantics remain unchanged; tests assert nested
+- [x] `WorkPacket` preview semantics remain unchanged; tests assert nested
       packet remains non-authorized.
 - [x] `pulse work claim <ticket-id> --assignee ... --capabilities ... --json`
       returns prepared assignment on happy path.
@@ -1760,7 +1760,7 @@ implementation hardening verification `e6c6402`):
 Final P2S2-I11 verification evidence before marking complete:
 
 - Documentation claims audited against actual `075b161..428f149` history.
-- Key boundary/code checks audited from source/tests: `WorkPacketV1` preview
+- Key boundary/code checks audited from source/tests: `WorkPacket` preview
   remains non-authorized, `work claim`/`release`/`leases`/`leases recover`
   surfaces exist, non-enrolled repositories reject before runtime bootstrap,
   assignment schemas deny unknown fields, direct public `ready -> active`
@@ -1783,7 +1783,7 @@ Final P2S2-I11 verification evidence before marking complete:
   development repository.
 
 This completes only Phase 2 Slice 2: atomic reservation, workspace binding and
-`PreparedAssignmentV1`. Phase 2 as a whole is not complete: Pulse still has no
+`PreparedAssignment`. Phase 2 as a whole is not complete: Pulse still has no
 runner, cancel/resume, handoff, verification or close gate. Those remain later
 Phase 2 slices beyond Slice 2.
 
@@ -1809,5 +1809,5 @@ maintainer explicitly reopens this proposal:
 7. Direct `ready -> active` is not a public transition path; only `work claim`
    may commit that transition with runtime records and event atomically.
 
-None of these choices justify changing `WorkPacketV1` or adding runner/proof
+None of these choices justify changing `WorkPacket` or adding runner/proof
 semantics to Slice 2.

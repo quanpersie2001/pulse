@@ -461,7 +461,7 @@ Routing mặc định:
 | Durable fork và rationale | Decision node |
 | One-off implementation detail | Giữ trong work artifact |
 | Reproducible observation/proof | Evidence receipt |
-| Repeated Agent friction | Learning record + Harness Ticket/skill/script/eval |
+| Repeated Agent friction | Learning record + Harness Ticket/guidance/script/eval |
 
 Mỗi documentation candidate phải được:
 
@@ -615,7 +615,7 @@ finding -> evidence -> affected scope -> impact -> owner/escalation
         -> suggested work item -> suggested verification -> severity
 ```
 
-Repeated docs failures đi vào ratchet như harness work trong cùng graph. Ví dụ `docs_context_gap` lặp lại có thể dẫn tới registry scope fix, `AGENTS.md` map fix, skill guidance hoặc deterministic check.
+Repeated docs failures đi vào ratchet như harness work trong cùng graph. Ví dụ `docs_context_gap` lặp lại có thể dẫn tới registry scope fix, `AGENTS.md` map fix, reviewed guidance hoặc deterministic check.
 
 ## Story QA và documentation
 
@@ -673,15 +673,16 @@ Pulse không tự move/merge docs có semantic ambiguity nếu chưa có human a
 
 ## Documentation-specific capabilities
 
-Repository harness có thể cung cấp các capability references, không nhất thiết đều là public skills:
+Repository harness có thể cung cấp các typed capability references:
 
-- `pulse-docs-orient`: tìm canonical docs, owners và authority.
-- `pulse-docs-impact`: đánh giá Ticket/Story documentation impact.
-- `pulse-docs-update`: sửa đúng owner doc, tránh duplicate truth.
-- `pulse-docs-review`: semantic consistency, discoverability và freshness.
-- `pulse-docs-promote`: chuyển durable learning từ work sang docs/Decision/policy/harness.
+- orient: tìm canonical docs, owners và authority.
+- impact: đánh giá Ticket/Story documentation impact.
+- update: sửa đúng owner doc, tránh duplicate truth.
+- review: semantic consistency, discoverability và freshness.
+- promote: chuyển durable learning từ work sang docs/Decision/policy/harness.
 
-Các capability này được dùng bởi `pulse-orient`, `pulse-shape`, `pulse-plan`, `pulse-implement`, `pulse-review` và `pulse-improve-harness`.
+Các capability này được dùng bởi Agent đang orient, shape, plan, implement,
+review hoặc cải thiện harness theo typed assignment hiện tại.
 
 ## Acceptance scenarios
 
@@ -704,9 +705,9 @@ Các capability này được dùng bởi `pulse-orient`, `pulse-shape`, `pulse-
 17. Repeated docs finding tạo harness Ticket và regression eval.
 18. Offline vẫn query được docs registry, owner, authority và applicability.
 
-## Core v1 boundary
+## Core boundary
 
-Core v1 tối thiểu phải có:
+Core tối thiểu phải có:
 
 - Folder/source hierarchy được khóa.
 - Top-level `works/` tách khỏi `.pulse/workgraph/`.
@@ -719,7 +720,7 @@ Core v1 tối thiểu phải có:
 - Docs-specific doctor findings.
 - Brownfield backup/exclusion policy.
 
-Có thể defer sau Core v1:
+Có thể defer sau Core:
 
 - Automatic semantic contradiction detection nâng cao.
 - Section-level extraction hoàn toàn tự động.

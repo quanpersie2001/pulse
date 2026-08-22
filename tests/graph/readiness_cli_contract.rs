@@ -275,7 +275,7 @@ fn work_ready_emits_stable_json_for_ready_ticket() {
     );
     let report: Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(report["schema_version"], 1);
-    assert_eq!(report["profile"], "phase1_contract_readiness_v1");
+    assert_eq!(report["profile"], "contract_readiness");
     assert_eq!(report["status"], "ready");
     assert_eq!(report["transition_eligible"], true);
     assert_eq!(report["dispatch_authorized"], false);
@@ -326,7 +326,14 @@ fn work_ready_rejects_unsupported_profile() {
     let id = ready_ticket(&repo, &store);
     let output = run(
         &repo,
-        &["work", "ready", &id, "--profile", "bogus_v9", "--json"],
+        &[
+            "work",
+            "ready",
+            &id,
+            "--profile",
+            "unsupported_profile",
+            "--json",
+        ],
     );
     assert!(!output.status.success());
     let err: Value = serde_json::from_slice(&output.stderr).unwrap();

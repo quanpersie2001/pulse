@@ -14,7 +14,7 @@
 //! * the structural executability module must not import readiness (one-way
 //!   dependency: readiness consumes the structural report, never the reverse);
 //! * only implementation Tickets can become `ready` under
-//!   `phase1_contract_readiness_v1`.
+//!   `contract_readiness`.
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -37,11 +37,11 @@ use crate::PulseResult;
 /// Current readiness profile identifier. Only implementation Tickets can be
 /// ready under this profile; decision-work Tickets use decision-frontier
 /// eligibility instead.
-pub const READINESS_PROFILE: &str = "phase1_contract_readiness_v1";
+pub const READINESS_PROFILE: &str = "contract_readiness";
 
 /// Profile identifier recorded on `work.node.transitioned` events that pass the
 /// `draft -> shaped` (and blocked resume) shaping gate.
-pub const SHAPED_GATE_PROFILE: &str = "phase1_shaped_v1";
+pub const SHAPED_GATE_PROFILE: &str = "shaped";
 
 pub const READINESS_SCHEMA_VERSION: u32 = 1;
 
@@ -127,7 +127,7 @@ pub struct ReadinessReport {
 pub enum EvalProfile {
     /// `draft -> shaped` / blocked resume shaping gate.
     Shaped,
-    /// Full `phase1_contract_readiness_v1` readiness gate (`shaped -> ready`).
+    /// Full `contract_readiness` readiness gate (`shaped -> ready`).
     Ready,
 }
 

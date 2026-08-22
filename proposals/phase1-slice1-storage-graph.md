@@ -77,7 +77,7 @@ Slice hoàn thành khi storage/graph mechanics deterministic và recoverable. N�
 - Knowledge entry/relation store và applicability-aware recall.
 - Assignment lease, run state, handoff, worktree hoặc peer-agent orchestration.
 - Public `pulse init` và `pulse doctor`; roadmap hiện đặt repository bootstrap/doctor capability hoàn chỉnh ở Phase 3. Slice chỉ cung cấp library bootstrap primitive và fixture helper để Phase 3 gọi lại.
-- Skills/scripts/hooks/capability packs.
+- Guidance/scripts/hooks/capability packs.
 - Edge removal/tombstone semantics; slice đầu chỉ add/query/validate edge, còn remove được thêm khi delete recovery contract đã khóa.
 - Benchmark-driven cache optimization hoặc daemon.
 
@@ -566,7 +566,7 @@ Không kéo `tantivy`, `comrak`, async runtime, agent SDK hoặc orchestration d
 - [ ] JSON CLI output có `schema_version`, stable error codes và non-zero exits đúng.
 - [ ] Không có lifecycle/readiness/docs/knowledge semantics bị hard-code tạm trái với owner documents.
 
-Exit của slice là bằng chứng cho D-18 đến D-22 và Q1, đồng thời cung cấp primitive cho phần còn lại của Phase 1. Exit này không đồng nghĩa Core v1 hoặc Phase 1 đã hoàn thành.
+Exit của slice là bằng chứng cho D-18 đến D-22 và Q1, đồng thời cung cấp primitive cho phần còn lại của Phase 1. Exit này không đồng nghĩa Core hoặc Phase 1 đã hoàn thành.
 
 ## Handoff sang các slice Phase 1 tiếp theo
 
@@ -583,7 +583,7 @@ Các plane sau có thể reuse canonical JSON, expected-revision CAS, lock, atom
 
 ## Risks và open questions cho review
 
-1. **Supported platform matrix:** Core v1 target chính xác macOS/Linux/Windows hay có tiering? Q1 phải chốt trước khi claim portable crash safety.
+1. **Supported platform matrix:** Core target chính xác macOS/Linux/Windows hay có tiering? Q1 phải chốt trước khi claim portable crash safety.
 2. **Atomic replace durability:** replace-existing và directory fsync khác nhau theo OS/filesystem. Slice cần capability result nào, và Phase 3 doctor sẽ aggregate nó ra sao?
 3. **Lock implementation/fairness:** repository-scoped lock đơn giản nhưng serialize writers. Chỉ chuyển fine-grained locking sau benchmark và proof không phá multi-file validation.
 4. **Transaction intent durability:** runtime intent có đủ cho crash model mục tiêu không, hay semantic event/commit marker cần một tracked pending namespace? Đây là điểm phải prototype, không được lướt qua.

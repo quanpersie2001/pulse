@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "Pulse shaping validation receipt payload v1",
+  "title": "Pulse shaping validation receipt payload",
   "type": "object",
   "additionalProperties": false,
   "required": [

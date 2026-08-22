@@ -344,7 +344,7 @@ fn content_hash_option(repo_root: &Path, path: &str) -> Option<String> {
 }
 
 /// Placeholder shaping payload used when a current shaping receipt cannot be
-/// loaded as a valid v1 passed payload. The evaluator flags the family via
+/// loaded as a valid current passed payload. The evaluator flags the family via
 /// `integrity_valid=false`; payload contents are irrelevant in that case.
 fn default_shaping_payload() -> crate::evidence::model::ShapingValidationPayload {
     use crate::evidence::model::{

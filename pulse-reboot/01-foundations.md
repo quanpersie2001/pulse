@@ -35,7 +35,7 @@ Root guidance nên ngắn: chỉ ra nơi tìm architecture, tests, domain rules 
 
 ### Guardrail cơ học, judgment để agent xử lý
 
-Formatting, schema validation, forbidden dependency, generated-file freshness và test command nên là script/hook. Trade-off kiến trúc, ticket shaping và semantic priority nên nằm trong agent skill có bằng chứng.
+Formatting, schema validation, forbidden dependency, generated-file freshness và test command nên là script/hook. Trade-off kiến trúc, ticket shaping và semantic priority nên do Agent thực hiện theo typed contract và để lại evidence.
 
 ### Làm rõ critical ambiguity trước execution
 
@@ -61,9 +61,9 @@ Các thực hành của OpenAI được benchmark trên repo và operating model
 
 Pulse giữ tinh thần packet nhưng tách rõ Epic, Story và executable Ticket. Mức materialization phụ thuộc risk; xem [`02-work-graph.md`](02-work-graph.md).
 
-## Bài học từ Matt Pocock skills
+## Bài học từ các workflow reference của Matt Pocock
 
-`references/mattpocock/skills` cung cấp hai lớp primitive đáng giữ.
+Các reference `grilling` và `wayfinder` cung cấp hai lớp primitive đáng giữ.
 
 Từ `grilling`, `grill-me` và `grill-with-docs`, Pulse học cách pressure-test plan/design bằng decision tree: hỏi một câu mỗi lượt, giải quyết parent decision trước child branches, đọc codebase thay vì hỏi fact có thể tự tìm và kèm recommended answer để human phản hồi trên một proposal cụ thể. `grill-me` dùng tree như reasoning model nhưng không persist nó; `grill-with-docs` giữ glossary và ADR chọn lọc, không lưu toàn bộ branch graph.
 
@@ -76,7 +76,7 @@ Từ `wayfinder`, Pulse học cách vận hành khi decision space lớn hơn m�
 - resolve một decision rồi reconcile map, graduate fog vừa rõ, supersede nhánh bị invalid và recompute execution readiness;
 - dùng map như index trỏ tới canonical resolutions, không copy cùng một quyết định vào nhiều artifact.
 
-Pulse không copy nguyên skill chain `grill-with-docs -> to-spec -> to-tickets`, issue-tracker storage hoặc mặc định ghi `CONTEXT.md`/ADR trong mọi session. Pulse tích hợp grilling và progressive wayfinding vào `pulse-shape`; local work graph vẫn canonical, external tracker chỉ là adapter. Độ sâu interview/map và artifact theo risk, nhưng critical ambiguity không được âm thầm chuyển sang Worker.
+Pulse không copy nguyên workflow chain `grill-with-docs -> to-spec -> to-tickets`, issue-tracker storage hoặc mặc định ghi `CONTEXT.md`/ADR trong mọi session. Pulse tích hợp grilling và progressive wayfinding vào shaping contract; local work graph vẫn canonical, external tracker chỉ là adapter. Độ sâu interview/map và artifact theo risk, nhưng critical ambiguity không được âm thầm chuyển sang Worker.
 
 ## Bài học từ Maestro
 
@@ -157,7 +157,7 @@ Một số chi tiết không được copy:
 - Thu thập typed evidence từ code, test, browser, API và review.
 - Reconcile priority theo dependency, foundation value và supersession.
 - Chuyển failure lặp lại thành harness improvement và eval.
-- Sau v1, điều phối các Agent độc lập mà human vẫn quan sát và takeover được.
+- Sau khi single-Agent baseline ổn định, điều phối các Agent độc lập mà human vẫn quan sát và takeover được.
 
 ## Non-goals
 

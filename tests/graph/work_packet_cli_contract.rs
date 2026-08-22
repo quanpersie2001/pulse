@@ -420,9 +420,9 @@ fn work_packet_emits_stable_json_for_ready_ticket() {
 
     // Top-level shape
     assert_eq!(packet["schema_version"], 1);
-    assert_eq!(packet["profile"], "phase2_work_packet_preview_v1");
+    assert_eq!(packet["profile"], "work_packet_preview");
     assert_eq!(packet["code"], "reservation_candidate");
-    let typed: pulse::work_packet::WorkPacketV1 = serde_json::from_value(packet.clone()).unwrap();
+    let typed: pulse::work_packet::WorkPacket = serde_json::from_value(packet.clone()).unwrap();
     typed.validate_schema_contract().unwrap();
 
     // Subject

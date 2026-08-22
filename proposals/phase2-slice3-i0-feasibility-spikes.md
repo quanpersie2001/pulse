@@ -48,7 +48,7 @@ by this spike.
 
 ## Spike 3 — secure control nonce
 
-Code evidence: `src/process.rs::{ControlNoncePlaintext, ControlNonceV1}` and
+Code evidence: `src/process.rs::{ControlNoncePlaintext, ControlNonce}` and
 `tests/process/run_feasibility.rs`.
 
 The chosen Slice 3 feasibility transport is
@@ -60,7 +60,7 @@ only in memory, is zeroed on drop, and the persisted control record contains onl
 
 ## Spike 4 — bounded continuously-drained logs
 
-Code evidence: `src/process.rs::{drain_to_bounded_logs, BoundedLogRefV1}`.
+Code evidence: `src/process.rs::{drain_to_bounded_logs, BoundedLogRef}`.
 
 The retention strategy continuously drains stdout/stderr readers and writes
 separate prefix and tail segment files with create-new semantics. Retention is
@@ -95,7 +95,7 @@ non-`complete` snapshot status instead of guessed identity.
 
 Code evidence: `src/run.rs`, `tests/graph/run_feasibility_contract.rs`.
 
-The profile contract is narrowed to public `codex_process_v1` only. Executables
+The profile contract is narrowed to public `codex_process` only. Executables
 must be absolute normalized regular files or bare program names resolved through
 inherited `PATH`; repository-relative executable paths with separators are
 rejected for Slice 3. No shell command string is accepted. Environment reporting

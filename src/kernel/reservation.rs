@@ -10,7 +10,7 @@ use crate::event::{new_event_id, EventEnvelope};
 use crate::graph::node::{Node, NodeStatus};
 use crate::graph::store::JsonGraphStore;
 use crate::reservation::{
-    AcknowledgeReservationArgs, ActivateReservationArgs, CapabilityInventoryV1, CoreReservationV1,
+    AcknowledgeReservationArgs, ActivateReservationArgs, CapabilityInventory, CoreReservation,
     ReservationSource, ReservationState, ReservationSubject, ReserveWorkArgs, ReserveWorkOutcome,
     CAP_MATCH_MATCHED, MAX_TTL_SECONDS, MIN_TTL_SECONDS, RESERVATION_SCHEMA_VERSION,
 };
@@ -42,7 +42,7 @@ impl JsonGraphStore {
                 ),
             ));
         }
-        let inventory = CapabilityInventoryV1::from_json_bytes(&args.capability_inventory_bytes)?;
+        let inventory = CapabilityInventory::from_json_bytes(&args.capability_inventory_bytes)?;
         let key_hash = hash_bytes(args.idempotency_key.as_bytes());
         for _ in 0..2 {
             let guard = WriteGuard::acquire(&self.repo_root)?;
@@ -106,7 +106,7 @@ impl JsonGraphStore {
     fn reserve_work_under_fence(
         &self,
         args: &ReserveWorkArgs,
-        inventory: &CapabilityInventoryV1,
+        inventory: &CapabilityInventory,
         lease_id: &str,
     ) -> Result<ReserveWorkOutcome> {
         if let Some(existing) = find_live_reservation_for_ticket(&self.repo_root, &args.ticket_id)?
@@ -153,7 +153,7 @@ impl JsonGraphStore {
         }
         let now = Utc::now();
         let expires_at = now + chrono::Duration::seconds(args.ttl_seconds as i64);
-        let mut reservation = CoreReservationV1 {
+        let mut reservation = CoreReservation {
             schema_version: RESERVATION_SCHEMA_VERSION,
             reservation_id: lease_id.replacen("lease_", "rsv_", 1),
             lease_id: lease_id.to_string(),
@@ -207,7 +207,7 @@ impl JsonGraphStore {
     pub fn acknowledge_reservation(
         &self,
         args: AcknowledgeReservationArgs,
-    ) -> Result<CoreReservationV1> {
+    ) -> Result<CoreReservation> {
         let _guard = WriteGuard::acquire(&self.repo_root)?;
         authorize_assignment(&self.repo_root, &args.actor, "work.assignment.prepare")?;
         recover_prepared_transactions(&self.repo_root)?;
@@ -254,7 +254,7 @@ impl JsonGraphStore {
         Ok(after)
     }
 
-    pub fn activate_reservation(&self, args: ActivateReservationArgs) -> Result<CoreReservationV1> {
+    pub fn activate_reservation(&self, args: ActivateReservationArgs) -> Result<CoreReservation> {
         let _guard = WriteGuard::acquire(&self.repo_root)?;
         authorize_assignment(&self.repo_root, &args.actor, "work.assignment.prepare")?;
         recover_prepared_transactions(&self.repo_root)?;
@@ -386,7 +386,7 @@ impl JsonGraphStore {
         lease_id: &str,
         actor: &str,
         reason: &str,
-    ) -> Result<CoreReservationV1> {
+    ) -> Result<CoreReservation> {
         let _guard = WriteGuard::acquire(&self.repo_root)?;
         authorize_assignment(&self.repo_root, actor, "work.assignment.release")?;
         recover_prepared_transactions(&self.repo_root)?;
@@ -428,7 +428,7 @@ impl JsonGraphStore {
         &self,
         actor: &str,
         now: DateTime<Utc>,
-    ) -> Result<Vec<CoreReservationV1>> {
+    ) -> Result<Vec<CoreReservation>> {
         let _guard = WriteGuard::acquire(&self.repo_root)?;
         authorize_assignment(&self.repo_root, actor, "work.assignment.release")?;
         recover_prepared_transactions(&self.repo_root)?;
@@ -439,7 +439,7 @@ impl JsonGraphStore {
         &self,
         ticket_id: &str,
         lease_id: &str,
-    ) -> Result<crate::work_packet::WorkPacketV1> {
+    ) -> Result<crate::work_packet::WorkPacket> {
         let reservation = load_reservation(&self.repo_root, lease_id)?;
         if reservation.subject.ticket_id != ticket_id
             || matches!(
@@ -470,9 +470,9 @@ struct ReservationChange<'a> {
     operation: &'a str,
     actor: &'a str,
     ticket_id: &'a str,
-    before: Option<&'a CoreReservationV1>,
-    after: &'a CoreReservationV1,
-    packet: Option<&'a crate::work_packet::WorkPacketV1>,
+    before: Option<&'a CoreReservation>,
+    after: &'a CoreReservation,
+    packet: Option<&'a crate::work_packet::WorkPacket>,
     payload: serde_json::Value,
     failpoint: Option<crate::storage::transaction::TransactionFailpoint>,
 }
@@ -603,7 +603,7 @@ fn event_path(repo_root: &Path, event_id: &str, now: DateTime<Utc>) -> PathBuf {
         .join(format!("{event_id}.json"))
 }
 
-pub fn load_reservation(repo_root: &Path, lease_id: &str) -> Result<CoreReservationV1> {
+pub fn load_reservation(repo_root: &Path, lease_id: &str) -> Result<CoreReservation> {
     let path = reservation_path(repo_root, lease_id);
     let bytes = fs::read(&path).map_err(|error| {
         if error.kind() == std::io::ErrorKind::NotFound {
@@ -615,12 +615,12 @@ pub fn load_reservation(repo_root: &Path, lease_id: &str) -> Result<CoreReservat
         }
     })?;
     let record = serde_json::from_slice(&bytes).map_err(|error| PulseError::json(&path, error))?;
-    let record: CoreReservationV1 = record;
+    let record: CoreReservation = record;
     record.validate()?;
     Ok(record)
 }
 
-pub fn list_reservations(repo_root: &Path) -> Result<Vec<CoreReservationV1>> {
+pub fn list_reservations(repo_root: &Path) -> Result<Vec<CoreReservation>> {
     let directory = repo_root.join(RESERVATIONS_DIR);
     if !directory.exists() {
         return Ok(Vec::new());
@@ -638,7 +638,7 @@ pub fn list_reservations(repo_root: &Path) -> Result<Vec<CoreReservationV1>> {
         .into_iter()
         .map(|path| {
             let bytes = fs::read(&path).map_err(|error| PulseError::io(&path, error))?;
-            let record: CoreReservationV1 =
+            let record: CoreReservation =
                 serde_json::from_slice(&bytes).map_err(|error| PulseError::json(&path, error))?;
             record.validate()?;
             Ok(record)
@@ -646,7 +646,7 @@ pub fn list_reservations(repo_root: &Path) -> Result<Vec<CoreReservationV1>> {
         .collect()
 }
 
-fn load_packet(repo_root: &Path, lease_id: &str) -> Result<crate::work_packet::WorkPacketV1> {
+fn load_packet(repo_root: &Path, lease_id: &str) -> Result<crate::work_packet::WorkPacket> {
     let path = packet_path(repo_root, lease_id);
     let bytes = fs::read(&path).map_err(|error| PulseError::io(&path, error))?;
     serde_json::from_slice(&bytes).map_err(|error| PulseError::json(&path, error))
@@ -667,7 +667,7 @@ fn find_live_reservation_for_ticket(repo_root: &Path, ticket_id: &str) -> Result
             continue;
         }
         let bytes = fs::read(entry.path()).map_err(|error| PulseError::io(entry.path(), error))?;
-        let reservation: CoreReservationV1 = serde_json::from_slice(&bytes)
+        let reservation: CoreReservation = serde_json::from_slice(&bytes)
             .map_err(|error| PulseError::json(entry.path(), error))?;
         if reservation.subject.ticket_id == ticket_id
             && matches!(
@@ -685,7 +685,7 @@ fn find_live_reservation_for_ticket(repo_root: &Path, ticket_id: &str) -> Result
 
 fn validate_reservation_acknowledgement(
     repo_root: &Path,
-    before: &CoreReservationV1,
+    before: &CoreReservation,
     runtime_binding: &crate::reservation::RuntimeBinding,
     acknowledgement: &crate::reservation::AssignmentAcknowledgement,
 ) -> Result<()> {
@@ -718,7 +718,7 @@ fn expire_reservations_under_fence(
     actor: &str,
     now: DateTime<Utc>,
     failpoint: Option<crate::storage::transaction::TransactionFailpoint>,
-) -> Result<Vec<CoreReservationV1>> {
+) -> Result<Vec<CoreReservation>> {
     let mut expired = Vec::new();
     for before in list_reservations(repo_root)? {
         if !matches!(

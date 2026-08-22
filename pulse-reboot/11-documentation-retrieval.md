@@ -16,7 +16,7 @@ repository map / docs tree
   -> full document chỉ khi thật sự cần
 ```
 
-Core v1 không nhúng toàn bộ documentation corpus vào Agent prompt và không yêu cầu Agent tự grep toàn bộ `docs/`. Core v1 cũng không kéo vector database, embedding model, LLM query expansion, reranker, MCP server hoặc daemon vào runtime.
+Core không nhúng toàn bộ documentation corpus vào Agent prompt và không yêu cầu Agent tự grep toàn bộ `docs/`. Core cũng không kéo vector database, embedding model, LLM query expansion, reranker, MCP server hoặc daemon vào runtime.
 
 Docs retrieval và knowledge recall có thể reuse section/lexical engine abstractions, nhưng không merge thành untyped corpus. `pulse docs` ưu tiên current authoritative truth; `pulse knowledge` ưu tiên reusable historical guidance với lifecycle/applicability riêng. Work packet aggregator preserve type, authority và reason khi combine results.
 
@@ -34,7 +34,7 @@ Thiết kế này học có chọn lọc từ:
 - QMD dùng hierarchical path context, chọn context cụ thể nhất theo path prefix: [example config](https://github.com/tobi/qmd/blob/e428df76bc0274d9e93eb7ca3e95673315c42e90/example-index.yml#L31-L50) và [implementation](https://github.com/tobi/qmd/blob/e428df76bc0274d9e93eb7ca3e95673315c42e90/src/collections.ts#L473-L509).
 - QMD chunk Markdown theo heading/code-fence/paragraph boundaries: [breakpoint rules](https://github.com/tobi/qmd/blob/e428df76bc0274d9e93eb7ca3e95673315c42e90/src/store.ts#L110-L129) và [cutoff algorithm](https://github.com/tobi/qmd/blob/e428df76bc0274d9e93eb7ca3e95673315c42e90/src/store.ts#L195-L243).
 - QMD dùng BM25 field weighting, line-bound snippets và RRF: [FTS ranking](https://github.com/tobi/qmd/blob/e428df76bc0274d9e93eb7ca3e95673315c42e90/src/store.ts#L3567-L3636), [snippet extraction](https://github.com/tobi/qmd/blob/e428df76bc0274d9e93eb7ca3e95673315c42e90/src/store.ts#L4544-L4627), [RRF](https://github.com/tobi/qmd/blob/e428df76bc0274d9e93eb7ca3e95673315c42e90/src/store.ts#L3982-L4025).
-- QMD full stack kéo native SQLite/vector/model/grammar dependencies, nên không phù hợp Core v1: [package dependencies](https://github.com/tobi/qmd/blob/e428df76bc0274d9e93eb7ca3e95673315c42e90/package.json#L58-L78).
+- QMD full stack kéo native SQLite/vector/model/grammar dependencies, nên không phù hợp Core: [package dependencies](https://github.com/tobi/qmd/blob/e428df76bc0274d9e93eb7ca3e95673315c42e90/package.json#L58-L78).
 - MiniSearch cung cấp in-memory offline full-text, field boosting, prefix/fuzzy search, zero external dependencies và serialized index: [features](https://github.com/lucaong/minisearch/blob/3d239d1c3ae7aef1bf5d8945dd7b5f0709f646f5/README.md#L27-L57), [serialization](https://github.com/lucaong/minisearch/blob/3d239d1c3ae7aef1bf5d8945dd7b5f0709f646f5/src/MiniSearch.ts#L1498-L1544), [BM25+](https://github.com/lucaong/minisearch/blob/3d239d1c3ae7aef1bf5d8945dd7b5f0709f646f5/src/MiniSearch.ts#L2107-L2161).
 - Knowledge Base Builder minh họa root/per-directory index + one-line summaries để Agent đi top-down mà không dùng vector DB: [progressive disclosure](https://github.com/shivdeepak/knowledge-base-builder/blob/cd565ded6b082ecf02ac1822c6a0935e8180890f/README.md#L26-L65).
 
@@ -58,9 +58,9 @@ Không reusable như một schema chung:
 
 Không có generic `pulse search everything` trong Core. Agent/context builder gọi typed query surfaces rồi compose bounded packet.
 
-## Core v1 decision
+## Core decision
 
-Core v1 chốt:
+Core chốt:
 
 - Canonical prose: normal Git files trong `docs/`, `AGENTS.md`, `PULSE.md`.
 - Canonical metadata: `.pulse/docs/registry.json` theo [`10-documentation-system.md`](10-documentation-system.md).
@@ -69,8 +69,8 @@ Core v1 chốt:
 - Search engine: in-process BM25+ bằng `tantivy` (pure-Rust) hoặc equivalent engine đã benchmark/contract-test tương đương. MiniSearch (JS) chỉ còn là reference lesson.
 - Search cache: disposable, gitignored, content-hash/fingerprint keyed.
 - Default search mode: `lexical`.
-- Semantic/hybrid search: optional adapter sau Core v1.
-- Không dùng SQLite cho docs search trong Core v1.
+- Semantic/hybrid search: optional adapter sau Core.
+- Không dùng SQLite cho docs search trong Core.
 
 Technology choice `tantivy` (Rust) + `comrak` (Rust Markdown section parser) là implementation direction cho prototype, không phải public compatibility contract. Public contract là section-level lexical ranking, stable JSON output, deterministic rebuild và no-native-model dependency. Nếu prototype thay engine, acceptance semantics phải giữ.
 
@@ -182,7 +182,7 @@ Document record từ `10-documentation-system.md` bổ sung retrieval metadata t
 - Document-level `summary` được khuyến nghị cho registered authoritative docs.
 - Summary ngắn, một hoặc hai câu, mô tả nội dung và protected intent; không phải changelog.
 - Summary được dùng trong `_index.md`, search ranking, result preview và work packet.
-- Summary authored/approved cùng registry metadata, không tự sinh bằng LLM trong Core v1.
+- Summary authored/approved cùng registry metadata, không tự sinh bằng LLM trong Core.
 - Nếu thiếu summary, indexer có thể derive preview từ title + first meaningful paragraph nhưng `pulse doctor` có thể tạo advisory finding tùy policy.
 
 ### Aliases
@@ -276,7 +276,7 @@ Mỗi Markdown section tạo một derived record:
 
 ### Markdown parsing
 
-Core v1 parser hỗ trợ ATX headings `#` đến `######` và fenced code blocks.
+Core parser hỗ trợ ATX headings `#` đến `######` và fenced code blocks.
 
 Rules:
 
@@ -298,7 +298,7 @@ Default target nên được benchmark, khởi điểm:
 - Overlap khoảng 100-150 tokens cho oversized chunks.
 - Mỗi chunk giữ heading path, original section ref và exact line range.
 
-Core v1 không cần Tree-sitter vì corpus mục tiêu là Markdown docs. Code snippets được giữ trong section và không trở thành separate code AST index.
+Core không cần Tree-sitter vì corpus mục tiêu là Markdown docs. Code snippets được giữ trong section và không trở thành separate code AST index.
 
 ## Lexical search engine
 
@@ -340,7 +340,7 @@ Các giá trị này là prototype defaults, phải được tune bằng retriev
 - Prefix search chỉ bật cho term đủ dài, đề xuất `>= 3` ký tự.
 - Fuzzy search chỉ bật cho term dài, đề xuất `>= 6` ký tự và max edit ratio nhỏ.
 - Identifiers chứa hyphen/dot như `TK-031`, `refresh-token`, `v2.1` cần normalization tests.
-- Quoted phrases và negative terms có thể thêm sau; Core v1 ưu tiên stable simple query contract.
+- Quoted phrases và negative terms có thể thêm sau; Core ưu tiên stable simple query contract.
 - Vietnamese/CJK/tokenization behavior phải có fixture eval trước khi claim support quality; fallback substring/alias matching có thể bổ sung mà không đổi CLI.
 
 ### Pulse metadata adjustment
@@ -750,7 +750,7 @@ pulse docs search "..." --mode semantic
 pulse docs search "..." --mode hybrid
 ```
 
-Core v1 chỉ support `lexical`; unsupported mode trả capability error rõ, không silently fallback nếu caller yêu cầu semantic.
+Core chỉ support `lexical`; unsupported mode trả capability error rõ, không silently fallback nếu caller yêu cầu semantic.
 
 ### Hybrid fusion
 
@@ -791,7 +791,7 @@ Core không thêm ngay:
 - Cache không chứa unredacted secret files; indexer obeys protected-path policy.
 - `--json` escape content an toàn và giữ stable schema.
 
-## Core v1 acceptance scenarios
+## Core acceptance scenarios
 
 1. Agent tìm đúng section cho exact identifier mà không đọc full corpus.
 2. Natural-language query trả relevant section trong configured top K trên fixture corpus.
@@ -803,7 +803,7 @@ Core không thêm ngay:
 8. Retired, migration backup và generated navigation docs bị exclude mặc định.
 9. Draft/stale docs chỉ xuất hiện theo policy/flags và được label rõ.
 10. Ticket applicability cải thiện ranking nhưng không đè strong lexical relevance.
-11. `pulse docs search` hoạt động offline, không tải model trong Core v1.
+11. `pulse docs search` hoạt động offline, không tải model trong Core.
 12. Changed document được incremental reindex; unchanged section records được reuse hợp lệ.
 13. Corrupt/incompatible cache bị discard/rebuild, canonical docs không bị sửa.
 14. Search result snippets không vượt default budget và trỏ đúng lines.
@@ -818,7 +818,7 @@ Core không thêm ngay:
 23. Search cache và `_index.md` không trở thành writable source of truth.
 24. Retrieval eval đo top-K quality và context bytes, không chỉ command exit code.
 
-## Deferred after Core v1
+## Deferred after Core
 
 - Learned query expansion.
 - LLM/cross-encoder reranking.

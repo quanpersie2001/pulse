@@ -24,7 +24,7 @@ pub const CAPABILITY_INVENTORY_SCHEMA: &str =
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
-pub struct CapabilityInventoryV1 {
+pub struct CapabilityInventory {
     pub schema_version: u32,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub principal: String,
@@ -45,7 +45,7 @@ pub struct CapabilityMatchReport {
     pub reason_codes: Vec<String>,
 }
 
-impl CapabilityInventoryV1 {
+impl CapabilityInventory {
     pub fn from_json_bytes(bytes: &[u8]) -> Result<Self> {
         let value: Value = serde_json::from_slice(bytes).map_err(|error| {
             PulseError::validation(
@@ -197,7 +197,7 @@ pub struct AssignmentAcknowledgement {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
-pub struct CoreReservationV1 {
+pub struct CoreReservation {
     pub schema_version: u32,
     pub reservation_id: String,
     pub lease_id: String,
@@ -219,7 +219,7 @@ pub struct CoreReservationV1 {
     pub reservation_fingerprint: String,
 }
 
-impl CoreReservationV1 {
+impl CoreReservation {
     pub fn compute_fingerprint(&self) -> Result<String> {
         let mut projection = self.clone();
         projection.reservation_fingerprint.clear();
@@ -283,8 +283,8 @@ pub struct ReserveWorkArgs {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct ReserveWorkOutcome {
-    pub reservation: CoreReservationV1,
-    pub packet: crate::work_packet::WorkPacketV1,
+    pub reservation: CoreReservation,
+    pub packet: crate::work_packet::WorkPacket,
 }
 
 #[derive(Debug, Clone)]

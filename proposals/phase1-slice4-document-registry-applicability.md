@@ -106,7 +106,7 @@ Slice exit **không** đồng nghĩa:
 - semantic contradiction đã được resolve;
 - Ticket được transition sang `ready`;
 - docs close gate hoặc generated freshness runner đã hoàn chỉnh;
-- Phase 1 hoặc Core v1 hoàn thành.
+- Phase 1 hoặc Core hoàn thành.
 
 ## Non-goals
 
@@ -837,7 +837,7 @@ src/
     docs/
       document.schema.json
     evidence/
-      documentation-validation.v2.schema.json
+      documentation-validation.schema.json
 
   bin/
     pulse.rs

@@ -116,7 +116,7 @@ Không lưu global counter/revision thường xuyên trong manifest vì nó sẽ
 
 ## Node contract
 
-Một implementation Ticket node theo node schema baseline v1:
+Một implementation Ticket node theo node schema baseline hiện hành:
 
 ```json
 {
@@ -395,7 +395,7 @@ Implementation Ticket chỉ `ready` khi CLI xác nhận deterministic conditions
 - Applicable durable docs, owner và required Decisions resolve được khi risk/surface yêu cầu.
 - Mọi content/document reference tồn tại và node/edge graph valid.
 
-Kernel có thể validate schema, links, required fields, contract revisions, hashes, receipt integrity/bindings và policy grants; nó không tự phán đoán một conversation đã đạt shared understanding. Semantic shaping result do skill/reviewer tạo, có actor, contract/source/content bindings, branch summary và policy-required approval để ready gate kiểm tra.
+Kernel có thể validate schema, links, required fields, contract revisions, hashes, receipt integrity/bindings và policy grants; nó không tự phán đoán một conversation đã đạt shared understanding. Semantic shaping result do Agent/reviewer tạo theo typed receipt, có actor, contract/source/content bindings, branch summary và policy-required approval để ready gate kiểm tra.
 
 Readiness là derived, versioned report với gate-family findings và narrow fingerprint trên relevant Ticket/blocker/shaping/Decision/docs/QA/policy/content projections; không dùng global graph fingerprint làm sole currentness key. `status=ready` nhưng input fingerprint đổi là `ready_state_stale`, bị loại khỏi execution frontier và không tự rewrite canonical status trong read path.
 
@@ -457,7 +457,7 @@ Machine output luôn có `schema_version`, stable field names và non-zero exit 
 - Bỏ qua/rebuild khi stale hoặc corrupt.
 - Không cần thiết cho correctness.
 
-Core v1 không dùng SQLite, kể cả làm canonical index. Chỉ cân nhắc một cache engine khác sau khi benchmark chứng minh file scan/index in-memory không đủ; cache vẫn phải disposable.
+Core không dùng SQLite, kể cả làm canonical index. Chỉ cân nhắc một cache engine khác sau khi benchmark chứng minh file scan/index in-memory không đủ; cache vẫn phải disposable.
 
 ## Mutation protocol
 

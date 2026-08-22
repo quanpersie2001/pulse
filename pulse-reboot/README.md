@@ -106,7 +106,7 @@ Trong target repository, accepted Decision/product contract diễn tả intent; 
   cho Project/Workspace/Session/Provider managers, lifecycle, timeline sync và
   transport-neutral tool catalog; Pulse implement shape này bằng Rust và giữ
   work/proof semantics trong Core
-- [`references/mattpocock/skills`](../references/mattpocock/skills) — `grilling` reference cho one-question-at-a-time decision pressure-test; `wayfinder` reference cho destination, decision frontier, fog-of-war và progressive reconciliation. Pulse giữ local work graph/owner semantics thay vì copy skill chain, tracker canonicality hoặc artifact layout
+- Matt Pocock `grilling` và `wayfinder` references — nguồn học cho one-question-at-a-time decision pressure-test, destination, decision frontier, fog-of-war và progressive reconciliation. Pulse giữ local work graph/owner semantics thay vì copy workflow chain, tracker canonicality hoặc artifact layout
 
 ## Quy tắc cập nhật
 

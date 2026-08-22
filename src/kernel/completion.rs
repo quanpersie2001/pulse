@@ -8,8 +8,8 @@ use std::path::{Path, PathBuf};
 use crate::canonical_json::{hash_bytes, to_canonical_bytes};
 use crate::event::{new_event_id, EventEnvelope};
 use crate::execution::{
-    validate_checks, CompleteVerificationArgs, HandoffReceiptV1, SubmitHandoffArgs,
-    VerificationDisposition, VerificationReceiptV1,
+    validate_checks, CompleteVerificationArgs, HandoffReceipt, SubmitHandoffArgs,
+    VerificationDisposition, VerificationReceipt,
 };
 use crate::graph::lifecycle::TransitionReason;
 use crate::graph::node::{Node, NodeStatus};
@@ -23,10 +23,7 @@ use crate::storage::WriteGuard;
 use crate::{PulseError, Result};
 
 impl JsonGraphStore {
-    pub fn submit_execution_handoff(
-        &self,
-        mut args: SubmitHandoffArgs,
-    ) -> Result<HandoffReceiptV1> {
+    pub fn submit_execution_handoff(&self, mut args: SubmitHandoffArgs) -> Result<HandoffReceipt> {
         if args.idempotency_key.trim().is_empty() {
             return Err(PulseError::validation(
                 "handoff_idempotency_key_required",
@@ -106,7 +103,7 @@ impl JsonGraphStore {
         node.status_reason = None;
         node.revision += 1;
         node.updated_at = Utc::now();
-        let mut handoff = HandoffReceiptV1 {
+        let mut handoff = HandoffReceipt {
             schema_version: 1,
             handoff_id: handoff_id.clone(),
             idempotency_key_hash: hash_bytes(args.idempotency_key.as_bytes()),
@@ -153,7 +150,7 @@ impl JsonGraphStore {
     pub fn complete_execution_verification(
         &self,
         args: CompleteVerificationArgs,
-    ) -> Result<VerificationReceiptV1> {
+    ) -> Result<VerificationReceipt> {
         if args.idempotency_key.trim().is_empty() {
             return Err(PulseError::validation(
                 "verification_idempotency_key_required",
@@ -229,7 +226,7 @@ impl JsonGraphStore {
         node.status_reason = reason.map(TransitionReason::into_status_reason);
         node.revision += 1;
         node.updated_at = Utc::now();
-        let mut verification = VerificationReceiptV1 {
+        let mut verification = VerificationReceipt {
             schema_version: 1,
             verification_id: verification_id.clone(),
             idempotency_key_hash: hash_bytes(args.idempotency_key.as_bytes()),
@@ -331,11 +328,11 @@ fn commit_proof_transition<T: serde::Serialize>(
     commit_prepared_multi_target_transaction(&transaction, failpoint)
 }
 
-pub fn load_handoff(repo_root: &Path, handoff_id: &str) -> Result<HandoffReceiptV1> {
+pub fn load_handoff(repo_root: &Path, handoff_id: &str) -> Result<HandoffReceipt> {
     load_json(&handoff_path(repo_root, handoff_id), "handoff")
 }
 
-pub fn load_verification(repo_root: &Path, verification_id: &str) -> Result<VerificationReceiptV1> {
+pub fn load_verification(repo_root: &Path, verification_id: &str) -> Result<VerificationReceipt> {
     load_json(
         &verification_path(repo_root, verification_id),
         "verification",

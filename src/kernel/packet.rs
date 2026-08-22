@@ -1,6 +1,6 @@
 //! Coherent canonical packet snapshot builder (P2S1-I3 / P2S1-I4).
 //!
-//! This module composes the cross-domain [`WorkPacketV1`] using a two-fence
+//! This module composes the cross-domain [`WorkPacket`] using a two-fence
 //! algorithm: the first fence validates graph/source/authority state and builds
 //! the deterministic query; the fence is released for a cache-only docs index
 //! refresh; the second fence revalidates all preconditions before searching
@@ -49,7 +49,7 @@ use crate::work_packet::{
     PacketReadBudget, PacketRelationBundle, PacketRelationItem, PacketRemainingUncertainty,
     PacketResolution, PacketRevalidationPrecondition, PacketScope, PacketScopeHints, PacketShaping,
     PacketShapingDestination, PacketShapingMapSnapshot, PacketShapingWorkBinding, PacketSource,
-    PacketSurfaceRef, PacketWorkspace, SubjectSnapshot, WorkPacketV1,
+    PacketSurfaceRef, PacketWorkspace, SubjectSnapshot, WorkPacket,
 };
 use crate::{PulseError, PulseResult};
 
@@ -82,7 +82,7 @@ pub(crate) struct PacketPhase1State {
     // -- Reusable extracted data (invariant across fence drop) --
     pub subject: SubjectSnapshot,
     pub snapshot_pre: crate::work_packet::SnapshotReport,
-    pub contract: crate::work_packet::PacketImplementationContractV1,
+    pub contract: crate::work_packet::PacketImplementationContract,
     pub context: crate::work_packet::PacketContext,
     pub shaping: PacketShaping,
     pub graph: PacketGraph,
@@ -119,7 +119,7 @@ impl JsonGraphStore {
     ///
     /// No internal retry: if state changed during docs search the caller must
     /// retry.
-    pub fn work_packet(&self, id: &str) -> PulseResult<WorkPacketV1> {
+    pub fn work_packet(&self, id: &str) -> PulseResult<WorkPacket> {
         // ==================================================================
         // Phase 1 — First fence: validate, load, extract query, snapshot
         // ==================================================================
@@ -157,7 +157,7 @@ impl JsonGraphStore {
     }
 
     /// Load the immutable packet committed atomically with a Core reservation.
-    pub fn work_packet_for_lease(&self, id: &str, lease_id: &str) -> PulseResult<WorkPacketV1> {
+    pub fn work_packet_for_lease(&self, id: &str, lease_id: &str) -> PulseResult<WorkPacket> {
         self.work_packet_for_reservation(id, lease_id)
     }
 
@@ -181,7 +181,7 @@ impl JsonGraphStore {
     ///   - having run `recover_prepared_transactions` already;
     ///   - releasing/reacquiring if this returns
     ///     `work_packet_docs_cache_needs_refresh`.
-    pub(crate) fn work_packet_under_fence(&self, id: &str) -> PulseResult<WorkPacketV1> {
+    pub(crate) fn work_packet_under_fence(&self, id: &str) -> PulseResult<WorkPacket> {
         let evidence = check_repository_identity(&self.repo_root)?;
         let repository_id = evidence.repository_id.clone();
         self.require_existing_workgraph_unlocked()?;
@@ -341,7 +341,7 @@ impl JsonGraphStore {
         suggested_sections: Vec<crate::work_packet::PacketSuggestedSection>,
         docs_cache_fp: Option<String>,
         pre_suggestion_fingerprints: Vec<(u64, String, String, String, u64, u64)>,
-    ) -> PulseResult<WorkPacketV1> {
+    ) -> PulseResult<WorkPacket> {
         self.require_existing_workgraph_unlocked()?;
         validate_packet_operational_paths(&self.repo_root)?;
         recover_prepared_transactions(&self.repo_root)?;
@@ -441,7 +441,7 @@ impl JsonGraphStore {
         let dispatch = build_dispatch(&phase1.readiness_report, &snapshot_done, &phase1.source)?;
 
         // ---- Assemble ----
-        let mut packet = WorkPacketV1 {
+        let mut packet = WorkPacket {
             schema_version: work_packet::PACKET_SCHEMA_VERSION,
             profile: work_packet::PACKET_PROFILE.to_string(),
             code: "reservation_candidate".to_string(),
@@ -588,7 +588,7 @@ fn complete_snapshot(
     snapshot
 }
 
-fn extract_contract_dto(node: &Node) -> PulseResult<work_packet::PacketImplementationContractV1> {
+fn extract_contract_dto(node: &Node) -> PulseResult<work_packet::PacketImplementationContract> {
     let contract = node.implementation.as_ref().ok_or_else(|| {
         PulseError::validation(
             "work_packet_readiness_failed",
@@ -596,7 +596,7 @@ fn extract_contract_dto(node: &Node) -> PulseResult<work_packet::PacketImplement
         )
     })?;
 
-    Ok(work_packet::PacketImplementationContractV1 {
+    Ok(work_packet::PacketImplementationContract {
         mode: pkt_mode_str(contract.mode),
         work_surface: pkt_surface_str(contract.work_surface),
         plan_policy: pkt_plan_policy_str(contract.plan_policy),
@@ -3211,7 +3211,7 @@ mod tests {
                 contract_revision: 1,
                 status: NodeStatus::Ready,
             },
-            profile: "phase1_contract_readiness_v1".to_string(),
+            profile: "contract_readiness".to_string(),
             status: ReadinessStatus::Ready,
             transition_eligible: true,
             dispatch_authorized: false,
@@ -3229,7 +3229,7 @@ mod tests {
         };
         let snapshot = work_packet::SnapshotReport {
             graph_fingerprint: "sha256:graph".to_string(),
-            readiness_profile: "phase1_contract_readiness_v1".to_string(),
+            readiness_profile: "contract_readiness".to_string(),
             readiness_fingerprint: "sha256:ready".to_string(),
             readiness_status: "ready".to_string(),
             authority_policy_revision: 1,
@@ -3296,7 +3296,7 @@ mod tests {
         assert_eq!(lookup("snapshot.graph_fingerprint"), Some("sha256:graph"));
         assert_eq!(
             lookup("snapshot.readiness_profile"),
-            Some("phase1_contract_readiness_v1")
+            Some("contract_readiness")
         );
         assert_eq!(lookup("snapshot.readiness_status"), Some("ready"));
         assert_eq!(lookup("snapshot.authority_policy_revision"), Some("1"));
@@ -3366,7 +3366,7 @@ mod tests {
                 contract_revision: 1,
                 status: NodeStatus::Ready,
             },
-            profile: "phase1_contract_readiness_v1".to_string(),
+            profile: "contract_readiness".to_string(),
             status: ReadinessStatus::Ready,
             transition_eligible: true,
             dispatch_authorized: false,
@@ -3384,7 +3384,7 @@ mod tests {
         };
         let snapshot = work_packet::SnapshotReport {
             graph_fingerprint: "sha256:graph".to_string(),
-            readiness_profile: "phase1_contract_readiness_v1".to_string(),
+            readiness_profile: "contract_readiness".to_string(),
             readiness_fingerprint: "sha256:ready".to_string(),
             readiness_status: "ready".to_string(),
             authority_policy_revision: 1,
@@ -3490,7 +3490,7 @@ mod tests {
                 contract_revision: 1,
                 status: NodeStatus::Ready,
             },
-            profile: "phase1_contract_readiness_v1".to_string(),
+            profile: "contract_readiness".to_string(),
             status: ReadinessStatus::Ready,
             transition_eligible: true,
             dispatch_authorized: false,
@@ -3508,7 +3508,7 @@ mod tests {
         };
         let snapshot = work_packet::SnapshotReport {
             graph_fingerprint: "sha256:graph".to_string(),
-            readiness_profile: "phase1_contract_readiness_v1".to_string(),
+            readiness_profile: "contract_readiness".to_string(),
             readiness_fingerprint: "sha256:ready".to_string(),
             readiness_status: "ready".to_string(),
             authority_policy_revision: 1,

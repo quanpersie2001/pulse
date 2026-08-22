@@ -105,7 +105,7 @@ Slice exit **không** đồng nghĩa:
 - Ticket đã đủ để transition `shaped -> ready`;
 - verification/QA/docs review đủ để close Ticket hoặc Story;
 - dirty worktree snapshot đã có canonical algorithm;
-- Phase 1 hoặc Core v1 hoàn thành.
+- Phase 1 hoặc Core hoàn thành.
 
 ## Non-goals
 
@@ -130,10 +130,10 @@ Slice exit **không** đồng nghĩa:
   evidence/                           # tracked metadata/receipts; artifact policy có thể vary sau
     manifest.json
     schemas/
-      receipt-envelope.v1.schema.json
-      supersession-reconciliation.v1.schema.json
-      shaping-validation.v1.schema.json
-      documentation-validation.v1.schema.json
+      receipt-envelope.schema.json
+      supersession-reconciliation.schema.json
+      shaping-validation.schema.json
+      documentation-validation.schema.json
     receipts/
       rcpt_01J....json
     artifacts/
@@ -171,26 +171,26 @@ Ví dụ:
   "schema_version": 1,
   "receipt_schemas": {
     "1": {
-      "schema": "schemas/receipt-envelope.v1.schema.json",
+      "schema": "schemas/receipt-envelope.schema.json",
       "schema_hash": "sha256:..."
     }
   },
   "receipt_kinds": {
     "supersession_reconciliation": {
       "1": {
-        "schema": "schemas/supersession-reconciliation.v1.schema.json",
+        "schema": "schemas/supersession-reconciliation.schema.json",
         "schema_hash": "sha256:..."
       }
     },
     "shaping_validation": {
       "1": {
-        "schema": "schemas/shaping-validation.v1.schema.json",
+        "schema": "schemas/shaping-validation.schema.json",
         "schema_hash": "sha256:..."
       }
     },
     "documentation_validation": {
       "1": {
-        "schema": "schemas/documentation-validation.v1.schema.json",
+        "schema": "schemas/documentation-validation.schema.json",
         "schema_hash": "sha256:..."
       }
     }
@@ -715,10 +715,10 @@ src/
     mod.rs                 # minimal repository identity + clean commit resolver
   schema/
     evidence/
-      receipt-envelope.v1.schema.json
-      supersession-reconciliation.v1.schema.json
-      shaping-validation.v1.schema.json
-      documentation-validation.v1.schema.json
+      receipt-envelope.schema.json
+      supersession-reconciliation.schema.json
+      shaping-validation.schema.json
+      documentation-validation.schema.json
   graph/
     store.rs               # only thin receipt-reference integration for supersession
   bin/
@@ -951,7 +951,7 @@ reconciliation execution thuộc Phase 2; QA impact/baseline thuộc Phase 3.
 
 1. **Repository fork/re-home semantics:** stable generated `repository_id` được copy cùng repo; explicit fork muốn identity mới cần command/migration nào, và receipt cũ được import/reference ra sao?
 2. **Tracked artifact policy:** artifact nhỏ có track mặc định không, hay mọi artifact gitignored còn receipt metadata tracked? Product direction nói receipt metadata có thể track và artifact theo retention policy; Slice 3 cần chọn fixture/default rõ nhưng không claim universal policy.
-3. **Runtime intent loss:** receipt/event atomicity vẫn phụ thuộc preserved `.pulse/runtime/` trong crash model hiện tại. Có cần tracked pending marker trước Core v1 public claim không?
+3. **Runtime intent loss:** receipt/event atomicity vẫn phụ thuộc preserved `.pulse/runtime/` trong crash model hiện tại. Có cần tracked pending marker trước Core public claim không?
 4. **Authority enforcement surface:** Slice 3 không suy ra authority từ receipt hay `actor.kind`; command phải tiếp tục chỉ khả dụng ở control-plane scope. Trước public multi-actor usage, policy/authority resolver nào sẽ enforce human/Orchestrator grants và audit override?
 5. **Receipt correction:** typo trong immutable receipt tạo receipt mới nhưng relation nào đánh dấu replacement? Slice 3 defer; list consumer phải tránh “latest wins” heuristic.
 6. **Global graph fingerprint:** giữ field observed có hữu ích đủ để justify không? Nếu có, validators phải tuyệt đối không over-invalidate unrelated work.

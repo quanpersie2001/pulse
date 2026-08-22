@@ -20,8 +20,8 @@
 > and
 > [`phase2-slice2-atomic-reservation-workspace-binding.md`](phase2-slice2-atomic-reservation-workspace-binding.md)
 > are implemented and verified through final Slice 2 verifier commit `428f149`.
-> Slice 1 owns the read-only `WorkPacketV1` preview. Slice 2 owns
-> `PreparedAssignmentV1`, exclusive prepared leases, workspace binding and the
+> Slice 1 owns the read-only `WorkPacket` preview. Slice 2 owns
+> `PreparedAssignment`, exclusive prepared leases, workspace binding and the
 > gated `ready -> active` transition. This Slice 3 proposal must not reinterpret
 > those contracts.
 > Sở hữu dự kiến: deterministic bounded run input, one local Codex process
@@ -41,31 +41,31 @@
 Slice 2 ends at an exclusive prepared assignment:
 
 ```text
-WorkPacketV1 preview
+WorkPacket preview
   -> atomic claim
   -> exclusive prepared lease
   -> bound workspace
   -> capability match
   -> Ticket ready -> active
-  -> PreparedAssignmentV1(dispatch_authorized=true, runner_status=not_started)
+  -> PreparedAssignment(dispatch_authorized=true, runner_status=not_started)
 ```
 
 Slice 3 turns that prepared assignment into one observable and recoverable local
 single-Agent run:
 
 ```text
-PreparedAssignmentV1
+PreparedAssignment
   + revalidate assignment/lease/Ticket/workspace under repository fence
-  + build deterministic bounded RunInputV1 control envelope
+  + build deterministic bounded RunInput control envelope
   + render a small versioned Pulse Worker bootstrap prompt
   + durably record run + first attempt as starting
   + launch one Pulse-owned supervisor and one Codex process adapter
   + capture bounded stdout/stderr runtime logs
   + record process identity and run.started
   + observe exit, timeout, cancellation or interruption
-  + preserve workspace and record WorkspaceSnapshotV1
+  + preserve workspace and record WorkspaceSnapshot
   + allow safe workspace-level resume as a new attempt
-  -> RunRecordV1 with reproducible local process lifecycle
+  -> RunRecord with reproducible local process lifecycle
 ```
 
 The Ticket remains `active` throughout this slice. A process exiting with code
@@ -76,7 +76,7 @@ Those are later Phase 2 slices.
 
 The public runner is Codex-first, consistent with D-08, but the kernel/process
 boundary is intentionally narrow. Slice 3 installs one current adapter profile,
-`codex_process_v1`, which invokes a configured Codex executable without a shell.
+`codex_process`, which invokes a configured Codex executable without a shell.
 Fixture-only internal process adapters may be used by tests. This is not the
 Phase 5 independent Codex task/thread transport contract and does not create an
 Agent Registry, mailbox, delivery receipt or native thread identity guarantee.
@@ -90,12 +90,12 @@ a hidden internal command surface.
 
 Implemented Slice 2 provides:
 
-- `pulse::assignment::PreparedAssignmentV1` and strict schemas/fingerprints;
-- one live exclusive `AssignmentLeaseRecordV1` in state `prepared`;
-- one bound `AssignmentWorkspaceRecordV1` in mode `in_place` or
+- `pulse::assignment::PreparedAssignment` and strict schemas/fingerprints;
+- one live exclusive `AssignmentLeaseRecord` in state `prepared`;
+- one bound `AssignmentWorkspaceRecord` in mode `in_place` or
   `isolated_worktree`;
-- one committed `PreparedAssignmentRecordV1` that embeds the exact
-  `WorkPacketV1` preview and final assignment transaction fields;
+- one committed `PreparedAssignmentRecord` that embeds the exact
+  `WorkPacket` preview and final assignment transaction fields;
 - `JsonGraphStore::claim_work`, `release_work`, `list_leases` and
   `recover_leases` orchestration;
 - runtime assignment records under `.pulse/runtime/assignment/`;
@@ -111,10 +111,10 @@ Implemented Slice 2 provides:
 
 Current constraints that Slice 3 must preserve:
 
-- `WorkPacketV1` remains a read-only preview and never becomes a bearer token;
-- `PreparedAssignmentV1.dispatch.dispatch_authorized=true` means only that a
+- `WorkPacket` remains a read-only preview and never becomes a bearer token;
+- `PreparedAssignment.dispatch.dispatch_authorized=true` means only that a
   runner may start;
-- `PreparedAssignmentV1.dispatch.runner_status` remains `not_started` in the
+- `PreparedAssignment.dispatch.runner_status` remains `not_started` in the
   immutable Slice 2 record; Slice 3 does not rewrite old prepared assignment
   bytes to say `running`;
 - assignment lease state remains `prepared`; run liveness is owned by run
@@ -140,7 +140,7 @@ Implement enough single-Agent execution that a caller can:
 3. give Codex a small workflow bootstrap that loads the committed assignment
    through `pulse work packet <ticket-id> --lease <lease-id> --json`, rather than
    copying the Ticket, docs and knowledge corpus into the process prompt;
-4. receive a durable `RunStartReportV1` after the supervisor/process start
+4. receive a durable `RunStartReport` after the supervisor/process start
    handshake succeeds;
 5. inspect run and attempt state without mutating repository state;
 6. capture bounded stdout/stderr logs in gitignored runtime storage;
@@ -182,7 +182,7 @@ Slice 3 does not implement:
 - PTY/interactive terminal streaming;
 - full replayable dirty-worktree archive format;
 - cross-machine/shared-network process supervision;
-- changing `WorkPacketV1`, `PreparedAssignmentV1` or Slice 2 lease schema
+- changing `WorkPacket`, `PreparedAssignment` or Slice 2 lease schema
   semantics in place.
 
 If implementation discovers that native Codex task resume, PTY support, handoff
@@ -200,7 +200,7 @@ land.
 
 ### P2S3-D1 — Run state is separate runtime coordination, not lease or graph state
 
-Slice 3 introduces `RunRecordV1` and `RunAttemptRecordV1` under
+Slice 3 introduces `RunRecord` and `RunAttemptRecord` under
 `.pulse/runtime/run/`. The assignment lease continues to prove exclusive work
 ownership. The run record proves process lifecycle and liveness.
 
@@ -225,7 +225,7 @@ precedence until run recovery resolves it.
 The only documented public adapter kind is:
 
 ```text
-codex_process_v1
+codex_process
 ```
 
 It runs a configured Codex executable with an argv array. Pulse never invokes a
@@ -234,7 +234,7 @@ command substitution. The adapter config may choose executable path and a
 closed set of adapter arguments, but the kernel owns required run-input,
 workspace, logging, timeout and cancellation arguments.
 
-Tests may use an internal `fixture_process_v1` adapter that launches the test
+Tests may use an internal `fixture_process` adapter that launches the test
 binary or a controlled fixture script. It is not accepted by production CLI
 config and is absent from public schemas/help.
 
@@ -254,7 +254,7 @@ The target repository declares the current runner profile in tracked JSON:
 This is an explicit D-68 pre-release contract choice for Slice 3, not evidence
 that `.pulse/config.yaml` stops owning broader operational config in the
 normative roadmap. Slice 3 does not introduce YAML parsing or reinterpret
-`.pulse/config.yaml`; the profile registry is a narrow pre-Core-v1 contract
+`.pulse/config.yaml`; the profile registry is a narrow pre-Core contract
 owned by the runner subsystem and may later be composed into the broader
 operational config system through a separate Decision. It is intentionally
 tracked because changing the executable/argv/env allowlist changes what code a
@@ -269,7 +269,7 @@ Minimum profile:
   "profiles": [
     {
       "profile_id": "codex-local",
-      "adapter": "codex_process_v1",
+      "adapter": "codex_process",
       "executable": "codex",
       "fixed_args": ["exec", "--json"],
       "environment_allow": ["PATH", "HOME", "CODEX_HOME"],
@@ -290,7 +290,7 @@ Rules:
 
 - `schema_version` must be 1;
 - profile IDs are unique and filesystem-safe;
-- adapter must be `codex_process_v1`;
+- adapter must be `codex_process`;
 - executable is one program path/name, not a shell command;
 - executable resolution must be deterministic for the local machine: absolute
   paths are allowed only if they are normalized regular files, bare program
@@ -308,19 +308,19 @@ Rules:
 - non-enrolled or missing profile registry fails without runtime bootstrap;
 - test-only adapters are injected by internal APIs, not by public JSON.
 
-### P2S3-D4 — `RunInputV1` is control state; Codex receives a small workflow bootstrap
+### P2S3-D4 — `RunInput` is control state; Codex receives a small workflow bootstrap
 
-Slice 3 adds `RunInputV1`, built from the committed prepared assignment and
+Slice 3 adds `RunInput`, built from the committed prepared assignment and
 current source/workspace preconditions. The canonical input is the run identity
 source and may embed the exact prepared assignment for recovery. It is not a
 second semantic Ticket contract and its rendered prompt is not a compiled copy
 of the WorkPacket.
 
-`RunInputV1` contains:
+`RunInput` contains:
 
 - run/attempt IDs;
 - exact prepared assignment ID/fingerprint;
-- embedded exact `WorkPacketV1` preview;
+- embedded exact `WorkPacket` preview;
 - lease/workspace binding summary;
 - assignee and actor;
 - source base and workspace path;
@@ -359,8 +359,8 @@ run directory. CLI `show/list` must not print prompt/input bytes. An explicit
 later diagnostic command may expose bounded redacted input only after a separate
 policy review.
 
-`RunInputV1` does not mutate the nested `WorkPacketV1` or
-`PreparedAssignmentV1`. It is a control wrapper around committed assignment
+`RunInput` does not mutate the nested `WorkPacket` or
+`PreparedAssignment`. It is a control wrapper around committed assignment
 identity, not another writable source of Ticket meaning.
 
 ### P2S3-D5 — Public CLI is an explicit `run` namespace
@@ -463,7 +463,7 @@ of optional fields:
   "supervisor_nonce_hash": "sha256:...",
   "started_at": "2026-07-29T10:00:00Z",
   "platform": {
-    "kind": "linux_v1",
+    "kind": "linux",
     "process_group_id": 41002,
     "boot_id": "...",
     "start_ticks": 982341
@@ -599,7 +599,7 @@ A. under repository fence:
    recover storage/run state
    authorize + validate assignment/lease/Ticket/workspace/profile
    block duplicate live/unresolved run
-   build RunInputV1
+   build RunInput
    commit run + attempt(state=starting) + run.starting event
 
 B. outside repository fence:
@@ -671,7 +671,7 @@ Resume eligibility:
 - prepared lease, prepared assignment, Ticket active revision, workspace ID and
   repository identity still match;
 - workspace is not in merge/rebase/cherry-pick/revert/bisect operation;
-- current `WorkspaceSnapshotV1` equals the previous attempt's recorded final or
+- current `WorkspaceSnapshot` equals the previous attempt's recorded final or
   interrupted snapshot; for a clean `failed_to_start` with no child identity and
   no final/interrupted snapshot, current preflight snapshot must equal the
   original `workspace_before` snapshot and original start preconditions;
@@ -680,7 +680,7 @@ Resume eligibility:
   current profile under policy;
 - actor has `work.run.resume`.
 
-Resume builds a new `RunInputV1` containing bounded previous-attempt context:
+Resume builds a new `RunInput` containing bounded previous-attempt context:
 exit/interruption class, workspace snapshot identity, bounded redacted log tail
 and explicit instruction to inspect existing partial work. It never embeds full
 raw logs by default.
@@ -690,7 +690,7 @@ native session, that is a new contract/proposal.
 
 ### P2S3-D13 — Workspace snapshot is deterministic identity, not a full archive
 
-Slice 3 introduces `WorkspaceSnapshotV1` for drift detection. It is captured for
+Slice 3 introduces `WorkspaceSnapshot` for drift detection. It is captured for
 the bound workspace path, not implicitly for the repository root, and the record
 must state whether the workspace is `in_place` or `isolated_worktree`. In-place
 runs are allowed only after excluding Pulse-owned runtime/coordination paths
@@ -777,7 +777,7 @@ Rules:
 - after the limit, Pulse keeps the first bounded prefix and rolling bounded tail,
   records truncated byte count and continues draining the child to avoid
   deadlock;
-- `RunLogRefV1` contains path, byte counts, content hash, truncation and
+- `RunLogRef` contains path, byte counts, content hash, truncation and
   redaction status;
 - default raw log `redaction_status` is `not_applied_runtime_private`;
 - human/JSON CLI output returns only a bounded tail hash/count by default; a
@@ -834,7 +834,7 @@ It does not:
 - delete partial work;
 - change acceptance/docs impact/QA posture.
 
-A later handoff slice consumes `RunRecordV1`, attempt result, workspace snapshot
+A later handoff slice consumes `RunRecord`, attempt result, workspace snapshot
 and logs to create a typed worker handoff proposal.
 
 ### P2S3-D16 — Authority actions are explicit and default-deny
@@ -1046,7 +1046,7 @@ attempt: attempt_01J...
 ticket: TK-031 (active revision 9)
 lease: lease_01J...
 workspace: wt_TK-031_01J... (isolated worktree)
-profile: codex-local (codex_process_v1)
+profile: codex-local (codex_process)
 supervisor: running
 process: running
 logs: .pulse/runtime/run/logs/run_01J.../
@@ -1202,7 +1202,7 @@ Rules:
 
 ---
 
-## RunRecordV1 contract
+## RunRecord contract
 
 ```json
 {
@@ -1231,7 +1231,7 @@ Rules:
     "base_commit": "012345..."
   },
   "runner": {
-    "adapter": "codex_process_v1",
+    "adapter": "codex_process",
     "profile_id": "codex-local",
     "profile_fingerprint": "sha256:...",
     "resolved_executable_identity": "best_effort:...",
@@ -1258,7 +1258,7 @@ identity. Heartbeat currentness is runtime observation, not run identity.
 
 ---
 
-## RunAttemptRecordV1 contract
+## RunAttemptRecord contract
 
 ```json
 {
@@ -1309,12 +1309,12 @@ schemas, canonical JSON tests and no floats.
 
 ---
 
-## RunInputV1 contract
+## RunInput contract
 
 ```json
 {
   "schema_version": 1,
-  "profile": "phase2_single_agent_run_input_v1",
+  "profile": "single_agent_run_input",
   "run_id": "run_01J...",
   "attempt_id": "attempt_01J...",
   "attempt_number": 1,
@@ -1323,11 +1323,11 @@ schemas, canonical JSON tests and no floats.
   "workspace": {},
   "runner_profile": {
     "profile_id": "codex-local",
-    "adapter": "codex_process_v1",
+    "adapter": "codex_process",
     "profile_fingerprint": "sha256:..."
   },
   "bootstrap": {
-    "protocol": "pulse_worker_v1",
+    "protocol": "pulse_worker",
     "prompt_template_version": 1,
     "ticket_id": "TK-031",
     "lease_id": "lease_01J...",
@@ -1389,10 +1389,10 @@ duplicate of the embedded Ticket contract.
 - load workspace and require bound, matching lease/repository/base/path;
 - block any live/unresolved run for lease/workspace/Ticket;
 - revalidate workspace source identity and expected pre-start cleanliness;
-- build `WorkspaceSnapshotV1` before state;
-- build `RunInputV1` and bounded versioned Worker workflow bootstrap;
+- build `WorkspaceSnapshot` before state;
+- build `RunInput` and bounded versioned Worker workflow bootstrap;
 - create run/attempt IDs, control nonce/hash and runtime paths;
-- reject if canonical `RunInputV1` or rendered Markdown exceeds configured
+- reject if canonical `RunInput` or rendered Markdown exceeds configured
   bounded input budgets; do not silently truncate instructions or embedded
   packet bytes;
 - commit run + attempt starting records and `run.starting` event in one shared
@@ -1425,7 +1425,7 @@ duplicate of the embedded Ticket contract.
   includes `terminal_observation_pending=true`; finalization is performed by the
   next observer/recover path so the start command keeps one semantic state commit
   per transaction;
-- return committed `RunStartReportV1`.
+- return committed `RunStartReport`.
 
 ### Phase E — observation
 
@@ -1457,7 +1457,7 @@ semantic event or canonical run record files.
 6. validate assignment still owns active Ticket/workspace;
 7. capture current workspace snapshot;
 8. require exact identity match with recorded latest snapshot;
-9. build bounded resume `RunInputV1`;
+9. build bounded resume `RunInput`;
 10. create next attempt with incremented number;
 11. commit run state `starting`, new attempt and `run.resume_starting` event;
 12. use the same supervisor start handshake;
@@ -1695,12 +1695,12 @@ Recommended store API:
 
 ```rust
 impl JsonGraphStore {
-    pub fn start_run(&self, request: StartRunRequest) -> PulseResult<RunStartReportV1>;
-    pub fn show_run(&self, id: &str) -> PulseResult<RunViewV1>;
-    pub fn list_runs(&self, filter: RunFilter) -> PulseResult<RunListReportV1>;
-    pub fn cancel_run(&self, request: CancelRunRequest) -> PulseResult<RunCancelReportV1>;
-    pub fn resume_run(&self, request: ResumeRunRequest) -> PulseResult<RunStartReportV1>;
-    pub fn recover_runs(&self, actor: ActorRef) -> PulseResult<RunRecoveryReportV1>;
+    pub fn start_run(&self, request: StartRunRequest) -> PulseResult<RunStartReport>;
+    pub fn show_run(&self, id: &str) -> PulseResult<RunView>;
+    pub fn list_runs(&self, filter: RunFilter) -> PulseResult<RunListReport>;
+    pub fn cancel_run(&self, request: CancelRunRequest) -> PulseResult<RunCancelReport>;
+    pub fn resume_run(&self, request: ResumeRunRequest) -> PulseResult<RunStartReport>;
+    pub fn recover_runs(&self, actor: ActorRef) -> PulseResult<RunRecoveryReport>;
 }
 ```
 
@@ -1943,8 +1943,8 @@ feasible:
 ### P2S3-I2 — Add runner profile registry
 
 - Implement preserve-only profile registry load/validate/fingerprint.
-- Add production `codex_process_v1` and internal fixture adapter selection.
-- Prove public production profile JSON/help rejects `fixture_process_v1` and any
+- Add production `codex_process` and internal fixture adapter selection.
+- Prove public production profile JSON/help rejects `fixture_process` and any
   other test-only adapter; fixture adapters are injectable only through
   crate-private test APIs.
 - Add path/env/timeout/log bounds and no-shell tests.
@@ -1978,7 +1978,7 @@ feasible:
 ### P2S3-I6 — Implement run start starting transaction
 
 - Validate assignment/Ticket/workspace/profile/authority.
-- Build bounded `RunInputV1` and versioned workflow bootstrap without copying
+- Build bounded `RunInput` and versioned workflow bootstrap without copying
   Ticket/docs/knowledge content into the prompt.
 - Resolve `pulse work packet --lease` against the committed prepared assignment.
 - Commit starting run/attempt/input/snapshot + event.
@@ -2054,7 +2054,7 @@ It does not complete:
 - developer verification/review/QA receipts;
 - proof-driven close gate;
 - native independent Codex task transport;
-- Orchestration v2 scenarios 66–75 as a whole.
+- Orchestration scenarios 66–75 as a whole.
 
 Because this proposal remains draft, the roadmap's current Phase 2 status should
 continue to say Slice 3 is the next unimplemented runner/cancel/resume slice
@@ -2065,7 +2065,7 @@ until implementation and verifier commits exist.
 ## Definition of Done
 
 - [ ] Run/attempt/input/snapshot/profile/report DTOs and strict schemas exist.
-- [ ] `WorkPacketV1` and `PreparedAssignmentV1` bytes/semantics remain unchanged.
+- [ ] `WorkPacket` and `PreparedAssignment` bytes/semantics remain unchanged.
 - [ ] A live prepared assignment can start exactly one Codex process adapter.
 - [ ] Codex receives a bounded workflow bootstrap and loads the exact committed
       packet through `pulse work packet --lease`; the prompt does not duplicate
@@ -2138,7 +2138,7 @@ Expected next proposal after Slice 3:
 Phase 2 — Slice 4: Typed Worker Handoff + Developer Verification Gate
 ```
 
-That slice should consume `RunRecordV1`, final workspace snapshot, exit result
+That slice should consume `RunRecord`, final workspace snapshot, exit result
 and log references, produce a source-bound handoff/verification candidate, and
 open the gated `active -> verifying` path without yet conflating developer
 verification with Story QA qualification.

@@ -15,9 +15,9 @@
 - Phát hành một executable `pulse`. Core commands chạy offline; runtime
   commands kết nối daemon qua local socket/named pipe. Daemon có thể được
   desktop hoặc OS service manager quản lý.
-- Harness layer gồm skills `.mjs`, hooks và target-repository scripts giữ
-  **JavaScript/ESM** khi phù hợp với agent ecosystem. Nó gọi stable CLI/API,
-  không giữ daemon process state.
+- Target-repository hooks và scripts có thể dùng **JavaScript/ESM** khi phù
+  hợp với repository ecosystem. Chúng gọi stable CLI/API và không giữ daemon
+  process state.
 - CLI, HTTP/WebSocket và MCP là adapters. Application/domain semantics nằm trong
   Core hoặc Daemon services, không nằm trong command/session handlers.
 - JSON Schema hoặc tương đương cho work items/events/receipts.
@@ -63,7 +63,7 @@ Mỗi phần salvage phải đi qua contract/test mới; không kéo cả depend
 - Assignment saga giữa Core reservation và Daemon runtime binding.
 - Session timeline + authoritative cursor catch-up.
 - CLI surface nhỏ và nhất quán.
-- Skill/script/tool/hook contracts.
+- Guidance/script/tool/hook contracts.
 - Doctor output thành actionable findings.
 - Provider-native Codex adapter và ACP boundary.
 
@@ -101,7 +101,7 @@ thành.
 - Top-level `works/` boundary, document registry schema và durable docs source hierarchy.
 - Node/edge create/show/list/edit với revision CAS, deterministic edge IDs và atomic rename.
 - Lifecycle, inverse projections, dependency cycles, readiness và supersession.
-- Final node schema baseline v1 fields: separate `contract_revision`, typed Ticket role `implementation|decision_work`, `risk`/`materialization` cho phép explicit `unassessed` domain value khi classification chưa đủ chắc, implementation/decision-work contracts và minimal QA-impact posture.
+- Final node schema baseline fields: separate `contract_revision`, typed Ticket role `implementation|decision_work`, `risk`/`materialization` cho phép explicit `unassessed` domain value khi classification chưa đủ chắc, implementation/decision-work contracts và minimal QA-impact posture.
 - `graph validate`, `graph neighborhood`, `graph export` và disposable fingerprinted cache.
 - Immutable semantic event files.
 - Receipt store/validator tối thiểu, gồm source/content-bound documentation receipt và shaping receipt schema/reference contract.
@@ -129,7 +129,7 @@ is installed and independently evidenced; no full-suite-green result is claimed
 here. The legacy hidden supervisor is historical prototype scope and is already
 removed from the current runtime path.
 
-- Slice 1 `WorkPacketV1` preview đã implement/verify.
+- Slice 1 `WorkPacket` preview đã implement/verify.
 - Core reservation giữ exact Ticket revision/packet và chỉ activate sau typed
   daemon Session acknowledgement.
 - Rust daemon đã own Project/Workspace/Session/Provider/ProcessOwner/timeline,
@@ -195,8 +195,8 @@ ownership đã bị loại.
 
 ### Phase 3 - Harness capability packs
 
-- Core skills: orient, shape, plan, implement, debug, review, QA.
-- Hoàn thiện `pulse-shape` + reusable decision-tree grilling/wayfinding primitive trên contract Phase 1/2: repo-grounded questions, one-question-at-a-time flow, recommended answers, destination, frontier, fog và risk-adaptive materialization.
+- Core-supported Agent responsibilities: orient, shape, plan, implement, debug, review, QA.
+- Hoàn thiện typed shaping flow + reusable decision-tree grilling/wayfinding primitive trên contract Phase 1/2: repo-grounded questions, one-question-at-a-time flow, recommended answers, destination, frontier, fog và risk-adaptive materialization.
 - Gap routing cho research, human grilling, Decision, prototype và enabling work; persisted map chỉ dùng khi multi-session/risk policy yêu cầu.
 - Reviewer/eval cho shaping receipt để ready gate kiểm tra source revisions, branch summary, destination, bounded fog, authority và remaining uncertainty mà kernel không giả làm semantic planner.
 - Script/tool/hook manifests.
@@ -207,7 +207,7 @@ ownership đã bị loại.
 - QA environment lifecycle: start, healthcheck, fixture seed/reset, cleanup và source-to-build/deployment binding.
 - Executor capability manifests/adapters cho Playwright, browser agent, Chrome DevTools observation, structured HTTP/API, shell/PTY CLI và structured manual fallback; data/platform adapters có thể thêm theo fixture needs.
 - QA receipt validation cho case/baseline revision, environment/fixture identity, required observations/artifacts, actor independence, retry/flaky và waiver policy.
-- QA case generation/review skill ground trên acceptance, Decisions, risks, prior defects, supported matrix và child Ticket impacts.
+- QA case generation/review procedure ground trên acceptance, Decisions, risks, prior defects, supported matrix và child Ticket impacts.
 - QA workflow bootstrap dùng assignment/source/baseline identity và Pulse CLI retrieval, không inline full baseline/docs vào prompt.
 
 **Exit:** target repo mới bootstrap được; ít nhất một web scenario, một API hoặc CLI non-browser scenario và một documentation validation tạo receipt hợp lệ; targeted Ticket checkpoint và full Story qualification được phân biệt bằng gate/receipt.
@@ -215,14 +215,14 @@ ownership đã bị loại.
 ### Phase 4 - Knowledge compounding và ratchet loop
 
 - Continuous learning-candidate capture từ Worker/reviewer/QA/doctor/failure handoffs.
-- `pulse-compound` synthesis: gather, deduplicate, classify, validate provenance/applicability, reconcile contradiction và disposition candidates.
+- Compound synthesis: gather, deduplicate, classify, validate provenance/applicability, reconcile contradiction và disposition candidates.
 - Knowledge lifecycle/mutations, typed relations, promotion history và freshness/retirement.
 - `pulse knowledge search|get|applicable|index|status` với applicability filter trước BM25 ranking, explainable required/recommended/suggested/excluded buckets.
 - Role/moment-specific bounded knowledge injection vào shaping/planning/execution/debug/verification/review packets.
 - Usage feedback, reinforcement/noise signals và historical known-failure retrieval evals.
 - Failure classification và harness work items trong cùng graph.
 - Eval runner và fixture/replay suites.
-- Promotion workflow từ finding/learning sang docs/Decision/skill/check/hook/policy/eval.
+- Promotion workflow từ finding/learning sang docs/Decision/guidance/check/hook/policy/eval.
 - Documentation drift/promotion/retrieval findings và metrics report.
 - Optional semantic adapter spike chỉ khi lexical + typed applicability eval cho thấy recall gap đáng kể.
 
@@ -285,7 +285,7 @@ con số ở đây không biến toàn bộ danh sách thành Core DoD.
 30. Work packet trả required + suggested section refs cùng read budget, không inline toàn bộ top hits.
 31. Incremental reindex chỉ cập nhật changed docs; corrupt cache bị discard/rebuild.
 32. Retrieval eval cover exact identifier, natural-language paraphrase, Vietnamese/tokenization, no-result và context budget.
-33. Feature request mơ hồ được `pulse-shape` ground bằng owning work, Decisions, durable docs và code evidence trước khi hỏi human; các câu hỏi còn lại đi từng câu theo dependency order và có recommended answer khi có strong default.
+33. Feature request mơ hồ được shaping actor ground bằng owning work, Decisions, durable docs và code evidence trước khi hỏi human; các câu hỏi còn lại đi từng câu theo dependency order và có recommended answer khi có strong default.
 34. Ticket không `ready` khi một critical branch chưa disposition; `delegated` vượt implementation freedom hoặc `deferred` thiếu owner/target, reason, trigger/linked work đều bị reject.
 35. R0 correction rõ, low-risk qua concise contract + ambiguity self-check mà không bị ép tạo `work-brief.md`, ADR, plan hoặc một interview với human.
 36. Worker phát hiện ambiguity có thể đổi objective/acceptance/invariant thì dừng với `decision_request` hoặc re-shape proposal; reversible choice trong implementation freedom không làm gián đoạn execution.
@@ -367,7 +367,7 @@ Giảm thiểu: chỉ register durable/routeable docs, content vẫn là normal 
 
 ### Semantic search kéo model stack vào Core quá sớm
 
-Giảm thiểu: Core v1 chỉ lexical BM25+ pure-Rust (tantivy); embeddings, QMD adapter, RRF hybrid và reranker chỉ thêm khi retrieval eval chứng minh lexical recall không đủ.
+Giảm thiểu: Core chỉ lexical BM25+ pure-Rust (tantivy); embeddings, QMD adapter, RRF hybrid và reranker chỉ thêm khi retrieval eval chứng minh lexical recall không đủ.
 
 ### Orchestrator có quyền quá lớn
 

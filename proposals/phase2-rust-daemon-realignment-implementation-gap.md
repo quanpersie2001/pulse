@@ -108,7 +108,7 @@ boundary:
 | run/process integration tests | failure scenarios and platform fixtures | daemon protocol/application/native suites |
 
 Salvage means move or re-express behavior with new contracts. It does not mean
-wrap existing `RunRecordV1` and expose it indefinitely.
+wrap existing `RunRecord` and expose it indefinitely.
 
 ### 3.3 Replace and delete
 
@@ -117,7 +117,7 @@ replacement is proven:
 
 - hidden `pulse` supervisor subcommand as the lifecycle authority;
 - one supervisor process per attempt;
-- public `RunRecordV1`/`RunAttemptV1` as the primary Agent-session model;
+- public `RunRecord`/`RunAttempt` as the primary Agent-session model;
 - runner-profile registry as the provider abstraction;
 - Core-owned runtime run store and run recovery service;
 - assignment workspace record as the canonical Workspace identity;

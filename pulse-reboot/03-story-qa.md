@@ -299,7 +299,7 @@ Case không được khóa vào implementation detail không cần thiết. Beha
 
 ## Sinh và review test case
 
-`pulse-qa` không được invent cases từ prompt trống. QA planner phải ground trên:
+QA planner không được invent cases từ prompt trống. Nó phải ground trên:
 
 1. Story outcome và acceptance criteria.
 2. Product/domain/API/CLI contracts applicable.

@@ -39,7 +39,7 @@ use crate::graph::readiness::{ReadinessReport, ReadinessStatus, READINESS_PROFIL
 use crate::id::WorkKind;
 use crate::PulseResult;
 
-/// Current frontier projection schema baseline (pre-release current v1).
+/// Current frontier projection schema baseline.
 pub const FRONTIER_SCHEMA_VERSION: u32 = 1;
 
 /// Frontier claim state before the Phase 2 lease resolver exists. This is an

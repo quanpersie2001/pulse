@@ -10,9 +10,9 @@ Pulse combines:
 
 1. a local work graph for Epics, Stories, Tickets, Decisions and their relations;
 2. durable documentation knowledge with ownership, applicability, authority and validation;
-3. repository harness capabilities: scripts, tools, hooks, skills, policies and evals;
+3. repository harness capabilities: scripts, tools, hooks, policies and evals;
 4. evidence loops for verification, review, QA and receipts;
-5. knowledge compounding loops that promote proven learnings into docs, decisions, checks, skills or evals;
+5. knowledge compounding loops that promote proven learnings into docs, decisions, checks, policies or evals;
 6. optional peer-agent orchestration once single-agent reliability is proven.
 
 Pulse is **not** Jira-lite, a fixed phase workflow, a cloud-first service, or a general-purpose agent framework.

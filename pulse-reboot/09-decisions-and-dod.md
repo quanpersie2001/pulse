@@ -15,7 +15,7 @@
 | D-04 | Hierarchy, dependency, priority và supersession là các khái niệm riêng | Accept |
 | D-05 | Artifact materialize theo risk `R0..R3`, không theo phase cố định | Accept |
 | D-06 | Canonical work, runtime coordination và immutable evidence tách lớp | Accept |
-| D-07 | Deterministic mechanism thuộc kernel; semantic judgment thuộc Agent skills | Accept |
+| D-07 | Deterministic mechanism thuộc kernel; semantic judgment thuộc Agent/reviewer theo typed contract và evidence | Accept |
 | D-08 | Codex-native provider trước; Claude-native và ACP generic thêm sau contract/use thật, không ép lowest-common-denominator | Accept |
 | D-09 | Core, Runtime và Orchestration là ba milestone: Core repository semantics trước, Daemon single-Agent reliability tiếp theo, multi-Agent sau cùng | Accept |
 | D-10 | Multi-agent dùng independent daemon-managed sessions làm orchestration units; runtime parentage không tạo business authority | Accept |
@@ -30,7 +30,7 @@
 | D-19 | Full graph JSON là derived CLI projection/cache, không phải writable tracked truth | Accept |
 | D-20 | Agent/Orchestrator đọc và mutate graph qua CLI/API, không tự search/parse raw graph files | Accept |
 | D-21 | Core canonical correctness không phụ thuộc SQLite; Daemon runtime persistence là implementation decision riêng và không được trở thành work truth | Accept |
-| D-22 | Pulse Core và Pulse Daemon cùng bằng Rust stable trong một executable `pulse`; skills/hooks/repository scripts có thể dùng JavaScript/ESM qua stable boundary | Accept |
+| D-22 | Pulse Core và Pulse Daemon cùng bằng Rust stable trong một executable `pulse`; hooks/repository scripts có thể dùng JavaScript/ESM qua stable boundary | Accept |
 | D-23 | Durable repository documentation là first-class Pulse capability | Accept |
 | D-24 | `docs/`/`AGENTS.md`/`PULSE.md` giữ durable knowledge; work prose, evidence và runtime không phải current docs truth | Accept |
 | D-25 | Human-facing work content nằm ở top-level `works/`; machine graph metadata nằm trong `.pulse/workgraph/` | Accept |
@@ -44,14 +44,14 @@
 | D-33 | Documentation contradiction được resolve qua owner/Decision, không bằng heuristic kernel | Accept |
 | D-34 | `AGENTS.md` là navigation map, không phải monolithic knowledge base | Accept |
 | D-35 | Docs retrieval dùng progressive disclosure: tree/search trước, bounded section get sau | Accept |
-| D-36 | Core v1 dùng generated `_index.md` + section-level lexical BM25+ cache, không dùng vector/model stack | Accept |
+| D-36 | Core dùng generated `_index.md` + section-level lexical BM25+ cache, không dùng vector/model stack | Accept |
 | D-37 | Docs search cache và `_index.md` là disposable/generated projections, không phải writable truth | Accept |
 | D-38 | Retrieval unit mặc định là Markdown section với stable document identity, line range và content hash | Accept |
 | D-39 | `pulse docs search` trả metadata/snippet; `pulse docs get` mới đọc bounded canonical content; full file là explicit | Accept |
 | D-40 | Tantivy (BM25+, field boosting, pure-Rust) làm search engine direction và comrak làm Markdown section parser direction, đằng sau interface; MiniSearch (JS) chỉ còn là reference lesson, không phải contract. Public contract vẫn là section-level lexical ranking, deterministic rebuild, no-native-model dependency | Accept |
 | D-41 | Semantic/hybrid retrieval là optional adapter chỉ thêm khi lexical eval chứng minh recall gap | Accept |
 | D-42 | Hybrid retrieval dùng rank fusion như RRF, không cộng raw BM25 và vector scores trực tiếp | Accept |
-| D-43 | Critical ambiguity phải được disposition trước execution; `pulse-shape` dùng repo-grounded, one-question-at-a-time decision-tree grilling theo risk, không tạo fixed brainstorm phase hoặc bắt buộc một artifact riêng cho mọi Ticket | Accept |
+| D-43 | Critical ambiguity phải được disposition trước execution; shaping actor dùng repo-grounded, one-question-at-a-time decision-tree grilling theo risk, không tạo fixed brainstorm phase hoặc bắt buộc một artifact riêng cho mọi Ticket | Accept |
 | D-44 | Substantial multi-session shaping dùng approved destination, derived decision frontier và bounded `not_yet_specified`; chỉ materialize precise questions, reconcile graph/readiness sau mỗi resolution, và giữ local work graph làm canonical thay vì tracker map | Accept |
 | D-45 | Story là default owner của persistent behavioral QA baseline; child Ticket khai báo impact và reference Story cases thay vì duplicate expected behavior | Accept |
 | D-46 | QA có hai execution scopes trên cùng baseline: impact-driven Ticket checkpoint và full Story qualification bắt buộc trước Story close | Accept |
@@ -67,7 +67,7 @@
 | D-56 | `pulse knowledge search/get/applicable` là typed CLI; work packet inject bounded role/moment-specific summaries, không whole memory corpus | Accept |
 | D-57 | Candidate/disputed/superseded/retired learning không auto-inject; required routing chỉ từ explicit reference hoặc validated/enforced ratchet/policy | Accept |
 | D-58 | Accepted Decision/current authoritative docs không bị learning override; contradiction tạo finding và reconciliation | Accept |
-| D-59 | Compound search/deduplicate prior learnings, giữ immutable evidence links, support promotion tới docs/Decision/skill/check/hook/policy/eval | Accept |
+| D-59 | Compound search/deduplicate prior learnings, giữ immutable evidence links, support promotion tới docs/Decision/guidance/check/hook/policy/eval | Accept |
 | D-60 | Usage/retrieval feedback tham gia reinforce/revise/retire nhưng popularity không tự tạo authority | Accept |
 | D-61 | Docs và knowledge có thể reuse lexical engine/cache abstractions nhưng giữ typed corpora, filters, authority và result contracts riêng | Accept |
 | D-62 | Node dùng `contract_revision` riêng cho semantic shaping/readiness freshness; lifecycle, timestamp và shaping-pointer-only mutation chỉ tăng normal CAS `revision` | Accept |
@@ -76,7 +76,7 @@
 | D-65 | Phase 1 ready có minimal QA gate: `unknown` block; QA `none` cần `qa.none.approve`; `covered_by_story_close` cần `qa.defer_to_story_close`; `required` chờ Phase 3 baseline/case resolver | Accept |
 | D-66 | Readiness/frontiers là versioned derived projections với narrow relevant-input fingerprint; stale ready bị loại khỏi execution frontier, claim trước lease resolver là `not_evaluated` | Accept |
 | D-67 | Hard-to-reverse Decision reference cần immutable acceptance proof bind contract revision/content và actor có `decision.accept`; existence hoặc shaping mention không đủ | Accept |
-| D-68 | Trước initial Core v1, mỗi persisted/public contract family có một current baseline; Phase/Slice không phải version và internal development state không tạo predecessor/migration support | Accept |
+| D-68 | Trước initial Core, mỗi persisted/public contract family có một current baseline; Phase/Slice không phải version và internal development state không tạo predecessor/migration support | Accept |
 | D-69 | Session bootstrap là versioned workflow bootstrap với assignment identity/authority; exact Ticket contract đến từ lease-bound Core query, không compile full context vào prompt | Accept |
 | D-70 | Long-lived Rust Daemon, không phải hidden per-run supervisor, sở hữu Project/Workspace/Session/Provider/process/timeline runtime | Accept |
 | D-71 | Linux, macOS và Windows là Tier-1 daemon process-owner targets; platform adapters prove process identity/tree cancellation và fail closed | Accept |
@@ -86,6 +86,7 @@
 | D-75 | Tool catalog thuộc Daemon application layer; native provider tools, MCP, CLI và HTTP/WebSocket là adapters | Accept |
 | D-76 | Core reservation và Daemon provisioning tạo explicit idempotent saga có compensation/recovery; không có distributed transaction giả | Accept |
 | D-77 | Orchestrator dispatch một independent Worker per assignment; multiple Workers chỉ song song khi dependency/lease/workspace/write-scope cho phép, Reviewer/QA là peer sessions trên frozen snapshot với Core gate | Accept |
+| D-78 | Rust `pulse` executable là public product surface duy nhất; Pulse không package conversational router hoặc standalone agent skills | Accept |
 
 Khi một quyết định đổi, tạo Decision work item, cập nhật file chủ đề sở hữu và
 root summary. Không sửa riêng bảng này. D-68 được ghi trong
@@ -94,11 +95,13 @@ D-69 trong [Decision 0004](../docs/decisions/0004-cli-mediated-agent-context.md)
 D-70 tới D-76 trong
 [Decision 0005](../docs/decisions/0005-rust-daemon-runtime-control-plane.md);
 D-77 trong
-[Decision 0006](../docs/decisions/0006-peer-agent-assurance-topology.md).
+[Decision 0006](../docs/decisions/0006-peer-agent-assurance-topology.md);
+D-78 trong
+[Decision 0007](../docs/decisions/0007-remove-legacy-agent-skill-surface.md).
 
-## Core v1 Definition of Done
+## Core Definition of Done
 
-Core v1 hoàn thành khi:
+Core hoàn thành khi:
 
 - [ ] `pulse init` bootstrap fixture repository mà không phá file user.
 - [x] Work graph lưu/đọc/diff Epic, Story, Ticket, Decision bằng independent JSON node/edge files. Verified by Phase 1 Slices 1–2 and active graph/store integration tests.
@@ -108,13 +111,13 @@ Core v1 hoàn thành khi:
 - [x] Markdown heading parser tạo section refs có document ID, heading path, line range và content hash. Verified by Slice 5 section extraction tests.
 - [x] Pure-Rust lexical BM25+ index (tantivy) search được section-level, offline và không tải model. Verified by Slice 5 search/get/tree and retrieval-eval tests.
 - [x] Lifecycle, deterministic edges, inverse projection, revision CAS, atomic recovery và supersession có unit/integration tests. Verified by Phase 1 graph/storage/process suites.
-- [x] `graph export` rebuild deterministic sau khi xóa cache; SQLite không cần cho correctness/performance target v1. Verified by workgraph projection/cache tests.
+- [x] `graph export` rebuild deterministic sau khi xóa cache; SQLite không cần cho correctness/performance target ban đầu. Verified by workgraph projection/cache tests.
 - [ ] Agent nhận lease-bound committed `work packet` đầy đủ, gồm required/suggested section refs và read budget; bootstrap prompt chỉ mô tả retrieval/workflow/authority và không copy Ticket/docs/QA/knowledge content.
 - [x] Node schema có normal CAS `revision` và semantic `contract_revision`; create/edit/draft flows ghi assessed values hoặc explicit `unassessed` domain value cho risk/materialization khi classification chưa đủ chắc, không fabricate defaults và không derive values từ older on-disk shapes. Verified by Slice 7 commit `677c593`.
 - [x] Ticket role `implementation|decision_work` có typed contract riêng; precise decision work không bị recursive readiness loop. Verified by Slice 7 commit `677c593`.
 - [x] Implementation Ticket ready gate kiểm tra objective/current/target, work surface/anchors, required changes, invariants, acceptance, mode, plan policy, verification/evidence/handoff contract. Verified by Slice 7 commit `677c593`.
 - [x] Ready gate từ chối critical ambiguity chưa disposition; `delegated` phải nằm trong implementation freedom, `deferred` phải có owner/target + trigger hoặc linked work, và semantic shaping receipt phải source/revision-bound khi policy yêu cầu. Verified by Slice 7 commit `677c593`.
-- [ ] `pulse-shape` đọc repo/docs trước khi hỏi, đi decision branches theo dependency order, hỏi human từng câu kèm recommendation khi có strong default, và materialize kết quả vào đúng Story/Ticket/Decision/docs owner theo risk.
+- [ ] Shaping actor đọc repo/docs trước khi hỏi, đi decision branches theo dependency order, hỏi human từng câu kèm recommendation khi có strong default, và materialize kết quả vào đúng Story/Ticket/Decision/docs owner theo risk.
 - [ ] R0 clear/low-risk work qua short ambiguity self-check mà không bị ép tạo full brainstorm artifact hoặc hỏi human không cần thiết. **Foundation complete:** concise shaping mode/receipt contract đã có; Agent capability path vẫn thuộc Phase 2/3.
 - [ ] R2/R3 multi-session shaping hỗ trợ approved destination/exit condition, canonical resolution pointers, derived decision frontier, bounded `not_yet_specified` và out-of-scope boundary. **Foundation complete:** typed destination/map/branch/fog/frontier contracts đã có; conversational multi-session workflow vẫn chưa implement.
 - [ ] Precise fact/intent/trade-off/fidelity/prerequisite gaps được route đúng sang research, grilling, Decision, prototype hoặc enabling work; fog chưa precise không bị materialize sớm thành speculative Tickets. **Foundation complete:** typed gap/branch/fog vocabulary đã có; semantic routing capability vẫn chưa implement.
@@ -199,9 +202,9 @@ Runtime hoàn thành khi:
   workspace/session/process runtime path đã bị xóa.
 - [ ] Runtime acceptance scenarios trong `04-runtime-harness.md` pass.
 
-## Orchestration v2 Definition of Done
+## Orchestration Definition of Done
 
-Orchestration v2 hoàn thành khi:
+Orchestration hoàn thành khi:
 
 - [ ] Orchestration Agent, Worker, Reviewer và QA là independent user-visible tasks/threads.
 - [ ] Orchestration run có stable identity, control owner và recoverable state.

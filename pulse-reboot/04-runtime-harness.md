@@ -383,27 +383,25 @@ Target repository sở hữu:
 - `PULSE.md`: human-readable intent và judgment boundaries.
 - `.pulse/policy/authority.json`: enforceable default-deny grants.
 - scripts build/test/lint/dev/seed/reset.
-- skills cho shaping, implementation, debug, review, QA và reconciliation.
+- typed guidance và output contracts cho shaping, implementation, debug, review, QA và reconciliation.
 - verification profiles.
 - environment/executor manifests.
 - hooks và evals.
 
-### Skills
+### Agent judgment responsibilities
 
-Judgment capabilities:
+Các responsibility cần typed input/output và evidence:
 
-- `pulse-orient`
-- `pulse-shape`
-- `pulse-plan`
-- `pulse-implement`
-- `pulse-debug`
-- `pulse-review`
-- `pulse-qa`
-- `pulse-reconcile`
-- `pulse-compound`
-- `pulse-improve-harness`
+- orient repository và current work;
+- shape ambiguity, scope và acceptance;
+- plan bounded execution;
+- implement và debug;
+- review và QA độc lập;
+- reconcile priority, evidence và conflicts;
+- compound knowledge và improve harness.
 
-Skills hướng dẫn discovery, decisions và output contract. Chúng không copy
+Agent guidance không phải packaged runtime surface. Canonical input/output,
+authority và mutation vẫn do Core/Daemon contracts sở hữu; guidance không copy
 repository docs hoặc daemon protocol thành prompt dài.
 
 ### Scripts và tools

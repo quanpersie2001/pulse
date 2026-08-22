@@ -173,7 +173,7 @@ Slice exit **không** đồng nghĩa:
 - semantic/vector/hybrid retrieval tồn tại;
 - knowledge compounding search dùng chung index đã được triển khai;
 - docs close gate, link checker hoặc generated source freshness runner đã hoàn chỉnh;
-- Phase 1 hoặc Core v1 hoàn thành.
+- Phase 1 hoặc Core hoàn thành.
 
 ## Non-goals
 
@@ -1534,7 +1534,7 @@ Slice 5 chỉ cung cấp retrieval primitives và suggestion records; nó không
 
 ### Phase 3
 
-- `pulse-docs-orient|impact|update|review|promote` capabilities;
+- documentation orient/impact/update/review/promote capabilities;
 - link check, command snippets, generated freshness runners;
 - `pulse doctor` retrieval findings;
 - Story QA/product-doc conflict checks.

@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "Pulse decision acceptance receipt payload v1",
+  "title": "Pulse decision acceptance receipt payload",
   "type": "object",
   "additionalProperties": false,
   "required": [

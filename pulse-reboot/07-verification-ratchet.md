@@ -135,7 +135,7 @@ failure
   -> capture/update failure-pattern learning
   -> decide local fix vs harness fix
   -> create/link harness Ticket
-  -> add docs/Decision/skill/script/check/eval
+  -> add docs/Decision/guidance/script/check/eval
   -> verify on original case
   -> run regression eval
   -> promote stable guardrail
@@ -147,7 +147,7 @@ Promotion ladder:
 ```text
 one-off finding
   -> reviewer checklist
-  -> skill guidance
+  -> reviewed agent guidance
   -> deterministic script/check
   -> blocking hook/policy
 ```

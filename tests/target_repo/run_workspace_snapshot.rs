@@ -1,8 +1,8 @@
 #![cfg(unix)]
 
 use pulse::source::{
-    workspace_snapshot, workspace_snapshot_feasibility, WorkspaceCleanlinessV1,
-    WorkspaceOperationStateV1, WorkspaceSnapshotOptions, WorkspaceSnapshotStatusV1,
+    workspace_snapshot, workspace_snapshot_feasibility, WorkspaceCleanliness,
+    WorkspaceOperationState, WorkspaceSnapshotOptions, WorkspaceSnapshotStatus,
 };
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
@@ -29,8 +29,8 @@ fn snapshot_is_deterministic_and_captured_at_excluded_from_identity() {
 
     let one = workspace_snapshot(tmp.path(), &first).unwrap();
     let two = workspace_snapshot(tmp.path(), &second).unwrap();
-    assert_eq!(one.snapshot_status, WorkspaceSnapshotStatusV1::Complete);
-    assert_eq!(one.cleanliness, WorkspaceCleanlinessV1::Dirty);
+    assert_eq!(one.snapshot_status, WorkspaceSnapshotStatus::Complete);
+    assert_eq!(one.cleanliness, WorkspaceCleanliness::Dirty);
     assert_eq!(one.snapshot_identity, two.snapshot_identity);
     assert_eq!(one.tracked_diff_identity, two.tracked_diff_identity);
 }
@@ -53,27 +53,24 @@ fn snapshot_ignores_pulse_runtime_but_not_canonical_pulse_state() {
     fs::create_dir_all(tmp.path().join(".pulse/cache2/docs")).unwrap();
     fs::write(tmp.path().join(".pulse/cache2/docs/index"), b"not cache").unwrap();
     let snapshot = workspace_snapshot(tmp.path(), &options(&base)).unwrap();
-    assert_eq!(
-        snapshot.snapshot_status,
-        WorkspaceSnapshotStatusV1::Complete
-    );
-    assert_eq!(snapshot.cleanliness, WorkspaceCleanlinessV1::Dirty);
+    assert_eq!(snapshot.snapshot_status, WorkspaceSnapshotStatus::Complete);
+    assert_eq!(snapshot.cleanliness, WorkspaceCleanliness::Dirty);
 
     fs::remove_dir_all(tmp.path().join(".pulse/runtime2")).unwrap();
     fs::remove_dir_all(tmp.path().join(".pulse/cache2")).unwrap();
     let snapshot = workspace_snapshot(tmp.path(), &options(&base)).unwrap();
-    assert_eq!(snapshot.cleanliness, WorkspaceCleanlinessV1::Clean);
+    assert_eq!(snapshot.cleanliness, WorkspaceCleanliness::Clean);
 
     fs::create_dir_all(tmp.path().join(".pulse/workgraph/nodes")).unwrap();
     fs::write(tmp.path().join(".pulse/workgraph/nodes/TK-1.json"), b"{}").unwrap();
     let snapshot = workspace_snapshot(tmp.path(), &options(&base)).unwrap();
-    assert_eq!(snapshot.cleanliness, WorkspaceCleanlinessV1::Dirty);
+    assert_eq!(snapshot.cleanliness, WorkspaceCleanliness::Dirty);
 
     fs::remove_dir_all(tmp.path().join(".pulse/workgraph")).unwrap();
     fs::create_dir_all(tmp.path().join(".pulse/events")).unwrap();
     fs::write(tmp.path().join(".pulse/events/event.json"), b"{}").unwrap();
     let snapshot = workspace_snapshot(tmp.path(), &options(&base)).unwrap();
-    assert_eq!(snapshot.cleanliness, WorkspaceCleanlinessV1::Dirty);
+    assert_eq!(snapshot.cleanliness, WorkspaceCleanliness::Dirty);
 }
 
 #[test]
@@ -91,11 +88,8 @@ fn snapshot_detects_untracked_file_mode_symlink_and_huge_caps() {
     std::os::unix::fs::symlink("tool.sh", tmp.path().join("tool-link")).unwrap();
 
     let snapshot = workspace_snapshot(tmp.path(), &options(&base)).unwrap();
-    assert_eq!(
-        snapshot.snapshot_status,
-        WorkspaceSnapshotStatusV1::Complete
-    );
-    assert_eq!(snapshot.cleanliness, WorkspaceCleanlinessV1::Dirty);
+    assert_eq!(snapshot.snapshot_status, WorkspaceSnapshotStatus::Complete);
+    assert_eq!(snapshot.cleanliness, WorkspaceCleanliness::Dirty);
     assert!(snapshot.untracked_manifest_identity.starts_with("sha256:"));
 
     fs::write(tmp.path().join("huge.bin"), vec![7_u8; 32]).unwrap();
@@ -105,7 +99,7 @@ fn snapshot_detects_untracked_file_mode_symlink_and_huge_caps() {
     let snapshot = workspace_snapshot(tmp.path(), &capped).unwrap();
     assert_eq!(
         snapshot.snapshot_status,
-        WorkspaceSnapshotStatusV1::BoundedOut
+        WorkspaceSnapshotStatus::BoundedOut
     );
 }
 
@@ -126,8 +120,8 @@ fn snapshot_hashes_tracked_binary_and_mode_changes() {
     fs::set_permissions(tmp.path().join("bin.dat"), permissions).unwrap();
     let mode_change = workspace_snapshot(tmp.path(), &options(&base)).unwrap();
 
-    assert_eq!(changed_bytes.cleanliness, WorkspaceCleanlinessV1::Dirty);
-    assert_eq!(mode_change.cleanliness, WorkspaceCleanlinessV1::Dirty);
+    assert_eq!(changed_bytes.cleanliness, WorkspaceCleanliness::Dirty);
+    assert_eq!(mode_change.cleanliness, WorkspaceCleanliness::Dirty);
     assert_ne!(
         changed_bytes.tracked_diff_identity,
         mode_change.tracked_diff_identity
@@ -160,11 +154,8 @@ fn tracked_diff_ignores_textconv_and_external_diff_transforms() {
 
     fs::write(tmp.path().join("blob.bin"), b"second distinct raw bytes").unwrap();
     let snapshot = workspace_snapshot(tmp.path(), &options(&base)).unwrap();
-    assert_eq!(
-        snapshot.snapshot_status,
-        WorkspaceSnapshotStatusV1::Complete
-    );
-    assert_eq!(snapshot.cleanliness, WorkspaceCleanlinessV1::Dirty);
+    assert_eq!(snapshot.snapshot_status, WorkspaceSnapshotStatus::Complete);
+    assert_eq!(snapshot.cleanliness, WorkspaceCleanliness::Dirty);
 
     git::git(
         tmp.path(),
@@ -173,11 +164,11 @@ fn tracked_diff_ignores_textconv_and_external_diff_transforms() {
     let with_external_config = workspace_snapshot(tmp.path(), &options(&base)).unwrap();
     assert_eq!(
         with_external_config.snapshot_status,
-        WorkspaceSnapshotStatusV1::Complete
+        WorkspaceSnapshotStatus::Complete
     );
     assert_eq!(
         with_external_config.cleanliness,
-        WorkspaceCleanlinessV1::Dirty
+        WorkspaceCleanliness::Dirty
     );
     assert_eq!(
         snapshot.tracked_diff_identity,
@@ -196,17 +187,14 @@ fn snapshot_hashes_lfs_pointer_as_worktree_file_and_rejects_nested_repo() {
     )
     .unwrap();
     let snapshot = workspace_snapshot(tmp.path(), &options(&base)).unwrap();
-    assert_eq!(
-        snapshot.snapshot_status,
-        WorkspaceSnapshotStatusV1::Complete
-    );
+    assert_eq!(snapshot.snapshot_status, WorkspaceSnapshotStatus::Complete);
 
     fs::create_dir_all(tmp.path().join("nested")).unwrap();
     git::git(&tmp.path().join("nested"), &["init"]);
     let snapshot = workspace_snapshot(tmp.path(), &options(&base)).unwrap();
     assert_eq!(
         snapshot.snapshot_status,
-        WorkspaceSnapshotStatusV1::Unsupported
+        WorkspaceSnapshotStatus::Unsupported
     );
 }
 
@@ -220,16 +208,16 @@ fn snapshot_reports_git_operation_and_diff_base_mismatch() {
     let snapshot = workspace_snapshot(tmp.path(), &options(&base)).unwrap();
     assert_eq!(
         snapshot.snapshot_status,
-        WorkspaceSnapshotStatusV1::Unsupported
+        WorkspaceSnapshotStatus::Unsupported
     );
-    assert_eq!(snapshot.operation_state, WorkspaceOperationStateV1::Merge);
+    assert_eq!(snapshot.operation_state, WorkspaceOperationState::Merge);
 
     let mut bad = options(&base);
     bad.diff_base_commit = "0000000000000000000000000000000000000000".to_string();
     let snapshot = workspace_snapshot(tmp.path(), &bad).unwrap();
     assert_eq!(
         snapshot.snapshot_status,
-        WorkspaceSnapshotStatusV1::Unsupported
+        WorkspaceSnapshotStatus::Unsupported
     );
 }
 
@@ -245,7 +233,7 @@ fn snapshot_bounds_tracked_diff_and_status_output() {
     let snapshot = workspace_snapshot(tmp.path(), &capped).unwrap();
     assert_eq!(
         snapshot.snapshot_status,
-        WorkspaceSnapshotStatusV1::BoundedOut
+        WorkspaceSnapshotStatus::BoundedOut
     );
 
     let mut status_capped = options(&base);
@@ -253,7 +241,7 @@ fn snapshot_bounds_tracked_diff_and_status_output() {
     let snapshot = workspace_snapshot(tmp.path(), &status_capped).unwrap();
     assert_eq!(
         snapshot.snapshot_status,
-        WorkspaceSnapshotStatusV1::BoundedOut
+        WorkspaceSnapshotStatus::BoundedOut
     );
 }
 
@@ -277,7 +265,7 @@ fn snapshot_bounds_untracked_listing_before_manifest_buffering() {
     let snapshot = workspace_snapshot(tmp.path(), &capped).unwrap();
     assert_eq!(
         snapshot.snapshot_status,
-        WorkspaceSnapshotStatusV1::BoundedOut
+        WorkspaceSnapshotStatus::BoundedOut
     );
     assert_ne!(
         snapshot.untracked_manifest_identity,
@@ -309,11 +297,8 @@ fn runtime_cache_untracked_listing_exclusions_do_not_consume_caps() {
     capped.max_status_bytes = 32;
     capped.max_untracked_entries = 1;
     let snapshot = workspace_snapshot(tmp.path(), &capped).unwrap();
-    assert_eq!(
-        snapshot.snapshot_status,
-        WorkspaceSnapshotStatusV1::Complete
-    );
-    assert_eq!(snapshot.cleanliness, WorkspaceCleanlinessV1::Clean);
+    assert_eq!(snapshot.snapshot_status, WorkspaceSnapshotStatus::Complete);
+    assert_eq!(snapshot.cleanliness, WorkspaceCleanliness::Clean);
 }
 
 #[test]
@@ -345,11 +330,8 @@ fn runtime_cache_ignored_listing_exclusions_do_not_consume_caps() {
     capped.max_status_bytes = 32;
     capped.max_untracked_entries = 1;
     let snapshot = workspace_snapshot(tmp.path(), &capped).unwrap();
-    assert_eq!(
-        snapshot.snapshot_status,
-        WorkspaceSnapshotStatusV1::Complete
-    );
-    assert_eq!(snapshot.cleanliness, WorkspaceCleanlinessV1::Clean);
+    assert_eq!(snapshot.snapshot_status, WorkspaceSnapshotStatus::Complete);
+    assert_eq!(snapshot.cleanliness, WorkspaceCleanliness::Clean);
 }
 
 #[test]
@@ -366,11 +348,8 @@ fn giant_excluded_runtime_path_record_is_bounded() {
     capped.max_status_bytes = 8;
     capped.max_untracked_entries = 1;
     let snapshot = workspace_snapshot(tmp.path(), &capped).unwrap();
-    assert_eq!(
-        snapshot.snapshot_status,
-        WorkspaceSnapshotStatusV1::Complete
-    );
-    assert_eq!(snapshot.cleanliness, WorkspaceCleanlinessV1::Clean);
+    assert_eq!(snapshot.snapshot_status, WorkspaceSnapshotStatus::Complete);
+    assert_eq!(snapshot.cleanliness, WorkspaceCleanliness::Clean);
 }
 
 #[test]
@@ -395,14 +374,11 @@ fn snapshot_treats_bounded_ignored_listing_as_unsupported_source() {
     let snapshot = workspace_snapshot(tmp.path(), &capped).unwrap();
     assert_eq!(
         snapshot.snapshot_status,
-        WorkspaceSnapshotStatusV1::Unsupported
+        WorkspaceSnapshotStatus::Unsupported
     );
     for _ in 0..5 {
         let rerun = workspace_snapshot(tmp.path(), &capped).unwrap();
-        assert_eq!(
-            rerun.snapshot_status,
-            WorkspaceSnapshotStatusV1::Unsupported
-        );
+        assert_eq!(rerun.snapshot_status, WorkspaceSnapshotStatus::Unsupported);
     }
 }
 
@@ -416,7 +392,7 @@ fn ignored_file_in_scope_is_not_silently_hidden() {
     let snapshot = workspace_snapshot(tmp.path(), &options(&base)).unwrap();
     assert_eq!(
         snapshot.snapshot_status,
-        WorkspaceSnapshotStatusV1::Unsupported
+        WorkspaceSnapshotStatus::Unsupported
     );
 }
 
@@ -444,7 +420,7 @@ fn snapshot_rejects_special_files() {
     let snapshot = workspace_snapshot(tmp.path(), &options(&base)).unwrap();
     assert_eq!(
         snapshot.snapshot_status,
-        WorkspaceSnapshotStatusV1::Unsupported
+        WorkspaceSnapshotStatus::Unsupported
     );
 }
 
@@ -473,28 +449,22 @@ fn scoped_snapshot_special_file_and_nested_repo_scans_honor_scope_and_runtime_ex
     let mut scoped = options(&base);
     scoped.included_paths = vec!["src-other/file.txt".to_string()];
     let snapshot = workspace_snapshot(tmp.path(), &scoped).unwrap();
-    assert_eq!(
-        snapshot.snapshot_status,
-        WorkspaceSnapshotStatusV1::Complete
-    );
-    assert_eq!(snapshot.cleanliness, WorkspaceCleanlinessV1::Clean);
+    assert_eq!(snapshot.snapshot_status, WorkspaceSnapshotStatus::Complete);
+    assert_eq!(snapshot.cleanliness, WorkspaceCleanliness::Clean);
 
     let mut dir_scoped = options(&base);
     dir_scoped.included_paths = vec!["src-other".to_string()];
     let snapshot = workspace_snapshot(tmp.path(), &dir_scoped).unwrap();
     assert_eq!(
         snapshot.snapshot_status,
-        WorkspaceSnapshotStatusV1::Unsupported
+        WorkspaceSnapshotStatus::Unsupported
     );
 
     let mut prefix_confusion = options(&base);
     prefix_confusion.included_paths = vec!["src".to_string()];
     let snapshot = workspace_snapshot(tmp.path(), &prefix_confusion).unwrap();
-    assert_eq!(
-        snapshot.snapshot_status,
-        WorkspaceSnapshotStatusV1::Complete
-    );
-    assert_eq!(snapshot.cleanliness, WorkspaceCleanlinessV1::Clean);
+    assert_eq!(snapshot.snapshot_status, WorkspaceSnapshotStatus::Complete);
+    assert_eq!(snapshot.cleanliness, WorkspaceCleanliness::Clean);
 }
 
 #[test]
@@ -508,18 +478,15 @@ fn snapshot_validates_base_commit_as_head_ancestor() {
     let descendant = git::git(tmp.path(), &["rev-parse", "HEAD"]);
     git::git(tmp.path(), &["checkout", "--detach", &descendant]);
     let snapshot = workspace_snapshot(tmp.path(), &options(&base)).unwrap();
-    assert_eq!(
-        snapshot.snapshot_status,
-        WorkspaceSnapshotStatusV1::Complete
-    );
-    assert_eq!(snapshot.cleanliness, WorkspaceCleanlinessV1::Dirty);
+    assert_eq!(snapshot.snapshot_status, WorkspaceSnapshotStatus::Complete);
+    assert_eq!(snapshot.cleanliness, WorkspaceCleanliness::Dirty);
 
     let mut missing = options("ffffffffffffffffffffffffffffffffffffffff");
     missing.diff_base_commit = missing.base_commit.clone();
     let snapshot = workspace_snapshot(tmp.path(), &missing).unwrap();
     assert_eq!(
         snapshot.snapshot_status,
-        WorkspaceSnapshotStatusV1::Unsupported
+        WorkspaceSnapshotStatus::Unsupported
     );
 
     let unrelated = tempfile::tempdir().unwrap();
@@ -533,7 +500,7 @@ fn snapshot_validates_base_commit_as_head_ancestor() {
     let snapshot = workspace_snapshot(tmp.path(), &options(&unrelated_base)).unwrap();
     assert_eq!(
         snapshot.snapshot_status,
-        WorkspaceSnapshotStatusV1::Unsupported
+        WorkspaceSnapshotStatus::Unsupported
     );
 
     git::git(tmp.path(), &["checkout", &base]);
@@ -546,6 +513,6 @@ fn snapshot_validates_base_commit_as_head_ancestor() {
     assert_eq!(rewritten, snapshot.head_commit);
     assert_eq!(
         snapshot.snapshot_status,
-        WorkspaceSnapshotStatusV1::Unsupported
+        WorkspaceSnapshotStatus::Unsupported
     );
 }

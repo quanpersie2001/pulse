@@ -506,7 +506,7 @@ fn execution_frontier_includes_only_current_ready_implementation_tickets() {
     assert_eq!(report.kind, "execution");
     assert_eq!(report.claim_state, "not_evaluated");
     assert!(!report.dispatch_authorized);
-    assert_eq!(report.readiness_profile, "phase1_contract_readiness_v1");
+    assert_eq!(report.readiness_profile, "contract_readiness");
     assert_eq!(exec_item_ids(&report.items), vec![ready.id.clone()]);
     assert!(report.items[0].frontier_eligible);
     assert!(report.items[0].readiness_fingerprint.starts_with("sha256:"));
@@ -973,7 +973,12 @@ fn execution_frontier_rejects_unsupported_profile() {
     let repo = tmp.path();
     let store = JsonGraphStore::new(repo);
     let err = store
-        .frontier(FrontierKind::Execution, None, Some("bogus_v9"), true)
+        .frontier(
+            FrontierKind::Execution,
+            None,
+            Some("unsupported_profile"),
+            true,
+        )
         .unwrap_err();
     assert_eq!(err.code(), "readiness_profile_unsupported");
 }
@@ -1052,7 +1057,7 @@ fn cli_execution_frontier_emits_stable_json() {
     assert_eq!(report["kind"], "execution");
     assert_eq!(report["claim_state"], "not_evaluated");
     assert_eq!(report["dispatch_authorized"], false);
-    assert_eq!(report["readiness_profile"], "phase1_contract_readiness_v1");
+    assert_eq!(report["readiness_profile"], "contract_readiness");
     assert_eq!(report["items"][0]["id"], ready.id);
     assert_eq!(report["items"][0]["frontier_eligible"], true);
 }
@@ -1127,7 +1132,7 @@ fn cli_rejects_unsupported_profile() {
             "--kind",
             "execution",
             "--profile",
-            "bogus_v9",
+            "unsupported_profile",
             "--json",
         ],
     );

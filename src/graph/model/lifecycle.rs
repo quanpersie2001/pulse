@@ -30,9 +30,9 @@ pub enum TransitionPolicy {
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum GateProfile {
-    /// `draft -> shaped` shaping gate (`phase1_shaped_v1`).
+    /// `draft -> shaped` shaping gate (`shaped`).
     Shaped,
-    /// `shaped -> ready` full readiness gate (`phase1_contract_readiness_v1`).
+    /// `shaped -> ready` full readiness gate (`contract_readiness`).
     Ready,
     /// `ready -> active` reservation-activation gate. Core evaluates it only
     /// after the daemon supplies an exact typed acknowledgement.
@@ -42,9 +42,9 @@ pub enum GateProfile {
 impl GateProfile {
     pub fn as_str(self) -> &'static str {
         match self {
-            GateProfile::Shaped => "phase1_shaped_v1",
-            GateProfile::Ready => "phase1_contract_readiness_v1",
-            GateProfile::ReservationActivation => "phase2_reservation_activation_v1",
+            GateProfile::Shaped => "shaped",
+            GateProfile::Ready => "contract_readiness",
+            GateProfile::ReservationActivation => "reservation_activation",
         }
     }
 }

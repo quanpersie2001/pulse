@@ -10,25 +10,25 @@ use crate::daemon::session::{CommunicationGrantRecord, SessionMessageRecord, Ses
 use crate::daemon::timeline::{TimelineCursor, TimelinePage};
 use crate::daemon::workspace::{IsolationMode, WorkspaceRecord};
 use crate::execution::{
-    HandoffReceiptV1, VerificationCheck, VerificationDisposition, VerificationReceiptV1,
+    HandoffReceipt, VerificationCheck, VerificationDisposition, VerificationReceipt,
 };
 
-pub const PROTOCOL_VERSION: u32 = 2;
+pub const PROTOCOL_VERSION: u32 = 3;
 pub const DAEMON_CAPABILITIES: &[&str] = &[
-    "project_registry_v1",
-    "workspace_manager_v1",
-    "session_manager_v1",
-    "provider_registry_v1",
-    "process_owner_v1",
-    "timeline_cursor_v1",
-    "timeline_subscription_v1",
-    "assignment_saga_v1",
-    "session_mailbox_v1",
-    "session_resume_v1",
-    "session_attach_v1",
-    "session_inspect_v1",
-    "session_logs_v1",
-    "mcp_tool_adapter_v1",
+    "project_registry",
+    "workspace_manager",
+    "session_manager",
+    "provider_registry",
+    "process_owner",
+    "timeline_cursor",
+    "timeline_subscription",
+    "assignment_saga",
+    "session_mailbox",
+    "session_resume",
+    "session_attach",
+    "session_inspect",
+    "session_logs",
+    "mcp_tool_adapter",
 ];
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -348,10 +348,10 @@ pub enum DaemonResponse {
         saga: AssignmentSagaRecord,
     },
     Handoff {
-        handoff: HandoffReceiptV1,
+        handoff: HandoffReceipt,
     },
     Verification {
-        verification: VerificationReceiptV1,
+        verification: VerificationReceipt,
     },
     Accepted {
         resource_id: String,

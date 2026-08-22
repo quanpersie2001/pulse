@@ -6,8 +6,8 @@ use std::io::Write;
 use std::time::Duration;
 
 #[test]
-fn protocol_version_reflects_breaking_session_resume_contract() {
-    assert_eq!(PROTOCOL_VERSION, 2);
+fn protocol_version_reflects_current_breaking_contract() {
+    assert_eq!(PROTOCOL_VERSION, 3);
 }
 
 #[test]
@@ -119,8 +119,8 @@ fn local_protocol_rejects_mismatch_before_mutation_and_shutdowns_cleanly() {
         .unwrap();
     match handshake {
         DaemonResponse::Handshake { capabilities, .. } => {
-            assert!(capabilities.contains(&"session_resume_v1".to_string()));
-            assert!(capabilities.contains(&"session_attach_v1".to_string()));
+            assert!(capabilities.contains(&"session_resume".to_string()));
+            assert!(capabilities.contains(&"session_attach".to_string()));
         }
         other => panic!("unexpected handshake response: {other:?}"),
     }

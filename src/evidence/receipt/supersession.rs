@@ -77,7 +77,7 @@ pub(super) fn validate_supersession_payload(
     if p.payload_version != 1 || receipt.result != ReceiptResult::Passed {
         return Err(PulseError::validation(
             "receipt_result_ineligible",
-            "supersession receipt must be passed v1",
+            "supersession receipt must use the current passed payload",
         ));
     }
     if receipt.bindings.source.is_none() {

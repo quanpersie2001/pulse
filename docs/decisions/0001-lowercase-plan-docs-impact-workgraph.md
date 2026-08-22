@@ -4,7 +4,7 @@ Date: 2026-05-25
 
 ## Status
 
-Accepted
+Accepted; legacy router mechanism superseded
 
 ## Context
 
@@ -20,7 +20,7 @@ Without a strict planning artifact contract, planning could regress into legacy 
 
 ## Decision
 
-`pulse:workflow plan` writes lowercase `plan.md` under the owning story directory.
+The approved planning process writes lowercase `plan.md` under the owning story directory. This artifact contract is independent of any conversational router.
 
 Every `plan.md` must include mandatory documentation impact for:
 
@@ -31,7 +31,7 @@ Every `plan.md` must include mandatory documentation impact for:
 
 Each docs surface must be marked `Create`, `Update`, or `No change` with rationale and validation evidence.
 
-Approved current-slice workgraph items must be queried, created, or changed through `{{pulse_command}} workgraph`. `.pulse/workgraph/items.jsonl` is database-like storage behind the CLI and must not be read or hand-edited during planning.
+Approved current-slice workgraph items must be queried, created, or changed through the Rust `pulse work` and `pulse graph` commands. Canonical graph storage must not be hand-edited during planning.
 
 ## Alternatives Considered
 
@@ -59,4 +59,4 @@ Tradeoffs:
 ## Follow-Up
 
 - Keep validation references aligned with lowercase `plan.md`.
-- Regenerate packaged skill outputs after source skill changes.
+- Keep the artifact contract aligned with current Rust CLI and graph semantics.

@@ -4,7 +4,7 @@ Durable terms used by Pulse workflow, runtime, and workgraph documentation.
 
 ## Current-work contract
 
-A bounded execution slice prepared by `pulse:workflow plan` and proven by `pulse:workflow validate` before implementation starts.
+A bounded execution slice represented by approved graph/contracts and proven by current readiness evidence before implementation starts.
 
 ## Documentation impact
 
@@ -12,7 +12,7 @@ The mandatory `plan.md` section that records whether `docs/ARCHITECTURE.md`, `do
 
 ## Plan artifact
 
-The lowercase story-scoped `plan.md` produced by `pulse:workflow plan`. It decomposes approved `solution-design.md` decisions into tasks, docs updates, validation mapping, and workgraph materialization posture.
+The lowercase story-scoped `plan.md` that decomposes approved `solution-design.md` decisions into tasks, docs updates, validation mapping, and workgraph materialization posture.
 
 ## Product docs
 
@@ -20,4 +20,4 @@ Domain-focused product contract files under `docs/product/`, such as `overview.m
 
 ## Workgraph materialization
 
-Creating or updating canonical Pulse work items through `{{pulse_command}} workgraph` after approval, instead of hand-editing `.pulse/workgraph/items.jsonl`.
+Creating or updating canonical Pulse work items through the Rust `pulse work` and `pulse graph` commands after approval, instead of hand-editing graph storage.

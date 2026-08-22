@@ -1,4 +1,4 @@
-//! Public neutral WorkPacketV1 DTOs.
+//! Public neutral WorkPacket DTOs.
 //!
 //! This module defines the packet contract for Phase 2 preview work packets.
 //! Every type is a pure value DTO with `#[serde(deny_unknown_fields)]` on every
@@ -24,10 +24,10 @@ use crate::PulseResult;
 pub const PACKET_SCHEMA_VERSION: u32 = 1;
 
 /// Packet profile identifier.
-pub const PACKET_PROFILE: &str = "phase2_work_packet_preview_v1";
+pub const PACKET_PROFILE: &str = "work_packet_preview";
 
 /// Budget profile identifier.
-pub const BUDGET_PROFILE: &str = "phase2_work_packet_preview_budget_v1";
+pub const BUDGET_PROFILE: &str = "work_packet_preview_budget";
 
 /// Hard ceiling for canonical packet JSON (128 KiB).
 pub const MAX_CANONICAL_JSON_BYTES: usize = 131_072;
@@ -57,13 +57,13 @@ pub const MAX_INITIAL_LINES: usize = 240;
 /// Complete Phase 2 preview work packet.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
-pub struct WorkPacketV1 {
+pub struct WorkPacket {
     pub schema_version: u32,
     pub profile: String,
     pub code: String,
     pub subject: SubjectSnapshot,
     pub snapshot: SnapshotReport,
-    pub contract: PacketImplementationContractV1,
+    pub contract: PacketImplementationContract,
     pub context: PacketContext,
     pub shaping: PacketShaping,
     pub graph: PacketGraph,
@@ -126,7 +126,7 @@ pub struct SnapshotReport {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
-pub struct PacketImplementationContractV1 {
+pub struct PacketImplementationContract {
     pub mode: String,
     pub work_surface: String,
     pub plan_policy: String,
@@ -782,7 +782,7 @@ pub struct PacketBudget {
 // Normalization
 // ---------------------------------------------------------------------------
 
-impl WorkPacketV1 {
+impl WorkPacket {
     /// Normalize every set-like collection for deterministic ordering.
     pub fn normalize(&mut self) {
         sort_strings(&mut self.reason_codes);
@@ -803,7 +803,7 @@ impl WorkPacketV1 {
     }
 }
 
-impl PacketImplementationContractV1 {
+impl PacketImplementationContract {
     pub fn normalize(&mut self) {
         sort_by_path_symbol(&mut self.code_anchors);
         sort_by_path_symbol(&mut self.documentation_anchors);
@@ -1010,7 +1010,7 @@ impl HasId for PacketBlockerItem {
 // Fingerprint projection
 // ---------------------------------------------------------------------------
 
-impl WorkPacketV1 {
+impl WorkPacket {
     /// Compute the canonical packet fingerprint.
     ///
     /// The fingerprint projection excludes:
@@ -1147,7 +1147,7 @@ fn validate_json_schema_contract(value: &Value) -> PulseResult<()> {
 // Size fixpoint
 // ---------------------------------------------------------------------------
 
-impl WorkPacketV1 {
+impl WorkPacket {
     /// Compute the fixed-point canonical size.
     ///
     /// 1. Set `packet_fingerprint` to the computed fingerprint.
@@ -1302,7 +1302,7 @@ impl Default for PacketDispatch {
 // Schema constant
 // ---------------------------------------------------------------------------
 
-/// Embedded JSON schema for WorkPacketV1.
+/// Embedded JSON schema for WorkPacket.
 pub const WORK_PACKET_SCHEMA: &str = include_str!("schema/work-packet.schema.json");
 
 // ===========================================================================
@@ -1318,8 +1318,8 @@ mod tests {
     // Helper: build a minimal valid packet for tests
     // -----------------------------------------------------------------------
 
-    fn minimal_packet(fingerprint: &str) -> WorkPacketV1 {
-        WorkPacketV1 {
+    fn minimal_packet(fingerprint: &str) -> WorkPacket {
+        WorkPacket {
             schema_version: PACKET_SCHEMA_VERSION,
             profile: PACKET_PROFILE.to_string(),
             code: "reservation_candidate".to_string(),
@@ -1339,7 +1339,7 @@ mod tests {
                 graph_fingerprint:
                     "sha256:0000000000000000000000000000000000000000000000000000000000000000"
                         .to_string(),
-                readiness_profile: "phase1_contract_readiness_v1".to_string(),
+                readiness_profile: "contract_readiness".to_string(),
                 readiness_fingerprint:
                     "sha256:1111111111111111111111111111111111111111111111111111111111111111"
                         .to_string(),
@@ -1357,7 +1357,7 @@ mod tests {
                         .to_string(),
                 source_commit: "0123456789abcdef0123456789abcdef01234567".to_string(),
             },
-            contract: PacketImplementationContractV1 {
+            contract: PacketImplementationContract {
                 mode: "guided".to_string(),
                 work_surface: "code".to_string(),
                 plan_policy: "worker_optional".to_string(),
@@ -1543,7 +1543,7 @@ mod tests {
     fn round_trip_minimal_packet() {
         let packet = minimal_packet("");
         let json = serde_json::to_value(&packet).unwrap();
-        let deserialized: WorkPacketV1 = serde_json::from_value(json.clone()).unwrap();
+        let deserialized: WorkPacket = serde_json::from_value(json.clone()).unwrap();
         assert_eq!(packet, deserialized);
 
         // Verify specific top-level fields survive round-trip.
@@ -1582,7 +1582,7 @@ mod tests {
             "reason_codes": [],
             "unknown_field": "should_reject"
         });
-        let result: Result<WorkPacketV1, _> = serde_json::from_value(json);
+        let result: Result<WorkPacket, _> = serde_json::from_value(json);
         assert!(result.is_err(), "top-level unknown field must be rejected");
     }
 
@@ -1623,7 +1623,7 @@ mod tests {
             "acceptance": [],
             "fake": true
         });
-        let result: Result<PacketImplementationContractV1, _> = serde_json::from_value(json);
+        let result: Result<PacketImplementationContract, _> = serde_json::from_value(json);
         assert!(result.is_err(), "Contract unknown field must be rejected");
     }
 
@@ -2032,7 +2032,7 @@ mod tests {
     #[test]
     fn work_packet_schema_is_embedded() {
         assert!(!WORK_PACKET_SCHEMA.is_empty());
-        assert!(WORK_PACKET_SCHEMA.contains("WorkPacketV1"));
+        assert!(WORK_PACKET_SCHEMA.contains("WorkPacket"));
     }
 
     #[test]
@@ -2111,8 +2111,8 @@ mod tests {
     #[test]
     fn constants_are_sane() {
         assert_eq!(PACKET_SCHEMA_VERSION, 1);
-        assert_eq!(PACKET_PROFILE, "phase2_work_packet_preview_v1");
-        assert_eq!(BUDGET_PROFILE, "phase2_work_packet_preview_budget_v1");
+        assert_eq!(PACKET_PROFILE, "work_packet_preview");
+        assert_eq!(BUDGET_PROFILE, "work_packet_preview_budget");
         assert_eq!(MAX_CANONICAL_JSON_BYTES, 131_072);
         assert_eq!(MAX_INCIDENT_RELATIONS, 128);
         assert_eq!(MAX_DECISION_FRONTIER_ITEMS, 16);

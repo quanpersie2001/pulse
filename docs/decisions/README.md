@@ -10,6 +10,7 @@ Current decisions:
 - [0004 — CLI-mediated Agent context and workflow bootstrap](0004-cli-mediated-agent-context.md)
 - [0005 — Rust daemon runtime control plane](0005-rust-daemon-runtime-control-plane.md)
 - [0006 — Peer Worker, Reviewer, and QA task topology](0006-peer-agent-assurance-topology.md)
+- [0007 — Remove the legacy agent skill surface](0007-remove-legacy-agent-skill-surface.md)
 
 Add or update a decision when:
 

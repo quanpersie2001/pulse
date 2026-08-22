@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://pulse.reboot/schemas/work-packet.schema.json",
-  "title": "WorkPacketV1",
+  "title": "WorkPacket",
   "description": "Phase 2 preview work packet. Read-only context for a ready implementation Ticket.",
   "type": "object",
   "additionalProperties": false,
@@ -33,7 +33,7 @@
     },
     "profile": {
       "type": "string",
-      "const": "phase2_work_packet_preview_v1"
+      "const": "work_packet_preview"
     },
     "code": {
       "type": "string"

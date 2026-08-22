@@ -3,7 +3,7 @@
 > Trạng thái: **implemented và verified historical implementation record**.
 > Current contract được xác định bởi source, schemas, active tests và later
 > single-baseline decisions. Node schema v2 wording trong planning history đã bị
-> current node schema baseline v1 thay thế; không có migration family cho
+> current node schema baseline thay thế; không có migration family cho
 > internal Slice shape cũ.
 > Tiền đề: [`phase1-slice1-storage-graph.md`](phase1-slice1-storage-graph.md) đã hoàn thành và cung cấp storage/transaction/work-graph primitive.
 > Sở hữu: implementation strategy cho lát cắt Phase 1 tiếp theo: lifecycle mutation, supersession semantics, dependency-aware structural executability và các graph queries cần để giải thích chúng.
@@ -84,7 +84,7 @@ Slice exit **không** đồng nghĩa:
 - Ticket đã qua full `ready` gate;
 - Agent có thể nhận lease;
 - Ticket/Story có thể chuyển `done`;
-- Phase 1 hoặc Core v1 hoàn thành.
+- Phase 1 hoặc Core hoàn thành.
 
 ## Non-goals
 
@@ -816,7 +816,7 @@ Slice 2 cung cấp extension points cần thiết:
 9. **Node status `blocked` vs derived blockers:** explicit blocked status và graph blocker có thể lệch. Proposal không auto-mutate; query phải giải thích cả hai. Có cần doctor finding cho stale blocked state ở Phase 3?
 10. **Projection size:** full per-node executability trong `graph export` có thể lớn O(V×E). Benchmark Q2 quyết định precomputed indexes/incremental cache, không thay correctness contract.
 11. **Affected-by semantics:** relation nào là hard invalidation và relation nào chỉ advisory cần giữ typed output để future readiness composer không over-invalidate.
-12. **Legacy JSONL cutover:** repository hiện còn một số active docs/skills mô tả `.pulse/workgraph/items.jsonl`. Reboot implementation không được tạo hai canonical truths; cần migration proposal riêng trước khi Rust CLI trở thành public replacement.
+12. **Legacy JSONL cutover:** repository từng có active docs/workflow guidance mô tả `.pulse/workgraph/items.jsonl`. Reboot implementation không được tạo hai canonical truths; cần migration proposal riêng trước khi Rust CLI trở thành public replacement.
 13. **Actor identity:** Slice 1 đang không nhất quán giữa default `human:unknown` và required edge actor. Slice 2 nên bắt actor explicit cho lifecycle mutation và chuẩn bị typed actor contract, nhưng không mở full Agent Registry.
 14. **Status reason privacy/size:** summary phải bounded và không chứa raw prompt/secret. Exact limit/redaction policy cần chốt trong schema/test.
 

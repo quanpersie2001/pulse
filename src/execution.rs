@@ -7,7 +7,7 @@ use crate::{PulseError, Result};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
-pub struct HandoffReceiptV1 {
+pub struct HandoffReceipt {
     pub schema_version: u32,
     pub handoff_id: String,
     pub idempotency_key_hash: String,
@@ -30,7 +30,7 @@ pub struct HandoffReceiptV1 {
     pub handoff_fingerprint: String,
 }
 
-impl HandoffReceiptV1 {
+impl HandoffReceipt {
     pub fn compute_fingerprint(&self) -> Result<String> {
         let mut projection = self.clone();
         projection.handoff_fingerprint.clear();
@@ -58,7 +58,7 @@ pub struct VerificationCheck {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
-pub struct VerificationReceiptV1 {
+pub struct VerificationReceipt {
     pub schema_version: u32,
     pub verification_id: String,
     pub idempotency_key_hash: String,
@@ -76,7 +76,7 @@ pub struct VerificationReceiptV1 {
     pub verification_fingerprint: String,
 }
 
-impl VerificationReceiptV1 {
+impl VerificationReceipt {
     pub fn compute_fingerprint(&self) -> Result<String> {
         let mut projection = self.clone();
         projection.verification_fingerprint.clear();

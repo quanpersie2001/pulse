@@ -1,151 +1,83 @@
 # Contributing
 
-This repo packages one plugin, `pulse`, with a single public workflow surface: `pulse:workflow`.
-Use this guide when editing router commands, manifests, or public docs. The Rust CLI and daemon own mutable runtime and workgraph state.
+Pulse is developed as one Rust executable with an offline Core and a
+host-local daemon. The repository does not package an agent workflow router,
+plugin, or standalone agent skills.
 
-## Repository Truth
+## Repository truth
 
-These paths matter most:
+The current implementation and its contracts live in:
 
-- [`skills/workflow/`](skills/workflow) is the canonical source of public workflow behavior
-- [`skills/workflow/references/`](skills/workflow/references) owns command-level behavior docs
-- the Rust CLI and daemon own canonical runtime and workgraph logic
-- [`.codex-plugin/plugin.json`](.codex-plugin/plugin.json) is the Codex package manifest
-- [`.claude-plugin/plugin.json`](.claude-plugin/plugin.json) is the Claude plugin manifest
-- [`.mcp.json`](.mcp.json) is the packaged MCP manifest for shared runtime servers
-- [`.agents/plugins/marketplace.json`](.agents/plugins/marketplace.json) exposes the packaged plugin to Codex
-- [`AGENTS.md`](AGENTS.md), [`README.md`](README.md), and this file are contract docs and must stay consistent
+- `src/bin/pulse.rs`: minimal executable adapter;
+- `src/cli/`: command parsing and output rendering;
+- `src/kernel/`: cross-domain Core composition;
+- `src/graph/`, `src/docs/`, `src/evidence/`, and `src/knowledge/`: offline domain owners;
+- `src/daemon/`: the sole host-local runtime lifecycle authority;
+- `tests/`: architecture, contract, integration, recovery, and reliability coverage;
+- `PULSE_REBOOT.md` and `pulse-reboot/`: product direction and detailed design owners;
+- `AGENTS.md`, `README.md`, and this file: repository operating contracts.
 
-## Plugin Packaging Overview
+Historical proposals explain accepted slices but do not override current
+source, tests, or owning reboot documents.
 
-This repository is a root-scoped packaged plugin repo.
+## Ownership and dependency direction
 
-- Codex manifest: [`.codex-plugin/plugin.json`](.codex-plugin/plugin.json)
-- Claude manifest: [`.claude-plugin/plugin.json`](.claude-plugin/plugin.json)
-- Marketplace metadata: [`.agents/plugins/marketplace.json`](.agents/plugins/marketplace.json)
+- The binary delegates to the `pulse::cli` facade.
+- CLI owns transport and rendering, not domain or provider semantics.
+- Core commands operate without the daemon.
+- Daemon owns Project, Workspace, Session, Provider, process, timeline, effect,
+  assignment, and recovery runtime state.
+- Core never imports daemon.
+- Future Orchestration may compose Core and Runtime but may not replace either
+  authority.
 
-Packaged public-surface discovery is rooted at `skills/workflow/` as declared in manifests.
+Preserve stable public paths deliberately. Keep new surfaces private by
+default, and update architecture/public-path tests whenever an intentional
+contract change requires it.
 
-## Where Workflow Behavior Lives
+## Target-repository boundary
 
-Public workflow behavior is routed through `skills/workflow/`:
+This repository develops Pulse but is not enrolled as a Pulse-managed target.
+Do not bootstrap or mutate Pulse workgraph, evidence, docs-registry, or
+lifecycle state with `--repo-root .`.
 
-```text
-skills/workflow/
-├── SKILL.md
-├── commands/
-├── references/
-└── templates/
-```
+Integration tests must copy a tracked target fixture through
+`tests/common/fixture_repo.rs::TestRepo::from_fixture` and run Pulse against the
+temporary copy. Manual smoke tests follow the same pattern.
 
-Runtime status, readiness, and session/lease operations use the Rust `pulse` CLI and daemon. Canonical graph state lives in:
+## Change workflow
 
-- Rust daemon state reported by `pulse daemon status`
-- `.pulse/workgraph/nodes/`
+1. Read the owning source, tests, and design document.
+2. Keep changes scoped to the owning module and preserve recovery/order
+   invariants at effect boundaries.
+3. Add focused coverage in the existing domain integration crate.
+4. Update contract documentation when public behavior or ownership changes.
+5. Run narrow tests first, then the repository reliability gates.
 
-## SKILL.md Format
+For daemon changes, retain authorization ordering, idempotency checks,
+failpoint placement, durable intent before external I/O, and fail-closed
+uncertainty handling. Do not introduce a second application facade or state
+store.
 
-Every skill needs a `SKILL.md` with YAML frontmatter and markdown body.
+## Validation
 
-```yaml
----
-name: my-skill
-description: >-
-  Use when this skill clearly applies. State trigger scenarios and expected outcomes.
-metadata:
-  version: '1.0'
-  ecosystem: pulse
----
-
-# My Skill
-
-Operational instructions.
-```
-
-### Required Fields
-
-| Field | Purpose |
-|-------|---------|
-| `name` | Bare skill identifier in frontmatter |
-| `description` | Trigger text for skill matching |
-
-## Pulse Workflow Conventions
-
-### Public command surface
-
-Pulse is documented and operated as one router with subcommands:
-
-- `pulse:workflow use`
-- `pulse:workflow explore`
-- `pulse:workflow brainstorm`
-- `pulse:workflow plan`
-- `pulse:workflow validate`
-- `pulse:workflow swarm`
-- `pulse:workflow execute`
-- `pulse:workflow review`
-- `pulse:workflow compound`
-
-
-### Standalone utility skills (packaged outside `pulse:workflow`)
-
-- `architecture-rescue`
-- `systematic-debug-fix`
-- `dev-note`
-- `dev-note-distil`
-- `prompt-leverage`
-
-### Runtime authority
-
-Use Rust `pulse` commands for status, readiness, and workgraph operations, for example:
+Before handoff, run:
 
 ```bash
-pulse work list --repo-root <repo> --json
-pulse daemon status
+cargo fmt --check
+cargo clippy --all-targets --quiet -- -D warnings
+cargo test --all-targets
 ```
 
-The packaged plugin assumes the Rust `pulse` CLI is already available on the
-target environment's `PATH`; it does not install the binary. Binary
-installation and distribution remain an unresolved product decision.
+`cargo test --all-targets` must pass with default threading. Do not lower test
+threading to conceal races or global-state collisions.
 
-## Adding or Changing Router Commands
+Useful focused commands are listed in `AGENTS.md`.
 
-1. Update `skills/workflow/SKILL.md` if routing/help tables change.
-2. Update `skills/workflow/references/<command>/command.md`.
-3. Keep shared contracts under `skills/workflow/references/shared/`.
-4. Update public docs when contract language changes:
-   - [`README.md`](README.md)
-   - [`CONTRIBUTING.md`](CONTRIBUTING.md)
-   - [`AGENTS.md`](AGENTS.md)
-   - [`PULSE_REBOOT.md`](PULSE_REBOOT.md)
-   - [`pulse-reboot/`](pulse-reboot/)
-5. Run checks and tests.
+## Documentation rules
 
-## Testing Changes
-
-Minimum verification:
-
-1. Install/update plugin in runtime.
-2. Start a fresh session.
-3. Trigger the command(s) you changed.
-4. Confirm routing and behavior match command docs.
-
-For runtime changes, verify:
-
-- `pulse:workflow use` provides guidance only and does not initialize or repair state.
-- `pulse graph bootstrap --repo-root <repo> --json` explicitly initializes the supported graph layout.
-- `pulse graph validate --repo-root <repo> --json` validates graph state.
-- `pulse daemon start` and `pulse daemon status` explicitly manage and inspect daemon runtime.
-
-## Documentation Rules
-
-- use repository-relative links for repo files
-- external links are allowed for upstream/public references
-- never commit absolute local filesystem paths
-- verify links resolve
-- treat docs/contract drift as a bug
-
-Run:
-
-```bash
-bash scripts/check-markdown-links.sh
-```
+- Use repository-relative links for repository files.
+- Keep current product/architecture truth in its owning document.
+- Treat source, tests, public docs, and design drift as a defect.
+- Never commit absolute machine paths, generated caches, runtime state, or
+  target-repository mutations.

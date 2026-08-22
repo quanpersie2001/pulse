@@ -81,9 +81,9 @@ Slice này không trả lời các câu hỏi judgment:
 - Hai learnings có semantic duplicate không?
 - Learning có đủ authority để thành required ratchet không?
 - Learning nào applicable nhất cho current Ticket?
-- Learning nên promote vào document, Decision, skill hay check nào?
+- Learning nên promote vào document, Decision, guidance hay check nào?
 
-Các câu hỏi đó thuộc `pulse-compound`, reviewer/human authority và Phase 4
+Các câu hỏi đó thuộc compound actor, reviewer/human authority và Phase 4
 retrieval/promotion capabilities.
 
 ## Nguyên tắc
@@ -185,7 +185,7 @@ Slice exit **không** đồng nghĩa:
 - promotion target đã thực sự được mutate/verified;
 - usage feedback/reinforcement/retirement workflow đã tồn tại;
 - Phase 1 hoàn thành — shaping/readiness foundation vẫn còn thiếu;
-- Core v1 hoàn thành.
+- Core hoàn thành.
 
 ## Non-goals
 
@@ -198,7 +198,7 @@ Slice exit **không** đồng nghĩa:
 - Prompt packet injection, audience budgets hoặc required overflow policy.
 - Usage feedback, reinforcement, noise metrics hoặc known-failure replay.
 - Doctor knowledge findings ngoài structural `knowledge validate/status`.
-- Automatic docs/Decision/skill/check/hook/policy/eval mutation.
+- Automatic docs/Decision/guidance/check/hook/policy/eval mutation.
 - Full actor authority, signatures, Agent Registry hoặc cryptographic approval.
 - Generic user-defined learning kinds/relation types.
 - Arbitrary untyped provenance payload.
@@ -692,7 +692,7 @@ Rules:
 - document target resolve qua docs registry và optional revision/content hash;
 - commit target phải là full Git OID resolve được;
 - target kinds without a canonical resolver in the current kernel are rejected;
-  run/finding/skill/script/check/hook/policy/eval relation kinds require explicit
+  run/finding/guidance/script/check/hook/policy/eval relation kinds require explicit
   schema evolution when their resolver plane exists;
 - `superseded_by`, `corroborates` và `caused_by` reject self-edge;
 - `superseded_by` không cycle và một old learning có tối đa một outgoing target;
@@ -1322,7 +1322,7 @@ Slice 7 nên sở hữu:
 - decision frontier và execution frontier projections;
 - readiness invalidation khi graph/docs/shaping inputs đổi.
 
-Slice 7 không cần full conversational `pulse-shape` Agent capability hoặc
+Slice 7 không cần full conversational shaping Agent capability hoặc
 single-agent dispatch. Minimal semantic shaping path, reconciliation mutation,
 work packet, runner, lease và resume tiếp tục sang Phase 2.
 
@@ -1331,7 +1331,7 @@ work packet, runner, lease và resume tiếp tục sang Phase 2.
 Phase 4 mở rộng foundation này với:
 
 - continuous candidate capture;
-- `pulse-compound` synthesis/dedup/disposition;
+- compound synthesis/dedup/disposition;
 - lifecycle authority and promotion history;
 - Tantivy knowledge index;
 - `knowledge search|get|applicable|index|status` full contract;
@@ -1341,7 +1341,7 @@ Phase 4 mở rộng foundation này với:
 - usage feedback and reinforcement/noise classification;
 - historical known-failure retrieval evals;
 - contradiction reconciliation and doctor findings;
-- promotion to docs/Decision/skill/check/hook/policy/eval.
+- promotion to docs/Decision/guidance/check/hook/policy/eval.
 
 Identity, record layout, relation IDs and canonical fingerprint from Slice 6 must
 remain usable; Phase 4 may evolve schemas explicitly but must not replace the
@@ -1354,7 +1354,7 @@ plane with a transcript database or untyped vector memory.
    logical multi-target transaction.
 2. **Resolver policy:** Slice 6 chỉ record target kinds có canonical resolver
    hiện hữu: learning, work/Decision, receipt, document và full Git commit.
-   Future run/finding/skill/script/check/hook/policy/eval targets cần explicit
+   Future run/finding/guidance/script/check/hook/policy/eval targets cần explicit
    schema evolution; không có `provisional_external` canonical relation.
 3. **Content binding:** materialized narrative luôn có exact path + SHA-256.
    Byte change không cập nhật binding làm validation fail; typed binding edit

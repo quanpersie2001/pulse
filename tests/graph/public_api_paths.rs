@@ -79,7 +79,7 @@ fn graph_public_paths_used_by_tests_and_binary_compile() {
         reference: None,
     };
     assert_eq!(reason.into_status_reason().code, "baseline");
-    assert_eq!(READINESS_PROFILE, "phase1_contract_readiness_v1");
+    assert_eq!(READINESS_PROFILE, "contract_readiness");
     assert_eq!(FRONTIER_CLAIM_STATE, "not_evaluated");
     assert!(matches!(FrontierKind::Execution, FrontierKind::Execution));
 }

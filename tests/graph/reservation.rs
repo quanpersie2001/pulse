@@ -696,10 +696,7 @@ fn packet_file(repo: &std::path::Path, lease_id: &str) -> std::path::PathBuf {
         .join(format!("{lease_id}.json"))
 }
 
-fn records_for_key(
-    repo: &std::path::Path,
-    key: &str,
-) -> Vec<pulse::reservation::CoreReservationV1> {
+fn records_for_key(repo: &std::path::Path, key: &str) -> Vec<pulse::reservation::CoreReservation> {
     let key_hash = pulse::canonical_json::hash_bytes(key.as_bytes());
     let directory = repo.join(".pulse/runtime/assignment/reservations");
     let mut records = std::fs::read_dir(&directory)
@@ -707,7 +704,7 @@ fn records_for_key(
         .map(|entry| entry.unwrap().path())
         .filter(|path| path.extension().and_then(|ext| ext.to_str()) == Some("json"))
         .map(|path| {
-            let record: pulse::reservation::CoreReservationV1 =
+            let record: pulse::reservation::CoreReservation =
                 serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
             record
         })
@@ -736,10 +733,10 @@ fn live_leases_for_key(repo: &std::path::Path, key: &str) -> Vec<String> {
 
 /// Deterministically move a reservation record into a terminal state the way a
 /// future state writer would: set the state and recompute the fingerprint so the
-/// record still passes `CoreReservationV1::validate`.
+/// record still passes `CoreReservation::validate`.
 fn terminalize(repo: &std::path::Path, lease_id: &str, state: ReservationState) -> Vec<u8> {
     let path = reservation_file(repo, lease_id);
-    let mut record: pulse::reservation::CoreReservationV1 =
+    let mut record: pulse::reservation::CoreReservation =
         serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
     record.state = state;
     record.reservation_fingerprint = record.compute_fingerprint().unwrap();
@@ -767,7 +764,7 @@ fn assert_fresh_generation_retry(
 
     let terminal_bytes = terminalize(repo.path(), &first.reservation.lease_id, terminal_state);
     assert_ne!(terminal_bytes, first_reservation_bytes);
-    let terminal_record: pulse::reservation::CoreReservationV1 =
+    let terminal_record: pulse::reservation::CoreReservation =
         serde_json::from_slice(&terminal_bytes).unwrap();
     assert_eq!(terminal_record.state, terminal_state);
 
@@ -788,7 +785,7 @@ fn assert_fresh_generation_retry(
     // The fresh generation carries its own live packet for the same subject.
     let retry_packet =
         std::fs::read(packet_file(repo.path(), &retry.reservation.lease_id)).unwrap();
-    let retry_packet: pulse::work_packet::WorkPacketV1 =
+    let retry_packet: pulse::work_packet::WorkPacket =
         serde_json::from_slice(&retry_packet).unwrap();
     assert_eq!(
         retry_packet.packet_fingerprint,
@@ -898,7 +895,7 @@ fn concurrent_terminal_retry_reuses_one_fresh_live_generation() {
     );
     assert_eq!(records_for_key(repo.path(), key).len(), 2);
     // The prior terminal record is still on disk, untouched.
-    let terminal: pulse::reservation::CoreReservationV1 = serde_json::from_slice(
+    let terminal: pulse::reservation::CoreReservation = serde_json::from_slice(
         &std::fs::read(reservation_file(repo.path(), &first.reservation.lease_id)).unwrap(),
     )
     .unwrap();

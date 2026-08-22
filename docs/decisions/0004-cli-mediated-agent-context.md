@@ -27,7 +27,7 @@ The Worker loads the exact committed execution contract with:
 pulse work packet <ticket-id> --lease <lease-id> --json
 ```
 
-The lease-bound form resolves the immutable `WorkPacketV1` committed with the
+The lease-bound form resolves the immutable `WorkPacket` committed with the
 Core reservation. It validates Ticket revision, lease and packet fingerprint
 and does not silently rebuild from a newer live Ticket revision. Daemon-owned
 Workspace and Session identities are correlated only through the typed

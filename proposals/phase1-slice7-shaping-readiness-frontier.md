@@ -64,15 +64,15 @@ gated path `draft -> shaped -> ready` theo owner contract.
 `shaping_validation` receipt khi đó chỉ có skeletal payload v1 với
 `owning_work`, `risk`, một `destination` string, summary arrays và
 `approval_assertion`; JSON Schema trên disk chỉ enforce `payload_version`.
-Slice 7 đã hoàn thiện chính current payload v1 này. Internal placeholder bytes
+Slice 7 đã hoàn thiện chính current payload này. Internal placeholder bytes
 không trở thành historical compatibility family.
 
 ## Implementation và verification record
 
-Commit `677c593` triển khai Slice 7 trên current baseline v1:
+Commit `677c593` triển khai Slice 7 trên current baseline:
 
-- typed event envelope v1 với typed actor/subject và optional correlation;
-- completed `shaping_validation` payload v1, `decision_acceptance` payload v1 và
+- typed event envelope với typed actor/subject và optional correlation;
+- completed `shaping_validation` payload, `decision_acceptance` payload và
   schema/manifest validation;
 - tracked default-deny authority policy với validation/fingerprint/query;
 - contract, QA-impact và shaping mutation APIs/CLI với CAS, authority,
@@ -90,7 +90,7 @@ queries không bootstrap docs/evidence planes; missing Decision acceptance proof
 fence.
 
 Slice exit không bao gồm Phase 2 runner/lease/work packet hoặc full
-conversational `pulse-shape`, và không bao gồm Phase 3 QA baseline/case resolver.
+conversational shaping flow, và không bao gồm Phase 3 QA baseline/case resolver.
 
 ## Vị trí của slice trong Pulse Reboot
 
@@ -133,7 +133,7 @@ Agent/human:
 - kernel không tự viết Decision hoặc Ticket;
 - kernel không tự đánh giá recommendation semantic có tốt hay không.
 
-`pulse-shape` ở Phase 2/3 sẽ tạo/review inputs bằng repo-grounded,
+Shaping actor ở Phase 2/3 sẽ tạo/review inputs bằng repo-grounded,
 one-question-at-a-time grilling. Slice 7 chỉ cho capability đó một contract
 local, typed, auditable và recoverable để publish kết quả.
 
@@ -148,11 +148,11 @@ vào structural executability.
 Readiness là module riêng compose nhiều gate families. Điều này giữ output
 explainable và tránh một boolean `is_ready` khó audit.
 
-### S7-D2 — Current shaping receipt payload v1 là typed immutable result; map là index
+### S7-D2 — Current shaping receipt payload là typed immutable result; map là index
 
 - Canonical answers vẫn sống ở Decision, Ticket/Story contract, research hoặc
   prototype evidence tương ứng.
-- Current `shaping_validation` payload v1 được hoàn thiện thành immutable
+- Current `shaping_validation` payload được hoàn thiện thành immutable
   observation/assertion bind exact revisions và content bytes.
 - Optional `shaping.md`/`approach.md` map là human-facing low-resolution index,
   bind bằng path/revision/content hash.
@@ -255,7 +255,7 @@ Vì vậy Slice 7 có thể mở ready trung thực cho internal/no-checkpoint w
 không dispatch behavior-affecting work thiếu QA contract. Initial profile:
 
 ```text
-phase1_contract_readiness_v1
+contract_readiness
 ```
 
 Output luôn giữ:
@@ -278,17 +278,17 @@ profile khi cần. `ready` không bao giờ có nghĩa “QA unknown nhưng sẽ
 
 Triển khai shaping/readiness foundation để có thể:
 
-- hoàn thiện current node schema v1 với typed work role, risk/materialization,
+- hoàn thiện current node schema với typed work role, risk/materialization,
   implementation contract và shaping pointer;
 - phân biệt implementation Ticket với decision-work Ticket mà không thêm node
   kind hoặc hierarchy thứ hai;
-- hoàn thiện current `shaping_validation` payload v1 với contract revision bindings, destination, exit
+- hoàn thiện current `shaping_validation` payload với contract revision bindings, destination, exit
   condition, critical branches, dispositions, bounded fog, out-of-scope,
   canonical resolution pointers, approvals và reconciliation provenance;
 - record minimal immutable Decision acceptance proof cho hard-to-reverse
   references;
 - store minimal QA-impact posture so `unknown` cannot pass ready;
-- update development receipts/fixtures to the completed current payload v1; older
+- update development receipts/fixtures to the completed current payload; older
   internal placeholder bytes are regenerated or rejected as drift, not migrated;
 - apply một current shaping receipt vào owning work bằng expected-revision CAS;
 - validate map path/revision/content hash và stale bindings;
@@ -302,7 +302,7 @@ Triển khai shaping/readiness foundation để có thể:
 - derive execution frontier cho implementation Tickets status `ready` và
   current readiness pass;
 - rebuild projection/cache mà không đổi semantics;
-- cung cấp stable extension points cho minimal `pulse-shape`, work packet,
+- cung cấp stable extension points cho minimal shaping flow, work packet,
   prompt builder, lease và reconciliation ở Phase 2.
 
 ## Acceptance scope
@@ -329,7 +329,7 @@ Triển khai shaping/readiness foundation để có thể:
 
 ### Scenario chỉ chuẩn bị boundary
 
-- **#33:** Slice 7 cung cấp output contract cho `pulse-shape`; conversational
+- **#33:** Slice 7 cung cấp output contract cho shaping actor; conversational
   grounding/question flow defer Phase 2/3.
 - **#36:** Slice 7 encode implementation freedom và blocking ambiguity;
   Worker `decision_request` defer Phase 2.
@@ -355,13 +355,13 @@ work contract + shaping evidence tới readiness/frontier projections.
 
 Slice exit **không** đồng nghĩa:
 
-- `pulse-shape` conversational capability đã hoàn chỉnh;
+- conversational shaping capability đã hoàn chỉnh;
 - work packet/prompt builder đã tồn tại;
 - Worker đã được dispatch;
 - lease/source workspace đã được acquire;
 - full QA baseline/case execution đã được resolve;
 - Ticket có thể transition `active|verifying|done`;
-- Phase 2 hoặc Core v1 đã hoàn thành.
+- Phase 2 hoặc Core đã hoàn thành.
 
 ## Non-goals
 
@@ -395,7 +395,7 @@ PULSE.md
 
   workgraph/
     schemas/
-      node.schema.json              # current schema v1 amended in place
+      node.schema.json              # current schema amended in place
     nodes/
       ST-014.json                   # current shaping pointer
       TK-031.json                   # implementation contract
@@ -403,8 +403,8 @@ PULSE.md
 
   evidence/
     schemas/
-      shaping-validation.v1.schema.json
-      decision-acceptance.v1.schema.json
+      shaping-validation.schema.json
+      decision-acceptance.schema.json
     receipts/
       rcpt_01J....json
 
@@ -441,7 +441,7 @@ Ownership:
 - readiness/frontier cache là disposable;
 - map không phải canonical decision database hoặc writable frontier store.
 
-## Current node schema v1 completion
+## Current node schema completion
 
 ### Baseline rule
 
@@ -451,7 +451,7 @@ tests and fixtures. It does not add a predecessor model, schema-upgrade event,
 migrate-on-load path or migration command for internal Slice state.
 
 Current development repositories/fixtures are regenerated or updated to the
-completed v1 shape. Unknown or manually drifted repository schemas remain
+completed shape. Unknown or manually drifted repository schemas remain
 default-deny and are rejected rather than guessed or silently rewritten. Public
 Ticket creation requires explicit assessed role/risk/materialization; canonical
 draft/bootstrap state may retain the explicit `unassessed` domain value without
@@ -459,7 +459,7 @@ fabricating an implementation contract, shaping receipt or Markdown content.
 
 ### Semantic contract revision
 
-The current node v1 baseline includes:
+The current node baseline baseline includes:
 
 ```jsonc
 {
@@ -488,7 +488,7 @@ Rules:
 
 - contract mutation bumps both revisions;
 - pointer/status mutation bumps only normal revision;
-- shaping receipt payload v1 binds `contract_revision` as freshness boundary and records
+- shaping receipt payload binds `contract_revision` as freshness boundary and records
   normal node revision only as observed audit context;
 - generic evidence `bindings.work` may become historical after apply/transition,
   but shaping-specific currentness remains valid while exact contract revision
@@ -792,7 +792,7 @@ Rules:
 - old receipt remains historical;
 - no branch/fog/frontier array stored in node.
 
-## Current shaping receipt payload v1
+## Current shaping receipt payload
 
 ### Baseline completion
 
@@ -808,7 +808,7 @@ explicit by receipt kind and current payload version.
 
 ### Envelope requirements
 
-A readiness-eligible current payload v1 receipt requires:
+A readiness-eligible current payload receipt requires:
 
 - `kind=shaping_validation`;
 - `result=passed`;
@@ -1151,7 +1151,7 @@ Rules:
 - default deny;
 - exact `(kind,id)` match;
 - actor syntax compatible evidence `human|agent|system`;
-- no wildcard grant in v1;
+- no wildcard grant in the current contract;
 - principal/grants sorted deterministic;
 - policy revision/fingerprint participates readiness fingerprint;
 - required grants are derived by kernel from operation, materialization,
@@ -1196,7 +1196,7 @@ pulse work shaping apply <owner-id>
 Preconditions:
 
 1. owner exists and normal revision matches;
-2. receipt exists, integrity valid, kind `shaping_validation`, current payload v1, result passed;
+2. receipt exists, integrity valid, kind `shaping_validation`, current payload, result passed;
 3. receipt subject/owning work matches current owner `contract_revision`;
 4. required contract/content/source/map bindings current;
 5. branch/fog/disposition structural invariants pass;
@@ -1254,7 +1254,7 @@ pulse work shaping invalidate <owner-id>
 Initial profile ID:
 
 ```text
-phase1_contract_readiness_v1
+contract_readiness
 ```
 
 Only implementation Ticket can be ready under this profile. Decision-work
@@ -1285,7 +1285,7 @@ unavailable
 {
   "schema_version": 1,
   "subject": {"id": "TK-031", "revision": 4},
-  "profile": "phase1_contract_readiness_v1",
+  "profile": "contract_readiness",
   "status": "ready",
   "transition_eligible": true,
   "dispatch_authorized": false,
@@ -1529,7 +1529,7 @@ Open through dedicated gate, not generic ungated table.
 
 Requires:
 
-- current shaping-validation payload v1 receipt applied;
+- current shaping-validation payload receipt applied;
 - receipt integrity/current bindings pass;
 - materialization/shape mode/destination/map requirements pass;
 - branch/fog structural validation pass;
@@ -1541,7 +1541,7 @@ Transition event `work.node.transitioned` adds:
 
 ```jsonc
 {
-  "gate_profile": "phase1_shaped_v1",
+  "gate_profile": "shaped",
   "shaping_receipt": {"id": "rcpt_...", "hash": "sha256:..."},
   "input_fingerprint": "sha256:..."
 }
@@ -1549,7 +1549,7 @@ Transition event `work.node.transitioned` adds:
 
 ### `shaped -> ready`
 
-Requires complete `phase1_contract_readiness_v1` pass under write fence.
+Requires complete `contract_readiness` pass under write fence.
 
 CLI may accept expected fingerprint to prevent acting on an old query:
 
@@ -1683,7 +1683,7 @@ boundary.
   "kind": "execution",
   "for": "ST-014",
   "graph_fingerprint": "sha256:...",
-  "readiness_profile": "phase1_contract_readiness_v1",
+  "readiness_profile": "contract_readiness",
   "claim_state": "not_evaluated",
   "dispatch_authorized": false,
   "items": [
@@ -1712,7 +1712,7 @@ shaping contract names that owner. Traversal bounded/cycle-safe and deterministi
 
 ### Ordering
 
-- deterministic by subject ID in v1;
+- deterministic by subject ID;
 - soft preference included as metadata, not membership blocker;
 - priority included as display metadata only when schema supports it;
 - semantic scheduling/order is a separate reconciliation result/event.
@@ -1751,13 +1751,13 @@ pulse work shaping invalidate <owner-id>
   [--json]
 
 pulse work ready <ticket-id>
-  [--profile phase1_contract_readiness_v1]
+  [--profile contract_readiness]
   [--json]
 
 pulse work frontier
   --kind <decision|execution>
   [--for <epic-or-story-id>]
-  [--profile phase1_contract_readiness_v1]
+  [--profile contract_readiness]
   [--include-excluded]
   [--json]
 
@@ -1805,7 +1805,7 @@ pulse qa ...
 ```text
 src/
   graph/
-    node.rs                    # current v1 role/contract/shaping pointer
+    node.rs                    # current role/contract/shaping pointer
     contract.rs                # implementation + decision-work validation
     shaping.rs                 # current pointer/apply/invalidate + map checks
     readiness.rs               # pure gate-family composition
@@ -1817,7 +1817,7 @@ src/
 
   evidence/
     model.rs                   # shaping/Decision payload typed dispatch
-    shaping.rs                 # current v1 structural validation/currentness
+    shaping.rs                 # current structural validation/currentness
     decision.rs                # immutable Decision acceptance proof
     receipt.rs                 # shared integrity/binding validation
 
@@ -1828,8 +1828,8 @@ src/
   schema/
     node.schema.json
     evidence/
-      shaping-validation.v1.schema.json
-      decision-acceptance.v1.schema.json
+      shaping-validation.schema.json
+      decision-acceptance.schema.json
     policy/
       authority.schema.json
 
@@ -1838,7 +1838,7 @@ src/
 
 tests/
   shaping_contract.rs
-  shaping_receipt_v1.rs
+  shaping_receipt.rs
   readiness.rs
   readiness_cli_contract.rs
   frontier.rs
@@ -1862,12 +1862,12 @@ Boundary rules:
 ### Current baseline publication
 
 Bootstrap templates, Rust models, JSON Schemas, tests and fixture repositories
-are updated together to the completed current v1 baseline. Existing transaction
+are updated together to the completed current baseline. Existing transaction
 recovery remains responsible for actual node/event and receipt/event mutations;
 there is no schema-migration transaction or migration event in Slice 7. Read-only
 commands never bootstrap or rewrite canonical planes.
 
-Slice 7 also reconciles `src/event.rs` to the typed current event envelope v1 in
+Slice 7 also reconciles `src/event.rs` to the typed current event envelope in
 [`04-runtime-harness.md`](../pulse-reboot/04-runtime-harness.md#event-envelope):
 `schema_version`, `id`, `event_type`, `occurred_at`, typed actor/subject,
 optional typed correlation, and event-specific payload. The earlier internal
@@ -1944,7 +1944,7 @@ Pulse cannot prevent arbitrary editor writes outside lock. It must detect:
 ```jsonc
 {
   "readiness": {
-    "profile": "phase1_contract_readiness_v1",
+    "profile": "contract_readiness",
     "tickets": {}
   },
   "frontiers": {
@@ -2042,7 +2042,7 @@ frontier_claim_state_not_evaluated
 
 `graph validate` extensions:
 
-1. current schema v1 role/contract combinations;
+1. current schema role/contract combinations;
 2. role only on Ticket;
 3. brief/map path safety and current hash;
 4. current shaping pointer receipt identity/hash/subject;
@@ -2073,8 +2073,8 @@ self-hosting/import capability được chấp thuận riêng, các units dướ
 
 | Unit | Outcome | Phụ thuộc |
 |---|---|---|
-| S7-I1 | Reconcile typed event envelope v1 and verify the existing current node v1 contract foundation stays aligned across schema/Rust/tests | — |
-| S7-I2 | Authority policy loader/fingerprint, completed shaping receipt payload v1 and Decision acceptance proof | S7-I1 |
+| S7-I1 | Reconcile typed event envelope and verify the existing current node baseline contract foundation stays aligned across schema/Rust/tests | — |
+| S7-I2 | Authority policy loader/fingerprint, completed shaping receipt payload and Decision acceptance proof | S7-I1 |
 | S7-I3 | Contract/QA/shaping/Decision mutation APIs, CLI, CAS, events và recovery | S7-I1, S7-I2 |
 | S7-I4 | Readiness composition, narrow fingerprint, stale-ready semantics và lifecycle gates qua `ready` | S7-I2, S7-I3 |
 | S7-I5 | Deterministic decision/execution frontier projections và CLI | S7-I4 |
@@ -2092,11 +2092,11 @@ này chỉ để mô phỏng target-repository usage.
 
 ## Test matrix
 
-### Current schema v1
+### Current schema
 
 | ID | Scenario | Roadmap | Kỳ vọng |
 |---|---|---:|---|
-| S7-01 | Current node v1 schema/Rust/template alignment | prerequisite | One current baseline; no v2/predecessor/migration path |
+| S7-01 | Current node schema/Rust/template alignment | prerequisite | One current baseline; no v2/predecessor/migration path |
 | S7-02 | Unknown or manually drifted repository schema | integrity | Reject and preserve files; do not infer/migrate |
 | S7-03 | Public create and canonical draft classification | contract | Public create requires assessed classification; draft/bootstrap may use explicit unassessed without fake contract |
 | S7-04 | Role fields on non-Ticket | schema | Reject |
@@ -2119,7 +2119,7 @@ này chỉ để mô phỏng target-repository usage.
 
 | ID | Scenario | Roadmap | Kỳ vọng |
 |---|---|---:|---|
-| S7-14 | Placeholder/internal shaping receipt bytes | development drift | Regenerate fixture or reject; only completed current payload v1 is gate-eligible |
+| S7-14 | Placeholder/internal shaping receipt bytes | development drift | Regenerate fixture or reject; only completed current payload is gate-eligible |
 | S7-15 | Valid R0 concise receipt | #35 | Can support shaped without map |
 | S7-16 | R2 multi-session effort missing destination/map | #37 | Shaped gate fails; ordinary focused R2 may omit map |
 | S7-17 | Map hash/revision mismatch | #37 | Receipt/readiness stale |
@@ -2209,7 +2209,7 @@ này chỉ để mô phỏng target-repository usage.
 |---|---|---:|---|
 | S7-72 | Crash after contract node before event | recovery | Exactly one event after recovery |
 | S7-73 | Crash after shaping pointer before event | recovery | Pointer/event coherent |
-| S7-74 | Current evidence v1 template/model mismatch | integrity | Reject drift; no migration or read-side rewrite |
+| S7-74 | Current evidence template/model mismatch | integrity | Reject drift; no migration or read-side rewrite |
 | S7-75 | Manual conflicting edit during recovery | recovery | Stop, preserve intent/evidence |
 | S7-76 | Map bytes change during ready evaluation | consistency | `readiness_inputs_changed` |
 | S7-77 | Concurrent docs registry mutation/readiness transition | consistency | Coherent before or after snapshot |
@@ -2225,7 +2225,7 @@ Decision/docs/map bindings.
 
 Các mục dưới đây đã được verify tại commit `677c593` và full test run 340 tests:
 
-- [x] Current node schema v1, Rust model, bootstrap template, tests and fixtures
+- [x] Current node schema, Rust model, bootstrap template, tests and fixtures
   agree; no v2/predecessor/migration path is introduced.
 - [x] Ticket có typed `implementation|decision_work` role; không thêm node kind
   hoặc hierarchy thứ hai.
@@ -2243,7 +2243,7 @@ Các mục dưới đây đã được verify tại commit `677c593` và full te
   target.
 - [x] Current shaping pointer reference immutable receipt ID/hash và optional
   map path/revision/hash; node không embed frontier/branch truth.
-- [x] Current shaping receipt payload v1 schema/typed decoder cover contract revisions,
+- [x] Current shaping receipt payload schema/typed decoder cover contract revisions,
   destination, branches, dispositions, fog, out-of-scope, resolution pointers,
   approval, reconciliation và remaining uncertainty.
 - [x] Evidence manifest/bootstrap references the completed current shaping
@@ -2314,14 +2314,14 @@ canonical graph/lifecycle
 
 Phase 2 có thể xây mà không đổi identity cơ bản:
 
-### Minimal `pulse-shape`
+### Minimal shaping flow
 
 - ground work/docs/Decisions/code trước khi hỏi;
 - one-question-at-a-time dependency walk;
 - recommended answer khi có strong default;
 - classify gap thành fact/intent/tradeoff/fidelity/prerequisite;
 - materialize đúng Ticket/Story/Decision/docs owner;
-- record shaping receipt payload v1;
+- record shaping receipt payload;
 - apply receipt và query readiness.
 
 ### Shaping reconciliation
@@ -2366,7 +2366,7 @@ support conversation/runtime.
 
 ## Phase 3 follow-up
 
-- Full `pulse-shape` risk-adaptive capability pack and reviewer/eval.
+- Full risk-adaptive shaping capability pack and reviewer/eval.
 - Machine config/init/doctor policy UX for authority registry.
 - Story QA baseline, affected/new case resolution and executor/receipt
   validation for `qa.impact=required`.

@@ -174,7 +174,7 @@ impl SectionRecord {
     pub const SCHEMA_VERSION: u32 = 1;
 }
 
-/// Normalize a heading's visible text into a stable anchor (algorithm v1).
+/// Normalize a heading's visible text into a stable anchor.
 ///
 /// Steps (versioned in [`ANCHOR_VERSION`]):
 /// 1. trim Unicode whitespace;

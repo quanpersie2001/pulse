@@ -50,29 +50,6 @@ fn combined_sources(roots: &[&str]) -> String {
         .join("\n")
 }
 
-fn text_files(root: &Path) -> Vec<(PathBuf, String)> {
-    let mut pending = vec![root.to_path_buf()];
-    let mut files = Vec::new();
-    while let Some(dir) = pending.pop() {
-        for entry in fs::read_dir(&dir).unwrap_or_else(|error| {
-            panic!("failed to read {}: {error}", dir.display());
-        }) {
-            let entry = entry.expect("distribution entry should be readable");
-            let path = entry.path();
-            if path.is_dir() {
-                pending.push(path);
-            } else if path.is_file() {
-                let body = fs::read_to_string(&path).unwrap_or_else(|error| {
-                    panic!("failed to read {}: {error}", path.display());
-                });
-                files.push((path, body));
-            }
-        }
-    }
-    files.sort_by(|left, right| left.0.cmp(&right.0));
-    files
-}
-
 fn store_sources() -> String {
     combined_sources(&["src/graph/store"])
 }
@@ -229,149 +206,71 @@ fn daemon_is_the_only_runtime_lifecycle_authority() {
 }
 
 #[test]
-fn packaged_workflow_has_no_legacy_node_runtime_or_canonical_writers() {
-    let workflow_source = repo_root().join("skills/workflow");
-    assert!(workflow_source.is_dir(), "workflow source must be packaged");
-    assert!(
-        !workflow_source.join("scripts").exists(),
-        "legacy Node workflow runtime must not be shipped"
-    );
+fn legacy_skill_surfaces_are_absent() {
+    for legacy in ["skills", "dist", ".codex-plugin", ".claude-plugin"] {
+        assert!(
+            !repo_root().join(legacy).exists(),
+            "legacy skill/plugin surface still exists at {legacy}"
+        );
+    }
 
-    let distribution = repo_root().join("dist");
-    assert!(
-        distribution.is_dir(),
-        "tracked distribution must be generated before architecture guards run"
-    );
-
-    let forbidden = [
-        "pulse.mjs",
-        "items.jsonl",
-        "runtime/state.json",
-        "runtime/STATE.md",
-        "runtime/reservations.json",
-        "workflow/scripts",
-        ".pulse/runtime",
-        ".pulse/harness",
-        ".pulse/scripts",
-        ".pulse/workgraph/schema.json",
-        ".pulse/workgraph/views/",
-        "tooling-status.json",
-        "session-load",
-        "runtime mirror",
-        "handoff manifest",
-        "backup-",
-        "backed-up",
-        "pulse work doctor",
-        "pulse work dep",
-        "pulse work link",
-        "workgraph create",
-        "workgraph dep",
-        "workgraph link",
-        "workgraph views",
-        "pulse work update",
-        "pulse work close",
-        "pulse work reopen",
-        "--to done",
-        "T-",
-        "B-",
-        "TASK",
-        "BUG",
-        "pulse status ",
-        "pulse ready ",
-        "pulse reservation ",
-        "{{pulse_command}}",
-        "the Rust `pulse` executable`",
-        "content_dir=works/epics",
-        "works/epics/",
-        "node scripts/",
-        "node_modules/",
-        "content_path",
-        "verification_path",
-        "pulse:workflow onboard",
-    ];
-    for (path, body) in text_files(&workflow_source).into_iter().chain(
-        text_files(&distribution).into_iter().filter(|(path, _)| {
-            path.components()
-                .any(|component| component.as_os_str() == "workflow")
-        }),
-    ) {
-        let display = path.display().to_string();
-        for marker in forbidden {
+    for contract_doc in ["README.md", "CONTRIBUTING.md", "AGENTS.md"] {
+        let body = source(contract_doc);
+        for legacy_marker in ["pulse:workflow", "skills/workflow", "plugin marketplace"] {
             assert!(
-                !display.contains(marker) && !body.contains(marker),
-                "legacy packaged workflow marker `{marker}` found in {display}"
+                !body.contains(legacy_marker),
+                "{contract_doc} advertises removed legacy surface `{legacy_marker}`"
             );
         }
     }
-
-    let providers = source("scripts/lib/providers.mjs");
-    assert!(
-        providers.contains("return \"pulse\";"),
-        "rendered workflow commands must invoke the Rust pulse executable"
-    );
-    let builder = source("scripts/build-skills.mjs");
-    assert!(
-        builder.contains("assertRustRuntimeDistribution"),
-        "package generation must enforce the distribution runtime guard"
-    );
 }
 
 #[test]
-fn packaged_workflow_matches_current_rust_cli_contract() {
-    let workflow_source = repo_root().join("skills/workflow");
-    let distribution = repo_root().join("dist");
-    let source_text = text_files(&workflow_source)
-        .into_iter()
-        .map(|(_, body)| body)
-        .collect::<Vec<_>>()
-        .join("\n");
-    let dist_text = text_files(&distribution)
-        .into_iter()
-        .filter(|(path, _)| {
-            path.components()
-                .any(|component| component.as_os_str() == "workflow")
-        })
-        .map(|(_, body)| body)
-        .collect::<Vec<_>>()
-        .join("\n");
-
-    for (label, body) in [("source", source_text), ("dist", dist_text)] {
-        for marker in [
-            "Canonical statuses are `DRAFT`, `SHAPED`, `READY`, `ACTIVE`, `VERIFYING`",
-            "the canonical item status is `READY`",
-            "--role implementation",
-            "--risk low",
-            "--materialization R1",
-            "MutationOutcome.value",
-            "Node.content_dir",
-            "`content_dir` is exactly `works/<node-id>`",
-            "content_dir=works/TK-12",
-            "pulse:workflow use",
-            "full close gate",
-        ] {
+fn current_contract_names_do_not_embed_version_suffixes() {
+    for (path, body) in rust_sources("src") {
+        for token in
+            body.split(|character: char| !(character.is_ascii_alphanumeric() || character == '_'))
+        {
+            let uppercase_suffix = token.rsplit_once('V').is_some_and(|(base, suffix)| {
+                !base.is_empty()
+                    && base.chars().next().is_some_and(char::is_uppercase)
+                    && !suffix.is_empty()
+                    && suffix.chars().all(|character| character.is_ascii_digit())
+            });
+            let snake_suffix = token.rsplit_once("_v").is_some_and(|(base, suffix)| {
+                !base.is_empty()
+                    && !suffix.is_empty()
+                    && suffix.chars().all(|character| character.is_ascii_digit())
+            });
             assert!(
-                body.contains(marker),
-                "{label} workflow contract marker is missing: {marker}"
+                !uppercase_suffix && !snake_suffix,
+                "{} contains version-suffixed current contract name `{token}`",
+                path.display()
             );
         }
-        assert!(
-            !body.contains("pulse:workflow onboard"),
-            "{label} workflow advertises an unrouted onboard command"
-        );
-        assert!(
-            !body.contains("content_path") && !body.contains("verification_path"),
-            "{label} workflow advertises nonexistent response fields"
-        );
-        assert!(
-            !body.contains("content_dir=works/epics"),
-            "{label} workflow fabricates a nested Node content directory"
-        );
-        assert!(
-            !body.contains("works/epics/"),
-            "{label} workflow ships the retired nested works hierarchy"
-        );
     }
 
+    let evidence_schemas = repo_root().join("src/schema/evidence");
+    for entry in fs::read_dir(&evidence_schemas).expect("evidence schemas should be readable") {
+        let path = entry.expect("schema entry should be readable").path();
+        let name = path
+            .file_name()
+            .and_then(|value| value.to_str())
+            .expect("schema filename should be UTF-8");
+        let embeds_schema_version = name.split(".v").skip(1).any(|suffix| {
+            suffix.split_once('.').is_some_and(|(version, _)| {
+                !version.is_empty() && version.chars().all(|character| character.is_ascii_digit())
+            })
+        });
+        assert!(
+            !embeds_schema_version,
+            "current schema filename embeds a version suffix: {name}"
+        );
+    }
+}
+
+#[test]
+fn work_content_dir_contract_is_enforced_by_rust() {
     let node_model = source("src/graph/model/node.rs");
     assert!(
         node_model.contains("content_dir: format!(\"works/{id}\")"),
@@ -416,7 +315,7 @@ fn provider_launch_is_owned_by_daemon_process_owner() {
         "PULSE_CODEX_EXECUTABLE",
         "\"app-server\"",
         "__run-supervisor",
-        "RunRecordV1",
+        "RunRecord",
         "RunnerProfile",
     ] {
         assert!(

@@ -136,4 +136,4 @@ Có thể dùng hai Agent độc lập đề xuất ordering khi stakes cao:
 - Scheduling decision phải gắn graph revision để tránh dùng trên backlog đã thay đổi.
 - Không dispatch work có hard blocker hoặc exclusive lease sống.
 - Public/safety documentation gap có thể là hard blocker; cosmetic cleanup thường chỉ là soft preference.
-- Reconciliation failure hoặc docs-context failure lặp lại phải trở thành eval/skill improvement.
+- Reconciliation failure hoặc docs-context failure lặp lại phải trở thành guidance, check hoặc eval improvement.

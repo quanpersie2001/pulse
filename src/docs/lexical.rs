@@ -17,7 +17,7 @@ use crate::{PulseError, PulseResult};
 
 pub const TANTIVY_COMPAT_VERSION: &str = "tantivy-0.22-pulse-docs-v2";
 pub const SNIPPET_MAX_BYTES: usize = 500;
-pub const PULSE_IDENTIFIER_TOKENIZER: &str = "pulse_identifier_v1";
+pub const PULSE_IDENTIFIER_TOKENIZER: &str = "pulse_identifier";
 
 #[derive(Debug, Clone)]
 pub struct LexicalSchema {

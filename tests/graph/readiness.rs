@@ -740,7 +740,7 @@ fn draft_to_shaped_transition_records_shaped_gate_profile() {
     assert_eq!(shaped.status, NodeStatus::Shaped);
     let events = collect_events(repo, "work.node.transitioned");
     let last = events.last().unwrap();
-    assert_eq!(last["payload"]["gate_profile"], "phase1_shaped_v1");
+    assert_eq!(last["payload"]["gate_profile"], "shaped");
     assert!(last["payload"]["input_fingerprint"]
         .as_str()
         .unwrap()
@@ -789,7 +789,7 @@ fn shaped_to_ready_requires_authority_and_passing_gate() {
     assert_eq!(ready_events.len(), 1);
     assert_eq!(
         ready_events[0]["payload"]["gate_profile"],
-        "phase1_contract_readiness_v1"
+        "contract_readiness"
     );
     assert!(ready_events[0]["payload"]["input_fingerprint"]
         .as_str()
@@ -917,7 +917,7 @@ fn ready_transition_crash_recovers_coherent_event() {
     assert_eq!(ready_events.len(), 1);
     assert_eq!(
         ready_events[0]["payload"]["gate_profile"],
-        "phase1_contract_readiness_v1"
+        "contract_readiness"
     );
 }
 

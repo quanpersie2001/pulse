@@ -28,7 +28,7 @@ use pulse::storage::transaction::{recover_prepared_transactions, TransactionFail
 use pulse::storage::{bootstrap as storage_bootstrap, safe_repo_relative, MANIFEST_JSON};
 use pulse::work_packet::{
     PacketBudget, PacketCapabilities, PacketDispatch, PacketKnowledge, PacketSource,
-    PacketWorkspace, WorkPacketV1, BUDGET_PROFILE, MAX_CANONICAL_JSON_BYTES, PACKET_PROFILE,
+    PacketWorkspace, WorkPacket, BUDGET_PROFILE, MAX_CANONICAL_JSON_BYTES, PACKET_PROFILE,
     WORK_PACKET_SCHEMA,
 };
 use pulse::{JsonGraphStore, PulseError, PulseResult, Result};
@@ -240,12 +240,12 @@ fn work_packet_public_paths_compile() {
     // from integration tests (external crate consumers).
 
     // Constants.
-    assert_eq!(PACKET_PROFILE, "phase2_work_packet_preview_v1");
-    assert_eq!(BUDGET_PROFILE, "phase2_work_packet_preview_budget_v1");
+    assert_eq!(PACKET_PROFILE, "work_packet_preview");
+    assert_eq!(BUDGET_PROFILE, "work_packet_preview_budget");
     assert_eq!(MAX_CANONICAL_JSON_BYTES, 131_072);
 
     // Schema & defaults.
-    assert!(WORK_PACKET_SCHEMA.contains("WorkPacketV1"));
+    assert!(WORK_PACKET_SCHEMA.contains("WorkPacket"));
 
     let budget = PacketBudget::default();
     assert_eq!(budget.profile, BUDGET_PROFILE);
@@ -282,7 +282,7 @@ fn work_packet_public_paths_compile() {
     let _s: &str = &workspace.required_strategy;
 
     // Verify that all major public DTO paths compile.
-    fn _accepts_packet(_: WorkPacketV1) {}
+    fn _accepts_packet(_: WorkPacket) {}
     fn _accepts_dispatch(_: PacketDispatch) {}
     fn _accepts_source(_: PacketSource) {}
     _accepts_dispatch(PacketDispatch::default());

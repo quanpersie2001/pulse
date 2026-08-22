@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://pulse.reboot/schemas/capability-inventory.schema.json",
-  "title": "CapabilityInventoryV1",
+  "title": "CapabilityInventory",
   "description": "Concrete capability inventory for an assignee. Input to the claim pipeline.",
   "type": "object",
   "additionalProperties": false,

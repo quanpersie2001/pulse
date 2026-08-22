@@ -6,7 +6,7 @@ Accepted.
 
 ## Context
 
-Pulse is still converging toward its initial Core v1 release. Earlier Phase 1
+Pulse is still converging toward its initial Core release. Earlier Phase 1
 implementation proposals treated intermediate Slice state as if it were released
 schema or payload history, which introduced predecessor models and migration
 work for development data that Pulse had never promised to support.
@@ -16,10 +16,13 @@ schema, payload, event, receipt, or API versions.
 
 ## Decision
 
-Before the initial Core v1 release, each persisted or public contract family has
-one current baseline, conventionally version `1` when a version field is needed.
-When the design changes, Pulse updates that current baseline in place across its
-owner docs, schemas, source, tests, and fixtures.
+Before the initial Core release, each persisted or public contract family has
+one current baseline. A numeric version remains data only when a persisted
+record or protocol envelope needs explicit compatibility validation. Current
+Rust types, schema filenames, profile IDs, capability IDs, and other public
+names do not carry `V1`, `V2`, `_v1`, or equivalent suffixes when there is only
+one supported contract. When the design changes, Pulse updates that current
+baseline in place across its owner docs, schemas, source, tests, and fixtures.
 
 Internal development state, historical Slice bytes, and local fixtures are not
 supported predecessor state. They are regenerated, updated to the current
@@ -42,5 +45,5 @@ compatibility boundary.
 - Current pre-release schemas and payloads are amended directly.
 - Historical proposals may retain obsolete implementation history, but an active
   proposal must be re-baselined before reuse.
-- Core v1 does not carry migration code for internal development generations.
+- Core does not carry migration code for internal development generations.
 - Real post-release compatibility work remains explicit and evidence-backed.
