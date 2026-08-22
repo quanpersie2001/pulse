@@ -76,7 +76,16 @@ ownership remains documented by [`src/kernel/`](src/kernel/) and
 4. A bound acknowledgement activates the reserved Ticket.
 5. The worker implements and verifies the lease-bound packet in its workspace.
 6. Typed handoff moves the Ticket to independent verification.
-7. Verification may request rework or block the Ticket; the typed QA/close authority remains planned work.
+7. Verification maps every acceptance item to passing checks/evidence; Core may close a low-risk Ticket whose QA and documentation postures are both `none`.
+8. Required QA, documentation promotion, and medium-or-higher risk remain fail-closed until their dedicated assurance resolvers are installed.
+
+`pulse session verify` reads checks from `--checks` and the acceptance map from
+`--acceptance`. The acceptance file is a JSON array of
+`{"acceptance_id","check_names","evidence_receipt_ids"}` objects and must cover
+the exact current contract IDs. After a passed verification, an authorized
+reviewer invokes `pulse session close-assignment <saga-id> --actor ...
+--source-commit ... --summary ...`; Core revalidates every binding before
+writing the close receipt and `done` transition.
 
 ### The 4 Human Gates
 

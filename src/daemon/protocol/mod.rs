@@ -10,10 +10,11 @@ use crate::daemon::session::{CommunicationGrantRecord, SessionMessageRecord, Ses
 use crate::daemon::timeline::{TimelineCursor, TimelinePage};
 use crate::daemon::workspace::{IsolationMode, WorkspaceRecord};
 use crate::execution::{
-    HandoffReceipt, VerificationCheck, VerificationDisposition, VerificationReceipt,
+    AcceptanceProof, CloseReceipt, HandoffReceipt, VerificationCheck, VerificationDisposition,
+    VerificationReceipt,
 };
 
-pub const PROTOCOL_VERSION: u32 = 3;
+pub const PROTOCOL_VERSION: u32 = 4;
 pub const DAEMON_CAPABILITIES: &[&str] = &[
     "project_registry",
     "workspace_manager",
@@ -184,6 +185,14 @@ pub enum DaemonRequest {
         disposition: VerificationDisposition,
         summary: String,
         checks: Vec<VerificationCheck>,
+        #[serde(default)]
+        acceptance_proofs: Vec<AcceptanceProof>,
+    },
+    AssignmentClose {
+        saga_id: String,
+        actor: String,
+        source_commit: String,
+        summary: String,
     },
     TimelineList {
         cursor: Option<TimelineCursor>,
@@ -352,6 +361,9 @@ pub enum DaemonResponse {
     },
     Verification {
         verification: VerificationReceipt,
+    },
+    Close {
+        close: CloseReceipt,
     },
     Accepted {
         resource_id: String,

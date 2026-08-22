@@ -236,6 +236,7 @@ impl DaemonApplication {
                 disposition,
                 summary,
                 checks,
+                acceptance_proofs,
             } => self.verification_complete(
                 saga_id,
                 actor,
@@ -243,8 +244,15 @@ impl DaemonApplication {
                 *disposition,
                 summary,
                 checks,
+                acceptance_proofs,
                 idempotency_key,
             )?,
+            DaemonRequest::AssignmentClose {
+                saga_id,
+                actor,
+                source_commit,
+                summary,
+            } => self.assignment_close(saga_id, actor, source_commit, summary, idempotency_key)?,
             DaemonRequest::TimelineList {
                 cursor,
                 limit,
@@ -340,6 +348,9 @@ impl DaemonApplication {
                 self.authorize_saga_session(principal, saga_id, "handoff")
             }
             DaemonRequest::VerificationComplete { saga_id, actor, .. } => {
+                self.authorize_verification(principal, saga_id, actor)
+            }
+            DaemonRequest::AssignmentClose { saga_id, actor, .. } => {
                 self.authorize_verification(principal, saga_id, actor)
             }
             _ => Ok(()),

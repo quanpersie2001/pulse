@@ -56,6 +56,18 @@ pub struct VerificationCheck {
     pub artifact_ids: Vec<String>,
 }
 
+/// Maps one contract acceptance item to passing verification checks and
+/// optional immutable evidence receipts.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct AcceptanceProof {
+    pub acceptance_id: String,
+    #[serde(default)]
+    pub check_names: Vec<String>,
+    #[serde(default)]
+    pub evidence_receipt_ids: Vec<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct VerificationReceipt {
@@ -69,6 +81,8 @@ pub struct VerificationReceipt {
     pub disposition: VerificationDisposition,
     pub summary: String,
     pub checks: Vec<VerificationCheck>,
+    #[serde(default)]
+    pub acceptance_proofs: Vec<AcceptanceProof>,
     pub verified_by: String,
     pub recorded_at: String,
     pub resulting_status: String,
@@ -104,6 +118,43 @@ pub struct CompleteVerificationArgs {
     pub disposition: VerificationDisposition,
     pub summary: String,
     pub checks: Vec<VerificationCheck>,
+    pub acceptance_proofs: Vec<AcceptanceProof>,
+    pub idempotency_key: String,
+}
+
+/// Immutable result of the Core-owned proof close gate.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct CloseReceipt {
+    pub schema_version: u32,
+    pub close_id: String,
+    pub idempotency_key_hash: String,
+    pub verification_id: String,
+    pub handoff_id: String,
+    pub ticket_id: String,
+    pub lease_id: String,
+    pub source_commit: String,
+    pub summary: String,
+    pub closed_by: String,
+    pub recorded_at: String,
+    pub resulting_revision: u64,
+    pub close_fingerprint: String,
+}
+
+impl CloseReceipt {
+    pub fn compute_fingerprint(&self) -> Result<String> {
+        let mut projection = self.clone();
+        projection.close_fingerprint.clear();
+        hash_serializable(&projection)
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct CloseTicketArgs {
+    pub verification_id: String,
+    pub actor: String,
+    pub source_commit: String,
+    pub summary: String,
     pub idempotency_key: String,
 }
 

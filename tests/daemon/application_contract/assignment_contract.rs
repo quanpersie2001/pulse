@@ -62,6 +62,7 @@ fn handoff_and_verification_bind_to_session_and_reviewer_principal() {
         disposition: pulse::execution::VerificationDisposition::Passed,
         summary: "verified".to_string(),
         checks: Vec::new(),
+        acceptance_proofs: Vec::new(),
     };
     let worker = RuntimePrincipal {
         principal_id: "worker".to_string(),
@@ -81,6 +82,7 @@ fn handoff_and_verification_bind_to_session_and_reviewer_principal() {
         disposition: pulse::execution::VerificationDisposition::Passed,
         summary: "verified".to_string(),
         checks: Vec::new(),
+        acceptance_proofs: Vec::new(),
     };
     assert_eq!(
         app.handle_as(&worker, &self_review, "verify-self")
@@ -100,6 +102,7 @@ fn handoff_and_verification_bind_to_session_and_reviewer_principal() {
         disposition: pulse::execution::VerificationDisposition::Passed,
         summary: "verified".to_string(),
         checks: Vec::new(),
+        acceptance_proofs: Vec::new(),
     };
     let error = app
         .handle_as(&reviewer, &valid_review, "verify-valid")

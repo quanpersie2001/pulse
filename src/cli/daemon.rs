@@ -95,6 +95,7 @@ pub(crate) enum SessionCommand {
     },
     Handoff(SessionHandoffArgs),
     Verify(SessionVerifyArgs),
+    CloseAssignment(SessionCloseAssignmentArgs),
     Create(SessionCreateArgs),
     List {
         #[arg(long)]
@@ -169,6 +170,19 @@ pub(crate) struct SessionVerifyArgs {
     pub(crate) summary: String,
     #[arg(long)]
     pub(crate) checks: std::path::PathBuf,
+    #[arg(long)]
+    pub(crate) acceptance: Option<std::path::PathBuf>,
+}
+
+#[derive(Args)]
+pub(crate) struct SessionCloseAssignmentArgs {
+    pub(crate) saga_id: String,
+    #[arg(long)]
+    pub(crate) actor: String,
+    #[arg(long)]
+    pub(crate) source_commit: String,
+    #[arg(long)]
+    pub(crate) summary: String,
 }
 
 #[derive(Clone, clap::ValueEnum)]
@@ -367,6 +381,15 @@ pub(crate) fn handle_session(command: SessionCommand, explicit_key: Option<&str>
                 std::fs::read(&args.checks).map_err(|error| PulseError::io(&args.checks, error))?;
             let checks = serde_json::from_slice(&bytes)
                 .map_err(|error| PulseError::json(&args.checks, error))?;
+            let acceptance_proofs = match args.acceptance {
+                Some(path) => {
+                    let bytes =
+                        std::fs::read(&path).map_err(|error| PulseError::io(&path, error))?;
+                    serde_json::from_slice(&bytes)
+                        .map_err(|error| PulseError::json(&path, error))?
+                }
+                None => Vec::new(),
+            };
             DaemonRequest::VerificationComplete {
                 saga_id: args.saga_id,
                 actor: args.actor,
@@ -384,8 +407,15 @@ pub(crate) fn handle_session(command: SessionCommand, explicit_key: Option<&str>
                 },
                 summary: args.summary,
                 checks,
+                acceptance_proofs,
             }
         }
+        SessionCommand::CloseAssignment(args) => DaemonRequest::AssignmentClose {
+            saga_id: args.saga_id,
+            actor: args.actor,
+            source_commit: args.source_commit,
+            summary: args.summary,
+        },
         SessionCommand::Create(args) => DaemonRequest::SessionCreate {
             workspace_id: args.workspace_id,
             provider_id: args.provider,
@@ -557,6 +587,32 @@ mod tests {
             crate::cli::args::Command::Session {
                 command: SessionCommand::Logs { session_id }
             } if session_id == "ses_test"
+        ));
+    }
+
+    #[test]
+    fn cli_parses_assignment_close_proof_request() {
+        let cli = crate::cli::Cli::try_parse_from([
+            "pulse",
+            "session",
+            "close-assignment",
+            "saga_test",
+            "--actor",
+            "human:reviewer",
+            "--source-commit",
+            "0123456789012345678901234567890123456789",
+            "--summary",
+            "All close gates passed.",
+        ])
+        .expect("assignment close CLI should parse");
+        assert!(matches!(
+            cli.command,
+            crate::cli::args::Command::Session {
+                command: SessionCommand::CloseAssignment(SessionCloseAssignmentArgs {
+                    saga_id,
+                    ..
+                })
+            } if saga_id == "saga_test"
         ));
     }
 

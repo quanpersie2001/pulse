@@ -195,7 +195,9 @@ Runtime hoàn thành khi:
 - [ ] Worker nhận lease-bound packet qua workflow bootstrap và gửi typed
   acknowledgement/handoff.
 - [ ] Một Ticket standalone đi qua `ready -> reserved -> active -> verifying ->
-  done|rework|blocked` bằng Core proof gate.
+  done|rework|blocked` bằng Core proof gate. **Partial:** low-risk + QA/docs
+  `none` close path và rework/blocked verification path đã có; required QA,
+  documentation promotion/defer và medium-or-higher risk còn fail closed.
 - [ ] Daemon restart recover registry, process, session, timeline và assignment
   saga không cần chat memory.
 - [ ] Hidden per-run supervisor và duplicate Core-owned

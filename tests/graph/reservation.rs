@@ -1,5 +1,6 @@
 use pulse::execution::{
-    CompleteVerificationArgs, SubmitHandoffArgs, VerificationCheck, VerificationDisposition,
+    AcceptanceProof, CloseTicketArgs, CompleteVerificationArgs, SubmitHandoffArgs,
+    VerificationCheck, VerificationDisposition,
 };
 use pulse::graph::node::NodeStatus;
 use pulse::reservation::{
@@ -48,6 +49,14 @@ fn acknowledgement(packet_fingerprint: &str) -> AssignmentAcknowledgement {
         packet_fingerprint: packet_fingerprint.to_string(),
         acknowledged_at: chrono::Utc::now().to_rfc3339(),
     }
+}
+
+fn acceptance_proofs(check_name: &str) -> Vec<AcceptanceProof> {
+    vec![AcceptanceProof {
+        acceptance_id: "AC-1".to_string(),
+        check_names: vec![check_name.to_string()],
+        evidence_receipt_ids: vec![],
+    }]
 }
 
 fn assignment_bytes(repo: &std::path::Path) -> Vec<(String, Vec<u8>)> {
@@ -188,11 +197,36 @@ fn zero_exit_check_without_receipt_keeps_ticket_nonterminal() {
         store.show_node(&ticket_id).unwrap().status,
         NodeStatus::Verifying
     );
+    let incomplete = store
+        .complete_execution_verification(CompleteVerificationArgs {
+            handoff_id: handoff.handoff_id.clone(),
+            actor: "human:reviewer".to_string(),
+            source_commit: handoff.source_commit.clone(),
+            disposition: VerificationDisposition::Passed,
+            summary: "Checks passed without acceptance mapping.".to_string(),
+            checks: vec![VerificationCheck {
+                name: "focused-test".to_string(),
+                command: "cargo test --test graph -- reservation".to_string(),
+                exit_code: 0,
+                artifact_ids: vec![],
+            }],
+            acceptance_proofs: vec![],
+            idempotency_key: "verification-incomplete".to_string(),
+        })
+        .unwrap_err();
+    assert_eq!(
+        incomplete.code(),
+        "verification_acceptance_coverage_incomplete"
+    );
+    assert_eq!(
+        store.show_node(&ticket_id).unwrap().status,
+        NodeStatus::Verifying
+    );
     let verified = store
         .complete_execution_verification(CompleteVerificationArgs {
-            handoff_id: handoff.handoff_id,
+            handoff_id: handoff.handoff_id.clone(),
             actor: "human:reviewer".to_string(),
-            source_commit: handoff.source_commit,
+            source_commit: handoff.source_commit.clone(),
             disposition: VerificationDisposition::Passed,
             summary: "Independent verification passed.".to_string(),
             checks: vec![VerificationCheck {
@@ -201,11 +235,104 @@ fn zero_exit_check_without_receipt_keeps_ticket_nonterminal() {
                 exit_code: 0,
                 artifact_ids: vec![],
             }],
+            acceptance_proofs: acceptance_proofs("focused-test"),
             idempotency_key: "verification-happy".to_string(),
         })
         .unwrap();
     assert_eq!(verified.resulting_status, "verifying");
     assert_ne!(verified.resulting_status, "done");
+    assert_eq!(
+        store.show_node(&ticket_id).unwrap().status,
+        NodeStatus::Verifying
+    );
+    let close_args = CloseTicketArgs {
+        verification_id: verified.verification_id,
+        actor: "human:reviewer".to_string(),
+        source_commit: handoff.source_commit,
+        summary: "All low-risk close gates passed.".to_string(),
+        idempotency_key: "close-happy".to_string(),
+    };
+    let crashing =
+        JsonGraphStore::with_failpoint(repo.path(), TransactionFailpoint::AfterMultiTargetAll);
+    assert!(crashing.close_execution_ticket(close_args.clone()).is_err());
+    let closed = store.close_execution_ticket(close_args).unwrap();
+    assert_eq!(closed.ticket_id, ticket_id);
+    assert_eq!(
+        store.show_node(&ticket_id).unwrap().status,
+        NodeStatus::Done
+    );
+}
+
+#[test]
+fn proof_close_fails_closed_when_risk_policy_is_not_installed() {
+    let repo = TestRepo::from_fixture("minimal-service");
+    let store = JsonGraphStore::new(repo.path());
+    bootstrap_repo(&repo, &store);
+    write_policy(repo.path(), &["work.assignment.release"]);
+    add_reviewer_policy(repo.path());
+    let ticket_id = setup_ready_ticket(repo.path(), &store);
+    let node_path = repo
+        .path()
+        .join(".pulse/workgraph/nodes")
+        .join(format!("{ticket_id}.json"));
+    let mut node = store.show_node(&ticket_id).unwrap();
+    node.risk = Some(pulse::graph::contract::Risk::Medium);
+    node.revision += 1;
+    node.updated_at = chrono::Utc::now();
+    std::fs::write(
+        &node_path,
+        pulse::canonical_json::to_canonical_bytes(&node).unwrap(),
+    )
+    .unwrap();
+
+    let reserved = reserve(&store, &ticket_id, "reservation-medium-risk");
+    let active = store
+        .activate_reservation(ActivateReservationArgs {
+            lease_id: reserved.reservation.lease_id,
+            actor: "agent:tester".to_string(),
+            runtime_binding: binding(),
+            acknowledgement: acknowledgement(&reserved.reservation.packet_fingerprint),
+        })
+        .unwrap();
+    let handoff = store
+        .submit_execution_handoff(SubmitHandoffArgs {
+            lease_id: active.lease_id,
+            actor: "agent:tester".to_string(),
+            session_id: "ses_test".to_string(),
+            source_commit: active.source.commit,
+            summary: "Medium-risk handoff awaiting assurance policy.".to_string(),
+            changed_paths: vec![],
+            evidence_receipt_ids: vec![],
+            idempotency_key: "handoff-medium-risk".to_string(),
+        })
+        .unwrap();
+    let verification = store
+        .complete_execution_verification(CompleteVerificationArgs {
+            handoff_id: handoff.handoff_id,
+            actor: "human:reviewer".to_string(),
+            source_commit: handoff.source_commit.clone(),
+            disposition: VerificationDisposition::Passed,
+            summary: "Independent verification passed.".to_string(),
+            checks: vec![VerificationCheck {
+                name: "focused".to_string(),
+                command: "true".to_string(),
+                exit_code: 0,
+                artifact_ids: vec![],
+            }],
+            acceptance_proofs: acceptance_proofs("focused"),
+            idempotency_key: "verification-medium-risk".to_string(),
+        })
+        .unwrap();
+    let error = store
+        .close_execution_ticket(CloseTicketArgs {
+            verification_id: verification.verification_id,
+            actor: "human:reviewer".to_string(),
+            source_commit: handoff.source_commit,
+            summary: "Attempt unsupported close.".to_string(),
+            idempotency_key: "close-medium-risk".to_string(),
+        })
+        .unwrap_err();
+    assert_eq!(error.code(), "close_risk_policy_unavailable");
     assert_eq!(
         store.show_node(&ticket_id).unwrap().status,
         NodeStatus::Verifying
@@ -322,6 +449,7 @@ fn unauthorized_verification_does_not_recover_pending_transaction() {
             exit_code: 0,
             artifact_ids: vec![],
         }],
+        acceptance_proofs: acceptance_proofs("focused"),
         idempotency_key: "unauthorized-verification-pending-key".to_string(),
     };
     let crashing =
@@ -583,12 +711,16 @@ fn add_reviewer_policy(root: &std::path::Path) {
         principal.grants.extend([
             "work.assignment.handoff".to_string(),
             "work.assignment.verify".to_string(),
+            "work.assignment.close".to_string(),
         ]);
     }
     policy.principals.push(pulse::policy::AuthorityPrincipal {
         kind: pulse::identity::actor::ActorKind::Human,
         id: "reviewer".to_string(),
-        grants: vec!["work.assignment.verify".to_string()],
+        grants: vec![
+            "work.assignment.verify".to_string(),
+            "work.assignment.close".to_string(),
+        ],
     });
     policy.normalize();
     std::fs::write(
@@ -1288,7 +1420,7 @@ fn daemon_saga_requires_acknowledgement_before_core_activation() {
             &DaemonRequest::VerificationComplete {
                 saga_id: activated.saga_id.clone(),
                 actor: "human:reviewer".to_string(),
-                source_commit,
+                source_commit: source_commit.clone(),
                 disposition: VerificationDisposition::Passed,
                 summary: "Independent verification passed.".to_string(),
                 checks: vec![VerificationCheck {
@@ -1297,6 +1429,7 @@ fn daemon_saga_requires_acknowledgement_before_core_activation() {
                     exit_code: 0,
                     artifact_ids: vec![],
                 }],
+                acceptance_proofs: acceptance_proofs("focused"),
             },
             "saga-verification",
         )
@@ -1306,6 +1439,39 @@ fn daemon_saga_requires_acknowledgement_before_core_activation() {
         store.show_node(&ticket_id).unwrap().status,
         NodeStatus::Verifying
     );
+    let close = restarted
+        .handle(
+            &DaemonRequest::AssignmentClose {
+                saga_id: activated.saga_id.clone(),
+                actor: "human:reviewer".to_string(),
+                source_commit,
+                summary: "Independent proof close passed.".to_string(),
+            },
+            "saga-close",
+        )
+        .unwrap();
+    assert!(matches!(close, DaemonResponse::Close { .. }));
+    assert_eq!(
+        store.show_node(&ticket_id).unwrap().status,
+        NodeStatus::Done
+    );
+    let completed = restarted
+        .handle(
+            &DaemonRequest::AssignmentInspect {
+                saga_id: activated.saga_id,
+            },
+            "",
+        )
+        .unwrap();
+    assert!(matches!(
+        completed,
+        DaemonResponse::Assignment {
+            saga: pulse::daemon::assignment::AssignmentSagaRecord {
+                state: AssignmentSagaState::Done,
+                ..
+            }
+        }
+    ));
 }
 
 #[cfg(unix)]

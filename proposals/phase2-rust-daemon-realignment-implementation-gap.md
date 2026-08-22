@@ -10,8 +10,9 @@
 > `DeliveryPending`/uncertain state when the provider outcome cannot be proven —
 > it never blindly re-sends and never releases a possibly-valid assignment.
 > Typed acknowledgement remains separate; activation is never inferred from
-> provider state. The complete Phase 3 close gate is not installed, no
-> full-suite-green result is claimed here, and daemon whole-snapshot boundedness,
+> provider state. A bounded Core proof close baseline is installed for low-risk
+> Tickets with QA/docs impact `none`; broader Phase 3 assurance resolvers are not
+> installed. No full-suite-green result is claimed here, and daemon whole-snapshot boundedness,
 > Windows native acceptance coverage and `repository_id` naming remain
 > deferred/risk items. Reservation TTL recovery currently covers
 > `Reserved`/`Acknowledged`, not `Active`.
@@ -132,7 +133,7 @@ Do not add translation layers solely to keep these names alive.
 This is the reconciled current snapshot. `Implemented` means the capability is
 present in the current tree; `Behavior-tested` identifies focused/source
 evidence that was inspected for this snapshot. Neither label is a claim that
-the complete Phase 3 close gate or full test suite is green.
+the broader Phase 3 assurance resolvers or full test suite are green.
 
 | Capability | Current disposition | Source evidence | Test/evidence path |
 |---|---|---|---|
@@ -309,6 +310,13 @@ or a released reservation, never duplicate active ownership.
 
 **Exit:** one standalone Ticket completes end to end with valid receipts; a
 zero-exit provider process without proof cannot close it.
+
+Current implementation closes the first bounded baseline: a low-risk
+standalone Ticket with QA and documentation impact `none`, exact acceptance
+coverage, independent passing verification, current source and immutable
+handoff/verification/close receipts. Required QA, Story-deferred QA,
+documentation promotion/defer and medium-or-higher risk remain explicitly
+unavailable rather than being inferred from process success.
 
 ### G8 - CLI replacement and old-path deletion
 

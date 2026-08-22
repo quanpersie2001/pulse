@@ -124,9 +124,9 @@ thành.
 
 **Current-status note (2026-08-01):** The inventory below records the present
 Rust daemon boundary and focused/source evidence, not a full Phase 2 close
-claim. Verification remains `Verifying` until the complete Phase 3 close gate
-is installed and independently evidenced; no full-suite-green result is claimed
-here. The legacy hidden supervisor is historical prototype scope and is already
+claim. Unsupported risk/QA/docs policies remain `Verifying` until their Phase 3
+assurance resolvers are installed; no full-suite-green result is claimed here.
+The legacy hidden supervisor is historical prototype scope and is already
 removed from the current runtime path.
 
 - Slice 1 `WorkPacket` preview đã implement/verify.
@@ -136,9 +136,12 @@ removed from the current runtime path.
   local protocol, MCP tool adapter và provisioning saga.
 - Codex provider dùng App Server `initialize`, `thread/start`, `turn/start` và
   `turn/interrupt`; Pulse Session ID tách khỏi provider thread handle.
-- Typed handoff và independent verification điều khiển
-  `active -> verifying`; the Phase 3 close gate decides `done|rework|blocked`,
-  and process exit không close Ticket.
+- Typed handoff và independent verification điều khiển `active -> verifying`;
+  Core proof close quyết định `done|rework|blocked`, và process exit không close
+  Ticket.
+- Core proof close baseline đã support exact acceptance-to-check/evidence mapping
+  cho standalone low-risk Ticket với QA/docs impact `none`; unsupported risk,
+  required QA và documentation promotion vẫn fail closed tại `verifying`.
 - Hidden supervisor, runner profiles, Core run store, assignment-owned
   Workspace records và public run/attempt contracts đã bị xóa một chiều.
 

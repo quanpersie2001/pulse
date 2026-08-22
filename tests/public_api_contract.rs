@@ -235,6 +235,17 @@ fn evidence_receipt_public_paths_compile() {
 }
 
 #[test]
+fn execution_proof_public_paths_compile() {
+    let _: Option<pulse::execution::HandoffReceipt> = None;
+    let _: Option<pulse::execution::VerificationReceipt> = None;
+    let _: Option<pulse::execution::AcceptanceProof> = None;
+    let _: Option<pulse::execution::CloseReceipt> = None;
+    let _ = pulse::kernel::completion::load_handoff;
+    let _ = pulse::kernel::completion::load_verification;
+    let _ = pulse::kernel::completion::load_close;
+}
+
+#[test]
 fn work_packet_public_paths_compile() {
     // Verify `pulse::work_packet` public types and constants are reachable
     // from integration tests (external crate consumers).

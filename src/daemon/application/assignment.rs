@@ -1152,6 +1152,7 @@ impl DaemonApplication {
         disposition: crate::execution::VerificationDisposition,
         summary: &str,
         checks: &[crate::execution::VerificationCheck],
+        acceptance_proofs: &[crate::execution::AcceptanceProof],
         idempotency_key: &str,
     ) -> Result<DaemonResponse> {
         let saga = self.assignment_saga(saga_id)?;
@@ -1174,6 +1175,7 @@ impl DaemonApplication {
                 disposition,
                 summary: summary.to_string(),
                 checks: checks.to_vec(),
+                acceptance_proofs: acceptance_proofs.to_vec(),
                 idempotency_key: format!("{idempotency_key}:core-verification"),
             })?;
         self.store.with_state(true, |state| {
@@ -1202,6 +1204,63 @@ impl DaemonApplication {
             Ok(())
         })?;
         Ok(DaemonResponse::Verification { verification })
+    }
+
+    pub(super) fn assignment_close(
+        &self,
+        saga_id: &str,
+        actor: &str,
+        source_commit: &str,
+        summary: &str,
+        idempotency_key: &str,
+    ) -> Result<DaemonResponse> {
+        let saga = self.assignment_saga(saga_id)?;
+        if saga.state != AssignmentSagaState::Verifying {
+            return Err(PulseError::validation(
+                "assignment_not_verifying",
+                "proof close requires a passed verification in the nonterminal verifying state",
+            ));
+        }
+        let verification_id = saga.verification_id.clone().ok_or_else(|| {
+            PulseError::validation(
+                "assignment_verification_missing",
+                "proof close requires a persisted verification receipt",
+            )
+        })?;
+        let project = self.project_record(&saga.project_id)?;
+        let core = crate::JsonGraphStore::new(&project.canonical_root);
+        let close = core.close_execution_ticket(crate::execution::CloseTicketArgs {
+            verification_id,
+            actor: actor.to_string(),
+            source_commit: source_commit.to_string(),
+            summary: summary.to_string(),
+            idempotency_key: format!("{idempotency_key}:core-close"),
+        })?;
+        self.store.with_state(true, |state| {
+            let saga = state
+                .assignment_sagas
+                .get_mut(saga_id)
+                .expect("saga exists");
+            saga.state = AssignmentSagaState::Done;
+            saga.updated_at = chrono::Utc::now().to_rfc3339();
+            let project_id = saga.project_id.clone();
+            let workspace_id = saga.workspace_id.clone();
+            let session_id = saga.session_id.clone();
+            append_event(
+                state,
+                "assignment.closed",
+                Some(&project_id),
+                workspace_id.as_deref(),
+                session_id.as_deref(),
+                json!({
+                    "saga_id": saga_id,
+                    "close_id": close.close_id,
+                    "verification_id": close.verification_id,
+                }),
+            );
+            Ok(())
+        })?;
+        Ok(DaemonResponse::Close { close })
     }
 
     pub(super) fn assignment_saga(&self, saga_id: &str) -> Result<AssignmentSagaRecord> {

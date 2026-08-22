@@ -8,11 +8,13 @@ use std::path::{Path, PathBuf};
 use crate::canonical_json::{hash_bytes, to_canonical_bytes};
 use crate::event::{new_event_id, EventEnvelope};
 use crate::execution::{
-    validate_checks, CompleteVerificationArgs, HandoffReceipt, SubmitHandoffArgs,
-    VerificationDisposition, VerificationReceipt,
+    validate_checks, AcceptanceProof, CloseReceipt, CloseTicketArgs, CompleteVerificationArgs,
+    HandoffReceipt, SubmitHandoffArgs, VerificationCheck, VerificationDisposition,
+    VerificationReceipt,
 };
+use crate::graph::contract::{QaImpactPosture, Risk};
 use crate::graph::lifecycle::TransitionReason;
-use crate::graph::node::{Node, NodeStatus};
+use crate::graph::node::{DocumentationImpactPosture, Node, NodeStatus};
 use crate::graph::store::JsonGraphStore;
 use crate::reservation::ReservationState;
 use crate::storage::transaction::{
@@ -149,7 +151,7 @@ impl JsonGraphStore {
 
     pub fn complete_execution_verification(
         &self,
-        args: CompleteVerificationArgs,
+        mut args: CompleteVerificationArgs,
     ) -> Result<VerificationReceipt> {
         if args.idempotency_key.trim().is_empty() {
             return Err(PulseError::validation(
@@ -198,6 +200,15 @@ impl JsonGraphStore {
                 "Ticket is not the exact verifying revision from the handoff",
             ));
         }
+        normalize_acceptance_proofs(&mut args.acceptance_proofs);
+        if args.disposition == VerificationDisposition::Passed {
+            validate_acceptance_proofs(
+                &self.repo_root,
+                &node,
+                &args.checks,
+                &args.acceptance_proofs,
+            )?;
+        }
         // Verification is an independent proof observation, not the final close
         // gate.  The Phase 3 QA baseline/case resolver is not represented by a
         // current typed schema, so a passed check must remain non-terminal until
@@ -237,6 +248,7 @@ impl JsonGraphStore {
             disposition: args.disposition,
             summary: args.summary.trim().to_string(),
             checks: args.checks,
+            acceptance_proofs: args.acceptance_proofs,
             verified_by: args.actor.clone(),
             recorded_at: Utc::now().to_rfc3339(),
             resulting_status: status_name(target).to_string(),
@@ -265,6 +277,148 @@ impl JsonGraphStore {
             self.failpoint,
         )?;
         Ok(verification)
+    }
+
+    /// Close a verified low-risk standalone Ticket through Core-owned proof
+    /// gates. Unsupported QA, documentation, or risk policies fail closed.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed validation error when proof bindings are stale,
+    /// authorization is missing, or a required assurance resolver is not yet
+    /// installed.
+    pub fn close_execution_ticket(&self, args: CloseTicketArgs) -> Result<CloseReceipt> {
+        if args.idempotency_key.trim().is_empty() {
+            return Err(PulseError::validation(
+                "close_idempotency_key_required",
+                "proof close requires an idempotency key",
+            ));
+        }
+        if args.summary.trim().is_empty() {
+            return Err(PulseError::validation(
+                "close_summary_missing",
+                "proof close summary must not be empty",
+            ));
+        }
+        let close_id = deterministic_evidence_id("close", &args.idempotency_key);
+        let close_path = close_path(&self.repo_root, &close_id);
+        let _guard = WriteGuard::acquire(&self.repo_root)?;
+        authorize(&self.repo_root, &args.actor, "work.assignment.close")?;
+        recover_prepared_transactions(&self.repo_root)?;
+        if close_path.exists() {
+            let existing = load_close(&self.repo_root, &close_id)?;
+            if existing.verification_id != args.verification_id
+                || existing.closed_by != args.actor
+                || existing.source_commit != args.source_commit
+                || existing.summary != args.summary.trim()
+            {
+                return Err(PulseError::validation(
+                    "close_idempotency_conflict",
+                    "close idempotency key was already used with different inputs",
+                ));
+            }
+            return Ok(existing);
+        }
+        let verification = load_verification(&self.repo_root, &args.verification_id)?;
+        if verification.disposition != VerificationDisposition::Passed
+            || verification.resulting_status != "verifying"
+        {
+            return Err(PulseError::validation(
+                "close_verification_not_passed",
+                "proof close requires a passed nonterminal verification receipt",
+            ));
+        }
+        let handoff = load_handoff(&self.repo_root, &verification.handoff_id)?;
+        if verification.ticket_id != handoff.ticket_id
+            || verification.lease_id != handoff.lease_id
+            || verification.source_commit != handoff.source_commit
+        {
+            return Err(PulseError::validation(
+                "close_proof_binding_mismatch",
+                "verification and handoff proofs do not share exact execution bindings",
+            ));
+        }
+        if verification.source_commit != args.source_commit
+            || crate::source::head_commit(&self.repo_root)? != args.source_commit
+        {
+            return Err(PulseError::validation(
+                "close_source_mismatch",
+                "proof close is not bound to the current verified source commit",
+            ));
+        }
+        let node_path = self.node_path(&verification.ticket_id);
+        let node_before_bytes =
+            fs::read(&node_path).map_err(|error| PulseError::io(&node_path, error))?;
+        let mut node: Node = serde_json::from_slice(&node_before_bytes)
+            .map_err(|error| PulseError::json(&node_path, error))?;
+        if node.status != NodeStatus::Verifying || node.revision != verification.resulting_revision
+        {
+            return Err(PulseError::validation(
+                "close_ticket_changed",
+                "Ticket is not the exact verified revision",
+            ));
+        }
+        validate_close_postures(&node)?;
+        let implementation = node.implementation.as_ref().ok_or_else(|| {
+            PulseError::validation(
+                "close_contract_missing",
+                "proof close requires an implementation contract",
+            )
+        })?;
+        validate_acceptance_proofs(
+            &self.repo_root,
+            &node,
+            &verification.checks,
+            &verification.acceptance_proofs,
+        )?;
+        if implementation.acceptance.is_empty() {
+            return Err(PulseError::validation(
+                "close_acceptance_missing",
+                "proof close requires at least one contract acceptance item",
+            ));
+        }
+
+        node.status = NodeStatus::Done;
+        node.status_reason = None;
+        node.revision += 1;
+        node.updated_at = Utc::now();
+        let mut close = CloseReceipt {
+            schema_version: 1,
+            close_id: close_id.clone(),
+            idempotency_key_hash: hash_bytes(args.idempotency_key.as_bytes()),
+            verification_id: verification.verification_id,
+            handoff_id: verification.handoff_id,
+            ticket_id: verification.ticket_id,
+            lease_id: verification.lease_id,
+            source_commit: args.source_commit,
+            summary: args.summary.trim().to_string(),
+            closed_by: args.actor.clone(),
+            recorded_at: Utc::now().to_rfc3339(),
+            resulting_revision: node.revision,
+            close_fingerprint: String::new(),
+        };
+        close.close_fingerprint = close.compute_fingerprint()?;
+        commit_proof_transition(
+            &self.repo_root,
+            "work.assignment.closed",
+            &args.actor,
+            &close.ticket_id,
+            &node_path,
+            &node_before_bytes,
+            &node,
+            &close_path,
+            &close,
+            json!({
+                "close_id": close.close_id,
+                "verification_id": close.verification_id,
+                "handoff_id": close.handoff_id,
+                "lease_id": close.lease_id,
+                "source_commit": close.source_commit,
+                "to": "done",
+            }),
+            self.failpoint,
+        )?;
+        Ok(close)
     }
 }
 
@@ -329,14 +483,39 @@ fn commit_proof_transition<T: serde::Serialize>(
 }
 
 pub fn load_handoff(repo_root: &Path, handoff_id: &str) -> Result<HandoffReceipt> {
-    load_json(&handoff_path(repo_root, handoff_id), "handoff")
+    let receipt: HandoffReceipt = load_json(&handoff_path(repo_root, handoff_id), "handoff")?;
+    if receipt.compute_fingerprint()? != receipt.handoff_fingerprint {
+        return Err(PulseError::validation(
+            "handoff_fingerprint_mismatch",
+            "handoff fingerprint does not match canonical contents",
+        ));
+    }
+    Ok(receipt)
 }
 
 pub fn load_verification(repo_root: &Path, verification_id: &str) -> Result<VerificationReceipt> {
-    load_json(
+    let receipt: VerificationReceipt = load_json(
         &verification_path(repo_root, verification_id),
         "verification",
-    )
+    )?;
+    if receipt.compute_fingerprint()? != receipt.verification_fingerprint {
+        return Err(PulseError::validation(
+            "verification_fingerprint_mismatch",
+            "verification fingerprint does not match canonical contents",
+        ));
+    }
+    Ok(receipt)
+}
+
+pub fn load_close(repo_root: &Path, close_id: &str) -> Result<CloseReceipt> {
+    let receipt: CloseReceipt = load_json(&close_path(repo_root, close_id), "close")?;
+    if receipt.compute_fingerprint()? != receipt.close_fingerprint {
+        return Err(PulseError::validation(
+            "close_fingerprint_mismatch",
+            "close fingerprint does not match canonical contents",
+        ));
+    }
+    Ok(receipt)
 }
 
 fn load_json<T: serde::de::DeserializeOwned>(path: &Path, kind: &str) -> Result<T> {
@@ -362,6 +541,126 @@ fn verification_path(repo_root: &Path, verification_id: &str) -> PathBuf {
     repo_root
         .join(".pulse/evidence/execution/verifications")
         .join(format!("{verification_id}.json"))
+}
+
+fn close_path(repo_root: &Path, close_id: &str) -> PathBuf {
+    repo_root
+        .join(".pulse/evidence/execution/closes")
+        .join(format!("{close_id}.json"))
+}
+
+fn normalize_acceptance_proofs(proofs: &mut [AcceptanceProof]) {
+    for proof in proofs.iter_mut() {
+        proof.acceptance_id = proof.acceptance_id.trim().to_string();
+        normalize_strings(&mut proof.check_names);
+        normalize_strings(&mut proof.evidence_receipt_ids);
+    }
+    proofs.sort_by(|left, right| left.acceptance_id.cmp(&right.acceptance_id));
+}
+
+fn validate_acceptance_proofs(
+    repo_root: &Path,
+    node: &Node,
+    checks: &[VerificationCheck],
+    proofs: &[AcceptanceProof],
+) -> Result<()> {
+    let implementation = node.implementation.as_ref().ok_or_else(|| {
+        PulseError::validation(
+            "verification_contract_missing",
+            "acceptance proof requires an implementation contract",
+        )
+    })?;
+    let expected = implementation
+        .acceptance
+        .iter()
+        .map(|item| item.id.as_str())
+        .collect::<Vec<_>>();
+    let actual = proofs
+        .iter()
+        .map(|proof| proof.acceptance_id.as_str())
+        .collect::<Vec<_>>();
+    if expected != actual {
+        return Err(PulseError::validation(
+            "verification_acceptance_coverage_incomplete",
+            format!("acceptance proof IDs must exactly match the contract: expected={expected:?}, actual={actual:?}"),
+        ));
+    }
+    let mut check_names = checks
+        .iter()
+        .map(|check| check.name.trim())
+        .collect::<Vec<_>>();
+    check_names.sort_unstable();
+    if check_names.windows(2).any(|pair| pair[0] == pair[1]) {
+        return Err(PulseError::validation(
+            "verification_check_duplicate",
+            "verification check names must be unique",
+        ));
+    }
+    for proof in proofs {
+        if proof.check_names.is_empty() && proof.evidence_receipt_ids.is_empty() {
+            return Err(PulseError::validation(
+                "verification_acceptance_proof_empty",
+                format!(
+                    "acceptance {} has no passing check or evidence receipt",
+                    proof.acceptance_id
+                ),
+            ));
+        }
+        for check_name in &proof.check_names {
+            let check = checks
+                .iter()
+                .find(|check| check.name.trim() == check_name)
+                .ok_or_else(|| {
+                    PulseError::validation(
+                        "verification_acceptance_check_missing",
+                        format!(
+                            "acceptance {} references unknown check {check_name}",
+                            proof.acceptance_id
+                        ),
+                    )
+                })?;
+            if check.exit_code != 0 {
+                return Err(PulseError::validation(
+                    "verification_acceptance_check_failed",
+                    format!(
+                        "acceptance {} references failed check {check_name}",
+                        proof.acceptance_id
+                    ),
+                ));
+            }
+        }
+        for receipt_id in &proof.evidence_receipt_ids {
+            crate::evidence::receipt::verify_receipt(repo_root, receipt_id, true, None)?;
+        }
+    }
+    Ok(())
+}
+
+fn validate_close_postures(node: &Node) -> Result<()> {
+    if node.risk != Some(Risk::Low) {
+        return Err(PulseError::validation(
+            "close_risk_policy_unavailable",
+            "current proof close supports only assessed low-risk Tickets",
+        ));
+    }
+    let qa_posture = node
+        .qa
+        .as_ref()
+        .map(|qa| qa.impact.posture)
+        .unwrap_or(QaImpactPosture::Unknown);
+    if qa_posture != QaImpactPosture::None {
+        return Err(PulseError::validation(
+            "close_qa_gate_unavailable",
+            "current proof close requires QA impact none; required and Story-deferred QA need their dedicated resolver",
+        ));
+    }
+    if node.documentation_posture() != DocumentationImpactPosture::None {
+        return Err(PulseError::validation(
+            "close_documentation_gate_unavailable",
+            "current proof close requires documentation impact none; required or deferred documentation needs promotion evidence",
+        ));
+    }
+    Ok(())
 }
 
 fn deterministic_evidence_id(prefix: &str, key: &str) -> String {

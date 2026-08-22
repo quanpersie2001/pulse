@@ -7,7 +7,7 @@ use std::time::Duration;
 
 #[test]
 fn protocol_version_reflects_current_breaking_contract() {
-    assert_eq!(PROTOCOL_VERSION, 3);
+    assert_eq!(PROTOCOL_VERSION, 4);
 }
 
 #[test]

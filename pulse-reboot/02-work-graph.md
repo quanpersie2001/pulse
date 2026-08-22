@@ -515,4 +515,11 @@ Vì vậy local work graph đóng vai trò tracker source mà Linear đóng tron
 
 Ticket chỉ `done` khi acceptance map tới valid evidence, developer verification và required review pass, QA posture được disposition, required targeted checkpoint receipts pass trên source snapshot hiện tại, documentation impact đã update/classify/defer hợp policy, không còn blocking finding và handoff ghi remaining risk trung thực. Ticket checkpoint chỉ chứng minh affected change scope; nó không thay full Story qualification.
 
+Current executable baseline cài Core close gate cho standalone Ticket `risk=low`,
+QA impact `none` và documentation impact `none`: exact contract acceptance IDs
+phải map sang passing verification checks hoặc current immutable receipts trên
+cùng handoff/source/revision. `required`, `covered_by_story_close`, documentation
+promotion/defer và medium-or-higher risk fail closed cho tới khi resolver tương
+ứng được cài; provider exit hoặc daemon state không thay close proof.
+
 Story chỉ `done` khi child outcome đủ, current `qa.md` coverage không còn gap bắt buộc và full applicable behavioral baseline pass trên integrated/frozen candidate snapshot theo [`03-story-qa.md`](03-story-qa.md). Epic đóng khi success signals được đánh giá, không chỉ vì mọi child Ticket mang nhãn `done`.

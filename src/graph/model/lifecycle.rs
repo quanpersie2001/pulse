@@ -274,9 +274,15 @@ fn required_gate_families(from: NodeStatus, to: NodeStatus) -> Vec<&'static str>
             vec!["lease", "run_authority"]
         }
         (NodeStatus::Active, NodeStatus::Verifying) => vec!["source_snapshot"],
-        (NodeStatus::Verifying, NodeStatus::Done) | (NodeStatus::Verifying, NodeStatus::Rework) => {
-            vec!["verification_receipt"]
-        }
+        (NodeStatus::Verifying, NodeStatus::Done) => vec![
+            "handoff_receipt",
+            "verification_receipt",
+            "acceptance_evidence",
+            "qa_disposition",
+            "documentation_impact",
+            "review_policy",
+        ],
+        (NodeStatus::Verifying, NodeStatus::Rework) => vec!["verification_receipt"],
         (NodeStatus::Verifying, NodeStatus::Blocked) => {
             vec!["verification_receipt", "run_authority"]
         }
