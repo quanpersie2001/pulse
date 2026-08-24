@@ -540,7 +540,180 @@ pub struct SpawnRequest<'a> {
     pub max_log_bytes: usize,
 }
 
+pub type HelperStartedCallback<'a> = dyn Fn(&HelperProcessRecord) -> Result<()> + 'a;
+
+pub struct RunRequest<'a> {
+    pub executable: &'a Path,
+    pub args: &'a [String],
+    pub cwd: &'a Path,
+    pub timeout: Duration,
+    pub max_output_bytes: usize,
+    pub started: Option<&'a HelperStartedCallback<'a>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct HelperProcessRecord {
+    pub executable: String,
+    pub pid: u32,
+    pub process_group_id: Option<i64>,
+    pub platform: String,
+    pub platform_start_marker: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct CompletedProcess {
+    pub exit_code: Option<i32>,
+    pub stdout: String,
+    pub stderr: String,
+    pub timed_out: bool,
+    pub output_truncated: bool,
+}
+
 impl ProcessOwner {
+    /// Run a bounded short-lived helper as a daemon-owned process group.
+    ///
+    /// Standard output and error are drained concurrently and each retained up
+    /// to the configured limit. A timeout terminates the exact process
+    /// group observed after spawn, then force-terminates it if needed.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the executable is unsafe, process identity cannot
+    /// be established, or the owned process cannot be observed or terminated.
+    pub fn run_to_completion(&self, request: RunRequest<'_>) -> Result<CompletedProcess> {
+        native::ensure_supported_platform()?;
+        if !request.executable.is_absolute() {
+            return Err(PulseError::validation(
+                "managed_executable_not_absolute",
+                "ProcessOwner requires a resolved absolute executable",
+            ));
+        }
+        if request.timeout.is_zero() || request.max_output_bytes == 0 {
+            return Err(PulseError::validation(
+                "managed_process_limits_invalid",
+                "process timeout and output limit must be positive",
+            ));
+        }
+        let mut command = Command::new(request.executable);
+        command
+            .args(request.args)
+            .current_dir(request.cwd)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        let mut child = native::spawn_process_group(&mut command)?;
+        let stdout = child.stdout.take().ok_or_else(|| {
+            PulseError::validation("managed_output_unavailable", "child stdout is unavailable")
+        })?;
+        let stderr = child.stderr.take().ok_or_else(|| {
+            PulseError::validation("managed_output_unavailable", "child stderr is unavailable")
+        })?;
+        let stdout_capture = Arc::new(Mutex::new(BoundedCapture::new(request.max_output_bytes)));
+        let stderr_capture = Arc::new(Mutex::new(BoundedCapture::new(request.max_output_bytes)));
+        let stdout_reader = spawn_capture_drain(stdout, Arc::clone(&stdout_capture));
+        let stderr_reader = spawn_capture_drain(stderr, Arc::clone(&stderr_capture));
+
+        let identity_deadline = Instant::now() + Duration::from_millis(500);
+        let identity = loop {
+            if let Ok(identity) = native::current_process_identity(child.id()) {
+                break Some(identity);
+            }
+            if child
+                .try_wait()
+                .map_err(|error| PulseError::io("<managed-process-wait>", error))?
+                .is_some()
+            {
+                break None;
+            }
+            if Instant::now() >= identity_deadline {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(PulseError::validation(
+                    "managed_process_identity_unavailable",
+                    "helper process identity did not stabilize after spawn",
+                ));
+            }
+            thread::sleep(Duration::from_millis(5));
+        };
+        if let Some(identity) = &identity {
+            let record = HelperProcessRecord {
+                executable: request.executable.to_string_lossy().to_string(),
+                pid: identity.pid,
+                process_group_id: identity.process_group_id,
+                platform: identity.platform.clone(),
+                platform_start_marker: identity.platform_start_marker.clone(),
+            };
+            if let Some(started) = request.started {
+                if let Err(error) = started(&record) {
+                    let _ = native::terminate_process_group(identity, request.executable);
+                    let deadline = Instant::now() + Duration::from_secs(2);
+                    while Instant::now() < deadline {
+                        if child.try_wait().ok().flatten().is_some() {
+                            break;
+                        }
+                        thread::sleep(Duration::from_millis(10));
+                    }
+                    if child.try_wait().ok().flatten().is_none() {
+                        let _ = native::force_terminate_process_group(identity, request.executable);
+                        let _ = child.wait();
+                    }
+                    let _ = stdout_reader.join();
+                    let _ = stderr_reader.join();
+                    return Err(error);
+                }
+            }
+        }
+        let deadline = Instant::now() + request.timeout;
+        let (status, timed_out) = 'wait: loop {
+            if let Some(status) = child
+                .try_wait()
+                .map_err(|error| PulseError::io("<managed-process-wait>", error))?
+            {
+                break (status, false);
+            }
+            if Instant::now() >= deadline {
+                let identity = identity.as_ref().ok_or_else(|| {
+                    PulseError::validation(
+                        "managed_process_identity_unavailable",
+                        "running helper process has no stable identity",
+                    )
+                })?;
+                native::terminate_process_group(identity, request.executable)?;
+                let grace = Instant::now() + Duration::from_secs(2);
+                loop {
+                    if let Some(status) = child
+                        .try_wait()
+                        .map_err(|error| PulseError::io("<managed-process-wait>", error))?
+                    {
+                        break 'wait (status, true);
+                    }
+                    if Instant::now() >= grace {
+                        native::force_terminate_process_group(identity, request.executable)?;
+                        let status = child
+                            .wait()
+                            .map_err(|error| PulseError::io("<managed-process-wait>", error))?;
+                        break 'wait (status, true);
+                    }
+                    thread::sleep(Duration::from_millis(10));
+                }
+            }
+            thread::sleep(Duration::from_millis(10));
+        };
+        stdout_reader.join().map_err(|_| lock_poisoned())?;
+        stderr_reader.join().map_err(|_| lock_poisoned())?;
+        let stdout = stdout_capture.lock().map_err(|_| lock_poisoned())?;
+        let stderr = stderr_capture.lock().map_err(|_| lock_poisoned())?;
+        Ok(CompletedProcess {
+            exit_code: status.code(),
+            stdout: String::from_utf8_lossy(&stdout.bytes).into_owned(),
+            stderr: String::from_utf8_lossy(&stderr.bytes).into_owned(),
+            timed_out,
+            output_truncated: stdout.truncated || stderr.truncated,
+        })
+    }
+
     pub fn spawn(&self, request: SpawnRequest<'_>) -> Result<ManagedProcessRecord> {
         native::ensure_supported_platform()?;
         if request.max_log_bytes == 0 {
@@ -960,6 +1133,94 @@ impl ProcessOwner {
         }
         native::force_terminate_process_group(&identity, executable)
     }
+
+    /// Terminate a persisted short-lived helper identity after daemon restart.
+    ///
+    /// # Errors
+    ///
+    /// Refuses cancellation if the PID now belongs to a different process or
+    /// the exact recorded process group cannot be terminated.
+    pub fn terminate_helper_record(&self, record: &HelperProcessRecord) -> Result<()> {
+        let identity = native::NativeProcessIdentity {
+            pid: record.pid,
+            process_group_id: record.process_group_id,
+            platform: record.platform.clone(),
+            platform_start_marker: record.platform_start_marker.clone(),
+            identity_status: "recorded".to_string(),
+        };
+        let executable = Path::new(&record.executable);
+        match native::process_identity_status(&identity, executable)? {
+            native::ProcessIdentityStatus::Absent => return Ok(()),
+            native::ProcessIdentityStatus::Mismatch => {
+                return Err(PulseError::validation(
+                    "managed_process_identity_mismatch",
+                    "recorded helper PID/start/process-group identity no longer matches",
+                ));
+            }
+            native::ProcessIdentityStatus::Match => {}
+        }
+        native::terminate_process_group(&identity, executable)?;
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while Instant::now() < deadline {
+            match native::process_identity_status(&identity, executable)? {
+                native::ProcessIdentityStatus::Absent => return Ok(()),
+                native::ProcessIdentityStatus::Mismatch => {
+                    return Err(PulseError::validation(
+                        "managed_process_identity_mismatch",
+                        "helper process identity changed while waiting for termination",
+                    ));
+                }
+                native::ProcessIdentityStatus::Match => {}
+            }
+            thread::sleep(Duration::from_millis(20));
+        }
+        native::force_terminate_process_group(&identity, executable)
+    }
+}
+
+struct BoundedCapture {
+    bytes: Vec<u8>,
+    limit: usize,
+    truncated: bool,
+}
+
+impl BoundedCapture {
+    fn new(limit: usize) -> Self {
+        Self {
+            bytes: Vec::new(),
+            limit,
+            truncated: false,
+        }
+    }
+
+    fn append(&mut self, bytes: &[u8]) {
+        let remaining = self.limit.saturating_sub(self.bytes.len());
+        self.bytes
+            .extend_from_slice(&bytes[..bytes.len().min(remaining)]);
+        self.truncated |= bytes.len() > remaining;
+    }
+}
+
+fn spawn_capture_drain<R>(
+    mut reader: R,
+    capture: Arc<Mutex<BoundedCapture>>,
+) -> thread::JoinHandle<()>
+where
+    R: Read + Send + 'static,
+{
+    thread::spawn(move || {
+        let mut buffer = [0_u8; 8_192];
+        loop {
+            match reader.read(&mut buffer) {
+                Ok(0) | Err(_) => return,
+                Ok(amount) => {
+                    if let Ok(mut capture) = capture.lock() {
+                        capture.append(&buffer[..amount]);
+                    }
+                }
+            }
+        }
+    })
 }
 
 fn write_provider_line(owned: &mut OwnedChild, message: &str) -> Result<()> {
@@ -1237,6 +1498,43 @@ mod tests {
     use super::*;
     use std::io::Cursor;
     use std::time::Duration;
+
+    #[cfg(unix)]
+    #[test]
+    fn short_process_runner_captures_structured_output() {
+        let owner = ProcessOwner::default();
+        let output = owner
+            .run_to_completion(RunRequest {
+                executable: Path::new("/bin/sh"),
+                args: &["-c".to_string(), "printf '{\"ok\":true}'".to_string()],
+                cwd: Path::new("/tmp"),
+                timeout: Duration::from_secs(2),
+                max_output_bytes: 1024,
+                started: None,
+            })
+            .unwrap();
+        assert_eq!(output.exit_code, Some(0));
+        assert_eq!(output.stdout, r#"{"ok":true}"#);
+        assert!(!output.timed_out);
+        assert!(!output.output_truncated);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn short_process_runner_terminates_group_on_timeout() {
+        let owner = ProcessOwner::default();
+        let output = owner
+            .run_to_completion(RunRequest {
+                executable: Path::new("/bin/sh"),
+                args: &["-c".to_string(), "sleep 10".to_string()],
+                cwd: Path::new("/tmp"),
+                timeout: Duration::from_millis(50),
+                max_output_bytes: 1024,
+                started: None,
+            })
+            .unwrap();
+        assert!(output.timed_out);
+    }
 
     #[test]
     fn provider_line_cap_bounds_line_buffer_and_preserves_log_tail_cap() {

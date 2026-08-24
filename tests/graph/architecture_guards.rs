@@ -81,6 +81,7 @@ fn daemon_is_the_only_runtime_lifecycle_authority() {
         "effects.rs",
         "mod.rs",
         "project.rs",
+        "qa.rs",
         "recovery.rs",
         "session.rs",
         "timeline.rs",

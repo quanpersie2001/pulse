@@ -78,15 +78,39 @@ pub fn record_receipt(
             "receipt too large",
         ));
     }
-    let mut receipt: ReceiptEnvelope =
+    let receipt: ReceiptEnvelope =
         serde_json::from_slice(&input_bytes).map_err(|error| PulseError::json(file, error))?;
+    record_receipt_envelope_with_size(repo_root, failpoint, receipt, input_bytes.len())
+}
+
+/// Record an already typed receipt without routing it through a temporary file.
+///
+/// # Errors
+///
+/// Returns the same schema, binding, CAS, and persistence errors as
+/// [`record_receipt`].
+pub fn record_receipt_envelope(
+    repo_root: &Path,
+    failpoint: Option<TransactionFailpoint>,
+    receipt: ReceiptEnvelope,
+) -> Result<ReceiptOutcome> {
+    let input_size = to_canonical_bytes(&receipt)?.len();
+    record_receipt_envelope_with_size(repo_root, failpoint, receipt, input_size)
+}
+
+fn record_receipt_envelope_with_size(
+    repo_root: &Path,
+    failpoint: Option<TransactionFailpoint>,
+    mut receipt: ReceiptEnvelope,
+    input_size: usize,
+) -> Result<ReceiptOutcome> {
     validate_receipt_id(&receipt.id)?;
     normalize_bindings(&mut receipt);
     let _guard = WriteGuard::acquire(repo_root)?;
     crate::storage::bootstrap(repo_root)?;
     crate::storage::transaction::recover_prepared_transactions(repo_root)?;
     let manifest = manifest::bootstrap(repo_root)?.manifest;
-    if input_bytes.len() as u64 > manifest.max_inline_receipt_bytes {
+    if input_size as u64 > manifest.max_inline_receipt_bytes {
         return Err(PulseError::validation(
             "receipt_schema_invalid",
             "receipt exceeds manifest max_inline_receipt_bytes",

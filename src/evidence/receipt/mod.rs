@@ -28,7 +28,7 @@ mod supersession;
 
 pub use bindings::{code_to_static, content_source_binding_codes};
 pub use store::{
-    list_receipts, load_receipt, record_receipt, show_receipt, verify_receipt, ReceiptList,
-    ReceiptOutcome, ReceiptStatus, ReceiptSummary,
+    list_receipts, load_receipt, record_receipt, record_receipt_envelope, show_receipt,
+    verify_receipt, ReceiptList, ReceiptOutcome, ReceiptStatus, ReceiptSummary,
 };
 pub use supersession::validate_for_supersession;

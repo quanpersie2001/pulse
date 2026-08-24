@@ -9,12 +9,13 @@ use crate::daemon::project::ProjectRecord;
 use crate::daemon::session::{CommunicationGrantRecord, SessionMessageRecord, SessionRecord};
 use crate::daemon::timeline::{TimelineCursor, TimelinePage};
 use crate::daemon::workspace::{IsolationMode, WorkspaceRecord};
+use crate::evidence::model::ReceiptEnvelope;
 use crate::execution::{
     AcceptanceProof, CloseReceipt, HandoffReceipt, VerificationCheck, VerificationDisposition,
     VerificationReceipt,
 };
 
-pub const PROTOCOL_VERSION: u32 = 4;
+pub const PROTOCOL_VERSION: u32 = 5;
 pub const DAEMON_CAPABILITIES: &[&str] = &[
     "project_registry",
     "workspace_manager",
@@ -30,6 +31,7 @@ pub const DAEMON_CAPABILITIES: &[&str] = &[
     "session_inspect",
     "session_logs",
     "mcp_tool_adapter",
+    "qa_checkpoint_executor",
 ];
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -177,6 +179,12 @@ pub enum DaemonRequest {
         summary: String,
         changed_paths: Vec<String>,
         evidence_receipt_ids: Vec<String>,
+    },
+    QaCheckpointRun {
+        saga_id: String,
+        actor: String,
+        source_commit: String,
+        executor_id: String,
     },
     VerificationComplete {
         saga_id: String,
@@ -358,6 +366,9 @@ pub enum DaemonResponse {
     },
     Handoff {
         handoff: HandoffReceipt,
+    },
+    QaCheckpoint {
+        receipt: Box<ReceiptEnvelope>,
     },
     Verification {
         verification: VerificationReceipt,

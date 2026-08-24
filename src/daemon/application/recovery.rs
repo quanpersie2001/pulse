@@ -4,7 +4,7 @@
 
 use serde_json::json;
 
-use crate::daemon::persistence::ExternalEffectState;
+use crate::daemon::persistence::{ExternalEffectKind, ExternalEffectState};
 use crate::daemon::process::ManagedProcessState;
 use crate::daemon::session::SessionLifecycle;
 use crate::Result;
@@ -45,6 +45,25 @@ impl DaemonApplication {
                     );
                     session.updated_at = chrono::Utc::now().to_rfc3339();
                 }
+            }
+            for effect in state.external_effects.values_mut() {
+                if effect.kind != ExternalEffectKind::QaCheckpointRun
+                    || !matches!(
+                        effect.state,
+                        ExternalEffectState::Attempting | ExternalEffectState::OutcomeUnknown
+                    )
+                {
+                    continue;
+                }
+                let Some(process) = effect.attempt_process.as_ref() else {
+                    continue;
+                };
+                effect.detail = match self.process_owner.terminate_helper_record(process) {
+                    Ok(()) => "orphaned QA helper was terminated during startup recovery",
+                    Err(_) => "QA helper identity could not be safely terminated during startup recovery",
+                }
+                .to_string();
+                effect.updated_at = chrono::Utc::now().to_rfc3339();
             }
             let effect_ids = state.external_effects.keys().cloned().collect::<Vec<_>>();
             for effect_id in effect_ids {

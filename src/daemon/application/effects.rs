@@ -81,6 +81,7 @@ impl DaemonApplication {
                 request_fingerprint: request_fingerprint.to_string(),
                 resource_id: None,
                 request_message,
+                attempt_process: None,
                 detail,
                 created_at: now.clone(),
                 updated_at: now,
@@ -167,5 +168,16 @@ pub(super) fn effect_has_committed_owner(
             .deliveries
             .get(&effect.owner_id)
             .is_some_and(|delivery| delivery.state == DeliveryState::Delivered),
+        ExternalEffectKind::QaCheckpointRun => {
+            effect.resource_id.as_ref().is_some_and(|receipt_id| {
+                state.timeline.iter().any(|event| {
+                    event.event_type == "assignment.qa_checkpoint_completed"
+                        && event.payload.get("saga_id").and_then(Value::as_str)
+                            == Some(effect.owner_id.as_str())
+                        && event.payload.get("receipt_id").and_then(Value::as_str)
+                            == Some(receipt_id.as_str())
+                })
+            })
+        }
     }
 }

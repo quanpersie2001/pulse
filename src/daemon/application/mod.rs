@@ -12,6 +12,7 @@ mod communication;
 mod dispatch;
 mod effects;
 mod project;
+mod qa;
 mod recovery;
 mod session;
 mod timeline;
@@ -315,6 +316,7 @@ mod tests {
                         acknowledgement_id: None,
                         handoff_id: None,
                         verification_id: None,
+                        qa_checkpoint_receipt_ids: Vec::new(),
                         state: AssignmentSagaState::DeliveryPending,
                         last_error: None,
                         created_at: now.clone(),

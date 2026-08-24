@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use crate::daemon::assignment::{AssignmentSagaRecord, DeliveryRecord};
-use crate::daemon::process::ManagedProcessRecord;
+use crate::daemon::process::{HelperProcessRecord, ManagedProcessRecord};
 use crate::daemon::project::ProjectRecord;
 use crate::daemon::session::{CommunicationGrantRecord, SessionMessageRecord, SessionRecord};
 use crate::daemon::timeline::TimelineEvent;
@@ -30,6 +30,7 @@ pub enum ExternalEffectKind {
     ProviderSessionResume,
     SessionSend,
     BootstrapDelivery,
+    QaCheckpointRun,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -66,6 +67,10 @@ pub struct ExternalEffectRecord {
     /// request.
     #[serde(default)]
     pub request_message: Option<String>,
+    /// Exact short-lived helper identity persisted immediately after spawn so
+    /// startup recovery can terminate an orphan without risking PID reuse.
+    #[serde(default)]
+    pub attempt_process: Option<HelperProcessRecord>,
     pub detail: String,
     pub created_at: String,
     pub updated_at: String,

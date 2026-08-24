@@ -126,6 +126,29 @@ Checkpoint có thể chạy:
 
 Ticket checkpoint không thay Story qualification. Receipt của nó có `qa_scope: ticket_checkpoint` và `ticket_id`.
 
+### Structured CLI/API executor hiện tại
+
+Target repository allowlist executor tại
+`.pulse/qa/executors/<executor-id>.json`. Contract hiện tại khai báo stable
+`id`/`version`, repository-relative `executable`, fixed `args`, timeout, output
+limit, capabilities và environment/fixture identity. Request runtime chỉ chọn
+`executor_id`; nó không được truyền executable hoặc arbitrary args.
+
+Sau handoff và trước verification, `pulse session qa-checkpoint` resolve exact
+affected cases rồi truyền một typed JSON input-file path làm argument cuối cho
+executor. Executor trả đúng một JSON object trên stdout gồm case outcomes,
+observations, artifact paths/roles và cleanup result. Daemon chạy helper trong
+process group có timeout, validate exact case revisions/capabilities/evidence,
+ingest artifact, rồi tự ghi immutable `qa_checkpoint` receipt. Non-zero exit,
+timeout, truncated hoặc malformed output tạo receipt `inconclusive` với
+`infrastructure_failure`; outcome không rõ sau crash bị fail-closed và không
+blind retry.
+
+Slice này mới sở hữu structured non-browser CLI/API execution. Environment
+start/health/reset/cleanup adapter và deterministic browser/Playwright executor
+vẫn là phần tiếp theo; `cleanup_passed` hiện là typed observation của executor,
+chưa thay thế daemon-owned environment lifecycle.
+
 ### Story qualification/close QA
 
 Story qualification chạy trên integrated candidate snapshot khi các child outcomes cần thiết đã có thể quan sát cùng nhau.

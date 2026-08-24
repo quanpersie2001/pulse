@@ -1,5 +1,118 @@
 use super::*;
 
+#[cfg(unix)]
+#[test]
+fn structured_qa_executor_records_and_replays_checkpoint_receipt() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let repo = TestRepo::from_fixture("minimal-service");
+    let graph = pulse::JsonGraphStore::new(repo.path());
+    bootstrap_repo(&repo, &graph);
+    write_policy(repo.path(), &["work.assignment.release"]);
+    let ticket_id = setup_ready_ticket_with_required_qa(repo.path(), &graph);
+    let executor_dir = repo.path().join(".pulse/qa/executors");
+    std::fs::create_dir_all(&executor_dir).unwrap();
+    std::fs::write(
+        executor_dir.join("api.json"),
+        serde_json::to_vec_pretty(&serde_json::json!({
+            "schema_version": 1,
+            "id": "api",
+            "version": "1.0.0",
+            "executable": "scripts/qa-runner.sh",
+            "args": [],
+            "timeout_seconds": 10,
+            "max_output_bytes": 16384,
+            "capabilities": ["api"],
+            "environment_profile": "fixture",
+            "fixture_revision": "minimal-service-1"
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let runner = repo.path().join("scripts/qa-runner.sh");
+    std::fs::write(
+        &runner,
+        concat!(
+            "#!/bin/sh\n",
+            "printf '%s' '{\"schema_version\":1,\"cases\":[{\"case_id\":\"QA-001\",\"case_revision\":1,\"outcome\":\"passed\"}],\"observations\":[\"one stable reservation\"],\"artifacts\":[],\"cleanup_passed\":true}'\n"
+        ),
+    )
+    .unwrap();
+    let mut permissions = std::fs::metadata(&runner).unwrap().permissions();
+    permissions.set_mode(0o755);
+    std::fs::set_permissions(&runner, permissions).unwrap();
+    let source_commit = common_git::commit_all(repo.path());
+
+    let home = tempfile::tempdir().unwrap();
+    let app = DaemonApplication::new(StateStore::new(home.path()), "test").unwrap();
+    let project_id = open_project(&app, repo.path());
+    let workspace_id = create_workspace(&app, &project_id);
+    let saga_id = "saga-qa-executor";
+    let now = chrono::Utc::now().to_rfc3339();
+    app.store()
+        .with_state(true, |state| {
+            state.assignment_sagas.insert(
+                saga_id.to_string(),
+                pulse::daemon::assignment::AssignmentSagaRecord {
+                    schema_version: 1,
+                    saga_id: saga_id.to_string(),
+                    idempotency_key: "qa-assignment".to_string(),
+                    request_fingerprint: "qa-assignment".to_string(),
+                    project_id: project_id.clone(),
+                    ticket_id: ticket_id.clone(),
+                    actor: "agent:worker".to_string(),
+                    assignee: "agent:worker".to_string(),
+                    ticket_revision: graph.show_node(&ticket_id).unwrap().revision,
+                    packet_fingerprint: "packet".to_string(),
+                    lease_id: Some("lease".to_string()),
+                    workspace_id: Some(workspace_id.clone()),
+                    session_id: Some("session".to_string()),
+                    delivery_id: None,
+                    acknowledgement_id: None,
+                    handoff_id: Some("handoff".to_string()),
+                    verification_id: None,
+                    qa_checkpoint_receipt_ids: Vec::new(),
+                    state: pulse::daemon::assignment::AssignmentSagaState::Verifying,
+                    last_error: None,
+                    created_at: now.clone(),
+                    updated_at: now.clone(),
+                },
+            );
+            Ok(())
+        })
+        .unwrap();
+    let request = DaemonRequest::QaCheckpointRun {
+        saga_id: saga_id.to_string(),
+        actor: "human:qa-reviewer".to_string(),
+        source_commit,
+        executor_id: "api".to_string(),
+    };
+    let receipt = match handle(&app, request.clone(), "qa-checkpoint") {
+        DaemonResponse::QaCheckpoint { receipt } => receipt,
+        other => panic!("unexpected response: {other:?}"),
+    };
+    assert_eq!(
+        receipt.result,
+        pulse::evidence::model::ReceiptResult::Passed
+    );
+    assert!(matches!(
+        handle(&app, request, "qa-checkpoint"),
+        DaemonResponse::QaCheckpoint { receipt: replay } if replay.id == receipt.id
+    ));
+    let state = app.store().load().unwrap();
+    assert_eq!(
+        state.assignment_sagas[saga_id].qa_checkpoint_receipt_ids,
+        vec![receipt.id.clone()]
+    );
+    assert!(state.external_effects.values().any(|effect| {
+        effect.kind == pulse::daemon::persistence::ExternalEffectKind::QaCheckpointRun
+            && effect.state == pulse::daemon::persistence::ExternalEffectState::Acknowledged
+            && effect.resource_id.as_deref() == Some(receipt.id.as_str())
+            && effect.attempt_process.is_some()
+    }));
+    pulse::evidence::verify_receipt(repo.path(), &receipt.id, true, None).unwrap();
+}
+
 #[test]
 fn handoff_and_verification_bind_to_session_and_reviewer_principal() {
     let (_home, _project_root, app) = application();
@@ -26,6 +139,7 @@ fn handoff_and_verification_bind_to_session_and_reviewer_principal() {
                     acknowledgement_id: None,
                     handoff_id: Some("handoff".to_string()),
                     verification_id: None,
+                    qa_checkpoint_receipt_ids: Vec::new(),
                     state: pulse::daemon::assignment::AssignmentSagaState::Verifying,
                     last_error: None,
                     created_at: now.clone(),
@@ -137,6 +251,7 @@ fn bound_assignment_ack_rejects_wrong_sender_and_exact_binding_mismatch_without_
                     acknowledgement_id: None,
                     handoff_id: None,
                     verification_id: None,
+                    qa_checkpoint_receipt_ids: Vec::new(),
                     state: pulse::daemon::assignment::AssignmentSagaState::BootstrapDelivered,
                     last_error: None,
                     created_at: now.clone(),
@@ -223,6 +338,7 @@ fn acknowledgement_saga_serialization_preserves_identical_replay_and_rejects_con
                     acknowledgement_id: Some("ack-same".to_string()),
                     handoff_id: None,
                     verification_id: None,
+                    qa_checkpoint_receipt_ids: Vec::new(),
                     state: pulse::daemon::assignment::AssignmentSagaState::Activated,
                     last_error: None,
                     created_at: now.clone(),
@@ -302,6 +418,7 @@ fn assignment_retry_with_changed_inputs_is_rejected_before_core_mutation() {
                     acknowledgement_id: None,
                     handoff_id: None,
                     verification_id: None,
+                    qa_checkpoint_receipt_ids: Vec::new(),
                     state: pulse::daemon::assignment::AssignmentSagaState::Recoverable,
                     last_error: None,
                     created_at: now.clone(),
@@ -366,6 +483,7 @@ fn legacy_recoverable_saga_pins_full_request_fingerprint_on_first_retry() {
                     acknowledgement_id: None,
                     handoff_id: None,
                     verification_id: None,
+                    qa_checkpoint_receipt_ids: Vec::new(),
                     state: pulse::daemon::assignment::AssignmentSagaState::Recoverable,
                     last_error: None,
                     created_at: now.clone(),
@@ -440,6 +558,7 @@ fn assign_idempotency_key_contract_allows_retry_after_recoverable_failure() {
         acknowledgement_id: None,
         handoff_id: None,
         verification_id: None,
+        qa_checkpoint_receipt_ids: Vec::new(),
         state: pulse::daemon::assignment::AssignmentSagaState::Recoverable,
         last_error: Some("simulated daemon crash".to_string()),
         created_at: now.clone(),

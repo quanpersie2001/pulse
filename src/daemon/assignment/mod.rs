@@ -86,6 +86,8 @@ pub struct AssignmentSagaRecord {
     pub acknowledgement_id: Option<String>,
     pub handoff_id: Option<String>,
     pub verification_id: Option<String>,
+    #[serde(default)]
+    pub qa_checkpoint_receipt_ids: Vec<String>,
     pub state: AssignmentSagaState,
     pub last_error: Option<String>,
     pub created_at: String,

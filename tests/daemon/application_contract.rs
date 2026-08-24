@@ -18,7 +18,9 @@ mod assignment_fixture;
 #[path = "../common/git.rs"]
 mod common_git;
 use super::common_fixture_repo;
-use assignment_fixture::{bootstrap_repo, setup_ready_ticket, write_policy};
+use assignment_fixture::{
+    bootstrap_repo, setup_ready_ticket, setup_ready_ticket_with_required_qa, write_policy,
+};
 use common_fixture_repo::TestRepo;
 
 fn application() -> (tempfile::TempDir, tempfile::TempDir, Arc<DaemonApplication>) {

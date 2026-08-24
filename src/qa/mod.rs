@@ -7,11 +7,16 @@
 //! and has no daemon dependency.
 
 mod baseline;
+mod executor;
 mod receipt;
 
 pub use baseline::{
     load_story_baseline, resolve_ticket_cases, QaBaseline, QaBaselineResolution, QaCase,
     QaCaseApplicability, QaCasePriority,
+};
+pub use executor::{
+    load_executor_manifest, validate_runner_output, QaExecutorManifest, QaRunnerArtifact,
+    QaRunnerInput, QaRunnerOutput,
 };
 pub use receipt::{
     validate_checkpoint_receipt, QaCaseObservation, QaCaseOutcome, QaCheckpointPayload,

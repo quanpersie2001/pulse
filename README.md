@@ -89,9 +89,14 @@ writing the close receipt and `done` transition.
 
 `pulse qa baseline <story-id>` parses and validates the canonical Story
 baseline. `pulse qa resolve <ticket-id>` resolves a required Ticket impact to
-exact current case revisions. QA observations are recorded through
-`pulse evidence receipt record --file <receipt.json>` and referenced by the
-verification acceptance map; they are never mutable status fields.
+exact current case revisions. After handoff and before verification,
+`pulse session qa-checkpoint <saga-id> --actor ... --source-commit ...
+--executor <id>` runs the repository-allowlisted structured executor declared
+at `.pulse/qa/executors/<id>.json`. The daemon owns its bounded process group,
+passes a typed input-file path as the final argument, validates typed JSON on
+stdout, ingests declared artifacts, and records the immutable checkpoint
+receipt automatically. The returned receipt ID must be referenced by the
+verification acceptance map; QA is never a mutable status field.
 
 ### The 4 Human Gates
 

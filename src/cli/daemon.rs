@@ -94,6 +94,7 @@ pub(crate) enum SessionCommand {
         saga_id: String,
     },
     Handoff(SessionHandoffArgs),
+    QaCheckpoint(SessionQaCheckpointArgs),
     Verify(SessionVerifyArgs),
     CloseAssignment(SessionCloseAssignmentArgs),
     Create(SessionCreateArgs),
@@ -172,6 +173,17 @@ pub(crate) struct SessionVerifyArgs {
     pub(crate) checks: std::path::PathBuf,
     #[arg(long)]
     pub(crate) acceptance: Option<std::path::PathBuf>,
+}
+
+#[derive(Args)]
+pub(crate) struct SessionQaCheckpointArgs {
+    pub(crate) saga_id: String,
+    #[arg(long)]
+    pub(crate) actor: String,
+    #[arg(long)]
+    pub(crate) source_commit: String,
+    #[arg(long)]
+    pub(crate) executor: String,
 }
 
 #[derive(Args)]
@@ -375,6 +387,12 @@ pub(crate) fn handle_session(command: SessionCommand, explicit_key: Option<&str>
             summary: args.summary,
             changed_paths: args.changed_paths,
             evidence_receipt_ids: args.evidence_receipts,
+        },
+        SessionCommand::QaCheckpoint(args) => DaemonRequest::QaCheckpointRun {
+            saga_id: args.saga_id,
+            actor: args.actor,
+            source_commit: args.source_commit,
+            executor_id: args.executor,
         },
         SessionCommand::Verify(args) => {
             let bytes =
@@ -613,6 +631,33 @@ mod tests {
                     ..
                 })
             } if saga_id == "saga_test"
+        ));
+    }
+
+    #[test]
+    fn cli_parses_structured_qa_checkpoint_request() {
+        let cli = crate::cli::Cli::try_parse_from([
+            "pulse",
+            "session",
+            "qa-checkpoint",
+            "saga_test",
+            "--actor",
+            "human:qa-reviewer",
+            "--source-commit",
+            "0123456789012345678901234567890123456789",
+            "--executor",
+            "api",
+        ])
+        .expect("QA checkpoint CLI should parse");
+        assert!(matches!(
+            cli.command,
+            crate::cli::args::Command::Session {
+                command: SessionCommand::QaCheckpoint(SessionQaCheckpointArgs {
+                    saga_id,
+                    executor,
+                    ..
+                })
+            } if saga_id == "saga_test" && executor == "api"
         ));
     }
 
