@@ -142,13 +142,15 @@ removed from the current runtime path.
 - Core proof close baseline đã support exact acceptance-to-check/evidence mapping
   cho low-risk Ticket với docs impact `none`; QA impact `none`, `required` với
   current passed checkpoint, hoặc `covered_by_story_close` với current full
-  Story qualification trên cùng source được close. Story lifecycle close,
-  unsupported risk và documentation promotion vẫn fail closed tại `verifying`.
+  Story qualification trên cùng source được close. Specialized Story lifecycle
+  close đã gate terminal descendants, blockers, frozen source và full current
+  qualification; unsupported risk và documentation promotion vẫn fail closed.
 - Repository-owned Playwright executor contract đã support typed browser
   engine/base URL, per-case deterministic assertions, trace artifact ingestion,
   lifecycle/source binding và payload version 3; real-browser acceptance fixture
-  vẫn thuộc Phase 3 completion. Full Story-close replay đã dùng cùng executor
-  contract và tạo Story-subject receipt, nhưng Story lifecycle gate chưa có.
+  vẫn thuộc Phase 3 completion. Full Story-close replay dùng cùng executor
+  contract và Story-subject receipt; Core Story-close atomically ghi lifecycle
+  outcome và immutable close proof.
 - Hidden supervisor, runner profiles, Core run store, assignment-owned
   Workspace records và public run/attempt contracts đã bị xóa một chiều.
 

@@ -37,7 +37,7 @@ pub fn run(cli: Cli) -> Result<(), PulseError> {
 
     let explicit_key = cli.idempotency_key.as_deref();
     match cli.command {
-        args::Command::Work { command } => work::handle(&store, command),
+        args::Command::Work { command } => work::handle(&store, command, explicit_key),
         args::Command::Docs { command } => docs::handle(&store, command),
         args::Command::Graph { command } => graph::handle(&store, command),
         args::Command::Evidence { command } => evidence::handle(&store, command),

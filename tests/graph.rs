@@ -56,6 +56,8 @@ mod shaping_cli_contract;
 mod shaping_contract;
 #[path = "graph/shaping_mutation.rs"]
 mod shaping_mutation;
+#[path = "graph/story_completion.rs"]
+mod story_completion;
 #[path = "graph/work_packet_cli_contract.rs"]
 mod work_packet_cli_contract;
 #[path = "graph/workgraph.rs"]

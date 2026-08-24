@@ -487,6 +487,10 @@ any non-terminal -> superseded
 - `active` phải có assignment lease hợp lệ và vẫn thuộc Phase 2.
 - `verifying` khóa source snapshot.
 - `done` do close gate tính, không do Worker tự khai báo. Ticket có QA posture `required` cần valid targeted checkpoint receipts; Story cần full applicable qualification receipts.
+- Story không nhận Ticket assignment lease. Specialized Core Story-close gate
+  giữ Story ở `ready` trong lúc child work chạy và chỉ thực hiện explicit
+  `ready -> done` khi descendant outcomes, blockers, frozen source và full
+  qualification đều pass; generic lifecycle transition không mở direction này.
 - `superseded` có `superseded_by` edge hoặc Decision giải thích.
 - Epic/Story roll-up derive từ graph và QA, không lưu child counters chỉnh tay.
 
@@ -515,11 +519,18 @@ Vì vậy local work graph đóng vai trò tracker source mà Linear đóng tron
 
 Ticket chỉ `done` khi acceptance map tới valid evidence, developer verification và required review pass, QA posture được disposition, required targeted checkpoint receipts pass trên source snapshot hiện tại, documentation impact đã update/classify/defer hợp policy, không còn blocking finding và handoff ghi remaining risk trung thực. Ticket checkpoint chỉ chứng minh affected change scope; nó không thay full Story qualification.
 
-Current executable baseline cài Core close gate cho standalone Ticket `risk=low`,
-QA impact `none` và documentation impact `none`: exact contract acceptance IDs
-phải map sang passing verification checks hoặc current immutable receipts trên
-cùng handoff/source/revision. `required`, `covered_by_story_close`, documentation
-promotion/defer và medium-or-higher risk fail closed cho tới khi resolver tương
-ứng được cài; provider exit hoặc daemon state không thay close proof.
+Current executable baseline cài Core close gate cho standalone Ticket `risk=low`
+và documentation impact `none`: exact contract acceptance IDs phải map sang
+passing verification checks hoặc current immutable receipts trên cùng
+handoff/source/revision. QA `required` cần exact targeted checkpoint;
+`covered_by_story_close` cần full current Story receipt trên cùng source.
+Documentation promotion/defer và medium-or-higher risk vẫn fail closed; provider
+exit hoặc daemon state không thay close proof.
 
 Story chỉ `done` khi child outcome đủ, current `qa.md` coverage không còn gap bắt buộc và full applicable behavioral baseline pass trên integrated/frozen candidate snapshot theo [`03-story-qa.md`](03-story-qa.md). Epic đóng khi success signals được đánh giá, không chỉ vì mọi child Ticket mang nhãn `done`.
+
+Current specialized Story close yêu cầu Story `ready`, mọi descendant
+Story/Ticket là `done|superseded`, có ít nhất một terminal descendant Ticket,
+không còn open hard blocker, current HEAD khớp receipt và closing actor độc lập
+với QA actor. Mutation atomically ghi Story node, immutable close receipt và
+semantic event; receipt giữ graph fingerprint cùng exact terminal Ticket IDs.

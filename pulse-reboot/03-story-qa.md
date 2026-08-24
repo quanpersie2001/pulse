@@ -197,7 +197,11 @@ immutable receipt có subject là Story. `ticket_id` của assignment được g
 trong payload để audit, nhưng Core chỉ cho một Ticket
 `covered_by_story_close` dùng receipt khi Story owner, full baseline revision,
 source commit, actor independence, capabilities/evidence và toàn bộ case
-coverage đều còn current. Story node lifecycle close riêng vẫn chưa implement.
+coverage đều còn current. Specialized Core `pulse work close-story` hiện dùng
+receipt đó để đóng Story `ready` khi toàn bộ descendant outcomes đã terminal,
+không còn hard blocker, source/baseline/case/capability/evidence đều current và
+closing actor độc lập với QA actor. Story close proof, node mutation và event
+được commit atomically; generic lifecycle transition không được mở thay thế gate.
 
 ### Execution cadence
 

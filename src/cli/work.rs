@@ -96,6 +96,19 @@ pub(crate) enum WorkCommand {
         #[arg(long)]
         json: bool,
     },
+    CloseStory {
+        story_id: String,
+        #[arg(long)]
+        qualification_receipt: String,
+        #[arg(long)]
+        actor: String,
+        #[arg(long)]
+        source_commit: String,
+        #[arg(long)]
+        summary: String,
+        #[arg(long)]
+        json: bool,
+    },
     Frontier {
         #[arg(long, value_enum)]
         kind: FrontierKindArg,
@@ -386,7 +399,11 @@ use crate::graph::lifecycle::TransitionReason;
 use crate::graph::store::{ContractSetRequest, QaImpactUpdate, SupersessionTarget};
 use crate::{policy, JsonGraphStore, PulseError};
 
-pub(crate) fn handle(store: &JsonGraphStore, command: WorkCommand) -> Result<(), PulseError> {
+pub(crate) fn handle(
+    store: &JsonGraphStore,
+    command: WorkCommand,
+    explicit_key: Option<&str>,
+) -> Result<(), PulseError> {
     match command {
         WorkCommand::Create {
             kind,
@@ -567,6 +584,24 @@ pub(crate) fn handle(store: &JsonGraphStore, command: WorkCommand) -> Result<(),
             let out = store.rollup(&id)?;
             render(json, &out, format!("rollup {}", out.subject))
         }
+        WorkCommand::CloseStory {
+            story_id,
+            qualification_receipt,
+            actor,
+            source_commit,
+            summary,
+            json,
+        } => {
+            let out = store.close_story(crate::execution::CloseStoryArgs {
+                story_id,
+                qualification_receipt_id: qualification_receipt,
+                actor,
+                source_commit,
+                summary,
+                idempotency_key: explicit_key.unwrap_or_default().to_string(),
+            })?;
+            render(json, &out, format!("closed Story {}", out.story_id))
+        }
         WorkCommand::Frontier {
             kind,
             for_,
@@ -745,5 +780,44 @@ fn readiness_policy_human(report: &policy::AuthorityPolicyReport) -> String {
             "readiness policy invalid: {}",
             report.reason_codes.join(",")
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use clap::Parser;
+
+    use super::WorkCommand;
+
+    #[test]
+    fn cli_parses_story_close_request_without_versioned_naming() {
+        let cli = crate::cli::Cli::try_parse_from([
+            "pulse",
+            "--idempotency-key",
+            "story-close-test",
+            "work",
+            "close-story",
+            "ST-01J00000000000000000000000",
+            "--qualification-receipt",
+            "rcpt_01J00000000000000000000000",
+            "--actor",
+            "human:conductor",
+            "--source-commit",
+            "0123456789012345678901234567890123456789",
+            "--summary",
+            "Integrated outcome qualified.",
+        ])
+        .expect("Story close CLI should parse");
+        assert!(matches!(
+            cli.command,
+            crate::cli::args::Command::Work {
+                command: WorkCommand::CloseStory {
+                    story_id,
+                    qualification_receipt,
+                    ..
+                }
+            } if story_id == "ST-01J00000000000000000000000"
+                && qualification_receipt == "rcpt_01J00000000000000000000000"
+        ));
     }
 }

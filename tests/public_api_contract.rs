@@ -240,9 +240,12 @@ fn execution_proof_public_paths_compile() {
     let _: Option<pulse::execution::VerificationReceipt> = None;
     let _: Option<pulse::execution::AcceptanceProof> = None;
     let _: Option<pulse::execution::CloseReceipt> = None;
+    let _: Option<pulse::execution::StoryCloseReceipt> = None;
+    let _: Option<pulse::execution::CloseStoryArgs> = None;
     let _ = pulse::kernel::completion::load_handoff;
     let _ = pulse::kernel::completion::load_verification;
     let _ = pulse::kernel::completion::load_close;
+    let _ = pulse::kernel::story_completion::load_story_close;
 }
 
 #[test]

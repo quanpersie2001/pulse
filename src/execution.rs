@@ -158,6 +158,44 @@ pub struct CloseTicketArgs {
     pub idempotency_key: String,
 }
 
+/// Immutable result of the Core-owned Story close gate.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct StoryCloseReceipt {
+    pub schema_version: u32,
+    pub close_id: String,
+    pub idempotency_key_hash: String,
+    pub story_id: String,
+    pub qualification_receipt_id: String,
+    pub source_commit: String,
+    pub graph_fingerprint_observed: String,
+    pub done_ticket_ids: Vec<String>,
+    pub superseded_ticket_ids: Vec<String>,
+    pub summary: String,
+    pub closed_by: String,
+    pub recorded_at: String,
+    pub resulting_revision: u64,
+    pub close_fingerprint: String,
+}
+
+impl StoryCloseReceipt {
+    pub fn compute_fingerprint(&self) -> Result<String> {
+        let mut projection = self.clone();
+        projection.close_fingerprint.clear();
+        hash_serializable(&projection)
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct CloseStoryArgs {
+    pub story_id: String,
+    pub qualification_receipt_id: String,
+    pub actor: String,
+    pub source_commit: String,
+    pub summary: String,
+    pub idempotency_key: String,
+}
+
 pub fn validate_checks(
     disposition: VerificationDisposition,
     checks: &[VerificationCheck],
