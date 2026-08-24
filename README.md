@@ -76,8 +76,8 @@ ownership remains documented by [`src/kernel/`](src/kernel/) and
 4. A bound acknowledgement activates the reserved Ticket.
 5. The worker implements and verifies the lease-bound packet in its workspace.
 6. Typed handoff moves the Ticket to independent verification.
-7. Verification maps every acceptance item to passing checks/evidence; Core may close a low-risk Ticket whose QA and documentation postures are both `none`.
-8. Required QA, documentation promotion, and medium-or-higher risk remain fail-closed until their dedicated assurance resolvers are installed.
+7. Verification maps every acceptance item to passing checks/evidence; Core may close a low-risk Ticket whose documentation posture is `none` and whose QA posture is either `none` or satisfied by a required checkpoint.
+8. Required Ticket QA closes only with a current passed `qa_checkpoint` receipt covering the exact affected Story baseline cases. Story-deferred QA, documentation promotion, and medium-or-higher risk remain fail-closed until their dedicated assurance resolvers are installed.
 
 `pulse session verify` reads checks from `--checks` and the acceptance map from
 `--acceptance`. The acceptance file is a JSON array of
@@ -86,6 +86,12 @@ the exact current contract IDs. After a passed verification, an authorized
 reviewer invokes `pulse session close-assignment <saga-id> --actor ...
 --source-commit ... --summary ...`; Core revalidates every binding before
 writing the close receipt and `done` transition.
+
+`pulse qa baseline <story-id>` parses and validates the canonical Story
+baseline. `pulse qa resolve <ticket-id>` resolves a required Ticket impact to
+exact current case revisions. QA observations are recorded through
+`pulse evidence receipt record --file <receipt.json>` and referenced by the
+verification acceptance map; they are never mutable status fields.
 
 ### The 4 Human Gates
 

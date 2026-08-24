@@ -1,8 +1,16 @@
+use pulse::evidence::model::{
+    ActorKind, ActorRef, ContentBinding, ReceiptBindings, ReceiptEnvelope, ReceiptKind,
+    ReceiptPayload, ReceiptResult, SourceBinding, SubjectRef,
+};
 use pulse::execution::{
     AcceptanceProof, CloseTicketArgs, CompleteVerificationArgs, SubmitHandoffArgs,
     VerificationCheck, VerificationDisposition,
 };
 use pulse::graph::node::NodeStatus;
+use pulse::qa::{
+    QaCaseObservation, QaCaseOutcome, QaCheckpointPayload, QaExecutionScope, QaExecutor,
+    QaRuntimeEnvironment,
+};
 use pulse::reservation::{
     AcknowledgeReservationArgs, ActivateReservationArgs, AssignmentAcknowledgement,
     ReservationState, ReserveWorkArgs, RuntimeBinding,
@@ -11,7 +19,8 @@ use pulse::storage::transaction::TransactionFailpoint;
 use pulse::JsonGraphStore;
 
 use super::assignment_fixture::{
-    bootstrap_repo, setup_ready_ticket, valid_inventory_bytes, write_policy,
+    bootstrap_repo, setup_ready_ticket, setup_ready_ticket_with_required_qa, valid_inventory_bytes,
+    write_policy,
 };
 use super::common_fixture_repo::TestRepo;
 
@@ -57,6 +66,168 @@ fn acceptance_proofs(check_name: &str) -> Vec<AcceptanceProof> {
         check_names: vec![check_name.to_string()],
         evidence_receipt_ids: vec![],
     }]
+}
+
+fn record_qa_checkpoint(repo: &std::path::Path, ticket_id: &str, source_commit: &str) -> String {
+    let store = JsonGraphStore::new(repo);
+    let node = store.show_node(ticket_id).unwrap();
+    let resolution = pulse::qa::resolve_ticket_cases(repo, &node).unwrap();
+    let manifest = pulse::evidence::manifest::load(repo).unwrap();
+    let receipt_id = "rcpt_01J00000000000000000000009".to_string();
+    let receipt = ReceiptEnvelope {
+        schema_version: 1,
+        receipt_version: 2,
+        id: receipt_id.clone(),
+        kind: ReceiptKind::QaCheckpoint,
+        result: ReceiptResult::Passed,
+        actor: ActorRef {
+            kind: ActorKind::Human,
+            id: "qa-reviewer".to_string(),
+        },
+        recorded_at: chrono::Utc::now(),
+        subject: SubjectRef {
+            kind: "work".to_string(),
+            id: ticket_id.to_string(),
+        },
+        bindings: ReceiptBindings {
+            work: vec![],
+            source: Some(SourceBinding {
+                kind: "git_commit".to_string(),
+                commit: source_commit.to_string(),
+                repository_id: manifest.repository_id,
+            }),
+            content: vec![ContentBinding {
+                path: resolution.path.clone(),
+                sha256: resolution.content_hash.clone(),
+            }],
+            artifacts: vec![],
+            graph_fingerprint_observed: None,
+        },
+        payload: ReceiptPayload::QaCheckpoint(QaCheckpointPayload {
+            payload_version: 1,
+            qa_scope: QaExecutionScope::TicketCheckpoint,
+            story_id: resolution.owner_id,
+            ticket_id: ticket_id.to_string(),
+            baseline_revision: resolution.revision,
+            baseline_content_hash: resolution.content_hash,
+            cases: vec![QaCaseObservation {
+                case_id: "QA-001".to_string(),
+                case_revision: 1,
+                outcome: QaCaseOutcome::Passed,
+            }],
+            executor: QaExecutor {
+                name: "structured-api".to_string(),
+                version: "1.0.0".to_string(),
+                capabilities: vec!["api".to_string()],
+            },
+            environment: QaRuntimeEnvironment {
+                profile: "test-api".to_string(),
+                platform: std::env::consts::OS.to_string(),
+                fixture_revision: "reservation-fixture-1".to_string(),
+            },
+            observations: vec!["Repeated reservation returned one stable identity.".to_string()],
+            cleanup_passed: true,
+        }),
+    };
+    let file = repo.join("qa-checkpoint-input.json");
+    std::fs::write(
+        &file,
+        pulse::canonical_json::to_canonical_bytes(&receipt).unwrap(),
+    )
+    .unwrap();
+    pulse::evidence::record_receipt(repo, None, &file).unwrap();
+    receipt_id
+}
+
+#[test]
+fn required_qa_checkpoint_opens_proof_close_only_with_current_case_coverage() {
+    let repo = TestRepo::from_fixture("minimal-service");
+    let store = JsonGraphStore::new(repo.path());
+    bootstrap_repo(&repo, &store);
+    write_policy(repo.path(), &["work.assignment.release"]);
+    add_reviewer_policy(repo.path());
+    let ticket_id = setup_ready_ticket_with_required_qa(repo.path(), &store);
+
+    let reserved = reserve(&store, &ticket_id, "reservation-required-qa");
+    let active = store
+        .activate_reservation(ActivateReservationArgs {
+            lease_id: reserved.reservation.lease_id,
+            actor: "agent:tester".to_string(),
+            runtime_binding: binding(),
+            acknowledgement: acknowledgement(&reserved.reservation.packet_fingerprint),
+        })
+        .unwrap();
+    let handoff = store
+        .submit_execution_handoff(SubmitHandoffArgs {
+            lease_id: active.lease_id,
+            actor: "agent:tester".to_string(),
+            session_id: "ses_test".to_string(),
+            source_commit: active.source.commit,
+            summary: "Behavioral change is ready for independent verification.".to_string(),
+            changed_paths: vec![],
+            evidence_receipt_ids: vec![],
+            idempotency_key: "handoff-required-qa".to_string(),
+        })
+        .unwrap();
+    let qa_receipt_id = record_qa_checkpoint(repo.path(), &ticket_id, &handoff.source_commit);
+    let verification = store
+        .complete_execution_verification(CompleteVerificationArgs {
+            handoff_id: handoff.handoff_id,
+            actor: "human:reviewer".to_string(),
+            source_commit: handoff.source_commit.clone(),
+            disposition: VerificationDisposition::Passed,
+            summary: "Implementation and behavioral checkpoint passed.".to_string(),
+            checks: vec![VerificationCheck {
+                name: "focused".to_string(),
+                command: "true".to_string(),
+                exit_code: 0,
+                artifact_ids: vec![],
+            }],
+            acceptance_proofs: vec![AcceptanceProof {
+                acceptance_id: "AC-1".to_string(),
+                check_names: vec!["focused".to_string()],
+                evidence_receipt_ids: vec![qa_receipt_id],
+            }],
+            idempotency_key: "verification-required-qa".to_string(),
+        })
+        .unwrap();
+    let close_args = CloseTicketArgs {
+        verification_id: verification.verification_id,
+        actor: "human:reviewer".to_string(),
+        source_commit: handoff.source_commit,
+        summary: "Required QA case coverage is current and passed.".to_string(),
+        idempotency_key: "close-required-qa".to_string(),
+    };
+    let node = store.show_node(&ticket_id).unwrap();
+    let baseline = pulse::qa::resolve_ticket_cases(repo.path(), &node).unwrap();
+    let baseline_path = repo.path().join(&baseline.path);
+    let original = std::fs::read(&baseline_path).unwrap();
+    let mut stale = original.clone();
+    stale.extend_from_slice(b"\nChanged after QA observation.\n");
+    std::fs::write(&baseline_path, stale).unwrap();
+    let stale_error = store
+        .close_execution_ticket(close_args.clone())
+        .unwrap_err();
+    assert!(
+        matches!(
+            stale_error.code(),
+            "close_qa_checkpoint_stale" | "content_binding_stale" | "unsupported_source_snapshot"
+        ),
+        "unexpected stale QA error: {}",
+        stale_error.code()
+    );
+    assert_eq!(
+        store.show_node(&ticket_id).unwrap().status,
+        NodeStatus::Verifying
+    );
+    std::fs::write(&baseline_path, original).unwrap();
+
+    let close = store.close_execution_ticket(close_args).unwrap();
+    assert_eq!(close.ticket_id, ticket_id);
+    assert_eq!(
+        store.show_node(&ticket_id).unwrap().status,
+        NodeStatus::Done
+    );
 }
 
 fn assignment_bytes(repo: &std::path::Path) -> Vec<(String, Vec<u8>)> {

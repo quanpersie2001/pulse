@@ -109,7 +109,7 @@ thành.
 - Ready projection cho critical branch disposition, authority/approval và remaining uncertainty; kernel chỉ validate typed contracts, bindings, revisions, hashes và policy, không tự đánh giá semantic clarity.
 - Shaping receipt contract + immutable Decision acceptance proof, receipt-first current pointer apply/invalidate và narrow readiness fingerprint không tự stale khi status/pointer-only revision đổi.
 - Tracked default-deny `.pulse/policy/authority.json` tách khỏi `PULSE.md` intent và `.pulse/config.yaml` operational settings; gồm explicit shaping/Decision/transition/docs/QA grants.
-- Minimal QA readiness boundary: `unknown` block; `none` cần rationale + `qa.none.approve`; `covered_by_story_close` cần Story owner/rationale + `qa.defer_to_story_close`; `required` unavailable tới Phase 3 baseline/case resolver.
+- QA readiness boundary: `unknown` block; `none` cần rationale + `qa.none.approve`; `covered_by_story_close` cần Story owner/rationale + `qa.defer_to_story_close`; `required` resolve exact affected cases từ current Story `qa.md` baseline.
 - Shaping-map reference/revision, destination/exit condition, canonical resolution pointers, bounded fog entries và derived decision/execution frontier queries; pre-lease output dùng `claim_state=not_evaluated`.
 - `pulse docs list|show|applicable` và exclusion của retired/migration docs.
 - Heading-aware section extraction, generated `_index.md`, disposable BM25+ index và `pulse docs index|status|search|get|tree`.
@@ -140,8 +140,9 @@ removed from the current runtime path.
   Core proof close quyết định `done|rework|blocked`, và process exit không close
   Ticket.
 - Core proof close baseline đã support exact acceptance-to-check/evidence mapping
-  cho standalone low-risk Ticket với QA/docs impact `none`; unsupported risk,
-  required QA và documentation promotion vẫn fail closed tại `verifying`.
+  cho low-risk Ticket với docs impact `none`; QA impact `none` hoặc `required`
+  với current passed checkpoint được close. Story-deferred QA, unsupported risk
+  và documentation promotion vẫn fail closed tại `verifying`.
 - Hidden supervisor, runner profiles, Core run store, assignment-owned
   Workspace records và public run/attempt contracts đã bị xóa một chiều.
 

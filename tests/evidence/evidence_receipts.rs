@@ -89,6 +89,26 @@ fn tree_bytes(root: &std::path::Path) -> Vec<(String, Vec<u8>)> {
     out
 }
 
+#[test]
+fn evidence_bootstrap_adds_qa_contract_without_changing_repository_identity() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path();
+    let initial = pulse::evidence::bootstrap(repo).unwrap().manifest;
+    let manifest_path = repo.join(".pulse/evidence/manifest.json");
+    let mut legacy = initial.clone();
+    legacy.receipt_schemas.remove("2");
+    legacy.receipt_kinds.remove("qa_checkpoint");
+    write_json(&manifest_path, &legacy);
+    fs::remove_file(repo.join(".pulse/evidence/schemas/receipt-envelope-qa.schema.json")).unwrap();
+    fs::remove_file(repo.join(".pulse/evidence/schemas/qa-checkpoint.schema.json")).unwrap();
+
+    let migrated = pulse::evidence::bootstrap(repo).unwrap().manifest;
+    assert_eq!(migrated.repository_id, initial.repository_id);
+    assert!(migrated.receipt_schemas.contains_key("1"));
+    assert!(migrated.receipt_schemas.contains_key("2"));
+    assert!(migrated.receipt_kinds.contains_key("qa_checkpoint"));
+}
+
 fn make_shaping_receipt(
     id: &str,
     node: &pulse::graph::node::Node,

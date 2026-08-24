@@ -84,6 +84,7 @@ pub enum ReceiptKind {
     ShapingValidation,
     DecisionAcceptance,
     DocumentationValidation,
+    QaCheckpoint,
 }
 
 impl ReceiptKind {
@@ -93,6 +94,7 @@ impl ReceiptKind {
             Self::ShapingValidation => "shaping_validation",
             Self::DecisionAcceptance => "decision_acceptance",
             Self::DocumentationValidation => "documentation_validation",
+            Self::QaCheckpoint => "qa_checkpoint",
         }
     }
 }
@@ -113,6 +115,7 @@ pub enum ReceiptPayload {
     ShapingValidation(ShapingValidationPayload),
     DecisionAcceptance(DecisionAcceptancePayload),
     DocumentationValidation(DocumentationValidationPayload),
+    QaCheckpoint(crate::qa::QaCheckpointPayload),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

@@ -46,6 +46,10 @@ pub(crate) enum Command {
         #[command(subcommand)]
         command: super::knowledge::KnowledgeCommand,
     },
+    Qa {
+        #[command(subcommand)]
+        command: super::qa::QaCommand,
+    },
     Daemon {
         #[command(subcommand)]
         command: super::daemon::DaemonCommand,

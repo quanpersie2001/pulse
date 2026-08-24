@@ -251,6 +251,11 @@ is orientation.
   interpretation (registry lifecycle, review posture) is owned by
   `src/docs/receipt_validation.rs` and consumed by evidence as a narrow
   validator; evidence does not implement docs policy.
+- `src/qa/` owns the typed Story behavioral baseline and QA checkpoint payload
+  semantics. The kernel resolves Ticket impacts and applies close policy;
+  evidence owns only immutable envelope persistence/bindings, and daemon owns
+  no QA meaning. Canonical baselines live in `works/<STORY-ID>/qa.md` as one
+  `pulse-qa` fenced machine contract plus explanatory prose.
 - `src/identity/` owns the shared actor vocabulary (`ActorRef`, `ActorKind`)
   used by evidence, event, policy and kernel. `evidence::model` re-exports it
   for path compatibility.

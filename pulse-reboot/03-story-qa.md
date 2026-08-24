@@ -184,6 +184,52 @@ Risk-adaptive depth:
 
 ## Cấu trúc normative của `qa.md`
 
+Pulse parse một fenced JSON block `pulse-qa` duy nhất trong `qa.md`. Đây là
+machine contract; prose bên ngoài dùng để giải thích intent. Receipt bind hash
+của toàn bộ `qa.md`, vì vậy thay đổi prose hoặc contract sau checkpoint đều làm
+proof cũ stale. Contract hiện tại dùng các field:
+
+- `schema_version`, `story_id`, `revision`, `scope`;
+- `requirements`, `protected_risks` và `exit_criteria`;
+- `cases`, mỗi case có stable `id`, positive `revision`, intent/type/priority,
+  requirement/risk refs, actions, expected observations, surface, required
+  capabilities/evidence và applicability.
+
+Mọi requirement/risk khai báo phải được ít nhất một case reference. ID trùng,
+reference không tồn tại, case incomplete hoặc `not_applicable` thiếu rationale
+đều invalid. Ticket `qa.required` chỉ ready khi behavioral owner Story tồn tại
+và mọi `affected_case_ids` resolve tới case `required` hiện tại.
+
+Ví dụ machine block tối thiểu:
+
+```pulse-qa
+{
+  "schema_version": 1,
+  "story_id": "ST-014",
+  "revision": 3,
+  "scope": "Authentication recovery preserves checkout state.",
+  "requirements": ["AC-01"],
+  "protected_risks": ["RISK-REFRESH-LOOP"],
+  "cases": [{
+    "id": "QA-001",
+    "revision": 3,
+    "intent": "Checkout continues after token refresh.",
+    "case_types": ["acceptance", "recovery"],
+    "priority": "critical",
+    "requirement_refs": ["AC-01"],
+    "risk_refs": ["RISK-REFRESH-LOOP"],
+    "preconditions": ["Access token expired; refresh token valid."],
+    "actions": ["Open checkout and wait for recovery."],
+    "expected_observations": ["One refresh; checkout and cart remain."],
+    "surface": "web",
+    "required_capabilities": ["browser", "network-observation"],
+    "required_evidence": ["trace"],
+    "applicability": "required"
+  }],
+  "exit_criteria": ["All required applicable cases pass on candidate source."]
+}
+```
+
 Ví dụ:
 
 ```markdown
@@ -614,6 +660,13 @@ Ví dụ JSON minh họa:
 ```
 
 Receipt là immutable. Nếu cần rerun hoặc sửa kết quả, tạo receipt mới và liên kết attempt/supersession; không mutate receipt cũ.
+
+Current Core Ticket checkpoint dùng evidence receipt kind `qa_checkpoint`
+trong receipt envelope version `2`. Verification phải reference receipt ID qua
+acceptance proof. Close gate tự revalidate exact Ticket/source, Story baseline
+revision/content hash, selected case revisions/outcomes, executor capabilities,
+required artifact roles, cleanup và independence với handoff author. Caller
+không có boolean hoặc status field để tự khai QA đã pass.
 
 ## Receipt validity
 

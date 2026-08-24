@@ -11,8 +11,9 @@
 > it never blindly re-sends and never releases a possibly-valid assignment.
 > Typed acknowledgement remains separate; activation is never inferred from
 > provider state. A bounded Core proof close baseline is installed for low-risk
-> Tickets with QA/docs impact `none`; broader Phase 3 assurance resolvers are not
-> installed. No full-suite-green result is claimed here, and daemon whole-snapshot boundedness,
+> Tickets with docs impact `none` and QA impact `none` or `required` with an
+> exact current passed Story-case checkpoint. Story close, documentation and
+> broader risk assurance resolvers are not installed. Daemon whole-snapshot boundedness,
 > Windows native acceptance coverage and `repository_id` naming remain
 > deferred/risk items. Reservation TTL recovery currently covers
 > `Reserved`/`Acknowledged`, not `Active`.
@@ -311,12 +312,14 @@ or a released reservation, never duplicate active ownership.
 **Exit:** one standalone Ticket completes end to end with valid receipts; a
 zero-exit provider process without proof cannot close it.
 
-Current implementation closes the first bounded baseline: a low-risk
-standalone Ticket with QA and documentation impact `none`, exact acceptance
-coverage, independent passing verification, current source and immutable
-handoff/verification/close receipts. Required QA, Story-deferred QA,
-documentation promotion/defer and medium-or-higher risk remain explicitly
-unavailable rather than being inferred from process success.
+Current implementation closes the first bounded baseline: a low-risk Ticket
+with documentation impact `none`, exact acceptance coverage, independent
+passing verification, current source and immutable handoff/verification/close
+receipts. QA impact may be `none` or `required`; required QA additionally needs
+exact current Story baseline case coverage through an immutable passed
+checkpoint receipt. Story-deferred QA, Story close, documentation
+promotion/defer and medium-or-higher risk remain explicitly unavailable rather
+than being inferred from process success.
 
 ### G8 - CLI replacement and old-path deletion
 

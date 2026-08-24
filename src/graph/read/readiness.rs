@@ -161,6 +161,16 @@ pub struct DecisionProofSnapshot {
     pub content_current: bool,
 }
 
+/// Current Story QA baseline resolution for a required Ticket checkpoint.
+#[derive(Debug, Clone)]
+pub struct QaCaseResolutionSnapshot {
+    pub owner_id: String,
+    pub baseline_revision: u64,
+    pub baseline_content_hash: String,
+    pub selected_cases: Vec<(String, u64)>,
+    pub error_code: Option<String>,
+}
+
 /// A single content binding (brief/map/shared approach/Decision prose) and its
 /// current on-disk hash, used for content-reference currentness.
 #[derive(Debug, Clone)]
@@ -180,6 +190,7 @@ pub struct ReadinessInputs<'a> {
     pub structural: &'a StructuralExecutabilityReport,
     pub shaping: Option<&'a ShapingReceiptSnapshot>,
     pub decision_proofs: Vec<DecisionProofSnapshot>,
+    pub qa_resolution: Option<&'a QaCaseResolutionSnapshot>,
     pub docs: &'a ApplicableDocsReport,
     pub authority: &'a AuthorityPolicyReport,
     pub content_bindings: Vec<ContentHashBinding>,
@@ -818,10 +829,19 @@ impl FamilyEvaluator<'_> {
             }
             QaImpactPosture::None | QaImpactPosture::CoveredByStoryClose => GateStatus::Passed,
             QaImpactPosture::Required => {
-                // Baseline/case resolver belongs to Phase 3. Until then the
-                // gate is unavailable and the Ticket cannot transition ready.
-                self.note("qa_baseline_resolver_unavailable");
-                GateStatus::Unavailable
+                let Some(resolution) = self.inputs.qa_resolution else {
+                    self.note("qa_baseline_missing");
+                    return GateStatus::Failed;
+                };
+                if let Some(code) = &resolution.error_code {
+                    self.note(code);
+                    GateStatus::Failed
+                } else if resolution.selected_cases.is_empty() {
+                    self.note("qa_case_selection_empty");
+                    GateStatus::Failed
+                } else {
+                    GateStatus::Passed
+                }
             }
         }
     }
@@ -949,6 +969,18 @@ fn fingerprint(inputs: &ReadinessInputs, profile: EvalProfile) -> PulseResult<St
     }
     if let Some(qa) = &node.qa {
         value.insert("qa".to_string(), qa_projection(qa));
+    }
+    if let Some(resolution) = inputs.qa_resolution {
+        value.insert(
+            "qa_baseline".to_string(),
+            json!({
+                "owner_id": resolution.owner_id,
+                "revision": resolution.baseline_revision,
+                "content_hash": resolution.baseline_content_hash,
+                "selected_cases": resolution.selected_cases,
+                "error_code": resolution.error_code,
+            }),
+        );
     }
     if let Some(contract) = &node.implementation {
         value.insert(

@@ -7,6 +7,8 @@ use std::path::{Path, PathBuf};
 
 pub const RECEIPT_ENVELOPE_SCHEMA: &str =
     include_str!("../schema/evidence/receipt-envelope.schema.json");
+pub const QA_RECEIPT_ENVELOPE_SCHEMA: &str =
+    include_str!("../schema/evidence/receipt-envelope-qa.schema.json");
 pub const SUPERSESSION_SCHEMA: &str =
     include_str!("../schema/evidence/supersession-reconciliation.schema.json");
 pub const SHAPING_SCHEMA: &str = include_str!("../schema/evidence/shaping-validation.schema.json");
@@ -14,6 +16,7 @@ pub const DECISION_ACCEPTANCE_SCHEMA: &str =
     include_str!("../schema/evidence/decision-acceptance.schema.json");
 pub const DOCUMENTATION_SCHEMA: &str =
     include_str!("../schema/evidence/documentation-validation.schema.json");
+pub const QA_CHECKPOINT_SCHEMA: &str = include_str!("../schema/evidence/qa-checkpoint.schema.json");
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
@@ -66,6 +69,12 @@ pub fn bootstrap(repo_root: &Path) -> Result<EvidenceBootstrapOutcome> {
         &mut preserved,
     )?;
     write_schema_if_absent(
+        &schemas.join("receipt-envelope-qa.schema.json"),
+        QA_RECEIPT_ENVELOPE_SCHEMA,
+        &mut created,
+        &mut preserved,
+    )?;
+    write_schema_if_absent(
         &schemas.join("supersession-reconciliation.schema.json"),
         SUPERSESSION_SCHEMA,
         &mut created,
@@ -89,11 +98,20 @@ pub fn bootstrap(repo_root: &Path) -> Result<EvidenceBootstrapOutcome> {
         &mut created,
         &mut preserved,
     )?;
+    write_schema_if_absent(
+        &schemas.join("qa-checkpoint.schema.json"),
+        QA_CHECKPOINT_SCHEMA,
+        &mut created,
+        &mut preserved,
+    )?;
 
     let manifest_path = evidence.join("manifest.json");
     let manifest = if manifest_path.exists() {
         preserved.push(manifest_path.clone());
-        let manifest: EvidenceManifest = crate::storage::read_json(&manifest_path)?;
+        let mut manifest: EvidenceManifest = crate::storage::read_json(&manifest_path)?;
+        if install_qa_contract(&mut manifest)? {
+            crate::storage::atomic_write(&manifest_path, &to_canonical_bytes(&manifest)?)?;
+        }
         validate_manifest(repo_root, &manifest)?;
         manifest
     } else {
@@ -150,6 +168,13 @@ fn default_manifest(repo_root: &Path) -> Result<EvidenceManifest> {
             schema_hash: schema_hash(RECEIPT_ENVELOPE_SCHEMA)?,
         },
     );
+    receipt_schemas.insert(
+        "2".to_string(),
+        SchemaRef {
+            schema: "schemas/receipt-envelope-qa.schema.json".to_string(),
+            schema_hash: schema_hash(QA_RECEIPT_ENVELOPE_SCHEMA)?,
+        },
+    );
     let mut receipt_kinds = BTreeMap::new();
     for (kind, version, path, schema) in [
         (
@@ -176,6 +201,12 @@ fn default_manifest(repo_root: &Path) -> Result<EvidenceManifest> {
             "schemas/documentation-validation.schema.json",
             DOCUMENTATION_SCHEMA,
         ),
+        (
+            "qa_checkpoint",
+            "1",
+            "schemas/qa-checkpoint.schema.json",
+            QA_CHECKPOINT_SCHEMA,
+        ),
     ] {
         receipt_kinds
             .entry(kind.to_string())
@@ -198,6 +229,34 @@ fn default_manifest(repo_root: &Path) -> Result<EvidenceManifest> {
         max_inline_receipt_bytes: 262_144,
         max_artifact_bytes: 16_777_216,
     })
+}
+
+fn install_qa_contract(manifest: &mut EvidenceManifest) -> Result<bool> {
+    let mut changed = false;
+    if !manifest.receipt_schemas.contains_key("2") {
+        manifest.receipt_schemas.insert(
+            "2".to_string(),
+            SchemaRef {
+                schema: "schemas/receipt-envelope-qa.schema.json".to_string(),
+                schema_hash: schema_hash(QA_RECEIPT_ENVELOPE_SCHEMA)?,
+            },
+        );
+        changed = true;
+    }
+    if !manifest.receipt_kinds.contains_key("qa_checkpoint") {
+        manifest.receipt_kinds.insert(
+            "qa_checkpoint".to_string(),
+            BTreeMap::from([(
+                "1".to_string(),
+                SchemaRef {
+                    schema: "schemas/qa-checkpoint.schema.json".to_string(),
+                    schema_hash: schema_hash(QA_CHECKPOINT_SCHEMA)?,
+                },
+            )]),
+        );
+        changed = true;
+    }
+    Ok(changed)
 }
 
 fn write_schema_if_absent(

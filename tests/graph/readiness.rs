@@ -88,6 +88,47 @@ fn write_brief(repo: &std::path::Path, node: &pulse::graph::node::Node) -> Strin
     hash_bytes(&fs::read(&path).unwrap())
 }
 
+fn write_qa_baseline(repo: &std::path::Path, story_id: &str, case_id: &str) {
+    let path = repo.join(format!("works/{story_id}/qa.md"));
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    fs::write(
+        path,
+        format!(
+            r#"# Behavioral QA
+
+```pulse-qa
+{{
+  "schema_version": 1,
+  "story_id": "{story_id}",
+  "revision": 1,
+  "scope": "Authentication recovery remains observable and bounded.",
+  "requirements": ["AC-LOGIN"],
+  "protected_risks": ["RISK-LOOP"],
+  "cases": [{{
+    "id": "{case_id}",
+    "revision": 1,
+    "intent": "Expired credentials recover without a loop.",
+    "case_types": ["acceptance", "recovery"],
+    "priority": "critical",
+    "requirement_refs": ["AC-LOGIN"],
+    "risk_refs": ["RISK-LOOP"],
+    "preconditions": ["expired access token"],
+    "actions": ["invoke the protected operation"],
+    "expected_observations": ["one refresh and a successful retry"],
+    "surface": "api",
+    "required_capabilities": ["api"],
+    "required_evidence": [],
+    "applicability": "required"
+  }}],
+  "exit_criteria": ["All required cases pass on the candidate source."]
+}}
+```
+"#,
+        ),
+    )
+    .unwrap();
+}
+
 fn implementation_contract(
     node: &pulse::graph::node::Node,
     brief_hash: &str,
@@ -614,7 +655,7 @@ fn ready_state_stale_does_not_silently_mutate_status() {
 }
 
 #[test]
-fn qa_unknown_blocks_ready_and_required_is_unavailable() {
+fn qa_unknown_blocks_ready_and_required_resolves_current_story_cases() {
     let tmp = tempfile::tempdir().unwrap();
     let repo = tmp.path();
     let store = JsonGraphStore::new(repo);
@@ -637,7 +678,7 @@ fn qa_unknown_blocks_ready_and_required_is_unavailable() {
         .contains(&"qa_impact_unknown".to_string()));
     assert_ne!(report.status, ReadinessStatus::Ready);
 
-    // QA=required is unavailable until the Phase 3 baseline resolver.
+    // QA=required fails closed until the behavioral owner's baseline exists.
     let story = store
         .create_node(WorkKind::Story, "Behavioral owner".to_string())
         .unwrap()
@@ -658,10 +699,33 @@ fn qa_unknown_blocks_ready_and_required_is_unavailable() {
         .value;
     let report = store.readiness(&node.id).unwrap();
     let qa = family(&report, "qa_impact");
-    assert_eq!(qa.status, GateStatus::Unavailable);
-    assert!(qa
+    assert_eq!(qa.status, GateStatus::Failed);
+    assert!(qa.reason_codes.contains(&"qa_baseline_missing".to_string()));
+
+    write_qa_baseline(repo, &story.id, "CASE-LOGIN-001");
+    let report = store.readiness(&node.id).unwrap();
+    assert_eq!(family(&report, "qa_impact").status, GateStatus::Passed);
+
+    // A stale/nonexistent case ID cannot silently pass against the same owner.
+    let node = store
+        .set_qa_impact_with_context(
+            &node.id,
+            node.revision,
+            QaImpactUpdate {
+                posture: QaImpactPosture::Required,
+                rationale: Some("Changed case selection.".to_string()),
+                behavioral_owner: Some(story.id),
+                affected_case_ids: vec!["CASE-MISSING".to_string()],
+            },
+            ctx(),
+        )
+        .unwrap()
+        .value;
+    let report = store.readiness(&node.id).unwrap();
+    assert_eq!(family(&report, "qa_impact").status, GateStatus::Failed);
+    assert!(family(&report, "qa_impact")
         .reason_codes
-        .contains(&"qa_baseline_resolver_unavailable".to_string()));
+        .contains(&"qa_case_missing".to_string()));
 }
 
 #[test]

@@ -2570,6 +2570,7 @@ mod tests {
             },
             shaping: None,
             decision_proofs: vec![],
+            qa_resolution: None,
             docs: docs_report_complete(),
             authority: AuthorityPolicyReport {
                 schema_version: 1,

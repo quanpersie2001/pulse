@@ -6,7 +6,7 @@ use crate::graph::executability::{structural_executability, StructuralExecutabil
 use crate::graph::node::{Node, NodeStatus};
 use crate::graph::readiness::{
     evaluate as evaluate_readiness, ContentHashBinding, DecisionProofSnapshot, EvalProfile,
-    ReadinessInputs, ReadinessReport, ShapingReceiptSnapshot,
+    QaCaseResolutionSnapshot, ReadinessInputs, ReadinessReport, ShapingReceiptSnapshot,
 };
 use crate::graph::store::JsonGraphStore;
 use crate::kernel::shaping::verify_map_current;
@@ -61,6 +61,7 @@ impl JsonGraphStore {
         let shaping = self.build_shaping_snapshot(node)?;
         let decision_proofs = self.build_decision_proofs(node)?;
         let docs = self.build_docs_applicability(node)?;
+        let qa_resolution = self.build_qa_resolution(node);
         let authority = crate::policy::load_authority_policy(&self.repo_root)?;
         let content_bindings = self.build_content_bindings(node, &shaping, &decision_proofs)?;
         Ok(ReadinessSnapshot {
@@ -69,9 +70,42 @@ impl JsonGraphStore {
             shaping,
             decision_proofs,
             docs,
+            qa_resolution,
             authority,
             content_bindings,
         })
+    }
+
+    fn build_qa_resolution(&self, node: &Node) -> Option<QaCaseResolutionSnapshot> {
+        if node.qa.as_ref().map(|qa| qa.impact.posture)
+            != Some(crate::graph::contract::QaImpactPosture::Required)
+        {
+            return None;
+        }
+        match crate::qa::resolve_ticket_cases(&self.repo_root, node) {
+            Ok(resolution) => Some(QaCaseResolutionSnapshot {
+                owner_id: resolution.owner_id,
+                baseline_revision: resolution.revision,
+                baseline_content_hash: resolution.content_hash,
+                selected_cases: resolution
+                    .cases
+                    .into_iter()
+                    .map(|case| (case.id, case.revision))
+                    .collect(),
+                error_code: None,
+            }),
+            Err(error) => Some(QaCaseResolutionSnapshot {
+                owner_id: node
+                    .qa
+                    .as_ref()
+                    .and_then(|qa| qa.impact.behavioral_owner.clone())
+                    .unwrap_or_default(),
+                baseline_revision: 0,
+                baseline_content_hash: String::new(),
+                selected_cases: Vec::new(),
+                error_code: Some(error.code().to_string()),
+            }),
+        }
     }
 
     pub(crate) fn empty_structural_report(&self, id: &str) -> StructuralExecutabilityReport {
@@ -315,6 +349,7 @@ pub(crate) struct ReadinessSnapshot {
     pub(crate) shaping: Option<ShapingReceiptSnapshot>,
     pub(crate) decision_proofs: Vec<DecisionProofSnapshot>,
     pub(crate) docs: crate::docs::applicability::ApplicableDocsReport,
+    pub(crate) qa_resolution: Option<QaCaseResolutionSnapshot>,
     pub(crate) authority: crate::policy::AuthorityPolicyReport,
     pub(crate) content_bindings: Vec<ContentHashBinding>,
 }
@@ -328,6 +363,7 @@ impl ReadinessSnapshot {
             shaping: self.shaping.as_ref(),
             decision_proofs: self.decision_proofs.clone(),
             docs: &self.docs,
+            qa_resolution: self.qa_resolution.as_ref(),
             authority: &self.authority,
             content_bindings: self.content_bindings.clone(),
             graph_fingerprint: self.graph_fingerprint.clone(),

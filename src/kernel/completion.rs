@@ -371,6 +371,7 @@ impl JsonGraphStore {
             &verification.checks,
             &verification.acceptance_proofs,
         )?;
+        validate_required_qa(&self.repo_root, &node, &handoff, &verification)?;
         if implementation.acceptance.is_empty() {
             return Err(PulseError::validation(
                 "close_acceptance_missing",
@@ -648,16 +649,176 @@ fn validate_close_postures(node: &Node) -> Result<()> {
         .as_ref()
         .map(|qa| qa.impact.posture)
         .unwrap_or(QaImpactPosture::Unknown);
-    if qa_posture != QaImpactPosture::None {
+    if matches!(
+        qa_posture,
+        QaImpactPosture::Unknown | QaImpactPosture::CoveredByStoryClose
+    ) {
         return Err(PulseError::validation(
             "close_qa_gate_unavailable",
-            "current proof close requires QA impact none; required and Story-deferred QA need their dedicated resolver",
+            "proof close requires QA impact none or a current required-case checkpoint; Story-deferred QA remains unavailable",
         ));
     }
     if node.documentation_posture() != DocumentationImpactPosture::None {
         return Err(PulseError::validation(
             "close_documentation_gate_unavailable",
             "current proof close requires documentation impact none; required or deferred documentation needs promotion evidence",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_required_qa(
+    repo_root: &Path,
+    node: &Node,
+    handoff: &HandoffReceipt,
+    verification: &VerificationReceipt,
+) -> Result<()> {
+    let posture = node
+        .qa
+        .as_ref()
+        .map(|qa| qa.impact.posture)
+        .unwrap_or(QaImpactPosture::Unknown);
+    if posture == QaImpactPosture::None {
+        return Ok(());
+    }
+    if posture != QaImpactPosture::Required {
+        return Err(PulseError::validation(
+            "close_qa_gate_unavailable",
+            "QA posture does not have a Ticket close resolver",
+        ));
+    }
+    let baseline = crate::qa::resolve_ticket_cases(repo_root, node)?;
+    let expected = baseline
+        .cases
+        .iter()
+        .map(|case| (case.id.as_str(), case))
+        .collect::<std::collections::BTreeMap<_, _>>();
+    let mut covered = std::collections::BTreeSet::new();
+    let mut saw_checkpoint = false;
+    let author = crate::policy::parse_actor(&handoff.recorded_by);
+
+    for receipt_id in verification
+        .acceptance_proofs
+        .iter()
+        .flat_map(|proof| proof.evidence_receipt_ids.iter())
+    {
+        let (receipt, _) = crate::evidence::receipt::load_receipt(repo_root, receipt_id)?;
+        let crate::evidence::model::ReceiptPayload::QaCheckpoint(payload) = &receipt.payload else {
+            continue;
+        };
+        saw_checkpoint = true;
+        crate::evidence::receipt::verify_receipt(repo_root, receipt_id, true, None)?;
+        if receipt.result != crate::evidence::model::ReceiptResult::Passed {
+            return Err(PulseError::validation(
+                "close_qa_checkpoint_not_passed",
+                format!("QA checkpoint {receipt_id} is not passed"),
+            ));
+        }
+        if receipt.actor == author {
+            return Err(PulseError::validation(
+                "close_qa_independence_required",
+                "the implementation handoff author cannot attest their own QA checkpoint",
+            ));
+        }
+        let source = receipt.bindings.source.as_ref().ok_or_else(|| {
+            PulseError::validation(
+                "close_qa_source_missing",
+                "QA checkpoint lacks an exact source binding",
+            )
+        })?;
+        if source.commit != verification.source_commit
+            || payload.ticket_id != node.id
+            || payload.story_id != baseline.owner_id
+            || payload.baseline_revision != baseline.revision
+            || payload.baseline_content_hash != baseline.content_hash
+        {
+            return Err(PulseError::validation(
+                "close_qa_checkpoint_stale",
+                "QA checkpoint does not bind the current Ticket, source, or Story baseline",
+            ));
+        }
+        let capabilities = payload
+            .executor
+            .capabilities
+            .iter()
+            .map(String::as_str)
+            .collect::<std::collections::BTreeSet<_>>();
+        let artifact_roles = receipt
+            .bindings
+            .artifacts
+            .iter()
+            .map(|artifact| artifact.role.as_str())
+            .collect::<std::collections::BTreeSet<_>>();
+        for observation in &payload.cases {
+            let case = expected.get(observation.case_id.as_str()).ok_or_else(|| {
+                PulseError::validation(
+                    "close_qa_case_unexpected",
+                    format!(
+                        "QA checkpoint contains unselected case {}",
+                        observation.case_id
+                    ),
+                )
+            })?;
+            if observation.case_revision != case.revision
+                || observation.outcome != crate::qa::QaCaseOutcome::Passed
+            {
+                return Err(PulseError::validation(
+                    "close_qa_case_not_passed",
+                    format!("QA case {} is stale or not passed", observation.case_id),
+                ));
+            }
+            if !case
+                .required_capabilities
+                .iter()
+                .all(|required| capabilities.contains(required.as_str()))
+            {
+                return Err(PulseError::validation(
+                    "close_qa_capability_missing",
+                    format!(
+                        "QA case {} lacks a required executor capability",
+                        observation.case_id
+                    ),
+                ));
+            }
+            if !case
+                .required_evidence
+                .iter()
+                .all(|required| artifact_roles.contains(required.as_str()))
+            {
+                return Err(PulseError::validation(
+                    "close_qa_evidence_missing",
+                    format!(
+                        "QA case {} lacks a required evidence artifact",
+                        observation.case_id
+                    ),
+                ));
+            }
+            if !covered.insert(observation.case_id.clone()) {
+                return Err(PulseError::validation(
+                    "close_qa_case_duplicate",
+                    format!(
+                        "QA case {} is claimed by multiple passed checkpoints",
+                        observation.case_id
+                    ),
+                ));
+            }
+        }
+    }
+    if !saw_checkpoint {
+        return Err(PulseError::validation(
+            "close_qa_checkpoint_missing",
+            "required QA impact needs a current passed checkpoint receipt in acceptance proof",
+        ));
+    }
+    let actual = covered.into_iter().collect::<Vec<_>>();
+    let wanted = expected
+        .keys()
+        .map(|id| (*id).to_string())
+        .collect::<Vec<_>>();
+    if actual != wanted {
+        return Err(PulseError::validation(
+            "close_qa_coverage_incomplete",
+            format!("QA checkpoint coverage must exactly match selected cases: expected={wanted:?}, actual={actual:?}"),
         ));
     }
     Ok(())

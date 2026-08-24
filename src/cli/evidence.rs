@@ -85,6 +85,7 @@ pub(crate) enum ReceiptKindArg {
     ShapingValidation,
     DecisionAcceptance,
     DocumentationValidation,
+    QaCheckpoint,
 }
 
 impl From<ReceiptKindArg> for ReceiptKind {
@@ -94,6 +95,7 @@ impl From<ReceiptKindArg> for ReceiptKind {
             ReceiptKindArg::ShapingValidation => ReceiptKind::ShapingValidation,
             ReceiptKindArg::DecisionAcceptance => ReceiptKind::DecisionAcceptance,
             ReceiptKindArg::DocumentationValidation => ReceiptKind::DocumentationValidation,
+            ReceiptKindArg::QaCheckpoint => ReceiptKind::QaCheckpoint,
         }
     }
 }

@@ -28,7 +28,7 @@ pub(super) fn validate_envelope(
     receipt: &ReceiptEnvelope,
     record_time: bool,
 ) -> Result<()> {
-    if receipt.schema_version != 1 || receipt.receipt_version != 1 {
+    if receipt.schema_version != 1 || !matches!(receipt.receipt_version, 1 | 2) {
         return Err(PulseError::validation(
             "receipt_version_unsupported",
             "unsupported receipt version",
@@ -54,6 +54,7 @@ pub(super) fn validate_envelope(
         ReceiptPayload::ShapingValidation(p) => validate_shaping_payload(receipt, p),
         ReceiptPayload::DecisionAcceptance(p) => validate_decision_acceptance_payload(receipt, p),
         ReceiptPayload::DocumentationValidation(p) => validate_docs_payload(receipt, p),
+        ReceiptPayload::QaCheckpoint(p) => crate::qa::validate_checkpoint_receipt(receipt, p),
     }
 }
 
@@ -107,6 +108,7 @@ pub(super) fn validate_manifest_kind(
         ReceiptPayload::ShapingValidation(payload) => payload.payload_version,
         ReceiptPayload::DecisionAcceptance(payload) => payload.payload_version,
         ReceiptPayload::DocumentationValidation(payload) => payload.payload_version,
+        ReceiptPayload::QaCheckpoint(payload) => payload.payload_version,
     };
     if !versions.contains_key(&payload_version.to_string()) {
         return Err(PulseError::validation(
@@ -157,5 +159,6 @@ fn payload_kind(payload: &ReceiptPayload) -> &'static str {
         ReceiptPayload::ShapingValidation(_) => "shaping_validation",
         ReceiptPayload::DecisionAcceptance(_) => "decision_acceptance",
         ReceiptPayload::DocumentationValidation(_) => "documentation_validation",
+        ReceiptPayload::QaCheckpoint(_) => "qa_checkpoint",
     }
 }

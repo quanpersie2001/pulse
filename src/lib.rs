@@ -12,6 +12,7 @@ pub mod identity;
 pub mod kernel;
 pub mod knowledge;
 pub mod policy;
+pub mod qa;
 pub mod reservation;
 pub mod source;
 pub mod storage;

@@ -138,12 +138,12 @@ Core hoàn thành khi:
 - [x] `search` trả bounded snippets; `get` mặc định trả section; full document cần explicit opt-in. Verified by Slice 5 search/get/tree tests.
 - [x] Docs-search cache content-hash keyed, atomic, disposable và incremental-rebuildable. Verified by Slice 5 cache/index concurrency, corruption and incremental rebuild tests.
 - [ ] Retrieval eval đo Recall@K/MRR, exclusions, latency và context bytes trước useful section. **Partial:** Recall@K/MRR, exclusions và context-byte fixtures đã có; production latency threshold/reporting vẫn chưa hoàn tất.
-- [ ] Story QA baseline có scope, acceptance/risk coverage, stable cases, applicability và exit criteria parse/validate được.
-- [ ] Behavior-affecting Ticket khai báo QA impact; targeted checkpoint chọn đúng affected/new cases.
+- [x] Story QA baseline có scope, acceptance/risk coverage, stable cases, applicability và exit criteria parse/validate được. Current Core parser dùng một typed `pulse-qa` block trong `works/<STORY-ID>/qa.md`; readiness fingerprint bind baseline hash và selected case revisions.
+- [x] Behavior-affecting Ticket khai báo QA impact; targeted checkpoint chọn đúng affected/new cases. `qa.required` resolve exact current cases và proof close yêu cầu immutable passed `qa_checkpoint` receipt với source/baseline/capability/evidence bindings.
 - [ ] Story QA baseline chạy được ít nhất qua một deterministic browser/Playwright executor và một structured non-browser API/CLI executor.
 - [ ] QA environment start/healthcheck/fixture reset/cleanup và source-to-build identity tham gia receipt validity.
 - [ ] Story không đóng nếu required behavioral receipt thiếu/invalid/fail/flaky/inconclusive hoặc coverage gap chưa disposition.
-- [ ] Retry giữ failed attempts; waiver/non-applicability có rationale, authority và audit.
+- [ ] Retry giữ failed attempts; waiver/non-applicability có rationale, authority và audit. **Partial:** immutable QA receipts preserve failed/inconclusive/flaky observations and baseline non-applicability requires rationale; retry linkage and waiver authority remain.
 - [x] Knowledge store validate one-learning-per-record, revision CAS, typed applicability/provenance/promotion/freshness và relations. Verified by Slice 6 knowledge schema/store/relation/concurrency/recovery tests; compound and retrieval remain Phase 4.
 - [ ] `pulse compound` synthesize/deduplicate/disposition candidates và cho phép `no_reusable_learning` trung thực.
 - [ ] `pulse knowledge search|get|applicable|index|status` có stable human/JSON contracts, bounded output và explainable match/exclusion.

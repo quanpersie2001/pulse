@@ -84,6 +84,21 @@ pub(super) fn bootstrap_repo(repo: &TestRepo, _store: &JsonGraphStore) {
 }
 
 pub(super) fn setup_ready_ticket(root: &std::path::Path, store: &JsonGraphStore) -> String {
+    setup_ready_ticket_with_qa(root, store, false)
+}
+
+pub(super) fn setup_ready_ticket_with_required_qa(
+    root: &std::path::Path,
+    store: &JsonGraphStore,
+) -> String {
+    setup_ready_ticket_with_qa(root, store, true)
+}
+
+fn setup_ready_ticket_with_qa(
+    root: &std::path::Path,
+    store: &JsonGraphStore,
+    required_qa: bool,
+) -> String {
     let node = store
         .create_node_public_with_context(
             WorkKind::Ticket,
@@ -113,7 +128,11 @@ pub(super) fn setup_ready_ticket(root: &std::path::Path, store: &JsonGraphStore)
                     mode: ImplementationMode::Guided,
                     work_surface: WorkSurface::Code,
                     plan_policy: PlanPolicy::None,
-                    semantic_impact: ImplementationSemanticImpact::NoBehaviorOrPublicRiskChange,
+                    semantic_impact: if required_qa {
+                        ImplementationSemanticImpact::BehaviorOrPublicRiskChange
+                    } else {
+                        ImplementationSemanticImpact::NoBehaviorOrPublicRiskChange
+                    },
                     effort: EffortMetadata::default(),
                     verification_profile: "service-change".to_string(),
                     brief: Some(ContentRef {
@@ -152,16 +171,38 @@ pub(super) fn setup_ready_ticket(root: &std::path::Path, store: &JsonGraphStore)
             context(),
         )
         .unwrap();
+    let behavioral_owner = if required_qa {
+        let story = store
+            .create_node(WorkKind::Story, "Reservation behavior".to_string())
+            .unwrap()
+            .value;
+        write_required_qa_baseline(root, &story.id);
+        Some(story.id)
+    } else {
+        None
+    };
     let current = store.show_node(&ticket_id).unwrap();
     store
         .set_qa_impact_with_context(
             &ticket_id,
             current.revision,
             QaImpactUpdate {
-                posture: QaImpactPosture::None,
-                rationale: Some("No product QA impact.".to_string()),
-                behavioral_owner: None,
-                affected_case_ids: vec![],
+                posture: if required_qa {
+                    QaImpactPosture::Required
+                } else {
+                    QaImpactPosture::None
+                },
+                rationale: Some(if required_qa {
+                    "Behavioral checkpoint required.".to_string()
+                } else {
+                    "No product QA impact.".to_string()
+                }),
+                behavioral_owner,
+                affected_case_ids: if required_qa {
+                    vec!["QA-001".to_string()]
+                } else {
+                    vec![]
+                },
             },
             context(),
         )
@@ -220,6 +261,47 @@ pub(super) fn setup_ready_ticket(root: &std::path::Path, store: &JsonGraphStore)
         .unwrap();
     commit_all(root);
     ticket_id
+}
+
+fn write_required_qa_baseline(root: &std::path::Path, story_id: &str) {
+    let path = root.join(format!("works/{story_id}/qa.md"));
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    fs::write(
+        path,
+        format!(
+            r#"# Reservation behavioral QA
+
+```pulse-qa
+{{
+  "schema_version": 1,
+  "story_id": "{story_id}",
+  "revision": 1,
+  "scope": "Reservation behavior remains observable.",
+  "requirements": ["AC-1"],
+  "protected_risks": ["RISK-DUPLICATE"],
+  "cases": [{{
+    "id": "QA-001",
+    "revision": 1,
+    "intent": "Reservation is not duplicated.",
+    "case_types": ["acceptance", "idempotency"],
+    "priority": "critical",
+    "requirement_refs": ["AC-1"],
+    "risk_refs": ["RISK-DUPLICATE"],
+    "preconditions": ["ready ticket"],
+    "actions": ["reserve twice with one idempotency key"],
+    "expected_observations": ["one stable reservation"],
+    "surface": "api",
+    "required_capabilities": ["api"],
+    "required_evidence": [],
+    "applicability": "required"
+  }}],
+  "exit_criteria": ["The required case passes on the candidate source."]
+}}
+```
+"#,
+        ),
+    )
+    .unwrap();
 }
 
 fn shaping_receipt(
