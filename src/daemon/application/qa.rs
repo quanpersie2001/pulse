@@ -274,6 +274,14 @@ impl DaemonApplication {
             output.observations.extend(progress.observations.clone());
         }
         let result = qa_result(&output);
+        let browser = output.browser.clone();
+        let payload_version = if browser.is_some() {
+            3
+        } else if environment.is_some() {
+            2
+        } else {
+            1
+        };
         let evidence = crate::evidence::bootstrap(repo_root)?.manifest;
         let receipt = ReceiptEnvelope {
             schema_version: 1,
@@ -307,7 +315,7 @@ impl DaemonApplication {
                 ..ReceiptBindings::default()
             },
             payload: ReceiptPayload::QaCheckpoint(QaCheckpointPayload {
-                payload_version: if environment.is_some() { 2 } else { 1 },
+                payload_version,
                 qa_scope: QaExecutionScope::TicketCheckpoint,
                 story_id: baseline.owner_id,
                 ticket_id: saga.ticket_id,
@@ -325,6 +333,7 @@ impl DaemonApplication {
                     fixture_revision: plan.executor_manifest.fixture_revision,
                     lifecycle: environment.map(EnvironmentProgress::receipt),
                 },
+                browser,
                 observations: output.observations,
                 cleanup_passed: output.cleanup_passed,
             }),
@@ -809,6 +818,7 @@ fn fallback_output(
             .collect(),
         observations: vec![detail],
         artifacts: Vec::new(),
+        browser: None,
         cleanup_passed: false,
     }
 }
@@ -827,6 +837,7 @@ fn infrastructure_output(baseline: &QaBaselineResolution, detail: &str) -> QaRun
             .collect(),
         observations: vec![detail.to_string()],
         artifacts: Vec::new(),
+        browser: None,
         cleanup_passed: false,
     }
 }

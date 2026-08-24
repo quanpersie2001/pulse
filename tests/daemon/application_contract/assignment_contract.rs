@@ -71,39 +71,14 @@ fn structured_qa_executor_records_and_replays_checkpoint_receipt() {
     let project_id = open_project(&app, repo.path());
     let workspace_id = create_workspace(&app, &project_id);
     let saga_id = "saga-qa-executor";
-    let now = chrono::Utc::now().to_rfc3339();
-    app.store()
-        .with_state(true, |state| {
-            state.assignment_sagas.insert(
-                saga_id.to_string(),
-                pulse::daemon::assignment::AssignmentSagaRecord {
-                    schema_version: 1,
-                    saga_id: saga_id.to_string(),
-                    idempotency_key: "qa-assignment".to_string(),
-                    request_fingerprint: "qa-assignment".to_string(),
-                    project_id: project_id.clone(),
-                    ticket_id: ticket_id.clone(),
-                    actor: "agent:worker".to_string(),
-                    assignee: "agent:worker".to_string(),
-                    ticket_revision: graph.show_node(&ticket_id).unwrap().revision,
-                    packet_fingerprint: "packet".to_string(),
-                    lease_id: Some("lease".to_string()),
-                    workspace_id: Some(workspace_id.clone()),
-                    session_id: Some("session".to_string()),
-                    delivery_id: None,
-                    acknowledgement_id: None,
-                    handoff_id: Some("handoff".to_string()),
-                    verification_id: None,
-                    qa_checkpoint_receipt_ids: Vec::new(),
-                    state: pulse::daemon::assignment::AssignmentSagaState::Verifying,
-                    last_error: None,
-                    created_at: now.clone(),
-                    updated_at: now.clone(),
-                },
-            );
-            Ok(())
-        })
-        .unwrap();
+    insert_verifying_assignment(
+        &app,
+        saga_id,
+        &project_id,
+        &workspace_id,
+        &ticket_id,
+        graph.show_node(&ticket_id).unwrap().revision,
+    );
     let request = DaemonRequest::QaCheckpointRun {
         saga_id: saga_id.to_string(),
         actor: "human:qa-reviewer".to_string(),
@@ -192,6 +167,234 @@ fn structured_qa_executor_records_and_replays_checkpoint_receipt() {
             .unwrap()
             .cleanup_passed
     );
+}
+
+#[cfg(unix)]
+#[test]
+fn playwright_executor_records_deterministic_browser_report_and_trace() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let repo = TestRepo::from_fixture("minimal-service");
+    let graph = pulse::JsonGraphStore::new(repo.path());
+    bootstrap_repo(&repo, &graph);
+    write_policy(repo.path(), &["work.assignment.release"]);
+    let ticket_id = setup_ready_ticket_with_required_qa(repo.path(), &graph);
+    let ticket = graph.show_node(&ticket_id).unwrap();
+    let story_id = ticket
+        .qa
+        .as_ref()
+        .and_then(|qa| qa.impact.behavioral_owner.as_ref())
+        .unwrap();
+    let baseline_path = repo.path().join(format!("works/{story_id}/qa.md"));
+    let baseline = std::fs::read_to_string(&baseline_path)
+        .unwrap()
+        .replace("\"surface\": \"api\"", "\"surface\": \"web\"")
+        .replace(
+            "\"required_capabilities\": [\"api\"]",
+            "\"required_capabilities\": [\"browser\", \"deterministic-assertion\", \"playwright\"]",
+        )
+        .replace(
+            "\"required_evidence\": []",
+            "\"required_evidence\": [\"trace\"]",
+        );
+    std::fs::write(&baseline_path, baseline).unwrap();
+
+    let executor_dir = repo.path().join(".pulse/qa/executors");
+    std::fs::create_dir_all(&executor_dir).unwrap();
+    std::fs::write(
+        executor_dir.join("browser.json"),
+        serde_json::to_vec_pretty(&serde_json::json!({
+            "schema_version": 1,
+            "id": "browser",
+            "version": "1.0.0",
+            "kind": "playwright",
+            "executable": "scripts/qa-browser.sh",
+            "args": [],
+            "timeout_seconds": 10,
+            "max_output_bytes": 16384,
+            "capabilities": ["browser", "deterministic-assertion", "playwright"],
+            "environment_profile": "local-web",
+            "fixture_revision": "minimal-service-1",
+            "environment": {
+                "start": lifecycle_command("start"),
+                "healthcheck": lifecycle_command("healthcheck"),
+                "reset": lifecycle_command("reset"),
+                "cleanup": lifecycle_command("cleanup")
+            },
+            "browser": {
+                "engine": "chromium",
+                "base_url": "http://127.0.0.1:4173",
+                "trace_role": "trace"
+            }
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let runner = repo.path().join("scripts/qa-browser.sh");
+    std::fs::write(
+        &runner,
+        concat!(
+            "#!/bin/sh\n",
+            "set -eu\n",
+            "mkdir -p .pulse/runtime\n",
+            "printf trace > .pulse/runtime/playwright-trace.zip\n",
+            "printf '%s' '{\"schema_version\":1,\"cases\":[{\"case_id\":\"QA-001\",\"case_revision\":1,\"outcome\":\"passed\"}],\"observations\":[\"deterministic browser assertion passed\"],\"artifacts\":[{\"path\":\".pulse/runtime/playwright-trace.zip\",\"role\":\"trace\",\"kind\":\"playwright_trace\",\"media_type\":\"application/zip\"}],\"browser\":{\"engine\":\"chromium\",\"base_url\":\"http://127.0.0.1:4173\",\"trace_role\":\"trace\",\"assertions\":[{\"case_id\":\"QA-001\",\"kind\":\"visible_state\",\"expected\":\"one stable reservation\",\"actual\":\"one stable reservation\",\"passed\":true}],\"console_errors\":[],\"network_errors\":[]},\"cleanup_passed\":true}'\n"
+        ),
+    )
+    .unwrap();
+    let mut permissions = std::fs::metadata(&runner).unwrap().permissions();
+    permissions.set_mode(0o755);
+    std::fs::set_permissions(&runner, permissions).unwrap();
+    write_lifecycle_script(repo.path());
+    let source_commit = common_git::commit_all(repo.path());
+
+    let home = tempfile::tempdir().unwrap();
+    let app = DaemonApplication::new(StateStore::new(home.path()), "test").unwrap();
+    let project_id = open_project(&app, repo.path());
+    let workspace_id = create_workspace(&app, &project_id);
+    let saga_id = "saga-qa-browser";
+    insert_verifying_assignment(
+        &app,
+        saga_id,
+        &project_id,
+        &workspace_id,
+        &ticket_id,
+        graph.show_node(&ticket_id).unwrap().revision,
+    );
+
+    let receipt = match handle(
+        &app,
+        DaemonRequest::QaCheckpointRun {
+            saga_id: saga_id.to_string(),
+            actor: "human:qa-reviewer".to_string(),
+            source_commit,
+            executor_id: "browser".to_string(),
+        },
+        "qa-browser-checkpoint",
+    ) {
+        DaemonResponse::QaCheckpoint { receipt } => receipt,
+        other => panic!("unexpected response: {other:?}"),
+    };
+    assert_eq!(
+        receipt.result,
+        pulse::evidence::model::ReceiptResult::Passed
+    );
+    assert_eq!(receipt.bindings.artifacts.len(), 1);
+    assert_eq!(receipt.bindings.artifacts[0].role, "trace");
+    let pulse::evidence::model::ReceiptPayload::QaCheckpoint(payload) = &receipt.payload else {
+        panic!("expected QA checkpoint payload");
+    };
+    assert_eq!(payload.payload_version, 3);
+    let browser = payload.browser.as_ref().unwrap();
+    assert_eq!(browser.engine, pulse::qa::QaBrowserEngine::Chromium);
+    assert_eq!(browser.assertions.len(), 1);
+    assert!(browser.assertions[0].passed);
+    pulse::evidence::verify_receipt(repo.path(), &receipt.id, true, None).unwrap();
+
+    std::fs::write(
+        &runner,
+        concat!(
+            "#!/bin/sh\n",
+            "set -eu\n",
+            "mkdir -p .pulse/runtime\n",
+            "printf trace > .pulse/runtime/playwright-trace.zip\n",
+            "printf '%s' '{\"schema_version\":1,\"cases\":[{\"case_id\":\"QA-001\",\"case_revision\":1,\"outcome\":\"passed\"}],\"observations\":[\"browser assertion contradicted pass\"],\"artifacts\":[{\"path\":\".pulse/runtime/playwright-trace.zip\",\"role\":\"trace\"}],\"browser\":{\"engine\":\"chromium\",\"base_url\":\"http://127.0.0.1:4173\",\"trace_role\":\"trace\",\"assertions\":[{\"case_id\":\"QA-001\",\"kind\":\"visible_state\",\"expected\":\"one stable reservation\",\"actual\":\"duplicate reservation\",\"passed\":false}],\"console_errors\":[],\"network_errors\":[]},\"cleanup_passed\":true}'\n"
+        ),
+    )
+    .unwrap();
+    let contradictory_source = common_git::commit_all(repo.path());
+    let rejected = match handle(
+        &app,
+        DaemonRequest::QaCheckpointRun {
+            saga_id: saga_id.to_string(),
+            actor: "human:qa-reviewer".to_string(),
+            source_commit: contradictory_source,
+            executor_id: "browser".to_string(),
+        },
+        "qa-browser-contradictory-pass",
+    ) {
+        DaemonResponse::QaCheckpoint { receipt } => receipt,
+        other => panic!("unexpected response: {other:?}"),
+    };
+    assert_eq!(
+        rejected.result,
+        pulse::evidence::model::ReceiptResult::Inconclusive
+    );
+    let pulse::evidence::model::ReceiptPayload::QaCheckpoint(payload) = &rejected.payload else {
+        panic!("expected QA checkpoint payload");
+    };
+    assert!(payload.browser.is_none());
+    assert!(payload
+        .observations
+        .iter()
+        .any(|value| value.contains("runner contract rejected")));
+}
+
+#[cfg(unix)]
+fn write_lifecycle_script(repo: &std::path::Path) {
+    use std::os::unix::fs::PermissionsExt;
+
+    let lifecycle = repo.join("scripts/qa-environment.sh");
+    std::fs::write(
+        &lifecycle,
+        concat!(
+            "#!/bin/sh\n",
+            "set -eu\n",
+            "phase=$1\n",
+            "mkdir -p .pulse/runtime\n",
+            "printf '%s\\n' \"$phase\" >> .pulse/runtime/qa-lifecycle.log\n",
+            "commit=$(git rev-parse HEAD)\n",
+            "printf '{\"schema_version\":1,\"environment_instance_id\":\"fixture-env\",\"source_commit\":\"%s\",\"fixture_revision\":\"minimal-service-1\",\"observations\":[\"%s complete\"]}' \"$commit\" \"$phase\"\n"
+        ),
+    )
+    .unwrap();
+    let mut permissions = std::fs::metadata(&lifecycle).unwrap().permissions();
+    permissions.set_mode(0o755);
+    std::fs::set_permissions(&lifecycle, permissions).unwrap();
+}
+
+#[cfg(unix)]
+fn insert_verifying_assignment(
+    app: &DaemonApplication,
+    saga_id: &str,
+    project_id: &str,
+    workspace_id: &str,
+    ticket_id: &str,
+    ticket_revision: u64,
+) {
+    let now = chrono::Utc::now().to_rfc3339();
+    app.store()
+        .with_state(true, |state| {
+            state.assignment_sagas.insert(
+                saga_id.to_string(),
+                pulse::daemon::assignment::AssignmentSagaRecord {
+                    schema_version: 1,
+                    saga_id: saga_id.to_string(),
+                    idempotency_key: format!("{saga_id}-assignment"),
+                    request_fingerprint: format!("{saga_id}-assignment"),
+                    project_id: project_id.to_string(),
+                    ticket_id: ticket_id.to_string(),
+                    actor: "agent:worker".to_string(),
+                    assignee: "agent:worker".to_string(),
+                    ticket_revision,
+                    packet_fingerprint: "packet".to_string(),
+                    lease_id: Some("lease".to_string()),
+                    workspace_id: Some(workspace_id.to_string()),
+                    session_id: Some("session".to_string()),
+                    delivery_id: None,
+                    acknowledgement_id: None,
+                    handoff_id: Some("handoff".to_string()),
+                    verification_id: None,
+                    qa_checkpoint_receipt_ids: Vec::new(),
+                    state: pulse::daemon::assignment::AssignmentSagaState::Verifying,
+                    last_error: None,
+                    created_at: now.clone(),
+                    updated_at: now.clone(),
+                },
+            );
+            Ok(())
+        })
+        .unwrap();
 }
 
 #[cfg(unix)]

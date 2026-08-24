@@ -8,6 +8,7 @@ use std::collections::BTreeSet;
 
 use serde::{Deserialize, Serialize};
 
+use super::QaBrowserReport;
 use crate::evidence::model::{ReceiptEnvelope, ReceiptResult};
 use crate::{PulseError, Result};
 
@@ -23,6 +24,8 @@ pub struct QaCheckpointPayload {
     pub cases: Vec<QaCaseObservation>,
     pub executor: QaExecutor,
     pub environment: QaRuntimeEnvironment,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub browser: Option<QaBrowserReport>,
     pub observations: Vec<String>,
     pub cleanup_passed: bool,
 }
@@ -102,7 +105,7 @@ pub fn validate_checkpoint_receipt(
     payload: &QaCheckpointPayload,
 ) -> Result<()> {
     if receipt.receipt_version != 2
-        || !matches!(payload.payload_version, 1 | 2)
+        || !matches!(payload.payload_version, 1..=3)
         || payload.qa_scope != QaExecutionScope::TicketCheckpoint
         || payload.story_id.trim().is_empty()
         || payload.ticket_id.trim().is_empty()
@@ -124,8 +127,12 @@ pub fn validate_checkpoint_receipt(
             "QA checkpoint receipt is incomplete or uses an unsupported contract",
         ));
     }
-    if (payload.payload_version == 1 && payload.environment.lifecycle.is_some())
-        || (payload.payload_version == 2 && payload.environment.lifecycle.is_none())
+    if (payload.payload_version == 1
+        && (payload.environment.lifecycle.is_some() || payload.browser.is_some()))
+        || (payload.payload_version == 2
+            && (payload.environment.lifecycle.is_none() || payload.browser.is_some()))
+        || (payload.payload_version == 3
+            && (payload.environment.lifecycle.is_none() || payload.browser.is_none()))
     {
         return Err(PulseError::validation(
             "qa_receipt_environment_invalid",
@@ -163,6 +170,9 @@ pub fn validate_checkpoint_receipt(
                 "QA environment lifecycle identity or required step result is invalid",
             ));
         }
+    }
+    if let Some(browser) = &payload.browser {
+        validate_browser_receipt(receipt, payload, browser)?;
     }
     let baseline_path = format!("works/{}/qa.md", payload.story_id);
     if !receipt.bindings.content.iter().any(|binding| {
@@ -202,6 +212,70 @@ pub fn validate_checkpoint_receipt(
         return Err(PulseError::validation(
             "qa_receipt_result_inconsistent",
             "QA envelope result does not match case outcomes and cleanup",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_browser_receipt(
+    receipt: &ReceiptEnvelope,
+    payload: &QaCheckpointPayload,
+    browser: &QaBrowserReport,
+) -> Result<()> {
+    let capabilities = payload
+        .executor
+        .capabilities
+        .iter()
+        .map(String::as_str)
+        .collect::<BTreeSet<_>>();
+    if browser.base_url.trim().is_empty()
+        || browser.trace_role.trim().is_empty()
+        || browser.assertions.is_empty()
+        || !["browser", "deterministic-assertion", "playwright"]
+            .iter()
+            .all(|required| capabilities.contains(required))
+        || !receipt
+            .bindings
+            .artifacts
+            .iter()
+            .any(|artifact| artifact.role == browser.trace_role)
+    {
+        return Err(PulseError::validation(
+            "qa_receipt_browser_invalid",
+            "browser QA receipt requires execution identity, deterministic assertions, and its bound trace artifact",
+        ));
+    }
+    let outcomes = payload
+        .cases
+        .iter()
+        .map(|case| (case.case_id.as_str(), case.outcome))
+        .collect::<std::collections::BTreeMap<_, _>>();
+    let mut covered = BTreeSet::new();
+    let mut assertion_keys = BTreeSet::new();
+    for assertion in &browser.assertions {
+        let Some(outcome) = outcomes.get(assertion.case_id.as_str()) else {
+            return Err(PulseError::validation(
+                "qa_receipt_browser_invalid",
+                "browser assertion references a case outside the receipt",
+            ));
+        };
+        if !assertion_keys.insert((assertion.case_id.as_str(), assertion.kind.as_str()))
+            || assertion.kind.trim().is_empty()
+            || assertion.expected.trim().is_empty()
+            || assertion.actual.trim().is_empty()
+            || (*outcome == QaCaseOutcome::Passed && !assertion.passed)
+        {
+            return Err(PulseError::validation(
+                "qa_receipt_browser_invalid",
+                "browser assertions are incomplete or inconsistent with case outcomes",
+            ));
+        }
+        covered.insert(assertion.case_id.as_str());
+    }
+    if covered != outcomes.keys().copied().collect() {
+        return Err(PulseError::validation(
+            "qa_receipt_browser_invalid",
+            "browser assertions must cover every receipt case",
         ));
     }
     Ok(())

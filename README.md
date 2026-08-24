@@ -105,6 +105,15 @@ matching the candidate commit and fixture revision. Pulse skips execution when
 preparation fails, always attempts declared cleanup after a known start outcome,
 and emits payload version 2; a failed cleanup can never produce a passed receipt.
 
+A Playwright executor declares `kind: "playwright"`, a browser engine/base URL,
+and the artifact role containing its trace. Pulse requires the lifecycle plus
+`browser`, `playwright`, and `deterministic-assertion` capabilities. Runner
+stdout must map at least one typed assertion to every selected web case and
+include the declared trace artifact. A claimed passed case with a failed
+assertion is rejected and recorded as inconclusive instead of becoming false
+proof. Successful browser checkpoints use payload version 3 while older
+structured and lifecycle receipts remain readable.
+
 ### The 4 Human Gates
 
 | Gate | What it blocks |

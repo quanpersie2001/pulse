@@ -154,9 +154,25 @@ receipt. Receipt có lifecycle dùng payload version 2, còn receipt version 1 c
 vẫn đọc/validate được. Crash giữa external I/O và durable receipt giữ effect ở
 uncertain, terminate exact helper identity khi có thể và không blind retry.
 
-Phần còn thiếu là deterministic browser/Playwright executor và richer adapter
-cho environment provider dài hạn; lifecycle hiện tại sở hữu bounded orchestration
-commands, source/fixture/instance binding và cleanup gate.
+Lifecycle hiện tại sở hữu bounded orchestration commands,
+source/fixture/instance binding và cleanup gate. Richer adapter cho environment
+provider dài hạn vẫn là phần chưa hoàn tất.
+
+Playwright adapter contract hiện đã có executor kind riêng. Manifest phải khai
+báo browser engine, HTTP base URL, trace artifact role, daemon-owned lifecycle
+và ba capabilities `browser`, `playwright`, `deterministic-assertion`. Structured
+output phải map ít nhất một bounded deterministic assertion tới từng selected
+web case, giữ console/network errors có cấu trúc và ingest trace qua evidence
+artifact store. Case claim `passed` nhưng assertion fail bị contract reject và
+receipt hạ thành `inconclusive`; browser receipt hợp lệ dùng payload version 3,
+không rewrite payload version 1/2 cũ.
+
+Pulse không bundle Node/Playwright hay hard-code selector/test suite. Target
+repository sở hữu tracked wrapper và Playwright dependency/config; Pulse sở hữu
+allowlist, bounded process/lifecycle, typed input/output, evidence ingestion và
+receipt validity. Real-browser acceptance fixture trên supported browser binary
+vẫn cần chạy để đóng đầy đủ browser DoD, cùng source-to-deployment binding và
+Story-close replay.
 
 ### Story qualification/close QA
 

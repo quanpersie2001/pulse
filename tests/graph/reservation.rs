@@ -126,6 +126,7 @@ fn record_qa_checkpoint(repo: &std::path::Path, ticket_id: &str, source_commit: 
                 fixture_revision: "reservation-fixture-1".to_string(),
                 lifecycle: None,
             },
+            browser: None,
             observations: vec!["Repeated reservation returned one stable identity.".to_string()],
             cleanup_passed: true,
         }),

@@ -143,6 +143,10 @@ removed from the current runtime path.
   cho low-risk Ticket với docs impact `none`; QA impact `none` hoặc `required`
   với current passed checkpoint được close. Story-deferred QA, unsupported risk
   và documentation promotion vẫn fail closed tại `verifying`.
+- Repository-owned Playwright executor contract đã support typed browser
+  engine/base URL, per-case deterministic assertions, trace artifact ingestion,
+  lifecycle/source binding và payload version 3; real-browser acceptance fixture
+  và Story-close replay vẫn thuộc Phase 3 completion.
 - Hidden supervisor, runner profiles, Core run store, assignment-owned
   Workspace records và public run/attempt contracts đã bị xóa một chiều.
 
