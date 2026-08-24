@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use super::{QaBaselineResolution, QaCaseObservation};
+use super::{QaBaselineResolution, QaCaseObservation, QaEnvironmentIdentity};
 use crate::canonical_json::hash_bytes;
 use crate::{PulseError, Result};
 
@@ -28,6 +28,37 @@ pub struct QaExecutorManifest {
     pub capabilities: Vec<String>,
     pub environment_profile: String,
     pub fixture_revision: String,
+    #[serde(default)]
+    pub environment: Option<QaEnvironmentManifest>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct QaEnvironmentManifest {
+    pub start: QaEnvironmentCommand,
+    pub healthcheck: QaEnvironmentCommand,
+    pub reset: QaEnvironmentCommand,
+    pub cleanup: QaEnvironmentCommand,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct QaEnvironmentCommand {
+    pub executable: String,
+    #[serde(default)]
+    pub args: Vec<String>,
+    pub timeout_seconds: u64,
+    pub max_output_bytes: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct QaEnvironmentStepOutput {
+    pub schema_version: u32,
+    pub environment_instance_id: String,
+    pub source_commit: String,
+    pub fixture_revision: String,
+    pub observations: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -40,6 +71,8 @@ pub struct QaRunnerInput {
     pub baseline_revision: u64,
     pub baseline_content_hash: String,
     pub cases: Vec<super::QaCase>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub environment: Option<QaEnvironmentIdentity>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -122,8 +155,33 @@ pub fn load_executor_manifest(
             "QA executor manifest is incomplete or exceeds execution limits",
         ));
     }
+    if let Some(environment) = &manifest.environment {
+        for command in [
+            &environment.start,
+            &environment.healthcheck,
+            &environment.reset,
+            &environment.cleanup,
+        ] {
+            validate_environment_command(command)?;
+        }
+    }
     let executable = crate::storage::safe_repo_relative(&manifest.executable)?;
     Ok((manifest, executable, hash_bytes(&bytes)))
+}
+
+fn validate_environment_command(command: &QaEnvironmentCommand) -> Result<()> {
+    crate::storage::safe_repo_relative(&command.executable)?;
+    if !(1..=900).contains(&command.timeout_seconds)
+        || !(1_024..=1_048_576).contains(&command.max_output_bytes)
+        || command.args.len() > 32
+        || command.args.iter().any(|argument| argument.len() > 4_096)
+    {
+        return Err(PulseError::validation(
+            "qa_environment_command_invalid",
+            "QA environment command exceeds argument, timeout, or output limits",
+        ));
+    }
+    Ok(())
 }
 
 /// Validate that runner output covers exactly the resolved case revisions and

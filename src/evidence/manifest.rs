@@ -17,6 +17,8 @@ pub const DECISION_ACCEPTANCE_SCHEMA: &str =
 pub const DOCUMENTATION_SCHEMA: &str =
     include_str!("../schema/evidence/documentation-validation.schema.json");
 pub const QA_CHECKPOINT_SCHEMA: &str = include_str!("../schema/evidence/qa-checkpoint.schema.json");
+pub const QA_CHECKPOINT_LIFECYCLE_SCHEMA: &str =
+    include_str!("../schema/evidence/qa-checkpoint-lifecycle.schema.json");
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
@@ -101,6 +103,12 @@ pub fn bootstrap(repo_root: &Path) -> Result<EvidenceBootstrapOutcome> {
     write_schema_if_absent(
         &schemas.join("qa-checkpoint.schema.json"),
         QA_CHECKPOINT_SCHEMA,
+        &mut created,
+        &mut preserved,
+    )?;
+    write_schema_if_absent(
+        &schemas.join("qa-checkpoint-lifecycle.schema.json"),
+        QA_CHECKPOINT_LIFECYCLE_SCHEMA,
         &mut created,
         &mut preserved,
     )?;
@@ -207,6 +215,12 @@ fn default_manifest(repo_root: &Path) -> Result<EvidenceManifest> {
             "schemas/qa-checkpoint.schema.json",
             QA_CHECKPOINT_SCHEMA,
         ),
+        (
+            "qa_checkpoint",
+            "2",
+            "schemas/qa-checkpoint-lifecycle.schema.json",
+            QA_CHECKPOINT_LIFECYCLE_SCHEMA,
+        ),
     ] {
         receipt_kinds
             .entry(kind.to_string())
@@ -243,16 +257,27 @@ fn install_qa_contract(manifest: &mut EvidenceManifest) -> Result<bool> {
         );
         changed = true;
     }
-    if !manifest.receipt_kinds.contains_key("qa_checkpoint") {
-        manifest.receipt_kinds.insert(
-            "qa_checkpoint".to_string(),
-            BTreeMap::from([(
-                "1".to_string(),
-                SchemaRef {
-                    schema: "schemas/qa-checkpoint.schema.json".to_string(),
-                    schema_hash: schema_hash(QA_CHECKPOINT_SCHEMA)?,
-                },
-            )]),
+    let qa = manifest
+        .receipt_kinds
+        .entry("qa_checkpoint".to_string())
+        .or_default();
+    if !qa.contains_key("1") {
+        qa.insert(
+            "1".to_string(),
+            SchemaRef {
+                schema: "schemas/qa-checkpoint.schema.json".to_string(),
+                schema_hash: schema_hash(QA_CHECKPOINT_SCHEMA)?,
+            },
+        );
+        changed = true;
+    }
+    if !qa.contains_key("2") {
+        qa.insert(
+            "2".to_string(),
+            SchemaRef {
+                schema: "schemas/qa-checkpoint-lifecycle.schema.json".to_string(),
+                schema_hash: schema_hash(QA_CHECKPOINT_LIFECYCLE_SCHEMA)?,
+            },
         );
         changed = true;
     }

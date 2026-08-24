@@ -17,15 +17,17 @@ use super::{append_event, deterministic_id, external_effect_blocked, DaemonAppli
 use crate::canonical_json::{hash_serializable, to_canonical_bytes};
 use crate::daemon::assignment::AssignmentSagaState;
 use crate::daemon::persistence::{ExternalEffectKind, ExternalEffectState};
-use crate::daemon::process::RunRequest;
+use crate::daemon::process::{CompletedProcess, RunRequest};
 use crate::daemon::protocol::DaemonResponse;
 use crate::evidence::model::{
     ArtifactBinding, ContentBinding, ReceiptBindings, ReceiptEnvelope, ReceiptKind, ReceiptPayload,
     ReceiptResult, SourceBinding, SubjectRef,
 };
 use crate::qa::{
-    QaBaselineResolution, QaCaseObservation, QaCaseOutcome, QaCheckpointPayload, QaExecutionScope,
-    QaExecutor, QaExecutorManifest, QaRunnerInput, QaRunnerOutput, QaRuntimeEnvironment,
+    QaBaselineResolution, QaCaseObservation, QaCaseOutcome, QaCheckpointPayload,
+    QaEnvironmentCommand, QaEnvironmentIdentity, QaEnvironmentLifecycle, QaEnvironmentManifest,
+    QaEnvironmentStepOutput, QaExecutionScope, QaExecutor, QaExecutorManifest, QaRunnerInput,
+    QaRunnerOutput, QaRuntimeEnvironment,
 };
 use crate::{PulseError, Result};
 
@@ -39,6 +41,31 @@ struct QaRunPlan {
     executor_path: String,
     executor_manifest_hash: String,
     input: QaRunnerInput,
+}
+
+struct EnvironmentProgress {
+    identity: QaEnvironmentIdentity,
+    start_passed: bool,
+    healthcheck_passed: bool,
+    reset_passed: bool,
+    cleanup_passed: bool,
+    observations: Vec<String>,
+}
+
+impl EnvironmentProgress {
+    fn ready(&self) -> bool {
+        self.start_passed && self.healthcheck_passed && self.reset_passed
+    }
+
+    fn receipt(self) -> QaEnvironmentLifecycle {
+        QaEnvironmentLifecycle {
+            identity: self.identity,
+            start_passed: self.start_passed,
+            healthcheck_passed: self.healthcheck_passed,
+            reset_passed: self.reset_passed,
+            cleanup_passed: self.cleanup_passed,
+        }
+    }
 }
 
 impl DaemonApplication {
@@ -158,7 +185,6 @@ impl DaemonApplication {
             ));
         }
 
-        let executable = resolve_tracked_executable(&workspace_root, &plan.executor_path)?;
         let input_path = self
             .store
             .root()
@@ -172,57 +198,81 @@ impl DaemonApplication {
             &effect_id,
             ExternalEffectState::Attempting,
             None,
-            Some("QA executor process started".to_string()),
+            Some("QA checkpoint lifecycle started".to_string()),
         )?;
-        let mut args = plan.executor_manifest.args.clone();
-        args.push(input_path.to_string_lossy().to_string());
-        let persist_started = |record: &crate::daemon::process::HelperProcessRecord| {
-            self.store.with_state(true, |state| {
-                let effect = state.external_effects.get_mut(&effect_id).ok_or_else(|| {
-                    PulseError::NotFound {
-                        subject: format!("external effect {effect_id}"),
-                    }
-                })?;
-                effect.attempt_process = Some(record.clone());
-                effect.updated_at = Utc::now().to_rfc3339();
-                Ok(())
-            })
+        let mut environment = if let Some(contract) = &plan.executor_manifest.environment {
+            Some(self.prepare_environment(
+                &effect_id,
+                &workspace_root,
+                &input_path,
+                contract,
+                source_commit,
+                &plan.executor_manifest.fixture_revision,
+            )?)
+        } else {
+            None
         };
-        let completed = match self.process_owner.run_to_completion(RunRequest {
-            executable: &executable,
-            args: &args,
-            cwd: &workspace_root,
-            timeout: Duration::from_secs(plan.executor_manifest.timeout_seconds),
-            max_output_bytes: plan.executor_manifest.max_output_bytes,
-            started: Some(&persist_started),
-        }) {
-            Ok(completed) => completed,
-            Err(error) => {
-                self.update_external_effect(
-                    &effect_id,
-                    ExternalEffectState::OutcomeUnknown,
-                    None,
-                    Some(format!("QA process outcome is unknown: {error}")),
-                )?;
-                return Err(error);
+        let (mut output, artifact_bindings) = if environment
+            .as_ref()
+            .map_or(true, EnvironmentProgress::ready)
+        {
+            let mut runner_input = plan.input.clone();
+            runner_input.environment = environment
+                .as_ref()
+                .map(|progress| progress.identity.clone());
+            crate::storage::atomic_write_private(&input_path, &to_canonical_bytes(&runner_input)?)?;
+            let executable = resolve_tracked_executable(&workspace_root, &plan.executor_path)?;
+            let completed = self.run_qa_command(
+                &effect_id,
+                "execute",
+                &workspace_root,
+                &input_path,
+                &executable,
+                &plan.executor_manifest.args,
+                plan.executor_manifest.timeout_seconds,
+                plan.executor_manifest.max_output_bytes,
+            )?;
+            match interpret_output(
+                repo_root,
+                &workspace_root,
+                &plan.executor_manifest,
+                &baseline,
+                &completed,
+            ) {
+                Ok(interpreted) => interpreted,
+                Err(error) => {
+                    let mut fallback = fallback_output(&baseline, &completed);
+                    fallback
+                        .observations
+                        .push(format!("QA evidence ingestion failed: {error}"));
+                    (fallback, Vec::new())
+                }
             }
+        } else {
+            (
+                infrastructure_output(
+                    &baseline,
+                    "QA executor was skipped because environment preparation failed",
+                ),
+                Vec::new(),
+            )
         };
-        let (output, artifact_bindings) = match interpret_output(
-            repo_root,
-            &workspace_root,
-            &plan.executor_manifest,
-            &baseline,
-            &completed,
+        if let (Some(progress), Some(contract)) = (
+            environment.as_mut(),
+            plan.executor_manifest.environment.as_ref(),
         ) {
-            Ok(interpreted) => interpreted,
-            Err(error) => {
-                let mut fallback = fallback_output(&baseline, &completed);
-                fallback
-                    .observations
-                    .push(format!("QA evidence ingestion failed: {error}"));
-                (fallback, Vec::new())
-            }
-        };
+            self.cleanup_environment(
+                &effect_id,
+                &workspace_root,
+                &input_path,
+                &contract.cleanup,
+                source_commit,
+                &plan.executor_manifest.fixture_revision,
+                progress,
+            )?;
+            output.cleanup_passed &= progress.cleanup_passed;
+            output.observations.extend(progress.observations.clone());
+        }
         let result = qa_result(&output);
         let evidence = crate::evidence::bootstrap(repo_root)?.manifest;
         let receipt = ReceiptEnvelope {
@@ -257,7 +307,7 @@ impl DaemonApplication {
                 ..ReceiptBindings::default()
             },
             payload: ReceiptPayload::QaCheckpoint(QaCheckpointPayload {
-                payload_version: 1,
+                payload_version: if environment.is_some() { 2 } else { 1 },
                 qa_scope: QaExecutionScope::TicketCheckpoint,
                 story_id: baseline.owner_id,
                 ticket_id: saga.ticket_id,
@@ -273,6 +323,7 @@ impl DaemonApplication {
                     profile: plan.executor_manifest.environment_profile,
                     platform: std::env::consts::OS.to_string(),
                     fixture_revision: plan.executor_manifest.fixture_revision,
+                    lifecycle: environment.map(EnvironmentProgress::receipt),
                 },
                 observations: output.observations,
                 cleanup_passed: output.cleanup_passed,
@@ -283,6 +334,232 @@ impl DaemonApplication {
         Ok(DaemonResponse::QaCheckpoint {
             receipt: Box::new(outcome.receipt),
         })
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn run_qa_command(
+        &self,
+        effect_id: &str,
+        phase: &str,
+        workspace_root: &Path,
+        input_path: &Path,
+        executable: &Path,
+        fixed_args: &[String],
+        timeout_seconds: u64,
+        max_output_bytes: usize,
+    ) -> Result<CompletedProcess> {
+        self.update_external_effect(
+            effect_id,
+            ExternalEffectState::Attempting,
+            None,
+            Some(format!("QA {phase} process started")),
+        )?;
+        let mut args = fixed_args.to_vec();
+        args.push(input_path.to_string_lossy().to_string());
+        let persist_started = |record: &crate::daemon::process::HelperProcessRecord| {
+            self.store.with_state(true, |state| {
+                let effect = state.external_effects.get_mut(effect_id).ok_or_else(|| {
+                    PulseError::NotFound {
+                        subject: format!("external effect {effect_id}"),
+                    }
+                })?;
+                effect.attempt_process = Some(record.clone());
+                effect.detail = format!("QA {phase} process identity persisted");
+                effect.updated_at = Utc::now().to_rfc3339();
+                Ok(())
+            })
+        };
+        match self.process_owner.run_to_completion(RunRequest {
+            executable,
+            args: &args,
+            cwd: workspace_root,
+            timeout: Duration::from_secs(timeout_seconds),
+            max_output_bytes,
+            started: Some(&persist_started),
+        }) {
+            Ok(completed) => Ok(completed),
+            Err(error) => {
+                self.update_external_effect(
+                    effect_id,
+                    ExternalEffectState::OutcomeUnknown,
+                    None,
+                    Some(format!("QA {phase} process outcome is unknown: {error}")),
+                )?;
+                Err(error)
+            }
+        }
+    }
+
+    fn prepare_environment(
+        &self,
+        effect_id: &str,
+        workspace_root: &Path,
+        input_path: &Path,
+        contract: &QaEnvironmentManifest,
+        source_commit: &str,
+        fixture_revision: &str,
+    ) -> Result<EnvironmentProgress> {
+        let mut progress = EnvironmentProgress {
+            identity: QaEnvironmentIdentity {
+                environment_instance_id: format!("unresolved:{effect_id}"),
+                source_commit: source_commit.to_string(),
+                fixture_revision: fixture_revision.to_string(),
+            },
+            start_passed: false,
+            healthcheck_passed: false,
+            reset_passed: false,
+            cleanup_passed: false,
+            observations: Vec::new(),
+        };
+        match self.run_environment_step(
+            effect_id,
+            "environment_start",
+            workspace_root,
+            input_path,
+            &contract.start,
+            source_commit,
+            fixture_revision,
+            None,
+        )? {
+            Ok(output) => {
+                progress.identity = environment_identity(&output);
+                progress.start_passed = true;
+                append_step_observations(&mut progress.observations, "start", &output);
+            }
+            Err(reason) => {
+                progress
+                    .observations
+                    .push(format!("start failed: {reason}"));
+                return Ok(progress);
+            }
+        }
+        match self.run_environment_step(
+            effect_id,
+            "environment_healthcheck",
+            workspace_root,
+            input_path,
+            &contract.healthcheck,
+            source_commit,
+            fixture_revision,
+            Some(&progress.identity),
+        )? {
+            Ok(output) => {
+                progress.healthcheck_passed = true;
+                append_step_observations(&mut progress.observations, "healthcheck", &output);
+            }
+            Err(reason) => {
+                progress
+                    .observations
+                    .push(format!("healthcheck failed: {reason}"));
+                return Ok(progress);
+            }
+        }
+        match self.run_environment_step(
+            effect_id,
+            "environment_reset",
+            workspace_root,
+            input_path,
+            &contract.reset,
+            source_commit,
+            fixture_revision,
+            Some(&progress.identity),
+        )? {
+            Ok(output) => {
+                progress.reset_passed = true;
+                append_step_observations(&mut progress.observations, "reset", &output);
+            }
+            Err(reason) => progress
+                .observations
+                .push(format!("reset failed: {reason}")),
+        }
+        Ok(progress)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn cleanup_environment(
+        &self,
+        effect_id: &str,
+        workspace_root: &Path,
+        input_path: &Path,
+        command: &QaEnvironmentCommand,
+        source_commit: &str,
+        fixture_revision: &str,
+        progress: &mut EnvironmentProgress,
+    ) -> Result<()> {
+        match self.run_environment_step(
+            effect_id,
+            "environment_cleanup",
+            workspace_root,
+            input_path,
+            command,
+            source_commit,
+            fixture_revision,
+            progress.start_passed.then_some(&progress.identity),
+        )? {
+            Ok(output) => {
+                if !progress.start_passed {
+                    progress.identity = environment_identity(&output);
+                }
+                progress.cleanup_passed = true;
+                append_step_observations(&mut progress.observations, "cleanup", &output);
+            }
+            Err(reason) => progress
+                .observations
+                .push(format!("cleanup failed: {reason}")),
+        }
+        Ok(())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn run_environment_step(
+        &self,
+        effect_id: &str,
+        phase: &str,
+        workspace_root: &Path,
+        input_path: &Path,
+        command: &QaEnvironmentCommand,
+        source_commit: &str,
+        fixture_revision: &str,
+        expected_identity: Option<&QaEnvironmentIdentity>,
+    ) -> Result<std::result::Result<QaEnvironmentStepOutput, String>> {
+        let executable = resolve_tracked_executable(workspace_root, &command.executable)?;
+        let completed = self.run_qa_command(
+            effect_id,
+            phase,
+            workspace_root,
+            input_path,
+            &executable,
+            &command.args,
+            command.timeout_seconds,
+            command.max_output_bytes,
+        )?;
+        if completed.timed_out || completed.output_truncated || completed.exit_code != Some(0) {
+            return Ok(Err(completed_failure(&completed)));
+        }
+        let output = match serde_json::from_str::<QaEnvironmentStepOutput>(completed.stdout.trim())
+        {
+            Ok(output) => output,
+            Err(error) => return Ok(Err(format!("invalid structured output: {error}"))),
+        };
+        if output.schema_version != 1
+            || output.environment_instance_id.trim().is_empty()
+            || output.source_commit != source_commit
+            || output.fixture_revision != fixture_revision
+            || output
+                .observations
+                .iter()
+                .all(|observation| observation.trim().is_empty())
+            || expected_identity.is_some_and(|identity| {
+                identity.environment_instance_id != output.environment_instance_id
+                    || identity.source_commit != output.source_commit
+                    || identity.fixture_revision != output.fixture_revision
+            })
+        {
+            return Ok(Err(
+                "environment identity, fixture, source, or observations do not match".to_string(),
+            ));
+        }
+        Ok(Ok(output))
     }
 
     fn recover_qa_receipt(
@@ -404,6 +681,7 @@ fn build_plan(
             baseline_revision: baseline.revision,
             baseline_content_hash: baseline.content_hash,
             cases: baseline.cases,
+            environment: None,
         },
     })
 }
@@ -533,6 +811,59 @@ fn fallback_output(
         artifacts: Vec::new(),
         cleanup_passed: false,
     }
+}
+
+fn infrastructure_output(baseline: &QaBaselineResolution, detail: &str) -> QaRunnerOutput {
+    QaRunnerOutput {
+        schema_version: 1,
+        cases: baseline
+            .cases
+            .iter()
+            .map(|case| QaCaseObservation {
+                case_id: case.id.clone(),
+                case_revision: case.revision,
+                outcome: QaCaseOutcome::InfrastructureFailure,
+            })
+            .collect(),
+        observations: vec![detail.to_string()],
+        artifacts: Vec::new(),
+        cleanup_passed: false,
+    }
+}
+
+fn completed_failure(completed: &CompletedProcess) -> String {
+    if completed.timed_out {
+        "command timed out".to_string()
+    } else if completed.output_truncated {
+        "command output exceeded its configured limit".to_string()
+    } else {
+        format!(
+            "command exited with {:?}: {}",
+            completed.exit_code,
+            completed.stderr.trim()
+        )
+    }
+}
+
+fn environment_identity(output: &QaEnvironmentStepOutput) -> QaEnvironmentIdentity {
+    QaEnvironmentIdentity {
+        environment_instance_id: output.environment_instance_id.clone(),
+        source_commit: output.source_commit.clone(),
+        fixture_revision: output.fixture_revision.clone(),
+    }
+}
+
+fn append_step_observations(
+    target: &mut Vec<String>,
+    phase: &str,
+    output: &QaEnvironmentStepOutput,
+) {
+    target.extend(
+        output
+            .observations
+            .iter()
+            .map(|observation| format!("{phase}: {observation}")),
+    );
 }
 
 fn qa_result(output: &QaRunnerOutput) -> ReceiptResult {

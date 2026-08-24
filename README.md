@@ -98,6 +98,13 @@ stdout, ingests declared artifacts, and records the immutable checkpoint
 receipt automatically. The returned receipt ID must be referenced by the
 verification acceptance map; QA is never a mutable status field.
 
+An executor may additionally declare fixed repository-relative `start`,
+`healthcheck`, `reset`, and `cleanup` commands. Every lifecycle command receives
+the same typed input path and must return one structured environment identity
+matching the candidate commit and fixture revision. Pulse skips execution when
+preparation fails, always attempts declared cleanup after a known start outcome,
+and emits payload version 2; a failed cleanup can never produce a passed receipt.
+
 ### The 4 Human Gates
 
 | Gate | What it blocks |

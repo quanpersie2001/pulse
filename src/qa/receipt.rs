@@ -68,6 +68,26 @@ pub struct QaRuntimeEnvironment {
     pub profile: String,
     pub platform: String,
     pub fixture_revision: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lifecycle: Option<QaEnvironmentLifecycle>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct QaEnvironmentIdentity {
+    pub environment_instance_id: String,
+    pub source_commit: String,
+    pub fixture_revision: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct QaEnvironmentLifecycle {
+    pub identity: QaEnvironmentIdentity,
+    pub start_passed: bool,
+    pub healthcheck_passed: bool,
+    pub reset_passed: bool,
+    pub cleanup_passed: bool,
 }
 
 /// Validate QA-specific semantics inside a generic immutable evidence envelope.
@@ -82,7 +102,7 @@ pub fn validate_checkpoint_receipt(
     payload: &QaCheckpointPayload,
 ) -> Result<()> {
     if receipt.receipt_version != 2
-        || payload.payload_version != 1
+        || !matches!(payload.payload_version, 1 | 2)
         || payload.qa_scope != QaExecutionScope::TicketCheckpoint
         || payload.story_id.trim().is_empty()
         || payload.ticket_id.trim().is_empty()
@@ -104,6 +124,14 @@ pub fn validate_checkpoint_receipt(
             "QA checkpoint receipt is incomplete or uses an unsupported contract",
         ));
     }
+    if (payload.payload_version == 1 && payload.environment.lifecycle.is_some())
+        || (payload.payload_version == 2 && payload.environment.lifecycle.is_none())
+    {
+        return Err(PulseError::validation(
+            "qa_receipt_environment_invalid",
+            "QA payload version and environment lifecycle contract do not match",
+        ));
+    }
     if receipt.subject.kind != "work"
         || receipt.subject.id != payload.ticket_id
         || receipt.bindings.source.is_none()
@@ -112,6 +140,29 @@ pub fn validate_checkpoint_receipt(
             "qa_receipt_binding_invalid",
             "QA checkpoint must bind its Ticket subject and exact source",
         ));
+    }
+    if let Some(lifecycle) = &payload.environment.lifecycle {
+        let source_commit = receipt
+            .bindings
+            .source
+            .as_ref()
+            .map(|source| source.commit.as_str());
+        if lifecycle.identity.environment_instance_id.trim().is_empty()
+            || lifecycle.identity.source_commit.trim().is_empty()
+            || lifecycle.identity.fixture_revision != payload.environment.fixture_revision
+            || source_commit != Some(lifecycle.identity.source_commit.as_str())
+            || (payload.cleanup_passed && !lifecycle.cleanup_passed)
+            || (receipt.result == ReceiptResult::Passed
+                && !(lifecycle.start_passed
+                    && lifecycle.healthcheck_passed
+                    && lifecycle.reset_passed
+                    && lifecycle.cleanup_passed))
+        {
+            return Err(PulseError::validation(
+                "qa_receipt_environment_invalid",
+                "QA environment lifecycle identity or required step result is invalid",
+            ));
+        }
     }
     let baseline_path = format!("works/{}/qa.md", payload.story_id);
     if !receipt.bindings.content.iter().any(|binding| {

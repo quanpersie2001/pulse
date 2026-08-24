@@ -24,7 +24,13 @@ fn structured_qa_executor_records_and_replays_checkpoint_receipt() {
             "max_output_bytes": 16384,
             "capabilities": ["api"],
             "environment_profile": "fixture",
-            "fixture_revision": "minimal-service-1"
+            "fixture_revision": "minimal-service-1",
+            "environment": {
+                "start": lifecycle_command("start"),
+                "healthcheck": lifecycle_command("healthcheck"),
+                "reset": lifecycle_command("reset"),
+                "cleanup": lifecycle_command("cleanup")
+            }
         }))
         .unwrap(),
     )
@@ -41,6 +47,23 @@ fn structured_qa_executor_records_and_replays_checkpoint_receipt() {
     let mut permissions = std::fs::metadata(&runner).unwrap().permissions();
     permissions.set_mode(0o755);
     std::fs::set_permissions(&runner, permissions).unwrap();
+    let lifecycle = repo.path().join("scripts/qa-environment.sh");
+    std::fs::write(
+        &lifecycle,
+        concat!(
+            "#!/bin/sh\n",
+            "set -eu\n",
+            "phase=$1\n",
+            "mkdir -p .pulse/runtime\n",
+            "printf '%s\\n' \"$phase\" >> .pulse/runtime/qa-lifecycle.log\n",
+            "commit=$(git rev-parse HEAD)\n",
+            "printf '{\"schema_version\":1,\"environment_instance_id\":\"fixture-env\",\"source_commit\":\"%s\",\"fixture_revision\":\"minimal-service-1\",\"observations\":[\"%s complete\"]}' \"$commit\" \"$phase\"\n"
+        ),
+    )
+    .unwrap();
+    let mut permissions = std::fs::metadata(&lifecycle).unwrap().permissions();
+    permissions.set_mode(0o755);
+    std::fs::set_permissions(&lifecycle, permissions).unwrap();
     let source_commit = common_git::commit_all(repo.path());
 
     let home = tempfile::tempdir().unwrap();
@@ -95,6 +118,20 @@ fn structured_qa_executor_records_and_replays_checkpoint_receipt() {
         receipt.result,
         pulse::evidence::model::ReceiptResult::Passed
     );
+    let pulse::evidence::model::ReceiptPayload::QaCheckpoint(payload) = &receipt.payload else {
+        panic!("expected QA checkpoint payload");
+    };
+    assert_eq!(payload.payload_version, 2);
+    let lifecycle = payload.environment.lifecycle.as_ref().unwrap();
+    assert_eq!(lifecycle.identity.environment_instance_id, "fixture-env");
+    assert!(lifecycle.start_passed);
+    assert!(lifecycle.healthcheck_passed);
+    assert!(lifecycle.reset_passed);
+    assert!(lifecycle.cleanup_passed);
+    assert_eq!(
+        std::fs::read_to_string(repo.path().join(".pulse/runtime/qa-lifecycle.log")).unwrap(),
+        "start\nhealthcheck\nreset\ncleanup\n"
+    );
     assert!(matches!(
         handle(&app, request, "qa-checkpoint"),
         DaemonResponse::QaCheckpoint { receipt: replay } if replay.id == receipt.id
@@ -111,6 +148,60 @@ fn structured_qa_executor_records_and_replays_checkpoint_receipt() {
             && effect.attempt_process.is_some()
     }));
     pulse::evidence::verify_receipt(repo.path(), &receipt.id, true, None).unwrap();
+
+    std::fs::write(
+        repo.path().join("scripts/qa-environment.sh"),
+        concat!(
+            "#!/bin/sh\n",
+            "set -eu\n",
+            "phase=$1\n",
+            "if [ \"$phase\" = cleanup ]; then echo cleanup-failed >&2; exit 7; fi\n",
+            "commit=$(git rev-parse HEAD)\n",
+            "printf '{\"schema_version\":1,\"environment_instance_id\":\"fixture-env\",\"source_commit\":\"%s\",\"fixture_revision\":\"minimal-service-1\",\"observations\":[\"%s complete\"]}' \"$commit\" \"$phase\"\n"
+        ),
+    )
+    .unwrap();
+    let failed_cleanup_source = common_git::commit_all(repo.path());
+    let failed_cleanup = match handle(
+        &app,
+        DaemonRequest::QaCheckpointRun {
+            saga_id: saga_id.to_string(),
+            actor: "human:qa-reviewer".to_string(),
+            source_commit: failed_cleanup_source,
+            executor_id: "api".to_string(),
+        },
+        "qa-checkpoint-cleanup-fails",
+    ) {
+        DaemonResponse::QaCheckpoint { receipt } => receipt,
+        other => panic!("unexpected response: {other:?}"),
+    };
+    assert_eq!(
+        failed_cleanup.result,
+        pulse::evidence::model::ReceiptResult::Inconclusive
+    );
+    let pulse::evidence::model::ReceiptPayload::QaCheckpoint(payload) = &failed_cleanup.payload
+    else {
+        panic!("expected QA checkpoint payload");
+    };
+    assert!(!payload.cleanup_passed);
+    assert!(
+        !payload
+            .environment
+            .lifecycle
+            .as_ref()
+            .unwrap()
+            .cleanup_passed
+    );
+}
+
+#[cfg(unix)]
+fn lifecycle_command(phase: &str) -> serde_json::Value {
+    serde_json::json!({
+        "executable": "scripts/qa-environment.sh",
+        "args": [phase],
+        "timeout_seconds": 10,
+        "max_output_bytes": 16384
+    })
 }
 
 #[test]

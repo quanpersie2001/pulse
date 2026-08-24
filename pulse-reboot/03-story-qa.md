@@ -144,10 +144,19 @@ timeout, truncated hoặc malformed output tạo receipt `inconclusive` với
 `infrastructure_failure`; outcome không rõ sau crash bị fail-closed và không
 blind retry.
 
-Slice này mới sở hữu structured non-browser CLI/API execution. Environment
-start/health/reset/cleanup adapter và deterministic browser/Playwright executor
-vẫn là phần tiếp theo; `cleanup_passed` hiện là typed observation của executor,
-chưa thay thế daemon-owned environment lifecycle.
+Structured executor có thể khai báo đủ bốn command repository-relative
+`start`, `healthcheck`, `reset`, `cleanup`. Mỗi command nhận cùng typed input
+path, chạy trong process group có bounded timeout/output và phải trả cùng
+`environment_instance_id`, candidate `source_commit`, `fixture_revision` cùng
+observations. Chỉ khi ba bước prepare pass thì case executor mới chạy; cleanup
+được attempt sau mọi start outcome đã biết và cleanup fail không thể tạo passed
+receipt. Receipt có lifecycle dùng payload version 2, còn receipt version 1 cũ
+vẫn đọc/validate được. Crash giữa external I/O và durable receipt giữ effect ở
+uncertain, terminate exact helper identity khi có thể và không blind retry.
+
+Phần còn thiếu là deterministic browser/Playwright executor và richer adapter
+cho environment provider dài hạn; lifecycle hiện tại sở hữu bounded orchestration
+commands, source/fixture/instance binding và cleanup gate.
 
 ### Story qualification/close QA
 

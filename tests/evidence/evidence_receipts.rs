@@ -107,6 +107,30 @@ fn evidence_bootstrap_adds_qa_contract_without_changing_repository_identity() {
     assert!(migrated.receipt_schemas.contains_key("1"));
     assert!(migrated.receipt_schemas.contains_key("2"));
     assert!(migrated.receipt_kinds.contains_key("qa_checkpoint"));
+    assert!(migrated.receipt_kinds["qa_checkpoint"].contains_key("1"));
+    assert!(migrated.receipt_kinds["qa_checkpoint"].contains_key("2"));
+}
+
+#[test]
+fn evidence_bootstrap_adds_lifecycle_schema_to_existing_qa_contract() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path();
+    let initial = pulse::evidence::bootstrap(repo).unwrap().manifest;
+    let manifest_path = repo.join(".pulse/evidence/manifest.json");
+    let mut prior = initial.clone();
+    prior
+        .receipt_kinds
+        .get_mut("qa_checkpoint")
+        .unwrap()
+        .remove("2");
+    write_json(&manifest_path, &prior);
+    fs::remove_file(repo.join(".pulse/evidence/schemas/qa-checkpoint-lifecycle.schema.json"))
+        .unwrap();
+
+    let migrated = pulse::evidence::bootstrap(repo).unwrap().manifest;
+    assert_eq!(migrated.repository_id, initial.repository_id);
+    assert!(migrated.receipt_kinds["qa_checkpoint"].contains_key("1"));
+    assert!(migrated.receipt_kinds["qa_checkpoint"].contains_key("2"));
 }
 
 fn make_shaping_receipt(
