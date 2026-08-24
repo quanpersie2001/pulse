@@ -371,7 +371,7 @@ impl JsonGraphStore {
             &verification.checks,
             &verification.acceptance_proofs,
         )?;
-        validate_required_qa(&self.repo_root, &node, &handoff, &verification)?;
+        validate_qa_close(&self.repo_root, &node, &handoff, &verification)?;
         if implementation.acceptance.is_empty() {
             return Err(PulseError::validation(
                 "close_acceptance_missing",
@@ -649,13 +649,10 @@ fn validate_close_postures(node: &Node) -> Result<()> {
         .as_ref()
         .map(|qa| qa.impact.posture)
         .unwrap_or(QaImpactPosture::Unknown);
-    if matches!(
-        qa_posture,
-        QaImpactPosture::Unknown | QaImpactPosture::CoveredByStoryClose
-    ) {
+    if qa_posture == QaImpactPosture::Unknown {
         return Err(PulseError::validation(
             "close_qa_gate_unavailable",
-            "proof close requires QA impact none or a current required-case checkpoint; Story-deferred QA remains unavailable",
+            "proof close requires assessed QA impact and its current assurance receipt",
         ));
     }
     if node.documentation_posture() != DocumentationImpactPosture::None {
@@ -667,7 +664,7 @@ fn validate_close_postures(node: &Node) -> Result<()> {
     Ok(())
 }
 
-fn validate_required_qa(
+fn validate_qa_close(
     repo_root: &Path,
     node: &Node,
     handoff: &HandoffReceipt,
@@ -681,13 +678,34 @@ fn validate_required_qa(
     if posture == QaImpactPosture::None {
         return Ok(());
     }
-    if posture != QaImpactPosture::Required {
-        return Err(PulseError::validation(
-            "close_qa_gate_unavailable",
-            "QA posture does not have a Ticket close resolver",
-        ));
-    }
-    let baseline = crate::qa::resolve_ticket_cases(repo_root, node)?;
+    let (baseline, expected_scope) = match posture {
+        QaImpactPosture::Required => (
+            crate::qa::resolve_ticket_cases(repo_root, node)?,
+            crate::qa::QaExecutionScope::TicketCheckpoint,
+        ),
+        QaImpactPosture::CoveredByStoryClose => {
+            let story_id = node
+                .qa
+                .as_ref()
+                .and_then(|qa| qa.impact.behavioral_owner.as_deref())
+                .ok_or_else(|| {
+                    PulseError::validation(
+                        "close_qa_story_owner_missing",
+                        "Story-deferred QA requires a behavioral owner",
+                    )
+                })?;
+            (
+                crate::qa::resolve_story_cases(repo_root, story_id)?,
+                crate::qa::QaExecutionScope::StoryClose,
+            )
+        }
+        QaImpactPosture::Unknown | QaImpactPosture::None => {
+            return Err(PulseError::validation(
+                "close_qa_gate_unavailable",
+                "QA posture does not have a close resolver",
+            ));
+        }
+    };
     let expected = baseline
         .cases
         .iter()
@@ -706,6 +724,9 @@ fn validate_required_qa(
         let crate::evidence::model::ReceiptPayload::QaCheckpoint(payload) = &receipt.payload else {
             continue;
         };
+        if payload.qa_scope != expected_scope {
+            continue;
+        }
         saw_checkpoint = true;
         crate::evidence::receipt::verify_receipt(repo_root, receipt_id, true, None)?;
         if receipt.result != crate::evidence::model::ReceiptResult::Passed {
@@ -726,8 +747,14 @@ fn validate_required_qa(
                 "QA checkpoint lacks an exact source binding",
             )
         })?;
+        let expected_subject = match expected_scope {
+            crate::qa::QaExecutionScope::TicketCheckpoint => node.id.as_str(),
+            crate::qa::QaExecutionScope::StoryClose => baseline.owner_id.as_str(),
+        };
         if source.commit != verification.source_commit
-            || payload.ticket_id != node.id
+            || (expected_scope == crate::qa::QaExecutionScope::TicketCheckpoint
+                && payload.ticket_id != node.id)
+            || receipt.subject.id != expected_subject
             || payload.story_id != baseline.owner_id
             || payload.baseline_revision != baseline.revision
             || payload.baseline_content_hash != baseline.content_hash
@@ -807,7 +834,7 @@ fn validate_required_qa(
     if !saw_checkpoint {
         return Err(PulseError::validation(
             "close_qa_checkpoint_missing",
-            "required QA impact needs a current passed checkpoint receipt in acceptance proof",
+            "QA impact needs a current passed receipt for its required execution scope in acceptance proof",
         ));
     }
     let actual = covered.into_iter().collect::<Vec<_>>();

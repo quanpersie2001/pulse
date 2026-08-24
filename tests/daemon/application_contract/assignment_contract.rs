@@ -171,6 +171,125 @@ fn structured_qa_executor_records_and_replays_checkpoint_receipt() {
 
 #[cfg(unix)]
 #[test]
+fn structured_qa_executor_records_full_story_qualification() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let repo = TestRepo::from_fixture("minimal-service");
+    let graph = pulse::JsonGraphStore::new(repo.path());
+    bootstrap_repo(&repo, &graph);
+    write_policy(
+        repo.path(),
+        &["work.assignment.release", "qa.defer_to_story_close"],
+    );
+    let ticket_id = setup_ready_ticket_with_story_qa(repo.path(), &graph);
+    let ticket = graph.show_node(&ticket_id).unwrap();
+    let story_id = ticket
+        .qa
+        .as_ref()
+        .and_then(|qa| qa.impact.behavioral_owner.as_ref())
+        .unwrap()
+        .clone();
+
+    let executor_dir = repo.path().join(".pulse/qa/executors");
+    std::fs::create_dir_all(&executor_dir).unwrap();
+    std::fs::write(
+        executor_dir.join("api.json"),
+        serde_json::to_vec_pretty(&serde_json::json!({
+            "schema_version": 1,
+            "id": "api",
+            "version": "1.0.0",
+            "executable": "scripts/qa-runner.sh",
+            "args": [],
+            "timeout_seconds": 10,
+            "max_output_bytes": 16384,
+            "capabilities": ["api"],
+            "environment_profile": "fixture",
+            "fixture_revision": "minimal-service-1",
+            "environment": {
+                "start": lifecycle_command("start"),
+                "healthcheck": lifecycle_command("healthcheck"),
+                "reset": lifecycle_command("reset"),
+                "cleanup": lifecycle_command("cleanup")
+            }
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let runner = repo.path().join("scripts/qa-runner.sh");
+    std::fs::write(
+        &runner,
+        concat!(
+            "#!/bin/sh\n",
+            "printf '%s' '{\"schema_version\":1,\"cases\":[{\"case_id\":\"QA-001\",\"case_revision\":1,\"outcome\":\"passed\"}],\"observations\":[\"full Story baseline passed\"],\"artifacts\":[],\"cleanup_passed\":true}'\n"
+        ),
+    )
+    .unwrap();
+    let mut permissions = std::fs::metadata(&runner).unwrap().permissions();
+    permissions.set_mode(0o755);
+    std::fs::set_permissions(&runner, permissions).unwrap();
+    write_lifecycle_script(repo.path());
+    let source_commit = common_git::commit_all(repo.path());
+
+    let home = tempfile::tempdir().unwrap();
+    let app = DaemonApplication::new(StateStore::new(home.path()), "test").unwrap();
+    let project_id = open_project(&app, repo.path());
+    let workspace_id = create_workspace(&app, &project_id);
+    let saga_id = "saga-story-qualification";
+    insert_verifying_assignment(
+        &app,
+        saga_id,
+        &project_id,
+        &workspace_id,
+        &ticket_id,
+        ticket.revision,
+    );
+    let mismatch = app
+        .handle(
+            &DaemonRequest::QaStoryQualificationRun {
+                saga_id: saga_id.to_string(),
+                story_id: "ST-01J00000000000000000000099".to_string(),
+                actor: "human:qa-reviewer".to_string(),
+                source_commit: source_commit.clone(),
+                executor_id: "api".to_string(),
+            },
+            "story-qualification-mismatch",
+        )
+        .unwrap_err();
+    assert_eq!(mismatch.code, "qa_story_assignment_mismatch");
+
+    let request = DaemonRequest::QaStoryQualificationRun {
+        saga_id: saga_id.to_string(),
+        story_id: story_id.clone(),
+        actor: "human:qa-reviewer".to_string(),
+        source_commit,
+        executor_id: "api".to_string(),
+    };
+    let receipt = match handle(&app, request.clone(), "story-qualification") {
+        DaemonResponse::QaCheckpoint { receipt } => receipt,
+        other => panic!("unexpected response: {other:?}"),
+    };
+
+    assert_eq!(receipt.subject.id, story_id);
+    assert_eq!(
+        receipt.result,
+        pulse::evidence::model::ReceiptResult::Passed
+    );
+    let pulse::evidence::model::ReceiptPayload::QaCheckpoint(payload) = &receipt.payload else {
+        panic!("expected QA qualification payload");
+    };
+    assert_eq!(payload.qa_scope, pulse::qa::QaExecutionScope::StoryClose);
+    assert_eq!(payload.ticket_id, ticket_id);
+    assert_eq!(payload.cases.len(), 1);
+    assert_eq!(payload.cases[0].case_id, "QA-001");
+    assert!(matches!(
+        handle(&app, request, "story-qualification"),
+        DaemonResponse::QaCheckpoint { receipt: replay } if replay.id == receipt.id
+    ));
+    pulse::evidence::verify_receipt(repo.path(), &receipt.id, true, None).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
 fn playwright_executor_records_deterministic_browser_report_and_trace() {
     use std::os::unix::fs::PermissionsExt;
 

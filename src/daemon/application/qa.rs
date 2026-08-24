@@ -35,6 +35,8 @@ use crate::{PulseError, Result};
 #[serde(deny_unknown_fields)]
 struct QaRunPlan {
     schema_version: u32,
+    #[serde(default)]
+    scope: QaExecutionScope,
     receipt_id: String,
     recorded_at: chrono::DateTime<Utc>,
     executor_manifest: QaExecutorManifest,
@@ -76,6 +78,48 @@ impl DaemonApplication {
         source_commit: &str,
         executor_id: &str,
         idempotency_key: &str,
+    ) -> Result<DaemonResponse> {
+        self.qa_run(
+            saga_id,
+            None,
+            actor,
+            source_commit,
+            executor_id,
+            idempotency_key,
+            QaExecutionScope::TicketCheckpoint,
+        )
+    }
+
+    pub(super) fn qa_story_qualification_run(
+        &self,
+        saga_id: &str,
+        story_id: &str,
+        actor: &str,
+        source_commit: &str,
+        executor_id: &str,
+        idempotency_key: &str,
+    ) -> Result<DaemonResponse> {
+        self.qa_run(
+            saga_id,
+            Some(story_id),
+            actor,
+            source_commit,
+            executor_id,
+            idempotency_key,
+            QaExecutionScope::StoryClose,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn qa_run(
+        &self,
+        saga_id: &str,
+        story_id: Option<&str>,
+        actor: &str,
+        source_commit: &str,
+        executor_id: &str,
+        idempotency_key: &str,
+        scope: QaExecutionScope,
     ) -> Result<DaemonResponse> {
         let saga = self.assignment_saga(saga_id)?;
         if saga.state != AssignmentSagaState::Verifying || saga.handoff_id.is_none() {
@@ -119,10 +163,34 @@ impl DaemonApplication {
         }
         let core = crate::JsonGraphStore::new(repo_root);
         let ticket = core.show_node(&saga.ticket_id)?;
-        let baseline = crate::qa::resolve_ticket_cases(repo_root, &ticket)?;
+        let baseline = match scope {
+            QaExecutionScope::TicketCheckpoint => {
+                crate::qa::resolve_ticket_cases(repo_root, &ticket)?
+            }
+            QaExecutionScope::StoryClose => {
+                let story_id = story_id.ok_or_else(|| {
+                    PulseError::validation(
+                        "qa_story_id_missing",
+                        "Story qualification requires a Story ID",
+                    )
+                })?;
+                let owner = ticket
+                    .qa
+                    .as_ref()
+                    .and_then(|qa| qa.impact.behavioral_owner.as_deref());
+                if owner != Some(story_id) {
+                    return Err(PulseError::validation(
+                        "qa_story_assignment_mismatch",
+                        "Story qualification must use an assignment bound to that behavioral owner",
+                    ));
+                }
+                crate::qa::resolve_story_cases(repo_root, story_id)?
+            }
+        };
         let effect_id = deterministic_id("effect_qa", &format!("{saga_id}:{idempotency_key}"));
         let request_fingerprint = hash_serializable(&(
             saga_id,
+            scope,
             actor,
             source_commit,
             executor_id,
@@ -148,6 +216,7 @@ impl DaemonApplication {
                 executor_id,
                 baseline.clone(),
                 &effect_id,
+                scope,
             )?,
         };
         let plan_json = String::from_utf8(to_canonical_bytes(&plan)?).map_err(|_| {
@@ -158,7 +227,7 @@ impl DaemonApplication {
             ExternalEffectKind::QaCheckpointRun,
             saga_id,
             &request_fingerprint,
-            format!("run QA executor {executor_id}"),
+            format!("run {scope:?} QA executor {executor_id}"),
             Some(plan_json),
         )?;
         match effect.state {
@@ -293,7 +362,10 @@ impl DaemonApplication {
             recorded_at: plan.recorded_at,
             subject: SubjectRef {
                 kind: "work".to_string(),
-                id: saga.ticket_id.clone(),
+                id: match plan.scope {
+                    QaExecutionScope::TicketCheckpoint => saga.ticket_id.clone(),
+                    QaExecutionScope::StoryClose => baseline.owner_id.clone(),
+                },
             },
             bindings: ReceiptBindings {
                 source: Some(SourceBinding {
@@ -316,7 +388,7 @@ impl DaemonApplication {
             },
             payload: ReceiptPayload::QaCheckpoint(QaCheckpointPayload {
                 payload_version,
-                qa_scope: QaExecutionScope::TicketCheckpoint,
+                qa_scope: plan.scope,
                 story_id: baseline.owner_id,
                 ticket_id: saga.ticket_id,
                 baseline_revision: baseline.revision,
@@ -587,7 +659,12 @@ impl DaemonApplication {
             ));
         };
         if receipt.kind != ReceiptKind::QaCheckpoint
-            || receipt.subject.id != plan.input.ticket_id
+            || receipt.subject.id
+                != match plan.scope {
+                    QaExecutionScope::TicketCheckpoint => plan.input.ticket_id.as_str(),
+                    QaExecutionScope::StoryClose => plan.input.story_id.as_str(),
+                }
+            || payload.qa_scope != plan.scope
             || payload.story_id != plan.input.story_id
             || payload.baseline_revision != plan.input.baseline_revision
             || payload.baseline_content_hash != plan.input.baseline_content_hash
@@ -671,12 +748,14 @@ fn build_plan(
     executor_id: &str,
     baseline: QaBaselineResolution,
     effect_id: &str,
+    scope: QaExecutionScope,
 ) -> Result<QaRunPlan> {
     let (manifest, executable, manifest_hash) =
         crate::qa::load_executor_manifest(executor_root, executor_id)?;
     let receipt_id = deterministic_receipt_id(effect_id);
     Ok(QaRunPlan {
         schema_version: 1,
+        scope,
         receipt_id,
         recorded_at: Utc::now(),
         executor_manifest: manifest,

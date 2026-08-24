@@ -11,8 +11,8 @@ mod executor;
 mod receipt;
 
 pub use baseline::{
-    load_story_baseline, resolve_ticket_cases, QaBaseline, QaBaselineResolution, QaCase,
-    QaCaseApplicability, QaCasePriority,
+    load_story_baseline, resolve_story_cases, resolve_ticket_cases, QaBaseline,
+    QaBaselineResolution, QaCase, QaCaseApplicability, QaCasePriority,
 };
 pub use executor::{
     load_executor_manifest, validate_runner_output, QaBrowserAssertion, QaBrowserEngine,

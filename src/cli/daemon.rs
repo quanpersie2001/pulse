@@ -95,6 +95,7 @@ pub(crate) enum SessionCommand {
     },
     Handoff(SessionHandoffArgs),
     QaCheckpoint(SessionQaCheckpointArgs),
+    StoryQualification(SessionStoryQualificationArgs),
     Verify(SessionVerifyArgs),
     CloseAssignment(SessionCloseAssignmentArgs),
     Create(SessionCreateArgs),
@@ -178,6 +179,19 @@ pub(crate) struct SessionVerifyArgs {
 #[derive(Args)]
 pub(crate) struct SessionQaCheckpointArgs {
     pub(crate) saga_id: String,
+    #[arg(long)]
+    pub(crate) actor: String,
+    #[arg(long)]
+    pub(crate) source_commit: String,
+    #[arg(long)]
+    pub(crate) executor: String,
+}
+
+#[derive(Args)]
+pub(crate) struct SessionStoryQualificationArgs {
+    pub(crate) saga_id: String,
+    #[arg(long)]
+    pub(crate) story_id: String,
     #[arg(long)]
     pub(crate) actor: String,
     #[arg(long)]
@@ -390,6 +404,13 @@ pub(crate) fn handle_session(command: SessionCommand, explicit_key: Option<&str>
         },
         SessionCommand::QaCheckpoint(args) => DaemonRequest::QaCheckpointRun {
             saga_id: args.saga_id,
+            actor: args.actor,
+            source_commit: args.source_commit,
+            executor_id: args.executor,
+        },
+        SessionCommand::StoryQualification(args) => DaemonRequest::QaStoryQualificationRun {
+            saga_id: args.saga_id,
+            story_id: args.story_id,
             actor: args.actor,
             source_commit: args.source_commit,
             executor_id: args.executor,
@@ -658,6 +679,38 @@ mod tests {
                     ..
                 })
             } if saga_id == "saga_test" && executor == "api"
+        ));
+    }
+
+    #[test]
+    fn cli_parses_story_qualification_request() {
+        let cli = crate::cli::Cli::try_parse_from([
+            "pulse",
+            "session",
+            "story-qualification",
+            "saga_test",
+            "--story-id",
+            "ST-01J00000000000000000000000",
+            "--actor",
+            "human:qa-reviewer",
+            "--source-commit",
+            "0123456789012345678901234567890123456789",
+            "--executor",
+            "api",
+        ])
+        .expect("Story qualification CLI should parse");
+        assert!(matches!(
+            cli.command,
+            crate::cli::args::Command::Session {
+                command: SessionCommand::StoryQualification(SessionStoryQualificationArgs {
+                    saga_id,
+                    story_id,
+                    executor,
+                    ..
+                })
+            } if saga_id == "saga_test"
+                && story_id == "ST-01J00000000000000000000000"
+                && executor == "api"
         ));
     }
 

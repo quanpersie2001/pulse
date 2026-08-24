@@ -189,6 +189,16 @@ Nó phải chạy:
 
 Receipt của nó có `qa_scope: story_close`. Đây là authoritative behavioral gate để đóng Story.
 
+Implementation hiện tại expose `pulse session story-qualification` trên một
+assignment đang `verifying`. Ticket của assignment phải có `behavioral_owner`
+đúng Story được yêu cầu; daemon resolve toàn bộ case `required` trong current
+baseline, chạy cùng repository-allowlisted executor/lifecycle contract và ghi
+immutable receipt có subject là Story. `ticket_id` của assignment được giữ
+trong payload để audit, nhưng Core chỉ cho một Ticket
+`covered_by_story_close` dùng receipt khi Story owner, full baseline revision,
+source commit, actor independence, capabilities/evidence và toàn bộ case
+coverage đều còn current. Story node lifecycle close riêng vẫn chưa implement.
+
 ### Execution cadence
 
 ```text

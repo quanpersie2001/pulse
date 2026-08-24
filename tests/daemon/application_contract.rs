@@ -19,7 +19,8 @@ mod assignment_fixture;
 mod common_git;
 use super::common_fixture_repo;
 use assignment_fixture::{
-    bootstrap_repo, setup_ready_ticket, setup_ready_ticket_with_required_qa, write_policy,
+    bootstrap_repo, setup_ready_ticket, setup_ready_ticket_with_required_qa,
+    setup_ready_ticket_with_story_qa, write_policy,
 };
 use common_fixture_repo::TestRepo;
 

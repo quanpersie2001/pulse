@@ -1,4 +1,4 @@
-//! Story QA baseline parsing, semantic validation and Ticket case resolution.
+//! Story QA baseline parsing, validation and execution-scope case resolution.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -117,6 +117,27 @@ pub fn load_story_baseline(repo_root: &Path, story_id: &str) -> Result<QaBaselin
         content_hash: hash_bytes(&bytes),
         cases: baseline.cases,
     })
+}
+
+/// Resolve every currently applicable case in a Story qualification baseline.
+///
+/// # Errors
+///
+/// Returns a typed validation error when the Story or baseline is invalid, or
+/// when the baseline has no applicable cases to qualify.
+pub fn resolve_story_cases(repo_root: &Path, story_id: &str) -> Result<QaBaselineResolution> {
+    validate_behavioral_owner(repo_root, story_id)?;
+    let mut baseline = load_story_baseline(repo_root, story_id)?;
+    baseline
+        .cases
+        .retain(|case| case.applicability == QaCaseApplicability::Required);
+    if baseline.cases.is_empty() {
+        return Err(PulseError::validation(
+            "qa_story_cases_empty",
+            "Story qualification requires at least one applicable baseline case",
+        ));
+    }
+    Ok(baseline)
 }
 
 /// Resolve a required Ticket QA impact to exact current Story case revisions.

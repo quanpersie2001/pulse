@@ -30,9 +30,10 @@ pub struct QaCheckpointPayload {
     pub cleanup_passed: bool,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Default, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum QaExecutionScope {
+    #[default]
     TicketCheckpoint,
     StoryClose,
 }
@@ -106,7 +107,6 @@ pub fn validate_checkpoint_receipt(
 ) -> Result<()> {
     if receipt.receipt_version != 2
         || !matches!(payload.payload_version, 1..=3)
-        || payload.qa_scope != QaExecutionScope::TicketCheckpoint
         || payload.story_id.trim().is_empty()
         || payload.ticket_id.trim().is_empty()
         || payload.baseline_revision == 0
@@ -139,13 +139,17 @@ pub fn validate_checkpoint_receipt(
             "QA payload version and environment lifecycle contract do not match",
         ));
     }
+    let expected_subject = match payload.qa_scope {
+        QaExecutionScope::TicketCheckpoint => payload.ticket_id.as_str(),
+        QaExecutionScope::StoryClose => payload.story_id.as_str(),
+    };
     if receipt.subject.kind != "work"
-        || receipt.subject.id != payload.ticket_id
+        || receipt.subject.id != expected_subject
         || receipt.bindings.source.is_none()
     {
         return Err(PulseError::validation(
             "qa_receipt_binding_invalid",
-            "QA checkpoint must bind its Ticket subject and exact source",
+            "QA receipt must bind its exact execution-scope owner and source",
         ));
     }
     if let Some(lifecycle) = &payload.environment.lifecycle {

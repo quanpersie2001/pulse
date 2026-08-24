@@ -84,21 +84,36 @@ pub(super) fn bootstrap_repo(repo: &TestRepo, _store: &JsonGraphStore) {
 }
 
 pub(super) fn setup_ready_ticket(root: &std::path::Path, store: &JsonGraphStore) -> String {
-    setup_ready_ticket_with_qa(root, store, false)
+    setup_ready_ticket_with_qa(root, store, FixtureQaPosture::None)
 }
 
 pub(super) fn setup_ready_ticket_with_required_qa(
     root: &std::path::Path,
     store: &JsonGraphStore,
 ) -> String {
-    setup_ready_ticket_with_qa(root, store, true)
+    setup_ready_ticket_with_qa(root, store, FixtureQaPosture::Required)
+}
+
+pub(super) fn setup_ready_ticket_with_story_qa(
+    root: &std::path::Path,
+    store: &JsonGraphStore,
+) -> String {
+    setup_ready_ticket_with_qa(root, store, FixtureQaPosture::CoveredByStoryClose)
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum FixtureQaPosture {
+    None,
+    Required,
+    CoveredByStoryClose,
 }
 
 fn setup_ready_ticket_with_qa(
     root: &std::path::Path,
     store: &JsonGraphStore,
-    required_qa: bool,
+    qa_posture: FixtureQaPosture,
 ) -> String {
+    let behavioral_qa = qa_posture != FixtureQaPosture::None;
     let node = store
         .create_node_public_with_context(
             WorkKind::Ticket,
@@ -128,7 +143,7 @@ fn setup_ready_ticket_with_qa(
                     mode: ImplementationMode::Guided,
                     work_surface: WorkSurface::Code,
                     plan_policy: PlanPolicy::None,
-                    semantic_impact: if required_qa {
+                    semantic_impact: if behavioral_qa {
                         ImplementationSemanticImpact::BehaviorOrPublicRiskChange
                     } else {
                         ImplementationSemanticImpact::NoBehaviorOrPublicRiskChange
@@ -171,7 +186,7 @@ fn setup_ready_ticket_with_qa(
             context(),
         )
         .unwrap();
-    let behavioral_owner = if required_qa {
+    let behavioral_owner = if behavioral_qa {
         let story = store
             .create_node(WorkKind::Story, "Reservation behavior".to_string())
             .unwrap()
@@ -187,18 +202,20 @@ fn setup_ready_ticket_with_qa(
             &ticket_id,
             current.revision,
             QaImpactUpdate {
-                posture: if required_qa {
-                    QaImpactPosture::Required
-                } else {
-                    QaImpactPosture::None
+                posture: match qa_posture {
+                    FixtureQaPosture::None => QaImpactPosture::None,
+                    FixtureQaPosture::Required => QaImpactPosture::Required,
+                    FixtureQaPosture::CoveredByStoryClose => QaImpactPosture::CoveredByStoryClose,
                 },
-                rationale: Some(if required_qa {
-                    "Behavioral checkpoint required.".to_string()
-                } else {
-                    "No product QA impact.".to_string()
+                rationale: Some(match qa_posture {
+                    FixtureQaPosture::None => "No product QA impact.".to_string(),
+                    FixtureQaPosture::Required => "Behavioral checkpoint required.".to_string(),
+                    FixtureQaPosture::CoveredByStoryClose => {
+                        "Integrated Story qualification owns this behavior.".to_string()
+                    }
                 }),
                 behavioral_owner,
-                affected_case_ids: if required_qa {
+                affected_case_ids: if qa_posture == FixtureQaPosture::Required {
                     vec!["QA-001".to_string()]
                 } else {
                     vec![]

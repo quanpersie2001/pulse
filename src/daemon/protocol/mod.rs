@@ -186,6 +186,13 @@ pub enum DaemonRequest {
         source_commit: String,
         executor_id: String,
     },
+    QaStoryQualificationRun {
+        saga_id: String,
+        story_id: String,
+        actor: String,
+        source_commit: String,
+        executor_id: String,
+    },
     VerificationComplete {
         saga_id: String,
         actor: String,

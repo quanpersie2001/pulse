@@ -76,8 +76,8 @@ ownership remains documented by [`src/kernel/`](src/kernel/) and
 4. A bound acknowledgement activates the reserved Ticket.
 5. The worker implements and verifies the lease-bound packet in its workspace.
 6. Typed handoff moves the Ticket to independent verification.
-7. Verification maps every acceptance item to passing checks/evidence; Core may close a low-risk Ticket whose documentation posture is `none` and whose QA posture is either `none` or satisfied by a required checkpoint.
-8. Required Ticket QA closes only with a current passed `qa_checkpoint` receipt covering the exact affected Story baseline cases. Story-deferred QA, documentation promotion, and medium-or-higher risk remain fail-closed until their dedicated assurance resolvers are installed.
+7. Verification maps every acceptance item to passing checks/evidence; Core may close a low-risk Ticket whose documentation posture is `none` and whose QA posture is `none`, satisfied by a required checkpoint, or covered by a current full Story qualification.
+8. Required Ticket QA closes only with a current passed `qa_checkpoint` receipt whose `qa_scope` is `ticket_checkpoint` and which covers the exact affected Story cases. A deferred Ticket requires a current passed receipt whose `qa_scope` is `story_close`, covering the full applicable Story baseline on the same source. Story lifecycle close, documentation promotion, and medium-or-higher risk remain fail-closed until their dedicated assurance resolvers are installed.
 
 `pulse session verify` reads checks from `--checks` and the acceptance map from
 `--acceptance`. The acceptance file is a JSON array of
@@ -97,6 +97,13 @@ passes a typed input-file path as the final argument, validates typed JSON on
 stdout, ingests declared artifacts, and records the immutable checkpoint
 receipt automatically. The returned receipt ID must be referenced by the
 verification acceptance map; QA is never a mutable status field.
+
+`pulse session story-qualification <saga-id> --story-id <story-id> --actor ...
+--source-commit ... --executor <id>` uses a verifying assignment whose Ticket
+belongs to that behavioral owner, replays every required applicable case, and
+records a Story-subject receipt with `qa_scope: story_close`. The initiating
+Ticket remains in the payload for audit, while any covered child Ticket may use
+the receipt only when its verification and the receipt bind the same source.
 
 An executor may additionally declare fixed repository-relative `start`,
 `healthcheck`, `reset`, and `cleanup` commands. Every lifecycle command receives

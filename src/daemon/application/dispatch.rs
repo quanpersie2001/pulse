@@ -237,6 +237,20 @@ impl DaemonApplication {
             } => {
                 self.qa_checkpoint_run(saga_id, actor, source_commit, executor_id, idempotency_key)?
             }
+            DaemonRequest::QaStoryQualificationRun {
+                saga_id,
+                story_id,
+                actor,
+                source_commit,
+                executor_id,
+            } => self.qa_story_qualification_run(
+                saga_id,
+                story_id,
+                actor,
+                source_commit,
+                executor_id,
+                idempotency_key,
+            )?,
             DaemonRequest::VerificationComplete {
                 saga_id,
                 actor,
@@ -359,6 +373,9 @@ impl DaemonApplication {
                 self.authorize_verification(principal, saga_id, actor)
             }
             DaemonRequest::QaCheckpointRun { saga_id, actor, .. } => {
+                self.authorize_verification(principal, saga_id, actor)
+            }
+            DaemonRequest::QaStoryQualificationRun { saga_id, actor, .. } => {
                 self.authorize_verification(principal, saga_id, actor)
             }
             DaemonRequest::AssignmentClose { saga_id, actor, .. } => {
