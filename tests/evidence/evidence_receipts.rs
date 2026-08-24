@@ -3,6 +3,11 @@ use pulse::canonical_json::hash_bytes;
 use pulse::evidence::model::*;
 use pulse::graph::store::SupersessionTarget;
 use pulse::id::WorkKind;
+use pulse::qa::{
+    QaBrowserAssertion, QaBrowserEngine, QaBrowserReport, QaCaseObservation, QaCaseOutcome,
+    QaCheckpointPayload, QaEnvironmentIdentity, QaEnvironmentLifecycle, QaExecutionScope,
+    QaExecutor, QaRuntimeEnvironment,
+};
 use pulse::storage::transaction::{recover_prepared_transactions, TransactionFailpoint};
 use pulse::JsonGraphStore;
 use std::fs;
@@ -110,6 +115,7 @@ fn evidence_bootstrap_adds_qa_contract_without_changing_repository_identity() {
     assert!(migrated.receipt_kinds["qa_checkpoint"].contains_key("1"));
     assert!(migrated.receipt_kinds["qa_checkpoint"].contains_key("2"));
     assert!(migrated.receipt_kinds["qa_checkpoint"].contains_key("3"));
+    assert!(migrated.receipt_kinds["qa_checkpoint"].contains_key("4"));
 }
 
 #[test]
@@ -133,6 +139,7 @@ fn evidence_bootstrap_adds_lifecycle_schema_to_existing_qa_contract() {
     assert!(migrated.receipt_kinds["qa_checkpoint"].contains_key("1"));
     assert!(migrated.receipt_kinds["qa_checkpoint"].contains_key("2"));
     assert!(migrated.receipt_kinds["qa_checkpoint"].contains_key("3"));
+    assert!(migrated.receipt_kinds["qa_checkpoint"].contains_key("4"));
 }
 
 #[test]
@@ -156,6 +163,131 @@ fn evidence_bootstrap_adds_browser_schema_to_existing_qa_contract() {
     assert!(migrated.receipt_kinds["qa_checkpoint"].contains_key("1"));
     assert!(migrated.receipt_kinds["qa_checkpoint"].contains_key("2"));
     assert!(migrated.receipt_kinds["qa_checkpoint"].contains_key("3"));
+    assert!(migrated.receipt_kinds["qa_checkpoint"].contains_key("4"));
+}
+
+#[test]
+fn evidence_bootstrap_adds_deployment_browser_schema_to_existing_qa_contract() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path();
+    let initial = pulse::evidence::bootstrap(repo).unwrap().manifest;
+    let manifest_path = repo.join(".pulse/evidence/manifest.json");
+    let mut prior = initial.clone();
+    prior
+        .receipt_kinds
+        .get_mut("qa_checkpoint")
+        .unwrap()
+        .remove("4");
+    write_json(&manifest_path, &prior);
+    fs::remove_file(
+        repo.join(".pulse/evidence/schemas/qa-checkpoint-browser-deployment.schema.json"),
+    )
+    .unwrap();
+
+    let migrated = pulse::evidence::bootstrap(repo).unwrap().manifest;
+    assert_eq!(migrated.repository_id, initial.repository_id);
+    assert!(migrated.receipt_kinds["qa_checkpoint"].contains_key("1"));
+    assert!(migrated.receipt_kinds["qa_checkpoint"].contains_key("2"));
+    assert!(migrated.receipt_kinds["qa_checkpoint"].contains_key("3"));
+    assert!(migrated.receipt_kinds["qa_checkpoint"].contains_key("4"));
+}
+
+#[test]
+fn historical_browser_payload_version_three_remains_integrity_valid() {
+    let baseline_hash = format!("sha256:{}", "a".repeat(64));
+    let receipt = ReceiptEnvelope {
+        schema_version: 1,
+        receipt_version: 2,
+        id: "rcpt_01J00000000000000000000031".to_string(),
+        kind: ReceiptKind::QaCheckpoint,
+        result: ReceiptResult::Passed,
+        actor: ActorRef {
+            kind: ActorKind::Human,
+            id: "qa-reviewer".to_string(),
+        },
+        recorded_at: Utc::now(),
+        subject: SubjectRef {
+            kind: "work".to_string(),
+            id: "TK-01J00000000000000000000001".to_string(),
+        },
+        bindings: ReceiptBindings {
+            source: Some(SourceBinding {
+                kind: "git_commit".to_string(),
+                commit: "candidate-commit".to_string(),
+                repository_id: "repo_fixture".to_string(),
+            }),
+            content: vec![ContentBinding {
+                path: "works/ST-01J00000000000000000000001/qa.md".to_string(),
+                sha256: baseline_hash.clone(),
+            }],
+            artifacts: vec![ArtifactBinding {
+                sha256: format!("sha256:{}", "b".repeat(64)),
+                role: "trace".to_string(),
+            }],
+            ..ReceiptBindings::default()
+        },
+        payload: ReceiptPayload::QaCheckpoint(QaCheckpointPayload {
+            payload_version: 3,
+            qa_scope: QaExecutionScope::TicketCheckpoint,
+            story_id: "ST-01J00000000000000000000001".to_string(),
+            ticket_id: "TK-01J00000000000000000000001".to_string(),
+            baseline_revision: 1,
+            baseline_content_hash: baseline_hash,
+            cases: vec![QaCaseObservation {
+                case_id: "QA-001".to_string(),
+                case_revision: 1,
+                outcome: QaCaseOutcome::Passed,
+            }],
+            executor: QaExecutor {
+                name: "browser".to_string(),
+                version: "1.0.0".to_string(),
+                capabilities: vec![
+                    "browser".to_string(),
+                    "deterministic-assertion".to_string(),
+                    "playwright".to_string(),
+                ],
+            },
+            environment: QaRuntimeEnvironment {
+                profile: "local-web".to_string(),
+                platform: "linux".to_string(),
+                fixture_revision: "fixture-1".to_string(),
+                lifecycle: Some(QaEnvironmentLifecycle {
+                    identity: QaEnvironmentIdentity {
+                        environment_instance_id: "environment-1".to_string(),
+                        source_commit: "candidate-commit".to_string(),
+                        fixture_revision: "fixture-1".to_string(),
+                        deployment: None,
+                    },
+                    start_passed: true,
+                    healthcheck_passed: true,
+                    reset_passed: true,
+                    cleanup_passed: true,
+                }),
+            },
+            browser: Some(QaBrowserReport {
+                engine: QaBrowserEngine::Chromium,
+                base_url: "http://127.0.0.1:4173".to_string(),
+                trace_role: "trace".to_string(),
+                deployment: None,
+                assertions: vec![QaBrowserAssertion {
+                    case_id: "QA-001".to_string(),
+                    kind: "visible_state".to_string(),
+                    expected: "ready".to_string(),
+                    actual: "ready".to_string(),
+                    passed: true,
+                }],
+                console_errors: vec![],
+                network_errors: vec![],
+            }),
+            qualification: None,
+            observations: vec!["Historical browser contract passed.".to_string()],
+            cleanup_passed: true,
+        }),
+    };
+    let ReceiptPayload::QaCheckpoint(payload) = &receipt.payload else {
+        unreachable!();
+    };
+    pulse::qa::validate_checkpoint_receipt(&receipt, payload).unwrap();
 }
 
 fn make_shaping_receipt(

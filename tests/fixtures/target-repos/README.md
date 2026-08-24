@@ -20,3 +20,8 @@ let output = repo.pulse_ok(&["graph", "bootstrap", "--json"]);
 
 The fixture source must remain free of generated `.pulse/` state and nested
 `.git/` directories.
+
+`playwright-service/` is the explicit real-browser acceptance fixture. It owns
+its web app, pinned Playwright metadata/config and lifecycle/QA wrappers, but
+keeps dependencies and browser binaries untracked. The ignored acceptance test
+installs them only into the external temporary copy.

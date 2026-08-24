@@ -8,7 +8,7 @@ use std::collections::BTreeSet;
 
 use serde::{Deserialize, Serialize};
 
-use super::QaBrowserReport;
+use super::{load_executor_manifest, QaBrowserReport, QaExecutorKind};
 use crate::evidence::model::{ReceiptEnvelope, ReceiptResult};
 use crate::{PulseError, Result};
 
@@ -104,6 +104,16 @@ pub struct QaEnvironmentIdentity {
     pub environment_instance_id: String,
     pub source_commit: String,
     pub fixture_revision: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deployment: Option<QaDeploymentIdentity>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct QaDeploymentIdentity {
+    pub build_id: String,
+    pub deployment_id: String,
+    pub base_url: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -128,7 +138,7 @@ pub fn validate_checkpoint_receipt(
     payload: &QaCheckpointPayload,
 ) -> Result<()> {
     if receipt.receipt_version != 2
-        || !matches!(payload.payload_version, 1..=3)
+        || !matches!(payload.payload_version, 1..=4)
         || payload.story_id.trim().is_empty()
         || payload.ticket_id.trim().is_empty()
         || payload.baseline_revision == 0
@@ -149,12 +159,35 @@ pub fn validate_checkpoint_receipt(
             "QA checkpoint receipt is incomplete or uses an unsupported contract",
         ));
     }
+    let lifecycle_deployment = payload
+        .environment
+        .lifecycle
+        .as_ref()
+        .and_then(|lifecycle| lifecycle.identity.deployment.as_ref());
+    let browser_deployment = payload
+        .browser
+        .as_ref()
+        .and_then(|browser| browser.deployment.as_ref());
     if (payload.payload_version == 1
-        && (payload.environment.lifecycle.is_some() || payload.browser.is_some()))
+        && (payload.environment.lifecycle.is_some()
+            || payload.browser.is_some()
+            || lifecycle_deployment.is_some()
+            || browser_deployment.is_some()))
         || (payload.payload_version == 2
-            && (payload.environment.lifecycle.is_none() || payload.browser.is_some()))
+            && (payload.environment.lifecycle.is_none()
+                || payload.browser.is_some()
+                || lifecycle_deployment.is_some()
+                || browser_deployment.is_some()))
         || (payload.payload_version == 3
-            && (payload.environment.lifecycle.is_none() || payload.browser.is_none()))
+            && (payload.environment.lifecycle.is_none()
+                || payload.browser.is_none()
+                || lifecycle_deployment.is_some()
+                || browser_deployment.is_some()))
+        || (payload.payload_version == 4
+            && (payload.environment.lifecycle.is_none()
+                || lifecycle_deployment.is_none()
+                || (payload.browser.is_some() && browser_deployment.is_none())
+                || (receipt.result == ReceiptResult::Passed && payload.browser.is_none())))
     {
         return Err(PulseError::validation(
             "qa_receipt_environment_invalid",
@@ -310,6 +343,47 @@ fn validate_browser_receipt(
             "browser QA receipt requires execution identity, deterministic assertions, and its bound trace artifact",
         ));
     }
+    if payload.payload_version == 4 {
+        let lifecycle = payload.environment.lifecycle.as_ref().ok_or_else(|| {
+            PulseError::validation(
+                "qa_receipt_deployment_invalid",
+                "deployment-bound browser QA requires an environment lifecycle",
+            )
+        })?;
+        let environment_deployment = lifecycle.identity.deployment.as_ref().ok_or_else(|| {
+            PulseError::validation(
+                "qa_receipt_deployment_invalid",
+                "deployment-bound browser QA requires a lifecycle deployment identity",
+            )
+        })?;
+        let browser_deployment = browser.deployment.as_ref().ok_or_else(|| {
+            PulseError::validation(
+                "qa_receipt_deployment_invalid",
+                "deployment-bound browser QA requires a browser deployment identity",
+            )
+        })?;
+        if !environment_deployment.is_valid()
+            || environment_deployment != browser_deployment
+            || browser.base_url != environment_deployment.base_url
+        {
+            return Err(PulseError::validation(
+                "qa_receipt_deployment_invalid",
+                "browser execution does not bind the lifecycle build, deployment, and base URL",
+            ));
+        }
+        let manifest_path = format!(".pulse/qa/executors/{}.json", payload.executor.name);
+        if !receipt
+            .bindings
+            .content
+            .iter()
+            .any(|binding| binding.path == manifest_path)
+        {
+            return Err(PulseError::validation(
+                "qa_receipt_deployment_invalid",
+                "deployment-bound browser QA must content-bind its executor manifest",
+            ));
+        }
+    }
     let outcomes = payload
         .cases
         .iter()
@@ -341,6 +415,93 @@ fn validate_browser_receipt(
         return Err(PulseError::validation(
             "qa_receipt_browser_invalid",
             "browser assertions must cover every receipt case",
+        ));
+    }
+    Ok(())
+}
+
+impl QaDeploymentIdentity {
+    pub(crate) fn is_valid(&self) -> bool {
+        !self.build_id.trim().is_empty()
+            && self.build_id.len() <= 256
+            && !self.deployment_id.trim().is_empty()
+            && self.deployment_id.len() <= 256
+            && self.base_url.len() <= 2_048
+            && (self.base_url.starts_with("http://") || self.base_url.starts_with("https://"))
+            && !self.base_url.chars().any(char::is_whitespace)
+    }
+}
+
+/// Revalidate a browser receipt against the executor/deployment contract that
+/// is currently required by the repository.
+///
+/// Historical receipt integrity remains independent of this check. Core gates
+/// call it when deciding whether immutable browser evidence is still eligible.
+///
+/// # Errors
+///
+/// Returns a typed validation error when a browser receipt predates deployment
+/// binding or no longer matches the current manifest and deployment identity.
+pub fn validate_current_deployment_binding(
+    repo_root: &std::path::Path,
+    receipt: &ReceiptEnvelope,
+    payload: &QaCheckpointPayload,
+) -> Result<()> {
+    let Some(browser) = payload.browser.as_ref() else {
+        return Ok(());
+    };
+    if payload.payload_version != 4 {
+        return Err(PulseError::validation(
+            "qa_deployment_binding_missing",
+            "browser QA evidence is not bound to a source-built deployment",
+        ));
+    }
+    let lifecycle = payload.environment.lifecycle.as_ref().ok_or_else(|| {
+        PulseError::validation(
+            "qa_deployment_binding_missing",
+            "browser QA evidence has no environment lifecycle",
+        )
+    })?;
+    let deployment = lifecycle.identity.deployment.as_ref().ok_or_else(|| {
+        PulseError::validation(
+            "qa_deployment_binding_missing",
+            "browser QA evidence has no build/deployment identity",
+        )
+    })?;
+    let (manifest, _, manifest_hash) = load_executor_manifest(repo_root, &payload.executor.name)?;
+    let contract = manifest.browser.as_ref().ok_or_else(|| {
+        PulseError::validation(
+            "qa_deployment_binding_stale",
+            "the current executor is not a Playwright deployment contract",
+        )
+    })?;
+    let manifest_path = format!(".pulse/qa/executors/{}.json", payload.executor.name);
+    let manifest_is_bound = receipt
+        .bindings
+        .content
+        .iter()
+        .any(|binding| binding.path == manifest_path && binding.sha256 == manifest_hash);
+    if manifest.kind != QaExecutorKind::Playwright
+        || !manifest_is_bound
+        || manifest.version != payload.executor.version
+        || manifest.capabilities != payload.executor.capabilities
+        || manifest.environment_profile != payload.environment.profile
+        || manifest.fixture_revision != payload.environment.fixture_revision
+        || contract.engine != browser.engine
+        || contract.trace_role != browser.trace_role
+        || contract.base_url != browser.base_url
+        || contract.base_url != deployment.base_url
+        || browser.deployment.as_ref() != Some(deployment)
+        || lifecycle.identity.source_commit
+            != receipt
+                .bindings
+                .source
+                .as_ref()
+                .map_or("", |source| source.commit.as_str())
+    {
+        return Err(PulseError::validation(
+            "qa_deployment_binding_stale",
+            "browser QA evidence no longer matches the current source/build/deployment contract",
         ));
     }
     Ok(())

@@ -2,6 +2,8 @@ node_modules/
 coverage/
 .DS_Store
 package*
+!tests/fixtures/target-repos/playwright-service/package.json
+!tests/fixtures/target-repos/playwright-service/package-lock.json
 vitest.config.ts
 
 # bv (beads viewer) local config and caches

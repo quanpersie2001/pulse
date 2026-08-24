@@ -129,10 +129,26 @@ A Playwright executor declares `kind: "playwright"`, a browser engine/base URL,
 and the artifact role containing its trace. Pulse requires the lifecycle plus
 `browser`, `playwright`, and `deterministic-assertion` capabilities. Runner
 stdout must map at least one typed assertion to every selected web case and
-include the declared trace artifact. A claimed passed case with a failed
-assertion is rejected and recorded as inconclusive instead of becoming false
-proof. Successful browser checkpoints use payload version 3 while older
-structured and lifecycle receipts remain readable.
+include the declared trace artifact. Every lifecycle step must preserve the same
+candidate-bound `build_id`, `deployment_id`, and deployment `base_url`; the
+browser report must echo that exact identity, and the trace must be a ZIP before
+artifact ingestion. A claimed passed case with a failed assertion or mismatched
+deployment is rejected and recorded as inconclusive instead of becoming false
+proof. New browser checkpoints use payload version 4; payload versions 1–3
+remain readable, while Core close gates require the current deployment-bound
+contract for browser evidence.
+
+The repository-owned real-browser acceptance fixture is exercised explicitly:
+
+```bash
+cargo test --test daemon -- \
+  application_contract::real_browser_acceptance::real_browser_story_qualification_binds_deployment_trace_and_close_replay \
+  --exact --ignored --nocapture
+```
+
+This command installs the pinned Playwright dependency and Chromium only in the
+external target-repository copy/cache. The normal `cargo test --all-targets`
+suite compiles but does not download or launch a browser.
 
 ### The 4 Human Gates
 

@@ -21,6 +21,8 @@ pub const QA_CHECKPOINT_LIFECYCLE_SCHEMA: &str =
     include_str!("../schema/evidence/qa-checkpoint-lifecycle.schema.json");
 pub const QA_CHECKPOINT_BROWSER_SCHEMA: &str =
     include_str!("../schema/evidence/qa-checkpoint-browser.schema.json");
+pub const QA_CHECKPOINT_BROWSER_DEPLOYMENT_SCHEMA: &str =
+    include_str!("../schema/evidence/qa-checkpoint-browser-deployment.schema.json");
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
@@ -117,6 +119,12 @@ pub fn bootstrap(repo_root: &Path) -> Result<EvidenceBootstrapOutcome> {
     write_schema_if_absent(
         &schemas.join("qa-checkpoint-browser.schema.json"),
         QA_CHECKPOINT_BROWSER_SCHEMA,
+        &mut created,
+        &mut preserved,
+    )?;
+    write_schema_if_absent(
+        &schemas.join("qa-checkpoint-browser-deployment.schema.json"),
+        QA_CHECKPOINT_BROWSER_DEPLOYMENT_SCHEMA,
         &mut created,
         &mut preserved,
     )?;
@@ -235,6 +243,12 @@ fn default_manifest(repo_root: &Path) -> Result<EvidenceManifest> {
             "schemas/qa-checkpoint-browser.schema.json",
             QA_CHECKPOINT_BROWSER_SCHEMA,
         ),
+        (
+            "qa_checkpoint",
+            "4",
+            "schemas/qa-checkpoint-browser-deployment.schema.json",
+            QA_CHECKPOINT_BROWSER_DEPLOYMENT_SCHEMA,
+        ),
     ] {
         receipt_kinds
             .entry(kind.to_string())
@@ -301,6 +315,16 @@ fn install_qa_contract(manifest: &mut EvidenceManifest) -> Result<bool> {
             SchemaRef {
                 schema: "schemas/qa-checkpoint-browser.schema.json".to_string(),
                 schema_hash: schema_hash(QA_CHECKPOINT_BROWSER_SCHEMA)?,
+            },
+        );
+        changed = true;
+    }
+    if !qa.contains_key("4") {
+        qa.insert(
+            "4".to_string(),
+            SchemaRef {
+                schema: "schemas/qa-checkpoint-browser-deployment.schema.json".to_string(),
+                schema_hash: schema_hash(QA_CHECKPOINT_BROWSER_DEPLOYMENT_SCHEMA)?,
             },
         );
         changed = true;

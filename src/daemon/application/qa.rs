@@ -6,6 +6,7 @@
 //! receipt. Unknown external outcomes fail closed and are never blindly rerun.
 
 use std::fs;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -26,8 +27,8 @@ use crate::evidence::model::{
 use crate::qa::{
     QaBaselineResolution, QaCaseObservation, QaCaseOutcome, QaCheckpointPayload,
     QaEnvironmentCommand, QaEnvironmentIdentity, QaEnvironmentLifecycle, QaEnvironmentManifest,
-    QaEnvironmentStepOutput, QaExecutionScope, QaExecutor, QaExecutorManifest, QaFlakyWaiver,
-    QaQualificationContext, QaRunnerInput, QaRunnerOutput, QaRunnerQualification,
+    QaEnvironmentStepOutput, QaExecutionScope, QaExecutor, QaExecutorKind, QaExecutorManifest,
+    QaFlakyWaiver, QaQualificationContext, QaRunnerInput, QaRunnerOutput, QaRunnerQualification,
     QaRuntimeEnvironment,
 };
 use crate::{PulseError, Result};
@@ -313,10 +314,14 @@ impl DaemonApplication {
         } else {
             None
         };
-        let (mut output, artifact_bindings) = if environment
-            .as_ref()
-            .map_or(true, EnvironmentProgress::ready)
-        {
+        let execution_blocker = environment.as_ref().and_then(|progress| {
+            if !progress.ready() {
+                Some("QA executor was skipped because environment preparation failed".to_string())
+            } else {
+                deployment_execution_blocker(&plan.executor_manifest, &progress.identity)
+            }
+        });
+        let (mut output, artifact_bindings) = if execution_blocker.is_none() {
             let mut runner_input = plan.input.clone();
             runner_input.environment = environment
                 .as_ref()
@@ -338,6 +343,7 @@ impl DaemonApplication {
                 &workspace_root,
                 &plan.executor_manifest,
                 &baseline,
+                runner_input.environment.as_ref(),
                 &completed,
             ) {
                 Ok(interpreted) => interpreted,
@@ -351,10 +357,7 @@ impl DaemonApplication {
             }
         } else {
             (
-                infrastructure_output(
-                    &baseline,
-                    "QA executor was skipped because environment preparation failed",
-                ),
+                infrastructure_output(&baseline, execution_blocker.as_deref().unwrap()),
                 Vec::new(),
             )
         };
@@ -376,13 +379,20 @@ impl DaemonApplication {
         }
         let result = qa_result(&output);
         let browser = output.browser.clone();
-        let payload_version = if browser.is_some() {
-            3
-        } else if environment.is_some() {
-            2
-        } else {
-            1
-        };
+        let deployment_bound = environment
+            .as_ref()
+            .and_then(|progress| progress.identity.deployment.as_ref())
+            .is_some();
+        let payload_version =
+            if plan.executor_manifest.kind == QaExecutorKind::Playwright && deployment_bound {
+                4
+            } else if browser.is_some() {
+                3
+            } else if environment.is_some() {
+                2
+            } else {
+                1
+            };
         let evidence = crate::evidence::bootstrap(repo_root)?.manifest;
         let receipt = ReceiptEnvelope {
             schema_version: 1,
@@ -518,6 +528,7 @@ impl DaemonApplication {
                 environment_instance_id: format!("unresolved:{effect_id}"),
                 source_commit: source_commit.to_string(),
                 fixture_revision: fixture_revision.to_string(),
+                deployment: None,
             },
             start_passed: false,
             healthcheck_passed: false,
@@ -655,19 +666,20 @@ impl DaemonApplication {
             Ok(output) => output,
             Err(error) => return Ok(Err(format!("invalid structured output: {error}"))),
         };
+        let output_identity = environment_identity(&output);
         if output.schema_version != 1
             || output.environment_instance_id.trim().is_empty()
             || output.source_commit != source_commit
             || output.fixture_revision != fixture_revision
             || output
+                .deployment
+                .as_ref()
+                .is_some_and(|deployment| !deployment.is_valid())
+            || output
                 .observations
                 .iter()
                 .all(|observation| observation.trim().is_empty())
-            || expected_identity.is_some_and(|identity| {
-                identity.environment_instance_id != output.environment_instance_id
-                    || identity.source_commit != output.source_commit
-                    || identity.fixture_revision != output.fixture_revision
-            })
+            || expected_identity.is_some_and(|identity| identity != &output_identity)
         {
             return Ok(Err(
                 "environment identity, fixture, source, or observations do not match".to_string(),
@@ -963,6 +975,7 @@ fn interpret_output(
     workspace_root: &Path,
     manifest: &QaExecutorManifest,
     baseline: &QaBaselineResolution,
+    environment: Option<&QaEnvironmentIdentity>,
     completed: &crate::daemon::process::CompletedProcess,
 ) -> Result<(QaRunnerOutput, Vec<ArtifactBinding>)> {
     if completed.timed_out || completed.output_truncated || completed.exit_code != Some(0) {
@@ -978,7 +991,8 @@ fn interpret_output(
             return Ok((fallback, Vec::new()));
         }
     };
-    if let Err(error) = crate::qa::validate_runner_output(manifest, baseline, &output) {
+    if let Err(error) = crate::qa::validate_runner_output(manifest, baseline, environment, &output)
+    {
         let mut fallback = fallback_output(baseline, completed);
         fallback
             .observations
@@ -1009,6 +1023,14 @@ fn interpret_output(
                 "qa_artifact_path_unsafe",
                 "QA artifact resolves outside the assignment workspace",
             ));
+        }
+        if manifest.kind == QaExecutorKind::Playwright
+            && manifest
+                .browser
+                .as_ref()
+                .is_some_and(|browser| artifact.role == browser.trace_role)
+        {
+            validate_trace_archive(&canonical_source)?;
         }
         let outcome = crate::evidence::put_artifact(
             repo_root,
@@ -1100,7 +1122,44 @@ fn environment_identity(output: &QaEnvironmentStepOutput) -> QaEnvironmentIdenti
         environment_instance_id: output.environment_instance_id.clone(),
         source_commit: output.source_commit.clone(),
         fixture_revision: output.fixture_revision.clone(),
+        deployment: output.deployment.clone(),
     }
+}
+
+fn deployment_execution_blocker(
+    manifest: &QaExecutorManifest,
+    identity: &QaEnvironmentIdentity,
+) -> Option<String> {
+    if manifest.kind != QaExecutorKind::Playwright {
+        return None;
+    }
+    let browser = manifest.browser.as_ref()?;
+    match identity.deployment.as_ref() {
+        Some(deployment) if deployment.is_valid() && deployment.base_url == browser.base_url => {
+            None
+        }
+        _ => Some(
+            "QA Playwright deployment identity is missing or does not own the configured base URL"
+                .to_string(),
+        ),
+    }
+}
+
+fn validate_trace_archive(path: &Path) -> Result<()> {
+    let mut file = fs::File::open(path).map_err(|error| PulseError::io(path, error))?;
+    let mut signature = [0_u8; 4];
+    file.read_exact(&mut signature)
+        .map_err(|error| PulseError::io(path, error))?;
+    if !matches!(
+        signature,
+        [b'P', b'K', 3, 4] | [b'P', b'K', 5, 6] | [b'P', b'K', 7, 8]
+    ) {
+        return Err(PulseError::validation(
+            "qa_playwright_trace_invalid",
+            "Playwright trace artifact is not a ZIP archive",
+        ));
+    }
+    Ok(())
 }
 
 fn append_step_observations(

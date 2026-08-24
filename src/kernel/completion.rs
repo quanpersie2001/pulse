@@ -760,6 +760,7 @@ fn validate_qa_close(
                 "QA checkpoint does not bind the current Ticket, source, or Story baseline",
             ));
         }
+        crate::qa::validate_current_deployment_binding(repo_root, &receipt, payload)?;
         let matrix_entry_id = if expected_scope == crate::qa::QaExecutionScope::StoryClose {
             let entry_id = payload
                 .qualification

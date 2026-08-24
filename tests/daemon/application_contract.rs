@@ -143,6 +143,9 @@ mod assignment_contract;
 mod dispatch_contract;
 #[path = "application_contract/project_workspace_contract.rs"]
 mod project_workspace_contract;
+#[cfg(unix)]
+#[path = "application_contract/real_browser_acceptance.rs"]
+mod real_browser_acceptance;
 #[path = "application_contract/recovery_contract.rs"]
 mod recovery_contract;
 #[path = "application_contract/session_lifecycle_contract.rs"]

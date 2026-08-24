@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use super::{QaBaselineResolution, QaCaseObservation, QaEnvironmentIdentity};
+use super::{QaBaselineResolution, QaCaseObservation, QaDeploymentIdentity, QaEnvironmentIdentity};
 use crate::canonical_json::hash_bytes;
 use crate::{PulseError, Result};
 
@@ -86,6 +86,8 @@ pub struct QaEnvironmentStepOutput {
     pub environment_instance_id: String,
     pub source_commit: String,
     pub fixture_revision: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deployment: Option<QaDeploymentIdentity>,
     pub observations: Vec<String>,
 }
 
@@ -133,6 +135,8 @@ pub struct QaBrowserReport {
     pub engine: QaBrowserEngine,
     pub base_url: String,
     pub trace_role: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deployment: Option<QaDeploymentIdentity>,
     pub assertions: Vec<QaBrowserAssertion>,
     #[serde(default)]
     pub console_errors: Vec<String>,
@@ -296,6 +300,7 @@ fn validate_environment_command(command: &QaEnvironmentCommand) -> Result<()> {
 pub fn validate_runner_output(
     manifest: &QaExecutorManifest,
     baseline: &QaBaselineResolution,
+    environment: Option<&QaEnvironmentIdentity>,
     output: &QaRunnerOutput,
 ) -> Result<()> {
     if output.schema_version != 1
@@ -341,7 +346,7 @@ pub fn validate_runner_output(
             "QA runner output must cover exactly the selected cases",
         ));
     }
-    validate_browser_output(manifest, baseline, output)?;
+    validate_browser_output(manifest, baseline, environment, output)?;
     let capabilities = manifest
         .capabilities
         .iter()
@@ -383,6 +388,7 @@ pub fn validate_runner_output(
 fn validate_browser_output(
     manifest: &QaExecutorManifest,
     baseline: &QaBaselineResolution,
+    environment: Option<&QaEnvironmentIdentity>,
     output: &QaRunnerOutput,
 ) -> Result<()> {
     match (
@@ -392,9 +398,14 @@ fn validate_browser_output(
     ) {
         (QaExecutorKind::Structured, None, None) => Ok(()),
         (QaExecutorKind::Playwright, Some(contract), Some(report)) => {
+            let environment_deployment = environment.and_then(|value| value.deployment.as_ref());
             if report.engine != contract.engine
                 || report.base_url != contract.base_url
                 || report.trace_role != contract.trace_role
+                || report.deployment.as_ref() != environment_deployment
+                || environment_deployment.map_or(true, |deployment| {
+                    !deployment.is_valid() || deployment.base_url != contract.base_url
+                })
                 || report.assertions.is_empty()
                 || report.assertions.len() > 1_024
                 || report.console_errors.len() > 1_024

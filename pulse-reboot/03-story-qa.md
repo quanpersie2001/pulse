@@ -164,15 +164,22 @@ và ba capabilities `browser`, `playwright`, `deterministic-assertion`. Structur
 output phải map ít nhất một bounded deterministic assertion tới từng selected
 web case, giữ console/network errors có cấu trúc và ingest trace qua evidence
 artifact store. Case claim `passed` nhưng assertion fail bị contract reject và
-receipt hạ thành `inconclusive`; browser receipt hợp lệ dùng payload version 3,
-không rewrite payload version 1/2 cũ.
+receipt hạ thành `inconclusive`. Lifecycle Playwright còn phải giữ cùng
+`build_id`, `deployment_id` và deployment `base_url` xuyên suốt bốn bước; browser
+report phải bind lại đúng identity đó và trace artifact phải là ZIP trước khi
+ingest. Browser receipt mới dùng payload version 4; payload version 1/2/3 cũ vẫn
+đọc và validate integrity mà không bị rewrite.
 
 Pulse không bundle Node/Playwright hay hard-code selector/test suite. Target
 repository sở hữu tracked wrapper và Playwright dependency/config; Pulse sở hữu
 allowlist, bounded process/lifecycle, typed input/output, evidence ingestion và
-receipt validity. Real-browser acceptance fixture trên supported browser binary
-vẫn cần chạy để đóng đầy đủ browser DoD, cùng source-to-deployment binding và
-Story-close replay.
+receipt validity. Dedicated target fixture `playwright-service` đã chạy Chromium
+thật qua repository-owned wrapper: build page từ candidate Git commit, start /
+healthcheck / reset / cleanup cùng deployment identity, deterministic DOM/source/
+build/deployment assertions, Playwright trace ZIP, immutable Story qualification
+receipt và Story-close replay. Acceptance này là explicit ignored test vì nó cài
+pinned dependency/browser binary; default all-target suite không silently skip rồi
+claim proof.
 
 ### Story qualification/close QA
 
@@ -671,6 +678,13 @@ select source snapshot
 ```
 
 Story close nên dùng frozen source snapshot hoặc immutable deployed artifact. Nếu environment chạy artifact khác source được claim, receipt invalid.
+
+Current implementation materialize chuỗi identity tối thiểu
+`source_commit -> build_id -> deployment_id/base_url`. Daemon đối chiếu identity
+giữa lifecycle và browser output trước khi cho receipt `passed`; Core close gate
+load lại executor manifest hiện tại và reject browser receipt nếu environment,
+fixture, engine, trace role hoặc deployment binding không còn đúng. Việc current
+eligibility đổi không làm immutable historical envelope trở thành corrupt.
 
 ## Typed QA receipt
 

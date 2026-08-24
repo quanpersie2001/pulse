@@ -350,6 +350,7 @@ fn validate_story_qualification(
             "Story qualification does not bind the current source and baseline",
         ));
     }
+    crate::qa::validate_current_deployment_binding(repo_root, &receipt, payload)?;
     let initiating_ticket = projection
         .nodes
         .iter()

@@ -24,7 +24,8 @@ pub use executor::{
     QaRunnerOutput, QaRunnerQualification,
 };
 pub use receipt::{
-    validate_checkpoint_receipt, QaCaseObservation, QaCaseOutcome, QaCheckpointPayload,
-    QaEnvironmentIdentity, QaEnvironmentLifecycle, QaExecutionScope, QaExecutor, QaFlakyWaiver,
-    QaQualificationContext, QaRuntimeEnvironment,
+    validate_checkpoint_receipt, validate_current_deployment_binding, QaCaseObservation,
+    QaCaseOutcome, QaCheckpointPayload, QaDeploymentIdentity, QaEnvironmentIdentity,
+    QaEnvironmentLifecycle, QaExecutionScope, QaExecutor, QaFlakyWaiver, QaQualificationContext,
+    QaRuntimeEnvironment,
 };

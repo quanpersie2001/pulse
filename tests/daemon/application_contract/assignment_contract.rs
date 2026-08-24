@@ -420,7 +420,7 @@ fn story_qualification_retry_preserves_lineage_and_authorized_flaky_waiver() {
 
 #[cfg(unix)]
 #[test]
-fn playwright_executor_records_deterministic_browser_report_and_trace() {
+fn playwright_executor_contract_binds_deployment_and_rejects_invalid_trace() {
     use std::os::unix::fs::PermissionsExt;
 
     let repo = TestRepo::from_fixture("minimal-service");
@@ -486,15 +486,15 @@ fn playwright_executor_records_deterministic_browser_report_and_trace() {
             "#!/bin/sh\n",
             "set -eu\n",
             "mkdir -p .pulse/runtime\n",
-            "printf trace > .pulse/runtime/playwright-trace.zip\n",
-            "printf '%s' '{\"schema_version\":1,\"cases\":[{\"case_id\":\"QA-001\",\"case_revision\":1,\"outcome\":\"passed\"}],\"observations\":[\"deterministic browser assertion passed\"],\"artifacts\":[{\"path\":\".pulse/runtime/playwright-trace.zip\",\"role\":\"trace\",\"kind\":\"playwright_trace\",\"media_type\":\"application/zip\"}],\"browser\":{\"engine\":\"chromium\",\"base_url\":\"http://127.0.0.1:4173\",\"trace_role\":\"trace\",\"assertions\":[{\"case_id\":\"QA-001\",\"kind\":\"visible_state\",\"expected\":\"one stable reservation\",\"actual\":\"one stable reservation\",\"passed\":true}],\"console_errors\":[],\"network_errors\":[]},\"cleanup_passed\":true}'\n"
+            "printf 'PK\\003\\004contract' > .pulse/runtime/playwright-trace.zip\n",
+            "printf '%s' '{\"schema_version\":1,\"cases\":[{\"case_id\":\"QA-001\",\"case_revision\":1,\"outcome\":\"passed\"}],\"observations\":[\"deterministic browser assertion passed\"],\"artifacts\":[{\"path\":\".pulse/runtime/playwright-trace.zip\",\"role\":\"trace\",\"kind\":\"playwright_trace\",\"media_type\":\"application/zip\"}],\"browser\":{\"engine\":\"chromium\",\"base_url\":\"http://127.0.0.1:4173\",\"trace_role\":\"trace\",\"deployment\":{\"build_id\":\"build-fixture\",\"deployment_id\":\"deployment-fixture\",\"base_url\":\"http://127.0.0.1:4173\"},\"assertions\":[{\"case_id\":\"QA-001\",\"kind\":\"visible_state\",\"expected\":\"one stable reservation\",\"actual\":\"one stable reservation\",\"passed\":true}],\"console_errors\":[],\"network_errors\":[]},\"cleanup_passed\":true}'\n"
         ),
     )
     .unwrap();
     let mut permissions = std::fs::metadata(&runner).unwrap().permissions();
     permissions.set_mode(0o755);
     std::fs::set_permissions(&runner, permissions).unwrap();
-    write_lifecycle_script(repo.path());
+    write_playwright_lifecycle_script(repo.path());
     let source_commit = common_git::commit_all(repo.path());
 
     let home = tempfile::tempdir().unwrap();
@@ -533,11 +533,15 @@ fn playwright_executor_records_deterministic_browser_report_and_trace() {
     let pulse::evidence::model::ReceiptPayload::QaCheckpoint(payload) = &receipt.payload else {
         panic!("expected QA checkpoint payload");
     };
-    assert_eq!(payload.payload_version, 3);
+    assert_eq!(payload.payload_version, 4);
     let browser = payload.browser.as_ref().unwrap();
     assert_eq!(browser.engine, pulse::qa::QaBrowserEngine::Chromium);
     assert_eq!(browser.assertions.len(), 1);
     assert!(browser.assertions[0].passed);
+    assert_eq!(
+        browser.deployment.as_ref().unwrap().build_id,
+        "build-fixture"
+    );
     pulse::evidence::verify_receipt(repo.path(), &receipt.id, true, None).unwrap();
 
     std::fs::write(
@@ -546,8 +550,8 @@ fn playwright_executor_records_deterministic_browser_report_and_trace() {
             "#!/bin/sh\n",
             "set -eu\n",
             "mkdir -p .pulse/runtime\n",
-            "printf trace > .pulse/runtime/playwright-trace.zip\n",
-            "printf '%s' '{\"schema_version\":1,\"cases\":[{\"case_id\":\"QA-001\",\"case_revision\":1,\"outcome\":\"passed\"}],\"observations\":[\"browser assertion contradicted pass\"],\"artifacts\":[{\"path\":\".pulse/runtime/playwright-trace.zip\",\"role\":\"trace\"}],\"browser\":{\"engine\":\"chromium\",\"base_url\":\"http://127.0.0.1:4173\",\"trace_role\":\"trace\",\"assertions\":[{\"case_id\":\"QA-001\",\"kind\":\"visible_state\",\"expected\":\"one stable reservation\",\"actual\":\"duplicate reservation\",\"passed\":false}],\"console_errors\":[],\"network_errors\":[]},\"cleanup_passed\":true}'\n"
+            "printf 'PK\\003\\004contract' > .pulse/runtime/playwright-trace.zip\n",
+            "printf '%s' '{\"schema_version\":1,\"cases\":[{\"case_id\":\"QA-001\",\"case_revision\":1,\"outcome\":\"passed\"}],\"observations\":[\"browser assertion contradicted pass\"],\"artifacts\":[{\"path\":\".pulse/runtime/playwright-trace.zip\",\"role\":\"trace\"}],\"browser\":{\"engine\":\"chromium\",\"base_url\":\"http://127.0.0.1:4173\",\"trace_role\":\"trace\",\"deployment\":{\"build_id\":\"build-fixture\",\"deployment_id\":\"deployment-fixture\",\"base_url\":\"http://127.0.0.1:4173\"},\"assertions\":[{\"case_id\":\"QA-001\",\"kind\":\"visible_state\",\"expected\":\"one stable reservation\",\"actual\":\"duplicate reservation\",\"passed\":false}],\"console_errors\":[],\"network_errors\":[]},\"cleanup_passed\":true}'\n"
         ),
     )
     .unwrap();
@@ -577,6 +581,44 @@ fn playwright_executor_records_deterministic_browser_report_and_trace() {
         .observations
         .iter()
         .any(|value| value.contains("runner contract rejected")));
+
+    std::fs::write(
+        &runner,
+        concat!(
+            "#!/bin/sh\n",
+            "set -eu\n",
+            "mkdir -p .pulse/runtime\n",
+            "printf not-a-zip > .pulse/runtime/playwright-trace.zip\n",
+            "printf '%s' '{\"schema_version\":1,\"cases\":[{\"case_id\":\"QA-001\",\"case_revision\":1,\"outcome\":\"passed\"}],\"observations\":[\"invalid trace fixture\"],\"artifacts\":[{\"path\":\".pulse/runtime/playwright-trace.zip\",\"role\":\"trace\"}],\"browser\":{\"engine\":\"chromium\",\"base_url\":\"http://127.0.0.1:4173\",\"trace_role\":\"trace\",\"deployment\":{\"build_id\":\"build-fixture\",\"deployment_id\":\"deployment-fixture\",\"base_url\":\"http://127.0.0.1:4173\"},\"assertions\":[{\"case_id\":\"QA-001\",\"kind\":\"visible_state\",\"expected\":\"one stable reservation\",\"actual\":\"one stable reservation\",\"passed\":true}],\"console_errors\":[],\"network_errors\":[]},\"cleanup_passed\":true}'\n"
+        ),
+    )
+    .unwrap();
+    let invalid_trace_source = common_git::commit_all(repo.path());
+    let invalid_trace = match handle(
+        &app,
+        DaemonRequest::QaCheckpointRun {
+            saga_id: saga_id.to_string(),
+            actor: "human:qa-reviewer".to_string(),
+            source_commit: invalid_trace_source,
+            executor_id: "browser".to_string(),
+        },
+        "qa-browser-invalid-trace",
+    ) {
+        DaemonResponse::QaCheckpoint { receipt } => receipt,
+        other => panic!("unexpected response: {other:?}"),
+    };
+    assert_eq!(
+        invalid_trace.result,
+        pulse::evidence::model::ReceiptResult::Inconclusive
+    );
+    let pulse::evidence::model::ReceiptPayload::QaCheckpoint(payload) = &invalid_trace.payload
+    else {
+        panic!("expected QA checkpoint payload");
+    };
+    assert!(payload
+        .observations
+        .iter()
+        .any(|value| value.contains("not a ZIP archive")));
 }
 
 #[cfg(unix)]
@@ -594,6 +636,29 @@ fn write_lifecycle_script(repo: &std::path::Path) {
             "printf '%s\\n' \"$phase\" >> .pulse/runtime/qa-lifecycle.log\n",
             "commit=$(git rev-parse HEAD)\n",
             "printf '{\"schema_version\":1,\"environment_instance_id\":\"fixture-env\",\"source_commit\":\"%s\",\"fixture_revision\":\"minimal-service-1\",\"observations\":[\"%s complete\"]}' \"$commit\" \"$phase\"\n"
+        ),
+    )
+    .unwrap();
+    let mut permissions = std::fs::metadata(&lifecycle).unwrap().permissions();
+    permissions.set_mode(0o755);
+    std::fs::set_permissions(&lifecycle, permissions).unwrap();
+}
+
+#[cfg(unix)]
+fn write_playwright_lifecycle_script(repo: &std::path::Path) {
+    use std::os::unix::fs::PermissionsExt;
+
+    let lifecycle = repo.join("scripts/qa-environment.sh");
+    std::fs::write(
+        &lifecycle,
+        concat!(
+            "#!/bin/sh\n",
+            "set -eu\n",
+            "phase=$1\n",
+            "mkdir -p .pulse/runtime\n",
+            "printf '%s\\n' \"$phase\" >> .pulse/runtime/qa-lifecycle.log\n",
+            "commit=$(git rev-parse HEAD)\n",
+            "printf '{\"schema_version\":1,\"environment_instance_id\":\"fixture-env\",\"source_commit\":\"%s\",\"fixture_revision\":\"minimal-service-1\",\"deployment\":{\"build_id\":\"build-fixture\",\"deployment_id\":\"deployment-fixture\",\"base_url\":\"http://127.0.0.1:4173\"},\"observations\":[\"%s complete\"]}' \"$commit\" \"$phase\"\n"
         ),
     )
     .unwrap();
