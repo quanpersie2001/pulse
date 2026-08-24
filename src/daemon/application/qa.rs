@@ -26,8 +26,9 @@ use crate::evidence::model::{
 use crate::qa::{
     QaBaselineResolution, QaCaseObservation, QaCaseOutcome, QaCheckpointPayload,
     QaEnvironmentCommand, QaEnvironmentIdentity, QaEnvironmentLifecycle, QaEnvironmentManifest,
-    QaEnvironmentStepOutput, QaExecutionScope, QaExecutor, QaExecutorManifest, QaRunnerInput,
-    QaRunnerOutput, QaRuntimeEnvironment,
+    QaEnvironmentStepOutput, QaExecutionScope, QaExecutor, QaExecutorManifest, QaFlakyWaiver,
+    QaQualificationContext, QaRunnerInput, QaRunnerOutput, QaRunnerQualification,
+    QaRuntimeEnvironment,
 };
 use crate::{PulseError, Result};
 
@@ -43,6 +44,8 @@ struct QaRunPlan {
     executor_path: String,
     executor_manifest_hash: String,
     input: QaRunnerInput,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    qualification: Option<QaQualificationContext>,
 }
 
 struct EnvironmentProgress {
@@ -87,9 +90,13 @@ impl DaemonApplication {
             executor_id,
             idempotency_key,
             QaExecutionScope::TicketCheckpoint,
+            None,
+            None,
+            None,
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn qa_story_qualification_run(
         &self,
         saga_id: &str,
@@ -97,6 +104,9 @@ impl DaemonApplication {
         actor: &str,
         source_commit: &str,
         executor_id: &str,
+        matrix_entry_id: &str,
+        retry_of: Option<&str>,
+        waiver_reason: Option<&str>,
         idempotency_key: &str,
     ) -> Result<DaemonResponse> {
         self.qa_run(
@@ -107,6 +117,9 @@ impl DaemonApplication {
             executor_id,
             idempotency_key,
             QaExecutionScope::StoryClose,
+            Some(matrix_entry_id),
+            retry_of,
+            waiver_reason,
         )
     }
 
@@ -120,6 +133,9 @@ impl DaemonApplication {
         executor_id: &str,
         idempotency_key: &str,
         scope: QaExecutionScope,
+        matrix_entry_id: Option<&str>,
+        retry_of: Option<&str>,
+        waiver_reason: Option<&str>,
     ) -> Result<DaemonResponse> {
         let saga = self.assignment_saga(saga_id)?;
         if saga.state != AssignmentSagaState::Verifying || saga.handoff_id.is_none() {
@@ -184,9 +200,23 @@ impl DaemonApplication {
                         "Story qualification must use an assignment bound to that behavioral owner",
                     ));
                 }
-                crate::qa::resolve_story_cases(repo_root, story_id)?
+                crate::qa::resolve_story_matrix_entry(
+                    repo_root,
+                    story_id,
+                    matrix_entry_id.unwrap_or("default"),
+                )?
             }
         };
+        let qualification = build_qualification_context(
+            repo_root,
+            scope,
+            actor,
+            source_commit,
+            matrix_entry_id,
+            retry_of,
+            waiver_reason,
+            &baseline,
+        )?;
         let effect_id = deterministic_id("effect_qa", &format!("{saga_id}:{idempotency_key}"));
         let request_fingerprint = hash_serializable(&(
             saga_id,
@@ -195,6 +225,7 @@ impl DaemonApplication {
             source_commit,
             executor_id,
             &baseline.content_hash,
+            &qualification,
         ))?;
         let existing = self.store.with_state(false, |state| {
             Ok(state.external_effects.get(&effect_id).cloned())
@@ -217,6 +248,7 @@ impl DaemonApplication {
                 baseline.clone(),
                 &effect_id,
                 scope,
+                qualification.clone(),
             )?,
         };
         let plan_json = String::from_utf8(to_canonical_bytes(&plan)?).map_err(|_| {
@@ -406,6 +438,7 @@ impl DaemonApplication {
                     lifecycle: environment.map(EnvironmentProgress::receipt),
                 },
                 browser,
+                qualification: plan.qualification.clone(),
                 observations: output.observations,
                 cleanup_passed: output.cleanup_passed,
             }),
@@ -668,6 +701,7 @@ impl DaemonApplication {
             || payload.story_id != plan.input.story_id
             || payload.baseline_revision != plan.input.baseline_revision
             || payload.baseline_content_hash != plan.input.baseline_content_hash
+            || payload.qualification != plan.qualification
             || receipt
                 .bindings
                 .source
@@ -741,6 +775,7 @@ impl DaemonApplication {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn build_plan(
     executor_root: &Path,
     ticket_id: &str,
@@ -749,10 +784,27 @@ fn build_plan(
     baseline: QaBaselineResolution,
     effect_id: &str,
     scope: QaExecutionScope,
+    qualification: Option<QaQualificationContext>,
 ) -> Result<QaRunPlan> {
     let (manifest, executable, manifest_hash) =
         crate::qa::load_executor_manifest(executor_root, executor_id)?;
     let receipt_id = deterministic_receipt_id(effect_id);
+    if let (Some(context), Some(entry)) = (&qualification, baseline.matrix.first()) {
+        if context.matrix_entry_id != entry.id
+            || manifest.environment_profile != entry.environment_profile
+            || (entry.platform != "any" && entry.platform != std::env::consts::OS)
+        {
+            return Err(PulseError::validation(
+                "qa_qualification_matrix_mismatch",
+                "QA executor environment does not satisfy the selected matrix entry",
+            ));
+        }
+    }
+    let runner_qualification = qualification.as_ref().map(|context| QaRunnerQualification {
+        matrix_entry_id: context.matrix_entry_id.clone(),
+        attempt: context.attempt,
+        previous_attempt_receipt_id: context.previous_attempt_receipt_id.clone(),
+    });
     Ok(QaRunPlan {
         schema_version: 1,
         scope,
@@ -769,9 +821,117 @@ fn build_plan(
             baseline_revision: baseline.revision,
             baseline_content_hash: baseline.content_hash,
             cases: baseline.cases,
+            qualification: runner_qualification,
             environment: None,
         },
+        qualification,
     })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn build_qualification_context(
+    repo_root: &Path,
+    scope: QaExecutionScope,
+    actor: &str,
+    source_commit: &str,
+    matrix_entry_id: Option<&str>,
+    retry_of: Option<&str>,
+    waiver_reason: Option<&str>,
+    baseline: &QaBaselineResolution,
+) -> Result<Option<QaQualificationContext>> {
+    if scope != QaExecutionScope::StoryClose {
+        if retry_of.is_some() || waiver_reason.is_some() {
+            return Err(PulseError::validation(
+                "qa_retry_scope_invalid",
+                "retry lineage and flaky waivers are currently defined for Story qualification",
+            ));
+        }
+        return Ok(None);
+    }
+    let matrix_entry_id = matrix_entry_id.unwrap_or("default");
+    let (attempt, previous_attempt_receipt_id) = match retry_of {
+        Some(receipt_id) => {
+            crate::evidence::verify_receipt(repo_root, receipt_id, true, None)?;
+            let previous = crate::evidence::show_receipt(repo_root, receipt_id)?.receipt;
+            let ReceiptPayload::QaCheckpoint(payload) = &previous.payload else {
+                return Err(PulseError::validation(
+                    "qa_retry_receipt_invalid",
+                    "retry predecessor must be a Story qualification receipt",
+                ));
+            };
+            let context = payload.qualification.as_ref().ok_or_else(|| {
+                PulseError::validation(
+                    "qa_retry_receipt_invalid",
+                    "retry predecessor has no attempt lineage",
+                )
+            })?;
+            if previous.kind != ReceiptKind::QaCheckpoint
+                || previous.result == ReceiptResult::Passed
+                || payload.qa_scope != QaExecutionScope::StoryClose
+                || payload.story_id != baseline.owner_id
+                || payload.baseline_revision != baseline.revision
+                || payload.baseline_content_hash != baseline.content_hash
+                || context.matrix_entry_id != matrix_entry_id
+                || previous
+                    .bindings
+                    .source
+                    .as_ref()
+                    .map(|source| source.commit.as_str())
+                    != Some(source_commit)
+            {
+                return Err(PulseError::validation(
+                    "qa_retry_receipt_invalid",
+                    "retry predecessor does not match the current Story, source, baseline, and matrix entry",
+                ));
+            }
+            (context.attempt + 1, Some(receipt_id.to_string()))
+        }
+        None => {
+            if waiver_reason.is_some() {
+                return Err(PulseError::validation(
+                    "qa_flaky_waiver_invalid",
+                    "a flaky waiver can only approve an explicit retry lineage",
+                ));
+            }
+            (1, None)
+        }
+    };
+    let flaky_waiver = match waiver_reason {
+        Some(rationale) => {
+            if rationale.trim().is_empty() {
+                return Err(PulseError::validation(
+                    "qa_flaky_waiver_invalid",
+                    "a flaky waiver requires a non-empty rationale",
+                ));
+            }
+            let report = crate::policy::load_authority_policy(repo_root)?;
+            let approved_by = crate::policy::parse_actor(actor);
+            crate::policy::authorize(&report, &approved_by, &["qa.flaky.waive"])?;
+            Some(QaFlakyWaiver {
+                rationale: rationale.trim().to_string(),
+                approved_by,
+                policy_revision: report.policy_revision.ok_or_else(|| {
+                    PulseError::validation(
+                        "qa_flaky_waiver_invalid",
+                        "authority policy revision is unavailable",
+                    )
+                })?,
+                policy_fingerprint: report.fingerprint.ok_or_else(|| {
+                    PulseError::validation(
+                        "qa_flaky_waiver_invalid",
+                        "authority policy fingerprint is unavailable",
+                    )
+                })?,
+            })
+        }
+        None => None,
+    };
+    Ok(Some(QaQualificationContext {
+        matrix_entry_id: matrix_entry_id.to_string(),
+        attempt,
+        previous_attempt_receipt_id,
+        flaky_waiver,
+    }))
 }
 
 fn resolve_tracked_executable(workspace_root: &Path, relative: &str) -> Result<PathBuf> {

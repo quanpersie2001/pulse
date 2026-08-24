@@ -15,7 +15,7 @@ use crate::execution::{
     VerificationReceipt,
 };
 
-pub const PROTOCOL_VERSION: u32 = 5;
+pub const PROTOCOL_VERSION: u32 = 6;
 pub const DAEMON_CAPABILITIES: &[&str] = &[
     "project_registry",
     "workspace_manager",
@@ -32,6 +32,7 @@ pub const DAEMON_CAPABILITIES: &[&str] = &[
     "session_logs",
     "mcp_tool_adapter",
     "qa_checkpoint_executor",
+    "qa_matrix_qualification",
 ];
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -192,6 +193,9 @@ pub enum DaemonRequest {
         actor: String,
         source_commit: String,
         executor_id: String,
+        matrix_entry_id: String,
+        retry_of: Option<String>,
+        waiver_reason: Option<String>,
     },
     VerificationComplete {
         saga_id: String,

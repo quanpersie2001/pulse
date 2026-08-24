@@ -198,6 +198,12 @@ pub(crate) struct SessionStoryQualificationArgs {
     pub(crate) source_commit: String,
     #[arg(long)]
     pub(crate) executor: String,
+    #[arg(long, default_value = "default")]
+    pub(crate) matrix_entry: String,
+    #[arg(long)]
+    pub(crate) retry_of: Option<String>,
+    #[arg(long, requires = "retry_of")]
+    pub(crate) waiver_reason: Option<String>,
 }
 
 #[derive(Args)]
@@ -414,6 +420,9 @@ pub(crate) fn handle_session(command: SessionCommand, explicit_key: Option<&str>
             actor: args.actor,
             source_commit: args.source_commit,
             executor_id: args.executor,
+            matrix_entry_id: args.matrix_entry,
+            retry_of: args.retry_of,
+            waiver_reason: args.waiver_reason,
         },
         SessionCommand::Verify(args) => {
             let bytes =
@@ -697,6 +706,12 @@ mod tests {
             "0123456789012345678901234567890123456789",
             "--executor",
             "api",
+            "--matrix-entry",
+            "linux-api",
+            "--retry-of",
+            "rcpt_01J00000000000000000000000",
+            "--waiver-reason",
+            "Known harness instability accepted by policy.",
         ])
         .expect("Story qualification CLI should parse");
         assert!(matches!(
@@ -706,11 +721,17 @@ mod tests {
                     saga_id,
                     story_id,
                     executor,
+                    matrix_entry,
+                    retry_of,
+                    waiver_reason,
                     ..
                 })
             } if saga_id == "saga_test"
                 && story_id == "ST-01J00000000000000000000000"
                 && executor == "api"
+                && matrix_entry == "linux-api"
+                && retry_of.as_deref() == Some("rcpt_01J00000000000000000000000")
+                && waiver_reason.as_deref() == Some("Known harness instability accepted by policy.")
         ));
     }
 

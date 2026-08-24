@@ -253,14 +253,19 @@ proof cũ stale. Contract hiện tại dùng các field:
 
 - `schema_version`, `story_id`, `revision`, `scope`;
 - `requirements`, `protected_risks` và `exit_criteria`;
+- `matrix`, mỗi entry có stable ID, environment profile, platform và exact
+  required case IDs cần chạy trên cell đó;
 - `cases`, mỗi case có stable `id`, positive `revision`, intent/type/priority,
   requirement/risk refs, actions, expected observations, surface, required
   capabilities/evidence và applicability.
 
-Mọi requirement/risk khai báo phải được ít nhất một case reference. ID trùng,
-reference không tồn tại, case incomplete hoặc `not_applicable` thiếu rationale
-đều invalid. Ticket `qa.required` chỉ ready khi behavioral owner Story tồn tại
-và mọi `affected_case_ids` resolve tới case `required` hiện tại.
+Mọi requirement/risk khai báo phải được ít nhất một case reference và matrix
+phải cover toàn bộ case `required`. ID trùng, reference không tồn tại, matrix
+entry rỗng hoặc case incomplete đều invalid. Case `not_applicable` phải có cùng
+rationale trong `non_applicable_reason` và `non_applicable_approval`; approval
+bind actor có grant `qa.non_applicable.approve` cùng revision/fingerprint của
+authority policy hiện tại. Ticket `qa.required` chỉ ready khi behavioral owner
+Story tồn tại và mọi `affected_case_ids` resolve tới case `required` hiện tại.
 
 Ví dụ machine block tối thiểu:
 
@@ -272,6 +277,12 @@ Ví dụ machine block tối thiểu:
   "scope": "Authentication recovery preserves checkout state.",
   "requirements": ["AC-01"],
   "protected_risks": ["RISK-REFRESH-LOOP"],
+  "matrix": [{
+    "id": "linux-chromium",
+    "environment_profile": "local-web",
+    "platform": "linux",
+    "case_ids": ["QA-001"]
+  }],
   "cases": [{
     "id": "QA-001",
     "revision": 3,
@@ -721,7 +732,10 @@ Ví dụ JSON minh họa:
 }
 ```
 
-Receipt là immutable. Nếu cần rerun hoặc sửa kết quả, tạo receipt mới và liên kết attempt/supersession; không mutate receipt cũ.
+Receipt là immutable. Mỗi Story qualification receipt chứng minh đúng một matrix
+entry và có `qualification.matrix_entry_id`, positive `attempt` cùng
+`previous_attempt_receipt_id` khi retry. Nếu cần rerun, tạo receipt mới và nối
+đúng predecessor; không mutate receipt cũ và không được bỏ một attempt khỏi chain.
 
 Current Core Ticket checkpoint dùng evidence receipt kind `qa_checkpoint`
 trong receipt envelope version `2`. Verification phải reference receipt ID qua
@@ -787,7 +801,10 @@ attempt 2 pass
 => result không tự động là passed; classify flaky cho tới khi policy/root cause xử lý
 ```
 
-Mọi attempt giữ receipt riêng. Required critical case ở trạng thái `flaky`, `inconclusive` hoặc unapproved `waived` chặn Story close theo mặc định.
+Mọi attempt giữ receipt riêng. Retry pass sau một failed/inconclusive attempt vẫn
+chặn Story close như flaky. Chỉ head receipt có `flaky_waiver` với rationale,
+approving actor sở hữu grant `qa.flaky.waive`, current policy revision và
+fingerprint mới disposition được chain; policy đổi làm waiver stale.
 
 Chỉ `product_failure` tự động requeue product implementation. Các loại khác tạo test/harness/environment work tương ứng, nhưng vẫn có thể block close vì chưa có proof đáng tin.
 

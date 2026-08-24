@@ -10,18 +10,21 @@ mod baseline;
 mod executor;
 mod receipt;
 
+pub(crate) use baseline::validate_approval;
+
 pub use baseline::{
-    load_story_baseline, resolve_story_cases, resolve_ticket_cases, QaBaseline,
-    QaBaselineResolution, QaCase, QaCaseApplicability, QaCasePriority,
+    load_story_baseline, resolve_story_cases, resolve_story_matrix_entry, resolve_ticket_cases,
+    QaAuthorityApproval, QaBaseline, QaBaselineResolution, QaCase, QaCaseApplicability,
+    QaCasePriority, QaMatrixEntry,
 };
 pub use executor::{
     load_executor_manifest, validate_runner_output, QaBrowserAssertion, QaBrowserEngine,
     QaBrowserManifest, QaBrowserReport, QaEnvironmentCommand, QaEnvironmentManifest,
     QaEnvironmentStepOutput, QaExecutorKind, QaExecutorManifest, QaRunnerArtifact, QaRunnerInput,
-    QaRunnerOutput,
+    QaRunnerOutput, QaRunnerQualification,
 };
 pub use receipt::{
     validate_checkpoint_receipt, QaCaseObservation, QaCaseOutcome, QaCheckpointPayload,
-    QaEnvironmentIdentity, QaEnvironmentLifecycle, QaExecutionScope, QaExecutor,
-    QaRuntimeEnvironment,
+    QaEnvironmentIdentity, QaEnvironmentLifecycle, QaExecutionScope, QaExecutor, QaFlakyWaiver,
+    QaQualificationContext, QaRuntimeEnvironment,
 };

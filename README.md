@@ -78,7 +78,7 @@ ownership remains documented by [`src/kernel/`](src/kernel/) and
 6. Typed handoff moves the Ticket to independent verification.
 7. Verification maps every acceptance item to passing checks/evidence; Core may close a low-risk Ticket whose documentation posture is `none` and whose QA posture is `none`, satisfied by a required checkpoint, or covered by a current full Story qualification.
 8. Required Ticket QA closes only with a current passed `qa_checkpoint` receipt whose `qa_scope` is `ticket_checkpoint` and which covers the exact affected Story cases. A deferred Ticket requires a current passed receipt whose `qa_scope` is `story_close`, covering the full applicable Story baseline on the same source. Documentation promotion and medium-or-higher Ticket risk remain fail-closed until their dedicated assurance resolvers are installed.
-9. An authorized conductor or human invokes `pulse work close-story` with the current Story qualification. Core requires the Story to remain `ready`, every descendant Story/Ticket outcome to be `done` or `superseded`, at least one terminal descendant Ticket, no open hard blocker, an independent full-current qualification receipt, and the current repository HEAD before atomically writing the Story close receipt, event, and `done` transition.
+9. An authorized conductor or human invokes `pulse work close-story` with one current Story qualification head per required matrix entry. Core requires the Story to remain `ready`, every descendant Story/Ticket outcome to be `done` or `superseded`, at least one terminal descendant Ticket, no open hard blocker, complete independent matrix qualification, and the current repository HEAD before atomically writing the Story close receipt, event, and `done` transition.
 
 `pulse session verify` reads checks from `--checks` and the acceptance map from
 `--acceptance`. The acceptance file is a JSON array of
@@ -100,19 +100,23 @@ receipt automatically. The returned receipt ID must be referenced by the
 verification acceptance map; QA is never a mutable status field.
 
 `pulse session story-qualification <saga-id> --story-id <story-id> --actor ...
---source-commit ... --executor <id>` uses a verifying assignment whose Ticket
-belongs to that behavioral owner, replays every required applicable case, and
-records a Story-subject receipt with `qa_scope: story_close`. The initiating
-Ticket remains in the payload for audit, while any covered child Ticket may use
-the receipt only when its verification and the receipt bind the same source.
+--source-commit ... --executor <id> --matrix-entry <id>` uses a verifying
+assignment whose Ticket belongs to that behavioral owner, replays the exact
+required case set for one environment/platform matrix entry, and records a
+Story-subject receipt with `qa_scope: story_close`. A rerun must use `--retry-of
+<receipt-id>` so every immutable attempt remains linked. A retry after a failed
+or inconclusive attempt stays flaky at Story close unless `--waiver-reason ...`
+was authorized by the explicit `qa.flaky.waive` grant and binds the current
+authority policy. The initiating Ticket remains in the payload for audit.
 
 `pulse --idempotency-key <key> work close-story <story-id>
---qualification-receipt <receipt-id> --actor ... --source-commit ... --summary
-...` is the Core-owned Story lifecycle gate. Story work is not leased through a
-Ticket assignment, so this specialized operation performs the explicit
-`ready -> done` transition; generic `pulse work transition` remains closed for
-that direction. The immutable close proof records the observed graph
-fingerprint and exact done/superseded descendant Ticket IDs.
+--qualification-receipt <receipt-id> [--qualification-receipt <receipt-id> ...]
+--actor ... --source-commit ... --summary ...` is the Core-owned Story lifecycle
+gate. Story work is not leased through a Ticket assignment, so this specialized
+operation performs the explicit `ready -> done` transition; generic `pulse work
+transition` remains closed for that direction. The immutable close proof records
+the exact qualification heads, observed graph fingerprint and exact
+done/superseded descendant Ticket IDs.
 
 An executor may additionally declare fixed repository-relative `start`,
 `healthcheck`, `reset`, and `cleanup` commands. Every lifecycle command receives

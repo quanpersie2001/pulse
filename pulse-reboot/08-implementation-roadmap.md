@@ -151,6 +151,12 @@ removed from the current runtime path.
   vẫn thuộc Phase 3 completion. Full Story-close replay dùng cùng executor
   contract và Story-subject receipt; Core Story-close atomically ghi lifecycle
   outcome và immutable close proof.
+- Story qualification matrix hiện resolve exact case set theo required
+  environment/platform entry; mỗi entry tạo một immutable qualification head và
+  Story close yêu cầu đủ toàn bộ matrix. Retry nối predecessor receipt, giữ mọi
+  failed/inconclusive attempt, fail close với unlinked branch và coi pass-after-
+  failure là flaky trừ policy-bound `qa.flaky.waive`. Case non-applicability cũng
+  cần approval bind current authority policy qua `qa.non_applicable.approve`.
 - Hidden supervisor, runner profiles, Core run store, assignment-owned
   Workspace records và public run/attempt contracts đã bị xóa một chiều.
 

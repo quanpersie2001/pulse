@@ -706,12 +706,8 @@ fn validate_qa_close(
             ));
         }
     };
-    let expected = baseline
-        .cases
-        .iter()
-        .map(|case| (case.id.as_str(), case))
-        .collect::<std::collections::BTreeMap<_, _>>();
     let mut covered = std::collections::BTreeSet::new();
+    let mut covered_matrix_entries = std::collections::BTreeSet::new();
     let mut saw_checkpoint = false;
     let author = crate::policy::parse_actor(&handoff.recorded_by);
 
@@ -764,6 +760,43 @@ fn validate_qa_close(
                 "QA checkpoint does not bind the current Ticket, source, or Story baseline",
             ));
         }
+        let matrix_entry_id = if expected_scope == crate::qa::QaExecutionScope::StoryClose {
+            let entry_id = payload
+                .qualification
+                .as_ref()
+                .map_or("default", |context| context.matrix_entry_id.as_str());
+            let entry_baseline =
+                crate::qa::resolve_story_matrix_entry(repo_root, &baseline.owner_id, entry_id)?;
+            if entry_baseline.matrix.first().is_some_and(|entry| {
+                entry.environment_profile != payload.environment.profile
+                    || (entry.platform != "any" && entry.platform != payload.environment.platform)
+            }) {
+                return Err(PulseError::validation(
+                    "close_qa_matrix_environment_mismatch",
+                    "Story qualification environment does not match its matrix entry",
+                ));
+            }
+            crate::kernel::story_completion::validate_retry_lineage(
+                repo_root, &receipt, payload, &baseline, entry_id,
+            )?;
+            if !covered_matrix_entries.insert(entry_id.to_string()) {
+                return Err(PulseError::validation(
+                    "close_qa_matrix_duplicate",
+                    "Story-deferred QA accepts exactly one qualification head per matrix entry",
+                ));
+            }
+            Some((entry_id.to_string(), entry_baseline))
+        } else {
+            None
+        };
+        let receipt_baseline = matrix_entry_id
+            .as_ref()
+            .map_or(&baseline, |(_, entry_baseline)| entry_baseline);
+        let expected = receipt_baseline
+            .cases
+            .iter()
+            .map(|case| (case.id.as_str(), case))
+            .collect::<std::collections::BTreeMap<_, _>>();
         let capabilities = payload
             .executor
             .capabilities
@@ -820,7 +853,11 @@ fn validate_qa_close(
                     ),
                 ));
             }
-            if !covered.insert(observation.case_id.clone()) {
+            let coverage_key = matrix_entry_id.as_ref().map_or_else(
+                || observation.case_id.clone(),
+                |(entry_id, _)| format!("{entry_id}:{}", observation.case_id),
+            );
+            if !covered.insert(coverage_key) {
                 return Err(PulseError::validation(
                     "close_qa_case_duplicate",
                     format!(
@@ -838,10 +875,33 @@ fn validate_qa_close(
         ));
     }
     let actual = covered.into_iter().collect::<Vec<_>>();
-    let wanted = expected
-        .keys()
-        .map(|id| (*id).to_string())
-        .collect::<Vec<_>>();
+    let wanted = if expected_scope == crate::qa::QaExecutionScope::StoryClose {
+        let entries = if baseline.matrix.is_empty() {
+            vec![crate::qa::QaMatrixEntry {
+                id: "default".to_string(),
+                environment_profile: String::new(),
+                platform: String::new(),
+                case_ids: baseline.cases.iter().map(|case| case.id.clone()).collect(),
+            }]
+        } else {
+            baseline.matrix.clone()
+        };
+        entries
+            .iter()
+            .flat_map(|entry| {
+                entry
+                    .case_ids
+                    .iter()
+                    .map(|case_id| format!("{}:{case_id}", entry.id))
+            })
+            .collect::<Vec<_>>()
+    } else {
+        baseline
+            .cases
+            .iter()
+            .map(|case| case.id.clone())
+            .collect::<Vec<_>>()
+    };
     if actual != wanted {
         return Err(PulseError::validation(
             "close_qa_coverage_incomplete",

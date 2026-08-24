@@ -88,11 +88,11 @@ impl JsonGraphStore {
 
         let projection = self.export_unlocked()?;
         let outcomes = validate_descendant_outcomes(&projection, &args.story_id)?;
-        validate_story_qualification(
+        validate_story_qualifications(
             &self.repo_root,
             &projection,
             &args.story_id,
-            &args.qualification_receipt_id,
+            &args.qualification_receipt_ids,
             &args.source_commit,
             &args.actor,
         )?;
@@ -106,7 +106,7 @@ impl JsonGraphStore {
             close_id: close_id.clone(),
             idempotency_key_hash: hash_bytes(args.idempotency_key.as_bytes()),
             story_id: args.story_id.clone(),
-            qualification_receipt_id: args.qualification_receipt_id.clone(),
+            qualification_receipt_ids: args.qualification_receipt_ids.clone(),
             source_commit: args.source_commit.clone(),
             graph_fingerprint_observed: projection.graph_fingerprint,
             done_ticket_ids: outcomes.done,
@@ -231,6 +231,52 @@ fn validate_descendant_outcomes(
     Ok(TicketOutcomes { done, superseded })
 }
 
+fn validate_story_qualifications(
+    repo_root: &Path,
+    projection: &GraphProjection,
+    story_id: &str,
+    receipt_ids: &[String],
+    source_commit: &str,
+    closing_actor: &str,
+) -> Result<()> {
+    let baseline = crate::qa::resolve_story_cases(repo_root, story_id)?;
+    let required_entries = if baseline.matrix.is_empty() {
+        vec!["default".to_string()]
+    } else {
+        baseline
+            .matrix
+            .iter()
+            .map(|entry| entry.id.clone())
+            .collect()
+    };
+    let mut covered_entries = BTreeSet::new();
+    for receipt_id in receipt_ids {
+        let entry_id = validate_story_qualification(
+            repo_root,
+            projection,
+            story_id,
+            receipt_id,
+            source_commit,
+            closing_actor,
+            &baseline,
+        )?;
+        if !covered_entries.insert(entry_id) {
+            return Err(PulseError::validation(
+                "story_close_matrix_duplicate",
+                "Story close accepts exactly one qualification head per matrix entry",
+            ));
+        }
+    }
+    if covered_entries.into_iter().collect::<Vec<_>>() != required_entries {
+        return Err(PulseError::validation(
+            "story_close_matrix_incomplete",
+            format!("Story close requires qualification for matrix entries {required_entries:?}"),
+        ));
+    }
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
 fn validate_story_qualification(
     repo_root: &Path,
     projection: &GraphProjection,
@@ -238,7 +284,8 @@ fn validate_story_qualification(
     receipt_id: &str,
     source_commit: &str,
     closing_actor: &str,
-) -> Result<()> {
+    full_baseline: &crate::qa::QaBaselineResolution,
+) -> Result<String> {
     let report = crate::evidence::verify_receipt(repo_root, receipt_id, true, None)?;
     if report.integrity.status != "valid" || report.bindings.status != "current" {
         return Err(PulseError::validation(
@@ -280,7 +327,20 @@ fn validate_story_qualification(
             "Story qualification lacks an exact source binding",
         )
     })?;
-    let baseline = crate::qa::resolve_story_cases(repo_root, story_id)?;
+    let entry_id = payload
+        .qualification
+        .as_ref()
+        .map_or("default", |context| context.matrix_entry_id.as_str());
+    let baseline = crate::qa::resolve_story_matrix_entry(repo_root, story_id, entry_id)?;
+    if baseline.matrix.first().is_some_and(|entry| {
+        entry.environment_profile != payload.environment.profile
+            || (entry.platform != "any" && entry.platform != payload.environment.platform)
+    }) {
+        return Err(PulseError::validation(
+            "story_close_matrix_environment_mismatch",
+            "Story qualification environment does not match its matrix entry",
+        ));
+    }
     if source.commit != source_commit
         || payload.baseline_revision != baseline.revision
         || payload.baseline_content_hash != baseline.content_hash
@@ -309,6 +369,7 @@ fn validate_story_qualification(
             "Story qualification must originate from a Ticket owned by the Story",
         ));
     }
+    validate_retry_lineage(repo_root, &receipt, payload, full_baseline, entry_id)?;
     let expected = baseline
         .cases
         .iter()
@@ -369,7 +430,142 @@ fn validate_story_qualification(
             format!("Story qualification must cover the full applicable baseline: expected={wanted:?}, actual={actual:?}"),
         ));
     }
-    Ok(())
+    Ok(entry_id.to_string())
+}
+
+pub(crate) fn validate_retry_lineage(
+    repo_root: &Path,
+    head: &crate::evidence::model::ReceiptEnvelope,
+    head_payload: &crate::qa::QaCheckpointPayload,
+    baseline: &crate::qa::QaBaselineResolution,
+    entry_id: &str,
+) -> Result<()> {
+    let Some(head_context) = &head_payload.qualification else {
+        if !baseline.matrix.is_empty() {
+            return Err(PulseError::validation(
+                "story_close_qualification_lineage_missing",
+                "matrix qualification receipts require explicit attempt lineage",
+            ));
+        }
+        return Ok(());
+    };
+    if let Some(waiver) = &head_context.flaky_waiver {
+        let approval = crate::qa::QaAuthorityApproval {
+            actor: waiver.approved_by.clone(),
+            rationale: waiver.rationale.clone(),
+            policy_revision: waiver.policy_revision,
+            policy_fingerprint: waiver.policy_fingerprint.clone(),
+        };
+        crate::qa::validate_approval(repo_root, &approval, "qa.flaky.waive")?;
+    }
+    let mut lineage = BTreeSet::from([head.id.clone()]);
+    let mut current_id = head_context.previous_attempt_receipt_id.clone();
+    let mut expected_attempt = head_context.attempt;
+    let mut saw_non_passed = false;
+    while let Some(receipt_id) = current_id {
+        if !lineage.insert(receipt_id.clone()) || expected_attempt <= 1 {
+            return Err(PulseError::validation(
+                "story_close_qualification_lineage_invalid",
+                "Story qualification retry lineage is cyclic or has invalid attempt numbers",
+            ));
+        }
+        crate::evidence::verify_receipt(repo_root, &receipt_id, true, None)?;
+        let previous = crate::evidence::show_receipt(repo_root, &receipt_id)?.receipt;
+        let ReceiptPayload::QaCheckpoint(payload) = &previous.payload else {
+            return Err(PulseError::validation(
+                "story_close_qualification_lineage_invalid",
+                "Story qualification retry lineage contains a different receipt kind",
+            ));
+        };
+        let context = payload.qualification.as_ref().ok_or_else(|| {
+            PulseError::validation(
+                "story_close_qualification_lineage_invalid",
+                "Story qualification retry predecessor has no lineage context",
+            )
+        })?;
+        let source = previous
+            .bindings
+            .source
+            .as_ref()
+            .map(|source| source.commit.as_str());
+        if previous.kind != ReceiptKind::QaCheckpoint
+            || payload.qa_scope != QaExecutionScope::StoryClose
+            || payload.story_id != baseline.owner_id
+            || payload.baseline_revision != baseline.revision
+            || payload.baseline_content_hash != baseline.content_hash
+            || context.matrix_entry_id != entry_id
+            || context.attempt + 1 != expected_attempt
+            || source
+                != head
+                    .bindings
+                    .source
+                    .as_ref()
+                    .map(|binding| binding.commit.as_str())
+        {
+            return Err(PulseError::validation(
+                "story_close_qualification_lineage_invalid",
+                "Story qualification retry predecessor does not match its head",
+            ));
+        }
+        saw_non_passed |= previous.result != ReceiptResult::Passed;
+        expected_attempt = context.attempt;
+        current_id = context.previous_attempt_receipt_id.clone();
+    }
+    if expected_attempt != 1 {
+        return Err(PulseError::validation(
+            "story_close_qualification_lineage_invalid",
+            "Story qualification retry lineage does not terminate at attempt one",
+        ));
+    }
+    let summaries = crate::evidence::list_receipts(
+        repo_root,
+        Some(ReceiptKind::QaCheckpoint),
+        Some(baseline.owner_id.clone()),
+        None,
+    )?;
+    for summary in summaries.receipts {
+        let receipt = crate::evidence::show_receipt(repo_root, &summary.id)?.receipt;
+        let ReceiptPayload::QaCheckpoint(payload) = &receipt.payload else {
+            continue;
+        };
+        let matches_attempt = payload.qa_scope == QaExecutionScope::StoryClose
+            && payload.baseline_revision == baseline.revision
+            && payload.baseline_content_hash == baseline.content_hash
+            && payload
+                .qualification
+                .as_ref()
+                .is_some_and(|context| context.matrix_entry_id == entry_id)
+            && receipt
+                .bindings
+                .source
+                .as_ref()
+                .map(|source| source.commit.as_str())
+                == head
+                    .bindings
+                    .source
+                    .as_ref()
+                    .map(|source| source.commit.as_str());
+        if matches_attempt && !lineage.contains(&receipt.id) {
+            return Err(PulseError::validation(
+                "story_close_qualification_attempt_unlinked",
+                format!(
+                    "qualification attempt {} is not linked into the selected retry chain",
+                    receipt.id
+                ),
+            ));
+        }
+    }
+    match (saw_non_passed, head_context.flaky_waiver.is_some()) {
+        (true, false) => Err(PulseError::validation(
+            "story_close_qualification_flaky",
+            "a passed retry cannot hide failed or inconclusive qualification attempts",
+        )),
+        (false, true) => Err(PulseError::validation(
+            "story_close_qualification_waiver_unnecessary",
+            "a flaky waiver requires a non-passing predecessor",
+        )),
+        _ => Ok(()),
+    }
 }
 
 fn validate_args(args: &CloseStoryArgs) -> Result<()> {
@@ -385,7 +581,12 @@ fn validate_args(args: &CloseStoryArgs) -> Result<()> {
             "Story close summary must not be empty",
         ));
     }
-    if args.qualification_receipt_id.trim().is_empty() {
+    if args.qualification_receipt_ids.is_empty()
+        || args
+            .qualification_receipt_ids
+            .iter()
+            .any(|id| id.trim().is_empty())
+    {
         return Err(PulseError::validation(
             "story_close_qualification_missing",
             "Story close requires a qualification receipt ID",
@@ -397,7 +598,7 @@ fn validate_args(args: &CloseStoryArgs) -> Result<()> {
 fn replay_story_close(path: &Path, args: &CloseStoryArgs) -> Result<StoryCloseReceipt> {
     let close = load_story_close_path(path)?;
     if close.story_id != args.story_id
-        || close.qualification_receipt_id != args.qualification_receipt_id
+        || close.qualification_receipt_ids != args.qualification_receipt_ids
         || close.closed_by != args.actor
         || close.source_commit != args.source_commit
         || close.summary != args.summary.trim()
@@ -492,7 +693,7 @@ fn commit_story_close(
         &close.story_id,
         json!({
             "close_id": close.close_id,
-            "qualification_receipt_id": close.qualification_receipt_id,
+            "qualification_receipt_ids": close.qualification_receipt_ids,
             "source_commit": close.source_commit,
             "graph_fingerprint_observed": close.graph_fingerprint_observed,
             "from": "ready",

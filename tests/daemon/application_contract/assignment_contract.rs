@@ -251,6 +251,9 @@ fn structured_qa_executor_records_full_story_qualification() {
                 actor: "human:qa-reviewer".to_string(),
                 source_commit: source_commit.clone(),
                 executor_id: "api".to_string(),
+                matrix_entry_id: "default".to_string(),
+                retry_of: None,
+                waiver_reason: None,
             },
             "story-qualification-mismatch",
         )
@@ -263,6 +266,9 @@ fn structured_qa_executor_records_full_story_qualification() {
         actor: "human:qa-reviewer".to_string(),
         source_commit,
         executor_id: "api".to_string(),
+        matrix_entry_id: "default".to_string(),
+        retry_of: None,
+        waiver_reason: None,
     };
     let receipt = match handle(&app, request.clone(), "story-qualification") {
         DaemonResponse::QaCheckpoint { receipt } => receipt,
@@ -286,6 +292,130 @@ fn structured_qa_executor_records_full_story_qualification() {
         DaemonResponse::QaCheckpoint { receipt: replay } if replay.id == receipt.id
     ));
     pulse::evidence::verify_receipt(repo.path(), &receipt.id, true, None).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn story_qualification_retry_preserves_lineage_and_authorized_flaky_waiver() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let repo = TestRepo::from_fixture("minimal-service");
+    let graph = pulse::JsonGraphStore::new(repo.path());
+    bootstrap_repo(&repo, &graph);
+    write_policy(
+        repo.path(),
+        &[
+            "work.assignment.release",
+            "qa.defer_to_story_close",
+            "qa.flaky.waive",
+        ],
+    );
+    let ticket_id = setup_ready_ticket_with_story_qa(repo.path(), &graph);
+    let ticket = graph.show_node(&ticket_id).unwrap();
+    let story_id = ticket
+        .qa
+        .as_ref()
+        .and_then(|qa| qa.impact.behavioral_owner.as_ref())
+        .unwrap()
+        .clone();
+    let executor_dir = repo.path().join(".pulse/qa/executors");
+    std::fs::create_dir_all(&executor_dir).unwrap();
+    std::fs::write(
+        executor_dir.join("api.json"),
+        serde_json::to_vec_pretty(&serde_json::json!({
+            "schema_version": 1,
+            "id": "api",
+            "version": "1.0.0",
+            "executable": "scripts/qa-retry-runner.sh",
+            "args": [],
+            "timeout_seconds": 10,
+            "max_output_bytes": 16384,
+            "capabilities": ["api"],
+            "environment_profile": "fixture",
+            "fixture_revision": "minimal-service-1"
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let runner = repo.path().join("scripts/qa-retry-runner.sh");
+    std::fs::write(
+        &runner,
+        concat!(
+            "#!/bin/sh\n",
+            "set -eu\n",
+            "if grep -q '\"attempt\":[[:space:]]*1' \"$1\"; then outcome=product_failure; else outcome=passed; fi\n",
+            "printf '{\"schema_version\":1,\"cases\":[{\"case_id\":\"QA-001\",\"case_revision\":1,\"outcome\":\"%s\"}],\"observations\":[\"attempt executed\"],\"artifacts\":[],\"cleanup_passed\":true}' \"$outcome\"\n"
+        ),
+    )
+    .unwrap();
+    let mut permissions = std::fs::metadata(&runner).unwrap().permissions();
+    permissions.set_mode(0o755);
+    std::fs::set_permissions(&runner, permissions).unwrap();
+    let source_commit = common_git::commit_all(repo.path());
+
+    let home = tempfile::tempdir().unwrap();
+    let app = DaemonApplication::new(StateStore::new(home.path()), "test").unwrap();
+    let project_id = open_project(&app, repo.path());
+    let workspace_id = create_workspace(&app, &project_id);
+    let saga_id = "saga-story-qualification-retry";
+    insert_verifying_assignment(
+        &app,
+        saga_id,
+        &project_id,
+        &workspace_id,
+        &ticket_id,
+        ticket.revision,
+    );
+    let first = match handle(
+        &app,
+        DaemonRequest::QaStoryQualificationRun {
+            saga_id: saga_id.to_string(),
+            story_id: story_id.clone(),
+            actor: "human:tester".to_string(),
+            source_commit: source_commit.clone(),
+            executor_id: "api".to_string(),
+            matrix_entry_id: "default".to_string(),
+            retry_of: None,
+            waiver_reason: None,
+        },
+        "story-qualification-attempt-1",
+    ) {
+        DaemonResponse::QaCheckpoint { receipt } => receipt,
+        other => panic!("unexpected response: {other:?}"),
+    };
+    assert_eq!(first.result, pulse::evidence::model::ReceiptResult::Failed);
+
+    let retry = match handle(
+        &app,
+        DaemonRequest::QaStoryQualificationRun {
+            saga_id: saga_id.to_string(),
+            story_id,
+            actor: "human:tester".to_string(),
+            source_commit,
+            executor_id: "api".to_string(),
+            matrix_entry_id: "default".to_string(),
+            retry_of: Some(first.id.clone()),
+            waiver_reason: Some(
+                "Reviewed known harness instability for this candidate.".to_string(),
+            ),
+        },
+        "story-qualification-attempt-2",
+    ) {
+        DaemonResponse::QaCheckpoint { receipt } => receipt,
+        other => panic!("unexpected response: {other:?}"),
+    };
+    assert_eq!(retry.result, pulse::evidence::model::ReceiptResult::Passed);
+    let pulse::evidence::model::ReceiptPayload::QaCheckpoint(payload) = &retry.payload else {
+        panic!("expected QA qualification payload");
+    };
+    let context = payload.qualification.as_ref().unwrap();
+    assert_eq!(context.attempt, 2);
+    assert_eq!(
+        context.previous_attempt_receipt_id.as_deref(),
+        Some(first.id.as_str())
+    );
+    assert!(context.flaky_waiver.is_some());
+    pulse::evidence::verify_receipt(repo.path(), &retry.id, true, None).unwrap();
 }
 
 #[cfg(unix)]

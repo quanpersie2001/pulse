@@ -98,8 +98,8 @@ pub(crate) enum WorkCommand {
     },
     CloseStory {
         story_id: String,
-        #[arg(long)]
-        qualification_receipt: String,
+        #[arg(long, required = true, value_delimiter = ',')]
+        qualification_receipt: Vec<String>,
         #[arg(long)]
         actor: String,
         #[arg(long)]
@@ -594,7 +594,7 @@ pub(crate) fn handle(
         } => {
             let out = store.close_story(crate::execution::CloseStoryArgs {
                 story_id,
-                qualification_receipt_id: qualification_receipt,
+                qualification_receipt_ids: qualification_receipt,
                 actor,
                 source_commit,
                 summary,
@@ -817,7 +817,7 @@ mod tests {
                     ..
                 }
             } if story_id == "ST-01J00000000000000000000000"
-                && qualification_receipt == "rcpt_01J00000000000000000000000"
+                && qualification_receipt == vec!["rcpt_01J00000000000000000000000"]
         ));
     }
 }

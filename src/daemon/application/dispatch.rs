@@ -243,12 +243,18 @@ impl DaemonApplication {
                 actor,
                 source_commit,
                 executor_id,
+                matrix_entry_id,
+                retry_of,
+                waiver_reason,
             } => self.qa_story_qualification_run(
                 saga_id,
                 story_id,
                 actor,
                 source_commit,
                 executor_id,
+                matrix_entry_id,
+                retry_of.as_deref(),
+                waiver_reason.as_deref(),
                 idempotency_key,
             )?,
             DaemonRequest::VerificationComplete {

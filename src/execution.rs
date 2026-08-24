@@ -166,7 +166,7 @@ pub struct StoryCloseReceipt {
     pub close_id: String,
     pub idempotency_key_hash: String,
     pub story_id: String,
-    pub qualification_receipt_id: String,
+    pub qualification_receipt_ids: Vec<String>,
     pub source_commit: String,
     pub graph_fingerprint_observed: String,
     pub done_ticket_ids: Vec<String>,
@@ -189,7 +189,7 @@ impl StoryCloseReceipt {
 #[derive(Debug, Clone)]
 pub struct CloseStoryArgs {
     pub story_id: String,
-    pub qualification_receipt_id: String,
+    pub qualification_receipt_ids: Vec<String>,
     pub actor: String,
     pub source_commit: String,
     pub summary: String,

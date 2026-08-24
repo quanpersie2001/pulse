@@ -7,7 +7,7 @@ use pulse::graph::edge::EdgeType;
 use pulse::graph::node::{Node, NodeStatus};
 use pulse::qa::{
     QaCaseObservation, QaCaseOutcome, QaCheckpointPayload, QaExecutionScope, QaExecutor,
-    QaRuntimeEnvironment,
+    QaFlakyWaiver, QaQualificationContext, QaRuntimeEnvironment,
 };
 use pulse::storage::transaction::TransactionFailpoint;
 use pulse::JsonGraphStore;
@@ -23,7 +23,7 @@ fn ready_story_closes_with_terminal_children_and_full_current_qualification() {
         record_story_qualification(repo.path(), &story_id, &ticket_id, &source_commit);
     let args = CloseStoryArgs {
         story_id: story_id.clone(),
-        qualification_receipt_id: qualification_receipt_id.clone(),
+        qualification_receipt_ids: vec![qualification_receipt_id.clone()],
         actor: "human:tester".to_string(),
         source_commit,
         summary: "Integrated Story outcome is fully qualified.".to_string(),
@@ -35,7 +35,10 @@ fn ready_story_closes_with_terminal_children_and_full_current_qualification() {
     assert!(crashing.close_story(args.clone()).is_err());
     let close = store.close_story(args.clone()).unwrap();
     assert_eq!(close.story_id, story_id);
-    assert_eq!(close.qualification_receipt_id, qualification_receipt_id);
+    assert_eq!(
+        close.qualification_receipt_ids,
+        vec![qualification_receipt_id]
+    );
     assert_eq!(close.done_ticket_ids, vec![ticket_id]);
     assert!(close.superseded_ticket_ids.is_empty());
     assert_eq!(store.show_node(&story_id).unwrap().status, NodeStatus::Done);
@@ -54,7 +57,7 @@ fn story_close_rejects_nonterminal_child_before_mutation() {
     let error = store
         .close_story(CloseStoryArgs {
             story_id: story_id.clone(),
-            qualification_receipt_id,
+            qualification_receipt_ids: vec![qualification_receipt_id],
             actor: "human:tester".to_string(),
             source_commit,
             summary: "Attempt close before child completion.".to_string(),
@@ -85,7 +88,7 @@ fn story_close_rejects_tampered_qualification_before_mutation() {
     let error = store
         .close_story(CloseStoryArgs {
             story_id: story_id.clone(),
-            qualification_receipt_id,
+            qualification_receipt_ids: vec![qualification_receipt_id],
             actor: "human:tester".to_string(),
             source_commit,
             summary: "Attempt close with tampered proof.".to_string(),
@@ -98,6 +101,247 @@ fn story_close_rejects_tampered_qualification_before_mutation() {
         store.show_node(&story_id).unwrap().status,
         NodeStatus::Ready
     );
+}
+
+#[test]
+fn story_close_requires_every_declared_matrix_entry() {
+    let (repo, store, story_id, ticket_id, _) = ready_story_fixture(true);
+    let baseline_path = repo.path().join(format!("works/{story_id}/qa.md"));
+    let baseline = std::fs::read_to_string(&baseline_path).unwrap().replace(
+        "\"matrix\": [{",
+        "\"matrix\": [{\"id\":\"secondary\",\"environment_profile\":\"secondary\",\"platform\":\"any\",\"case_ids\":[\"QA-001\"]},{",
+    );
+    std::fs::write(&baseline_path, baseline).unwrap();
+    let source_commit = commit_all(repo.path());
+    let qualification_receipt_id =
+        record_story_qualification(repo.path(), &story_id, &ticket_id, &source_commit);
+
+    let error = store
+        .close_story(CloseStoryArgs {
+            story_id: story_id.clone(),
+            qualification_receipt_ids: vec![qualification_receipt_id],
+            actor: "human:tester".to_string(),
+            source_commit,
+            summary: "Missing secondary platform proof.".to_string(),
+            idempotency_key: "close-story-matrix-incomplete".to_string(),
+        })
+        .unwrap_err();
+
+    assert_eq!(error.code(), "story_close_matrix_incomplete");
+    assert_eq!(
+        store.show_node(&story_id).unwrap().status,
+        NodeStatus::Ready
+    );
+}
+
+#[test]
+fn retry_pass_remains_flaky_without_an_authorized_waiver() {
+    let (repo, store, story_id, ticket_id, source_commit) = ready_story_fixture(true);
+    let failed = record_story_qualification_attempt(
+        repo.path(),
+        &story_id,
+        &ticket_id,
+        &source_commit,
+        "rcpt_01J00000000000000000000021",
+        ReceiptResult::Failed,
+        QaCaseOutcome::ProductFailure,
+        1,
+        None,
+        None,
+    );
+    let passed = record_story_qualification_attempt(
+        repo.path(),
+        &story_id,
+        &ticket_id,
+        &source_commit,
+        "rcpt_01J00000000000000000000022",
+        ReceiptResult::Passed,
+        QaCaseOutcome::Passed,
+        2,
+        Some(&failed),
+        None,
+    );
+
+    let error = store
+        .close_story(CloseStoryArgs {
+            story_id: story_id.clone(),
+            qualification_receipt_ids: vec![passed],
+            actor: "human:tester".to_string(),
+            source_commit,
+            summary: "Retry passed without flaky disposition.".to_string(),
+            idempotency_key: "close-story-flaky-unwaived".to_string(),
+        })
+        .unwrap_err();
+
+    assert_eq!(error.code(), "story_close_qualification_flaky");
+    assert_eq!(
+        store.show_node(&story_id).unwrap().status,
+        NodeStatus::Ready
+    );
+}
+
+#[test]
+fn authorized_policy_bound_flaky_waiver_allows_retry_chain() {
+    let (repo, store, story_id, ticket_id, _) = ready_story_fixture(true);
+    write_policy(
+        repo.path(),
+        &[
+            "qa.defer_to_story_close",
+            "qa.flaky.waive",
+            "work.story.close",
+        ],
+    );
+    let source_commit = commit_all(repo.path());
+    let report = pulse::policy::load_authority_policy(repo.path()).unwrap();
+    let waiver = QaFlakyWaiver {
+        rationale: "Known deterministic harness race is accepted for this candidate.".to_string(),
+        approved_by: pulse::policy::parse_actor("human:tester"),
+        policy_revision: report.policy_revision.unwrap(),
+        policy_fingerprint: report.fingerprint.unwrap(),
+    };
+    let failed = record_story_qualification_attempt(
+        repo.path(),
+        &story_id,
+        &ticket_id,
+        &source_commit,
+        "rcpt_01J00000000000000000000023",
+        ReceiptResult::Inconclusive,
+        QaCaseOutcome::InfrastructureFailure,
+        1,
+        None,
+        None,
+    );
+    let passed = record_story_qualification_attempt(
+        repo.path(),
+        &story_id,
+        &ticket_id,
+        &source_commit,
+        "rcpt_01J00000000000000000000024",
+        ReceiptResult::Passed,
+        QaCaseOutcome::Passed,
+        2,
+        Some(&failed),
+        Some(waiver),
+    );
+
+    let close = store
+        .close_story(CloseStoryArgs {
+            story_id: story_id.clone(),
+            qualification_receipt_ids: vec![passed],
+            actor: "human:tester".to_string(),
+            source_commit,
+            summary: "Retry chain reviewed and explicitly waived.".to_string(),
+            idempotency_key: "close-story-flaky-waived".to_string(),
+        })
+        .unwrap();
+
+    assert_eq!(close.story_id, story_id);
+    assert_eq!(store.show_node(&story_id).unwrap().status, NodeStatus::Done);
+}
+
+#[test]
+fn non_applicable_case_requires_an_authorized_policy_bound_approval() {
+    let (repo, _, story_id, _, _) = ready_story_fixture(true);
+    let report = pulse::policy::load_authority_policy(repo.path()).unwrap();
+    let policy_revision = report.policy_revision.unwrap();
+    let policy_fingerprint = report.fingerprint.unwrap();
+    let baseline_path = repo.path().join(format!("works/{story_id}/qa.md"));
+    let matrix = concat!(
+        "  \"matrix\": [{\n",
+        "    \"id\": \"default\",\n",
+        "    \"environment_profile\": \"fixture\",\n",
+        "    \"platform\": \"any\",\n",
+        "    \"case_ids\": [\"QA-001\"]\n",
+        "  }],\n"
+    );
+    let approval = format!(
+        concat!(
+            "\"applicability\": \"not_applicable\",\n",
+            "    \"non_applicable_reason\": \"Unsupported deployment profile.\",\n",
+            "    \"non_applicable_approval\": {{",
+            "\"actor\":{{\"kind\":\"human\",\"id\":\"tester\"}},",
+            "\"rationale\":\"Unsupported deployment profile.\",",
+            "\"policy_revision\":{},",
+            "\"policy_fingerprint\":\"{}\"}}"
+        ),
+        policy_revision, policy_fingerprint
+    );
+    let baseline = std::fs::read_to_string(&baseline_path)
+        .unwrap()
+        .replace(matrix, "")
+        .replace("\"applicability\": \"required\"", &approval);
+    std::fs::write(&baseline_path, baseline).unwrap();
+
+    let error = pulse::qa::load_story_baseline(repo.path(), &story_id).unwrap_err();
+    assert_eq!(error.code(), "readiness_authority_denied");
+
+    write_policy(
+        repo.path(),
+        &[
+            "qa.defer_to_story_close",
+            "qa.non_applicable.approve",
+            "work.story.close",
+        ],
+    );
+    let authorized = pulse::policy::load_authority_policy(repo.path()).unwrap();
+    let baseline = std::fs::read_to_string(&baseline_path).unwrap().replace(
+        &policy_fingerprint,
+        authorized.fingerprint.as_deref().unwrap(),
+    );
+    std::fs::write(&baseline_path, baseline).unwrap();
+    pulse::qa::load_story_baseline(repo.path(), &story_id).unwrap();
+}
+
+#[test]
+fn stale_flaky_waiver_keeps_historical_receipt_integrity() {
+    let (repo, _, story_id, ticket_id, _) = ready_story_fixture(true);
+    write_policy(
+        repo.path(),
+        &[
+            "qa.defer_to_story_close",
+            "qa.flaky.waive",
+            "work.story.close",
+        ],
+    );
+    let source_commit = commit_all(repo.path());
+    let report = pulse::policy::load_authority_policy(repo.path()).unwrap();
+    let waiver = QaFlakyWaiver {
+        rationale: "Time-bounded harness instability acceptance.".to_string(),
+        approved_by: pulse::policy::parse_actor("human:tester"),
+        policy_revision: report.policy_revision.unwrap(),
+        policy_fingerprint: report.fingerprint.unwrap(),
+    };
+    let failed = record_story_qualification_attempt(
+        repo.path(),
+        &story_id,
+        &ticket_id,
+        &source_commit,
+        "rcpt_01J00000000000000000000025",
+        ReceiptResult::Failed,
+        QaCaseOutcome::ProductFailure,
+        1,
+        None,
+        None,
+    );
+    let passed = record_story_qualification_attempt(
+        repo.path(),
+        &story_id,
+        &ticket_id,
+        &source_commit,
+        "rcpt_01J00000000000000000000026",
+        ReceiptResult::Passed,
+        QaCaseOutcome::Passed,
+        2,
+        Some(&failed),
+        Some(waiver),
+    );
+    write_policy(
+        repo.path(),
+        &["qa.defer_to_story_close", "work.story.close"],
+    );
+
+    let verification = pulse::evidence::verify_receipt(repo.path(), &passed, true, None).unwrap();
+    assert_eq!(verification.integrity.status, "valid");
 }
 
 fn ready_story_fixture(child_done: bool) -> (TestRepo, JsonGraphStore, String, String, String) {
@@ -154,15 +398,42 @@ fn record_story_qualification(
     ticket_id: &str,
     source_commit: &str,
 ) -> String {
+    record_story_qualification_attempt(
+        repo,
+        story_id,
+        ticket_id,
+        source_commit,
+        "rcpt_01J00000000000000000000020",
+        ReceiptResult::Passed,
+        QaCaseOutcome::Passed,
+        1,
+        None,
+        None,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn record_story_qualification_attempt(
+    repo: &std::path::Path,
+    story_id: &str,
+    ticket_id: &str,
+    source_commit: &str,
+    receipt_id: &str,
+    result: ReceiptResult,
+    outcome: QaCaseOutcome,
+    attempt: u32,
+    previous_attempt_receipt_id: Option<&str>,
+    flaky_waiver: Option<QaFlakyWaiver>,
+) -> String {
     let resolution = pulse::qa::resolve_story_cases(repo, story_id).unwrap();
     let manifest = pulse::evidence::manifest::load(repo).unwrap();
-    let receipt_id = "rcpt_01J00000000000000000000020".to_string();
+    let receipt_id = receipt_id.to_string();
     let receipt = ReceiptEnvelope {
         schema_version: 1,
         receipt_version: 2,
         id: receipt_id.clone(),
         kind: ReceiptKind::QaCheckpoint,
-        result: ReceiptResult::Passed,
+        result,
         actor: ActorRef {
             kind: ActorKind::Human,
             id: "qa-reviewer".to_string(),
@@ -199,7 +470,7 @@ fn record_story_qualification(
                 .map(|case| QaCaseObservation {
                     case_id: case.id,
                     case_revision: case.revision,
-                    outcome: QaCaseOutcome::Passed,
+                    outcome,
                 })
                 .collect(),
             executor: QaExecutor {
@@ -208,12 +479,18 @@ fn record_story_qualification(
                 capabilities: vec!["api".to_string()],
             },
             environment: QaRuntimeEnvironment {
-                profile: "story-close".to_string(),
+                profile: "fixture".to_string(),
                 platform: std::env::consts::OS.to_string(),
                 fixture_revision: "minimal-service-1".to_string(),
                 lifecycle: None,
             },
             browser: None,
+            qualification: Some(QaQualificationContext {
+                matrix_entry_id: "default".to_string(),
+                attempt,
+                previous_attempt_receipt_id: previous_attempt_receipt_id.map(str::to_string),
+                flaky_waiver,
+            }),
             observations: vec!["Full integrated Story baseline passed.".to_string()],
             cleanup_passed: true,
         }),

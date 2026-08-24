@@ -100,7 +100,18 @@ pub struct QaRunnerInput {
     pub baseline_content_hash: String,
     pub cases: Vec<super::QaCase>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub qualification: Option<QaRunnerQualification>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub environment: Option<QaEnvironmentIdentity>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct QaRunnerQualification {
+    pub matrix_entry_id: String,
+    pub attempt: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub previous_attempt_receipt_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

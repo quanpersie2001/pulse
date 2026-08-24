@@ -26,8 +26,30 @@ pub struct QaCheckpointPayload {
     pub environment: QaRuntimeEnvironment,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub browser: Option<QaBrowserReport>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub qualification: Option<QaQualificationContext>,
     pub observations: Vec<String>,
     pub cleanup_passed: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct QaQualificationContext {
+    pub matrix_entry_id: String,
+    pub attempt: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub previous_attempt_receipt_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub flaky_waiver: Option<QaFlakyWaiver>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct QaFlakyWaiver {
+    pub rationale: String,
+    pub approved_by: crate::identity::actor::ActorRef,
+    pub policy_revision: u64,
+    pub policy_fingerprint: String,
 }
 
 #[derive(Debug, Default, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -178,6 +200,7 @@ pub fn validate_checkpoint_receipt(
     if let Some(browser) = &payload.browser {
         validate_browser_receipt(receipt, payload, browser)?;
     }
+    validate_qualification_context(receipt, payload)?;
     let baseline_path = format!("works/{}/qa.md", payload.story_id);
     if !receipt.bindings.content.iter().any(|binding| {
         binding.path == baseline_path && binding.sha256 == payload.baseline_content_hash
@@ -216,6 +239,44 @@ pub fn validate_checkpoint_receipt(
         return Err(PulseError::validation(
             "qa_receipt_result_inconsistent",
             "QA envelope result does not match case outcomes and cleanup",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_qualification_context(
+    receipt: &ReceiptEnvelope,
+    payload: &QaCheckpointPayload,
+) -> Result<()> {
+    let Some(context) = &payload.qualification else {
+        return Ok(());
+    };
+    if payload.qa_scope != QaExecutionScope::StoryClose
+        || context.matrix_entry_id.trim().is_empty()
+        || context.attempt == 0
+        || (context.attempt == 1 && context.previous_attempt_receipt_id.is_some())
+        || (context.attempt > 1 && context.previous_attempt_receipt_id.is_none())
+        || context.previous_attempt_receipt_id.as_deref() == Some(receipt.id.as_str())
+        || context
+            .previous_attempt_receipt_id
+            .as_deref()
+            .is_some_and(|id| !valid_receipt_id(id))
+        || (context.flaky_waiver.is_some() && context.attempt == 1)
+    {
+        return Err(PulseError::validation(
+            "qa_qualification_context_invalid",
+            "Story qualification matrix and retry lineage are incomplete or inconsistent",
+        ));
+    }
+    if context.flaky_waiver.as_ref().is_some_and(|waiver| {
+        waiver.rationale.trim().is_empty()
+            || waiver.approved_by.id.trim().is_empty()
+            || waiver.policy_revision == 0
+            || waiver.policy_fingerprint.trim().is_empty()
+    }) {
+        return Err(PulseError::validation(
+            "qa_flaky_waiver_invalid",
+            "flaky waiver audit fields are incomplete",
         ));
     }
     Ok(())
@@ -289,4 +350,13 @@ fn is_sha256(value: &str) -> bool {
     value
         .strip_prefix("sha256:")
         .is_some_and(|hex| hex.len() == 64 && hex.chars().all(|c| c.is_ascii_hexdigit()))
+}
+
+fn valid_receipt_id(id: &str) -> bool {
+    id.strip_prefix("rcpt_").is_some_and(|suffix| {
+        suffix.len() == 26
+            && suffix
+                .chars()
+                .all(|c| matches!(c, '0'..='9' | 'A'..='H' | 'J'..='K' | 'M'..='N' | 'P'..='T' | 'V'..='Z'))
+    })
 }

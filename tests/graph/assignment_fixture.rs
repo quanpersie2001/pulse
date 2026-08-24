@@ -296,6 +296,12 @@ fn write_required_qa_baseline(root: &std::path::Path, story_id: &str) {
   "scope": "Reservation behavior remains observable.",
   "requirements": ["AC-1"],
   "protected_risks": ["RISK-DUPLICATE"],
+  "matrix": [{{
+    "id": "default",
+    "environment_profile": "fixture",
+    "platform": "any",
+    "case_ids": ["QA-001"]
+  }}],
   "cases": [{{
     "id": "QA-001",
     "revision": 1,
