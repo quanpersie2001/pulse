@@ -215,6 +215,14 @@ ownership đã bị loại.
 
 ### Phase 3 - Harness capability packs
 
+**Current implementation inventory:** public `pulse init` đã compose bootstrap
+graph, evidence, docs, knowledge và default-deny authority dưới một Core write
+lock. Command preflight mọi canonical plane trước khi apply, preserve user
+content và authority grants hiện có, report thay vì rewrite `.gitignore`, dùng
+chung một repository identity xuyên các domain, và được chạy trên external copy
+của fixture `minimal-service`. `pulse doctor`, generated-doc freshness và typed
+operational `.pulse/config.yaml` vẫn là capability Phase 3 tiếp theo.
+
 - Core-supported Agent responsibilities: orient, shape, plan, implement, debug, review, QA.
 - Hoàn thiện typed shaping flow + reusable decision-tree grilling/wayfinding primitive trên contract Phase 1/2: repo-grounded questions, one-question-at-a-time flow, recommended answers, destination, frontier, fog và risk-adaptive materialization.
 - Gap routing cho research, human grilling, Decision, prototype và enabling work; persisted map chỉ dùng khi multi-session/risk policy yêu cầu.

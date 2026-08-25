@@ -120,6 +120,34 @@ pub fn load_existing(repo_root: &Path) -> Result<Option<DocsRegistryEnvelope>> {
     )?))
 }
 
+/// Validate existing documentation-registry bootstrap state without writing.
+///
+/// A missing registry may be completed only when the managed directory is
+/// empty or contains the current document schema and no other state.
+pub(crate) fn preflight_bootstrap(repo_root: &Path) -> Result<()> {
+    let root = repo_root.join(".pulse/docs");
+    if !root.exists() {
+        return Ok(());
+    }
+    if !root.is_dir() {
+        return Err(PulseError::validation(
+            "repository_init_docs_conflict",
+            ".pulse/docs exists but is not a directory",
+        ));
+    }
+    if load_existing(repo_root)?.is_some() {
+        return Ok(());
+    }
+
+    ensure_only_known_partial_entries(&root, &["schemas"])?;
+    let schemas = root.join("schemas");
+    ensure_only_known_partial_entries(&schemas, &["document.schema.json"])?;
+    if schemas.join("document.schema.json").exists() {
+        ensure_current_schema(repo_root)?;
+    }
+    Ok(())
+}
+
 pub(crate) fn load_unlocked_preserve(repo_root: &Path) -> Result<Option<DocsRegistryEnvelope>> {
     load_existing(repo_root)
 }
@@ -160,6 +188,26 @@ fn create_dir_if_missing(
     } else {
         fs::create_dir_all(path).map_err(|error| PulseError::io(path, error))?;
         created.push(path.to_path_buf());
+    }
+    Ok(())
+}
+
+fn ensure_only_known_partial_entries(root: &Path, allowed: &[&str]) -> Result<()> {
+    if !root.exists() {
+        return Ok(());
+    }
+    for entry in fs::read_dir(root).map_err(|error| PulseError::io(root, error))? {
+        let entry = entry.map_err(|error| PulseError::io(root, error))?;
+        let name = entry.file_name();
+        if !allowed.iter().any(|allowed| name == *allowed) {
+            return Err(PulseError::validation(
+                "repository_init_docs_partial_refused",
+                format!(
+                    "documentation registry state without a registry contains unknown entry {}",
+                    entry.path().display()
+                ),
+            ));
+        }
     }
     Ok(())
 }

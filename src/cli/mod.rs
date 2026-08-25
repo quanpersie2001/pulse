@@ -3,6 +3,7 @@ mod daemon;
 mod docs;
 mod evidence;
 mod graph;
+mod init;
 mod knowledge;
 pub mod output;
 mod qa;
@@ -25,18 +26,19 @@ pub fn run(cli: Cli) -> Result<(), PulseError> {
         .unwrap_or_else(|| std::env::current_dir().expect("current dir"));
     #[cfg(any(test, debug_assertions))]
     let store = if cli.test_work_packet_after_first_fence {
-        JsonGraphStore::with_work_packet_after_first_fence_failpoint(repo_root)
+        JsonGraphStore::with_work_packet_after_first_fence_failpoint(repo_root.clone())
     } else {
         match cli.test_failpoint {
-            Some(failpoint) => JsonGraphStore::with_failpoint(repo_root, failpoint.into()),
-            None => JsonGraphStore::new(repo_root),
+            Some(failpoint) => JsonGraphStore::with_failpoint(repo_root.clone(), failpoint.into()),
+            None => JsonGraphStore::new(repo_root.clone()),
         }
     };
     #[cfg(not(any(test, debug_assertions)))]
-    let store = JsonGraphStore::new(repo_root);
+    let store = JsonGraphStore::new(repo_root.clone());
 
     let explicit_key = cli.idempotency_key.as_deref();
     match cli.command {
+        args::Command::Init { json } => init::handle(&repo_root, json),
         args::Command::Work { command } => work::handle(&store, command, explicit_key),
         args::Command::Docs { command } => docs::handle(&store, command),
         args::Command::Graph { command } => graph::handle(&store, command),

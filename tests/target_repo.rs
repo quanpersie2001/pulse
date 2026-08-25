@@ -11,6 +11,8 @@ mod common;
 #[path = "common/bin.rs"]
 mod common_bin;
 
+#[path = "target_repo/repository_init.rs"]
+mod repository_init;
 #[path = "target_repo/run_workspace_snapshot.rs"]
 mod run_workspace_snapshot;
 #[path = "target_repo/target_repo_fixture.rs"]

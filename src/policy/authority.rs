@@ -4,7 +4,7 @@ use crate::{PulseError, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 const MAX_PRINCIPALS: usize = 256;
 const MAX_GRANTS: usize = 128;
@@ -41,6 +41,13 @@ pub struct AuthorityPolicyReport {
     pub fingerprint: Option<String>,
     pub principals: Vec<AuthorityPrincipal>,
     pub reason_codes: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct AuthorityBootstrapOutcome {
+    pub created: Vec<PathBuf>,
+    pub preserved: Vec<PathBuf>,
+    pub policy: AuthorityPolicy,
 }
 
 impl AuthorityPolicy {
@@ -155,6 +162,77 @@ pub fn load_authority_policy(repo_root: &Path) -> Result<AuthorityPolicyReport> 
 
 pub fn validate_authority_policy_file(repo_root: &Path) -> Result<AuthorityPolicyReport> {
     load_authority_policy(repo_root)
+}
+
+/// Validate an existing authority policy without creating a permissive default.
+///
+/// Missing policy state is safe for repository initialization. Existing state
+/// must already be canonical and valid so initialization never rewrites a
+/// maintainer-owned authority decision.
+pub(crate) fn preflight_bootstrap(repo_root: &Path) -> Result<()> {
+    let report = load_authority_policy(repo_root)?;
+    if !report.available {
+        return Ok(());
+    }
+    if !report.valid {
+        return Err(PulseError::validation(
+            "repository_init_authority_invalid",
+            "existing authority policy is invalid; refusing repository initialization without overwrite",
+        ));
+    }
+    Ok(())
+}
+
+/// Install a canonical default-deny authority policy when none exists.
+///
+/// # Errors
+///
+/// Returns a typed validation or I/O error when existing authority state is
+/// invalid or the new policy cannot be created durably.
+pub(crate) fn bootstrap_default_deny(repo_root: &Path) -> Result<AuthorityBootstrapOutcome> {
+    preflight_bootstrap(repo_root)?;
+    let directory = repo_root.join(".pulse/policy");
+    let path = authority_path(repo_root);
+    let mut created = Vec::new();
+    let mut preserved = Vec::new();
+
+    if directory.exists() {
+        preserved.push(directory.clone());
+    } else {
+        fs::create_dir_all(&directory).map_err(|error| PulseError::io(&directory, error))?;
+        created.push(directory);
+    }
+
+    let policy = if path.exists() {
+        preserved.push(path.clone());
+        let report = load_authority_policy(repo_root)?;
+        let revision = report.policy_revision.ok_or_else(|| {
+            PulseError::validation(
+                "repository_init_authority_invalid",
+                "existing authority policy has no revision",
+            )
+        })?;
+        AuthorityPolicy {
+            schema_version: 1,
+            revision,
+            principals: report.principals,
+        }
+    } else {
+        let policy = AuthorityPolicy {
+            schema_version: 1,
+            revision: 1,
+            principals: Vec::new(),
+        };
+        crate::storage::create_new(&path, &to_canonical_bytes(&policy)?)?;
+        created.push(path);
+        policy
+    };
+
+    Ok(AuthorityBootstrapOutcome {
+        created,
+        preserved,
+        policy,
+    })
 }
 
 /// Parse a `kind:id` actor string into a typed evidence `ActorRef`.

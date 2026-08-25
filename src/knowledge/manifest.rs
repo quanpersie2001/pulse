@@ -123,6 +123,48 @@ pub fn load_existing(repo_root: &Path) -> Result<Option<KnowledgeManifest>> {
     Ok(Some(manifest))
 }
 
+/// Validate existing knowledge bootstrap state without writing.
+///
+/// A partial installation is resumable only while it contains current schemas
+/// and no learning or relation records without a repository identity manifest.
+pub(crate) fn preflight_bootstrap(repo_root: &Path) -> Result<()> {
+    let root = repo_root.join(".pulse/knowledge");
+    if !root.exists() {
+        return Ok(());
+    }
+    if !root.is_dir() {
+        return Err(PulseError::validation(
+            "repository_init_knowledge_conflict",
+            ".pulse/knowledge exists but is not a directory",
+        ));
+    }
+    if load_existing(repo_root)?.is_some() {
+        return Ok(());
+    }
+
+    ensure_only_known_partial_entries(&root, &["schemas", "entries", "relations"])?;
+    let schemas = root.join("schemas");
+    ensure_only_known_partial_entries(&schemas, &["learning.schema.json", "relation.schema.json"])?;
+    for (name, schema) in [
+        ("learning.schema.json", LEARNING_SCHEMA),
+        ("relation.schema.json", RELATION_SCHEMA),
+    ] {
+        let path = schemas.join(name);
+        if path.exists() {
+            let bytes = fs::read(&path).map_err(|error| PulseError::io(&path, error))?;
+            if hash_bytes(&bytes) != schema_hash(schema)? {
+                return Err(PulseError::validation(
+                    "knowledge_schema_hash_mismatch",
+                    format!("schema drift at {}", path.display()),
+                ));
+            }
+        }
+    }
+    ensure_no_files(&root.join("entries"))?;
+    ensure_no_files(&root.join("relations"))?;
+    Ok(())
+}
+
 pub fn default_manifest(repository_id: String) -> Result<KnowledgeManifest> {
     Ok(KnowledgeManifest {
         schema_version: 1,
@@ -210,6 +252,49 @@ fn create_dir_if_missing(
     } else {
         fs::create_dir_all(path).map_err(|error| PulseError::io(path, error))?;
         created.push(path.to_path_buf());
+    }
+    Ok(())
+}
+
+fn ensure_only_known_partial_entries(root: &Path, allowed: &[&str]) -> Result<()> {
+    if !root.exists() {
+        return Ok(());
+    }
+    for entry in fs::read_dir(root).map_err(|error| PulseError::io(root, error))? {
+        let entry = entry.map_err(|error| PulseError::io(root, error))?;
+        let name = entry.file_name();
+        if !allowed.iter().any(|allowed| name == *allowed) {
+            return Err(PulseError::validation(
+                "repository_init_knowledge_partial_refused",
+                format!(
+                    "knowledge state without a manifest contains unknown entry {}",
+                    entry.path().display()
+                ),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn ensure_no_files(root: &Path) -> Result<()> {
+    if !root.exists() {
+        return Ok(());
+    }
+    for entry in fs::read_dir(root).map_err(|error| PulseError::io(root, error))? {
+        let entry = entry.map_err(|error| PulseError::io(root, error))?;
+        let file_type = entry
+            .file_type()
+            .map_err(|error| PulseError::io(entry.path(), error))?;
+        if file_type.is_symlink() || file_type.is_file() {
+            return Err(PulseError::validation(
+                "repository_init_knowledge_partial_refused",
+                format!(
+                    "knowledge records exist without a manifest at {}",
+                    entry.path().display()
+                ),
+            ));
+        }
+        ensure_no_files(&entry.path())?;
     }
     Ok(())
 }

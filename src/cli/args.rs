@@ -26,6 +26,10 @@ pub struct Cli {
 
 #[derive(Subcommand)]
 pub(crate) enum Command {
+    Init {
+        #[arg(long)]
+        json: bool,
+    },
     Work {
         #[command(subcommand)]
         command: super::work::WorkCommand,

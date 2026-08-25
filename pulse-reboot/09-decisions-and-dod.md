@@ -103,9 +103,9 @@ D-78 trong
 
 Core hoàn thành khi:
 
-- [ ] `pulse init` bootstrap fixture repository mà không phá file user.
+- [x] `pulse init` bootstrap fixture repository mà không phá file user. Public Core composition preflight graph/evidence/docs/knowledge/policy trước canonical writes, preserve user docs/README/`.gitignore` và authority grants, rồi chạy idempotent trên external `minimal-service` fixture copy.
 - [x] Work graph lưu/đọc/diff Epic, Story, Ticket, Decision bằng independent JSON node/edge files. Verified by Phase 1 Slices 1–2 and active graph/store integration tests.
-- [ ] `docs/`, top-level `works/`, `.pulse/workgraph/`, evidence và runtime có folder/source hierarchy không mâu thuẫn. **Foundation complete:** domain layouts/bootstrap và target-repository fixture boundary đã có; safe top-level `pulse init` composition vẫn thuộc Phase 3.
+- [x] `docs/`, top-level `works/`, `.pulse/workgraph/`, evidence và runtime có folder/source hierarchy không mâu thuẫn. `pulse init` tạo/preserve hierarchy cùng `knowledge/learnings`, events, default-deny policy và một shared evidence/docs/knowledge repository identity; runtime/cache chỉ được report thành proposed ignore entries, không rewrite `.gitignore`.
 - [x] Document registry query được ID/path/kind/owner/authority/scope/summary/aliases và không cần đăng ký mọi Markdown file. Verified by Slice 4 registry/applicability implementation and docs CLI tests.
 - [x] Generated root/selected-area `_index.md` projections deterministic, marked generated và rebuildable. Verified by Slice 5 projection/index tests; broader declared-generated freshness enforcement remains a later docs-validation gate.
 - [x] Markdown heading parser tạo section refs có document ID, heading path, line range và content hash. Verified by Slice 5 section extraction tests.

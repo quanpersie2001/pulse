@@ -6,6 +6,7 @@
 
 pub mod completion;
 pub mod frontier;
+pub(crate) mod init;
 pub mod lifecycle;
 pub mod packet;
 pub mod readiness;

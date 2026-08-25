@@ -92,6 +92,17 @@ pub fn bootstrap(repo_root: &Path) -> Result<BootstrapOutcome> {
     })
 }
 
+/// Validate that repository workgraph state can be initialized without writing.
+///
+/// # Errors
+///
+/// Returns a typed validation error when existing workgraph state is drifted,
+/// stateful-but-incomplete, or otherwise unsafe to complete automatically.
+pub(crate) fn preflight_bootstrap(repo_root: &Path) -> Result<()> {
+    let repo_root = crate::storage::paths::canonicalize_existing_dir(repo_root)?;
+    ensure_bootstrap_state(&repo_root)
+}
+
 /// Fail closed before any compatibility bootstrap entrypoint writes bytes.
 ///
 /// The store implementation and the historical `storage::bootstrap` path both

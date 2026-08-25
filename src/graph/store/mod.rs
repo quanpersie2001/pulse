@@ -45,6 +45,7 @@ mod nodes;
 mod repository;
 mod supersession;
 
+pub(crate) use bootstrap::preflight_bootstrap;
 pub use bootstrap::{
     bootstrap, default_manifest_value, BootstrapOutcome, EDGE_SCHEMA_JSON, MANIFEST_JSON,
     NODE_SCHEMA_JSON,

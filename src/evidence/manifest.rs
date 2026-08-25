@@ -68,66 +68,9 @@ pub fn bootstrap(repo_root: &Path) -> Result<EvidenceBootstrapOutcome> {
         }
     }
 
-    write_schema_if_absent(
-        &schemas.join("receipt-envelope.schema.json"),
-        RECEIPT_ENVELOPE_SCHEMA,
-        &mut created,
-        &mut preserved,
-    )?;
-    write_schema_if_absent(
-        &schemas.join("receipt-envelope-qa.schema.json"),
-        QA_RECEIPT_ENVELOPE_SCHEMA,
-        &mut created,
-        &mut preserved,
-    )?;
-    write_schema_if_absent(
-        &schemas.join("supersession-reconciliation.schema.json"),
-        SUPERSESSION_SCHEMA,
-        &mut created,
-        &mut preserved,
-    )?;
-    write_schema_if_absent(
-        &schemas.join("shaping-validation.schema.json"),
-        SHAPING_SCHEMA,
-        &mut created,
-        &mut preserved,
-    )?;
-    write_schema_if_absent(
-        &schemas.join("decision-acceptance.schema.json"),
-        DECISION_ACCEPTANCE_SCHEMA,
-        &mut created,
-        &mut preserved,
-    )?;
-    write_schema_if_absent(
-        &schemas.join("documentation-validation.schema.json"),
-        DOCUMENTATION_SCHEMA,
-        &mut created,
-        &mut preserved,
-    )?;
-    write_schema_if_absent(
-        &schemas.join("qa-checkpoint.schema.json"),
-        QA_CHECKPOINT_SCHEMA,
-        &mut created,
-        &mut preserved,
-    )?;
-    write_schema_if_absent(
-        &schemas.join("qa-checkpoint-lifecycle.schema.json"),
-        QA_CHECKPOINT_LIFECYCLE_SCHEMA,
-        &mut created,
-        &mut preserved,
-    )?;
-    write_schema_if_absent(
-        &schemas.join("qa-checkpoint-browser.schema.json"),
-        QA_CHECKPOINT_BROWSER_SCHEMA,
-        &mut created,
-        &mut preserved,
-    )?;
-    write_schema_if_absent(
-        &schemas.join("qa-checkpoint-browser-deployment.schema.json"),
-        QA_CHECKPOINT_BROWSER_DEPLOYMENT_SCHEMA,
-        &mut created,
-        &mut preserved,
-    )?;
+    for (name, schema) in schema_contracts() {
+        write_schema_if_absent(&schemas.join(name), schema, &mut created, &mut preserved)?;
+    }
 
     let manifest_path = evidence.join("manifest.json");
     let manifest = if manifest_path.exists() {
@@ -181,6 +124,134 @@ pub fn load_existing(repo_root: &Path) -> Result<Option<EvidenceManifest>> {
     let manifest: EvidenceManifest = crate::storage::read_json(&manifest_path)?;
     validate_manifest(repo_root, &manifest)?;
     Ok(Some(manifest))
+}
+
+/// Validate existing evidence bootstrap state without creating or upgrading it.
+///
+/// Current partial schema installation is resumable only while no immutable
+/// receipts or artifacts exist without their repository identity manifest.
+pub(crate) fn preflight_bootstrap(repo_root: &Path) -> Result<()> {
+    let root = repo_root.join(".pulse/evidence");
+    if !root.exists() {
+        return Ok(());
+    }
+    if !root.is_dir() {
+        return Err(PulseError::validation(
+            "repository_init_evidence_conflict",
+            ".pulse/evidence exists but is not a directory",
+        ));
+    }
+
+    let manifest = load_existing(repo_root)?;
+    let schemas = root.join("schemas");
+    for (name, schema) in schema_contracts() {
+        let path = schemas.join(name);
+        if path.exists() {
+            let expected = canonical_schema_bytes(schema)?;
+            let actual = fs::read(&path).map_err(|error| PulseError::io(&path, error))?;
+            if hash_bytes(&actual) != hash_bytes(&expected) {
+                return Err(PulseError::validation(
+                    "receipt_schema_invalid",
+                    format!("schema drift at {}", path.display()),
+                ));
+            }
+        }
+    }
+
+    if manifest.is_none() {
+        ensure_only_known_partial_entries(&root, &["schemas", "receipts", "artifacts"])?;
+        ensure_only_known_partial_entries(
+            &schemas,
+            &schema_contracts()
+                .iter()
+                .map(|(name, _)| *name)
+                .collect::<Vec<_>>(),
+        )?;
+        ensure_no_files(&root.join("receipts"))?;
+        ensure_no_files(&root.join("artifacts"))?;
+    }
+    Ok(())
+}
+
+fn schema_contracts() -> [(&'static str, &'static str); 10] {
+    [
+        ("receipt-envelope.schema.json", RECEIPT_ENVELOPE_SCHEMA),
+        (
+            "receipt-envelope-qa.schema.json",
+            QA_RECEIPT_ENVELOPE_SCHEMA,
+        ),
+        (
+            "supersession-reconciliation.schema.json",
+            SUPERSESSION_SCHEMA,
+        ),
+        ("shaping-validation.schema.json", SHAPING_SCHEMA),
+        (
+            "decision-acceptance.schema.json",
+            DECISION_ACCEPTANCE_SCHEMA,
+        ),
+        ("documentation-validation.schema.json", DOCUMENTATION_SCHEMA),
+        ("qa-checkpoint.schema.json", QA_CHECKPOINT_SCHEMA),
+        (
+            "qa-checkpoint-lifecycle.schema.json",
+            QA_CHECKPOINT_LIFECYCLE_SCHEMA,
+        ),
+        (
+            "qa-checkpoint-browser.schema.json",
+            QA_CHECKPOINT_BROWSER_SCHEMA,
+        ),
+        (
+            "qa-checkpoint-browser-deployment.schema.json",
+            QA_CHECKPOINT_BROWSER_DEPLOYMENT_SCHEMA,
+        ),
+    ]
+}
+
+fn canonical_schema_bytes(schema: &str) -> Result<Vec<u8>> {
+    let value: serde_json::Value = serde_json::from_str(schema)?;
+    to_canonical_bytes(&value)
+}
+
+fn ensure_only_known_partial_entries(root: &Path, allowed: &[&str]) -> Result<()> {
+    if !root.exists() {
+        return Ok(());
+    }
+    for entry in fs::read_dir(root).map_err(|error| PulseError::io(root, error))? {
+        let entry = entry.map_err(|error| PulseError::io(root, error))?;
+        let name = entry.file_name();
+        if !allowed.iter().any(|allowed| name == *allowed) {
+            return Err(PulseError::validation(
+                "repository_init_evidence_partial_refused",
+                format!(
+                    "evidence state without a manifest contains unknown entry {}",
+                    entry.path().display()
+                ),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn ensure_no_files(root: &Path) -> Result<()> {
+    if !root.exists() {
+        return Ok(());
+    }
+    for entry in fs::read_dir(root).map_err(|error| PulseError::io(root, error))? {
+        let entry = entry.map_err(|error| PulseError::io(root, error))?;
+        let file_type = entry
+            .file_type()
+            .map_err(|error| PulseError::io(entry.path(), error))?;
+        if file_type.is_symlink() || file_type.is_file() {
+            return Err(PulseError::validation(
+                "repository_init_evidence_partial_refused",
+                format!(
+                    "evidence records exist without a repository identity manifest at {}",
+                    entry.path().display()
+                ),
+            ));
+        }
+        ensure_no_files(&entry.path())?;
+    }
+    Ok(())
 }
 
 fn default_manifest(repo_root: &Path) -> Result<EvidenceManifest> {
