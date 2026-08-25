@@ -38,7 +38,7 @@ fn authored_record() -> Value {
         "summary": "Refresh-token failure contract",
         "aliases": [],
         "scope": {"paths": ["src/token.mjs"], "domains": ["authentication"], "work_labels": []},
-        "review_policy": "standard",
+        "review_policy": "none",
         "verification_profile": "product-doc",
         "generated": null,
         "superseded_by": null
@@ -121,6 +121,73 @@ fn docs_validate_checks_declared_freshness_links_and_navigation_on_fixture_copy(
         ])
     );
 
+    crate::common_git::commit_all(repo.path());
+    let recorded = repo.pulse_ok(&[
+        "docs",
+        "validate",
+        "--record",
+        "--actor",
+        "agent:docs-reviewer",
+        "--json",
+    ]);
+    assert_eq!(recorded["code"], "documentation_validation_recorded");
+    assert_eq!(recorded["receipt"]["receipt"]["result"], "passed");
+    assert_eq!(
+        recorded["receipt"]["receipt"]["payload"]["payload_version"],
+        2
+    );
+    assert_eq!(
+        recorded["receipt"]["receipt"]["payload"]["documents"][0]["verification_profile"],
+        "generated-doc"
+    );
+    assert_eq!(recorded["verification"]["registry"]["status"], "current");
+    assert_eq!(
+        recorded["verification"]["policy"]["status"],
+        "structurally_satisfied"
+    );
+    assert_eq!(recorded["verification"]["gate_eligible"], true);
+
+    let receipt_id = recorded["receipt"]["receipt"]["id"].as_str().unwrap();
+    let registry_path = repo.path().join(".pulse/docs/registry.json");
+    let mut registry: Value = serde_json::from_slice(&fs::read(&registry_path).unwrap()).unwrap();
+    registry["documents"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|document| document["id"] == "DOC-AUTH-CONTRACT")
+        .unwrap()["verification_profile"] = json!("product-doc-v2");
+    fs::write(
+        &registry_path,
+        serde_json::to_vec_pretty(&registry).unwrap(),
+    )
+    .unwrap();
+    let drifted = repo.pulse(&[
+        "evidence",
+        "receipt",
+        "verify",
+        receipt_id,
+        "--current",
+        "--json",
+    ]);
+    assert!(!drifted.status.success());
+    let drifted_report: Value = serde_json::from_slice(&drifted.stdout).unwrap();
+    assert_eq!(drifted_report["registry"]["status"], "mismatch");
+    assert!(drifted_report["registry"]["reason_codes"]
+        .as_array()
+        .unwrap()
+        .contains(&json!("document_receipt_profile_mismatch")));
+    registry["documents"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|document| document["id"] == "DOC-AUTH-CONTRACT")
+        .unwrap()["verification_profile"] = json!("product-doc");
+    fs::write(
+        &registry_path,
+        serde_json::to_vec_pretty(&registry).unwrap(),
+    )
+    .unwrap();
+
     let authored_path = repo.path().join("docs/product/authentication.md");
     let authored = fs::read_to_string(&authored_path).unwrap();
     fs::write(
@@ -136,7 +203,6 @@ fn docs_validate_checks_declared_freshness_links_and_navigation_on_fixture_copy(
         .any(|finding| finding["code"] == "docs_internal_link_broken"));
     fs::write(&authored_path, authored).unwrap();
 
-    let registry_path = repo.path().join(".pulse/docs/registry.json");
     let mut registry: Value = serde_json::from_slice(&fs::read(&registry_path).unwrap()).unwrap();
     set_generated_check(&mut registry, nested_pulse_show("DOC-NOT-FOUND"));
     fs::write(

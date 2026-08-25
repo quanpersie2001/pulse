@@ -193,7 +193,16 @@ pub(crate) fn handle(store: &JsonGraphStore, command: EvidenceCommand) -> Result
                     source.as_deref(),
                 )?;
                 let ok = out.integrity.status == "valid"
-                    && (!current || out.bindings.status == "current");
+                    && (!current
+                        || (out.bindings.status == "current"
+                            && matches!(
+                                out.registry.status.as_str(),
+                                "current" | "not_applicable"
+                            )
+                            && matches!(
+                                out.policy.status.as_str(),
+                                "structurally_satisfied" | "not_applicable"
+                            )));
                 render(json, &out, out.integrity.status.clone())?;
                 if ok {
                     Ok(())

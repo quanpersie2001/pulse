@@ -16,6 +16,8 @@ pub const DECISION_ACCEPTANCE_SCHEMA: &str =
     include_str!("../schema/evidence/decision-acceptance.schema.json");
 pub const DOCUMENTATION_SCHEMA: &str =
     include_str!("../schema/evidence/documentation-validation.schema.json");
+pub const DOCUMENTATION_PROFILE_SCHEMA: &str =
+    include_str!("../schema/evidence/documentation-validation-profile.schema.json");
 pub const QA_CHECKPOINT_SCHEMA: &str = include_str!("../schema/evidence/qa-checkpoint.schema.json");
 pub const QA_CHECKPOINT_LIFECYCLE_SCHEMA: &str =
     include_str!("../schema/evidence/qa-checkpoint-lifecycle.schema.json");
@@ -76,7 +78,9 @@ pub fn bootstrap(repo_root: &Path) -> Result<EvidenceBootstrapOutcome> {
     let manifest = if manifest_path.exists() {
         preserved.push(manifest_path.clone());
         let mut manifest: EvidenceManifest = crate::storage::read_json(&manifest_path)?;
-        if install_qa_contract(&mut manifest)? {
+        let qa_changed = install_qa_contract(&mut manifest)?;
+        let documentation_changed = install_documentation_contract(&mut manifest)?;
+        if qa_changed || documentation_changed {
             crate::storage::atomic_write(&manifest_path, &to_canonical_bytes(&manifest)?)?;
         }
         validate_manifest(repo_root, &manifest)?;
@@ -173,7 +177,7 @@ pub(crate) fn preflight_bootstrap(repo_root: &Path) -> Result<()> {
     Ok(())
 }
 
-fn schema_contracts() -> [(&'static str, &'static str); 10] {
+fn schema_contracts() -> [(&'static str, &'static str); 11] {
     [
         ("receipt-envelope.schema.json", RECEIPT_ENVELOPE_SCHEMA),
         (
@@ -190,6 +194,10 @@ fn schema_contracts() -> [(&'static str, &'static str); 10] {
             DECISION_ACCEPTANCE_SCHEMA,
         ),
         ("documentation-validation.schema.json", DOCUMENTATION_SCHEMA),
+        (
+            "documentation-validation-profile.schema.json",
+            DOCUMENTATION_PROFILE_SCHEMA,
+        ),
         ("qa-checkpoint.schema.json", QA_CHECKPOINT_SCHEMA),
         (
             "qa-checkpoint-lifecycle.schema.json",
@@ -297,6 +305,12 @@ fn default_manifest(repo_root: &Path) -> Result<EvidenceManifest> {
             DOCUMENTATION_SCHEMA,
         ),
         (
+            "documentation_validation",
+            "2",
+            "schemas/documentation-validation-profile.schema.json",
+            DOCUMENTATION_PROFILE_SCHEMA,
+        ),
+        (
             "qa_checkpoint",
             "1",
             "schemas/qa-checkpoint.schema.json",
@@ -401,6 +415,24 @@ fn install_qa_contract(manifest: &mut EvidenceManifest) -> Result<bool> {
         changed = true;
     }
     Ok(changed)
+}
+
+fn install_documentation_contract(manifest: &mut EvidenceManifest) -> Result<bool> {
+    let documentation = manifest
+        .receipt_kinds
+        .entry("documentation_validation".to_string())
+        .or_default();
+    if documentation.contains_key("2") {
+        return Ok(false);
+    }
+    documentation.insert(
+        "2".to_string(),
+        SchemaRef {
+            schema: "schemas/documentation-validation-profile.schema.json".to_string(),
+            schema_hash: schema_hash(DOCUMENTATION_PROFILE_SCHEMA)?,
+        },
+    );
+    Ok(true)
 }
 
 fn write_schema_if_absent(

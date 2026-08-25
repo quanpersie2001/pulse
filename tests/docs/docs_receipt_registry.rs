@@ -164,10 +164,75 @@ fn receipt_doc(id: &str, revision: u64, path: &str, hash: &str) -> Documentation
     DocumentationValidationDocument {
         document_id: Some(id.to_string()),
         document_revision: Some(revision),
+        verification_profile: None,
         path: path.to_string(),
         content_hash: hash.to_string(),
         result: ReceiptResult::Passed,
     }
+}
+
+fn receipt_doc_v2(
+    id: &str,
+    revision: u64,
+    profile: &str,
+    path: &str,
+    hash: &str,
+) -> DocumentationValidationDocument {
+    DocumentationValidationDocument {
+        document_id: Some(id.to_string()),
+        document_revision: Some(revision),
+        verification_profile: Some(profile.to_string()),
+        path: path.to_string(),
+        content_hash: hash.to_string(),
+        result: ReceiptResult::Passed,
+    }
+}
+
+#[test]
+fn payload_v2_binds_exact_verification_profile_and_detects_registry_drift() {
+    let (tmp, repository_id, source_commit, hash) = setup_repo(
+        "DOC-AUTH-DOMAIN",
+        3,
+        DocumentLifecycle::Current,
+        ReviewPolicy::None,
+    );
+    let repo = tmp.path();
+    let rcpt = receipt_with_payload_version(
+        "rcpt_01J00000000000000000000109",
+        &repository_id,
+        &source_commit,
+        receipt_doc_v2(
+            "DOC-AUTH-DOMAIN",
+            3,
+            "domain-doc",
+            "docs/domain/token-lifecycle.md",
+            &hash,
+        ),
+        vec![DocumentCheck {
+            kind: "link_check".to_string(),
+            result: ReceiptResult::Passed,
+            artifact: None,
+        }],
+        2,
+    );
+    record(repo, &rcpt);
+
+    let current = pulse::evidence::verify_receipt(repo, &rcpt.id, true, None).unwrap();
+    assert_eq!(current.registry.status, "current");
+    assert!(current.gate_eligible);
+
+    let registry_path = repo.join(".pulse/docs/registry.json");
+    let mut registry: DocsRegistry = pulse::storage::read_json(&registry_path).unwrap();
+    registry.documents[0].verification_profile = "domain-doc-v2".to_string();
+    write_json(&registry_path, &registry);
+
+    let drifted = pulse::evidence::verify_receipt(repo, &rcpt.id, true, None).unwrap();
+    assert_eq!(drifted.registry.status, "mismatch");
+    assert!(drifted
+        .registry
+        .reason_codes
+        .contains(&"document_receipt_profile_mismatch".to_string()));
+    assert!(!drifted.gate_eligible);
 }
 
 #[test]

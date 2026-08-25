@@ -223,8 +223,11 @@ chung một repository identity xuyên các domain, và được chạy trên ex
 của fixture `minimal-service`. `pulse docs validate` đã aggregate registry,
 local internal links, declared generated freshness command và deterministic
 navigation projection checks bằng read-only report; structural failure không
-execute repository code. `pulse doctor`, validation-profile/receipt binding và
-typed operational `.pulse/config.yaml` vẫn là capability Phase 3 tiếp theo.
+execute repository code. `pulse docs validate --record` đã tạo typed payload-v2
+receipt source/content-bound, bind exact `verification_profile`, reject snapshot
+drift và giữ historical payload v1. `pulse doctor`, profile-specific check
+selection, docs close-gate consumption và typed operational `.pulse/config.yaml`
+vẫn là capability Phase 3 tiếp theo.
 
 - Core-supported Agent responsibilities: orient, shape, plan, implement, debug, review, QA.
 - Hoàn thiện typed shaping flow + reusable decision-tree grilling/wayfinding primitive trên contract Phase 1/2: repo-grounded questions, one-question-at-a-time flow, recommended answers, destination, frontier, fog và risk-adaptive materialization.

@@ -32,3 +32,8 @@ pub use store::{
     verify_receipt, ReceiptList, ReceiptOutcome, ReceiptStatus, ReceiptSummary,
 };
 pub use supersession::validate_for_supersession;
+
+/// Generate a fresh immutable receipt identifier (`rcpt_<ulid>`).
+pub fn new_receipt_id() -> String {
+    format!("rcpt_{}", ulid::Ulid::new())
+}

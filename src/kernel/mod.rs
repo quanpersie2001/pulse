@@ -5,6 +5,7 @@
 //! graph store with documentation, evidence, policy and source/content checks.
 
 pub mod completion;
+pub mod documentation;
 pub mod frontier;
 pub(crate) mod init;
 pub mod lifecycle;

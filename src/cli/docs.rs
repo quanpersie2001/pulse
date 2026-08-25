@@ -73,6 +73,10 @@ pub(crate) enum DocsCommand {
     },
     Validate {
         #[arg(long)]
+        record: bool,
+        #[arg(long, requires = "record")]
+        actor: Option<String>,
+        #[arg(long)]
         json: bool,
     },
     Index {
@@ -389,19 +393,47 @@ pub(crate) fn handle(store: &JsonGraphStore, command: DocsCommand) -> Result<(),
                 document_id,
             )
         }
-        DocsCommand::Validate { json } => {
-            let registry = crate::docs::registry::load_registry_unvalidated(store.repo_root())?;
-            let report = crate::docs::validate_repository(store.repo_root(), &registry)?;
-            let ok = report.valid;
-            render(
-                json,
-                &report,
-                if ok { "valid" } else { "invalid" }.to_string(),
+        DocsCommand::Validate {
+            record,
+            actor,
+            json,
+        } => {
+            if record
+                && actor
+                    .as_deref()
+                    .map_or(true, |value| value.trim().is_empty())
+            {
+                return Err(PulseError::validation(
+                    "docs_validation_actor_required",
+                    "--record requires --actor",
+                ));
+            }
+            let run = crate::kernel::documentation::run_documentation_validation(
+                store.repo_root(),
+                store.failpoint(),
+                actor.as_deref(),
             )?;
+            let ok = run.validation.valid;
+            if record {
+                render(
+                    json,
+                    &run,
+                    run.receipt.as_ref().map_or_else(
+                        || "invalid".to_string(),
+                        |receipt| receipt.receipt.id.clone(),
+                    ),
+                )?;
+            } else {
+                render(
+                    json,
+                    &run.validation,
+                    if ok { "valid" } else { "invalid" }.to_string(),
+                )?;
+            }
             if ok {
                 Ok(())
             } else {
-                let code = if report.code == "invalid_docs_registry" {
+                let code = if run.validation.code == "invalid_docs_registry" {
                     "invalid_docs_registry"
                 } else {
                     "docs_validation_failed"

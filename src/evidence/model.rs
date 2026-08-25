@@ -392,6 +392,10 @@ pub struct DocumentationValidationDocument {
     /// domain error instead of failing deserialization first.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub document_revision: Option<u64>,
+    /// Exact repository verification profile observed for payload v2. Historical
+    /// v1 receipts omit it and remain integrity-readable.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verification_profile: Option<String>,
     pub path: String,
     pub content_hash: String,
     pub result: ReceiptResult,

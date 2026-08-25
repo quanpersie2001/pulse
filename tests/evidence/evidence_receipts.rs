@@ -119,6 +119,30 @@ fn evidence_bootstrap_adds_qa_contract_without_changing_repository_identity() {
 }
 
 #[test]
+fn evidence_bootstrap_adds_documentation_v2_without_changing_repository_identity() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path();
+    let initial = pulse::evidence::bootstrap(repo).unwrap().manifest;
+    let manifest_path = repo.join(".pulse/evidence/manifest.json");
+    let mut prior = initial.clone();
+    prior
+        .receipt_kinds
+        .get_mut("documentation_validation")
+        .unwrap()
+        .remove("2");
+    write_json(&manifest_path, &prior);
+    fs::remove_file(
+        repo.join(".pulse/evidence/schemas/documentation-validation-profile.schema.json"),
+    )
+    .unwrap();
+
+    let migrated = pulse::evidence::bootstrap(repo).unwrap().manifest;
+    assert_eq!(migrated.repository_id, initial.repository_id);
+    assert!(migrated.receipt_kinds["documentation_validation"].contains_key("1"));
+    assert!(migrated.receipt_kinds["documentation_validation"].contains_key("2"));
+}
+
+#[test]
 fn evidence_bootstrap_adds_lifecycle_schema_to_existing_qa_contract() {
     let tmp = tempfile::tempdir().unwrap();
     let repo = tmp.path();

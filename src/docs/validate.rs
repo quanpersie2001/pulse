@@ -194,8 +194,22 @@ fn validate_document(
     validate_aliases(document, errors);
     validate_path(repo_root, document, errors);
     validate_scope(document, errors);
+    validate_verification_profile(document, errors);
     validate_generated(document, errors);
     Ok(())
+}
+
+fn validate_verification_profile(document: &DocumentRecord, errors: &mut Vec<DocsFinding>) {
+    if document.verification_profile.trim().is_empty()
+        || document.verification_profile.chars().count() > 120
+    {
+        errors.push(finding(
+            "document_verification_profile_invalid",
+            "verification_profile must be non-empty and <=120 bytes",
+            Some(document.id.clone()),
+            Some(document.path.clone()),
+        ));
+    }
 }
 
 fn validate_owner(document: &DocumentRecord, errors: &mut Vec<DocsFinding>) {

@@ -88,5 +88,6 @@ percent decoding và parent-relative normalization.
 
 - Profile registry quyết định check nào là close-gating và policy cho timeout.
 - External-link connectivity, Markdown reference links và anchor validation.
-- Tạo/bind typed `documentation_validation` receipt từ report này.
+- Typed `documentation_validation` receipt và exact profile binding đã được
+  triển khai ở Phase 3 Slice 3; close gate consumption vẫn deferred.
 - `pulse docs validate --changed` và `pulse doctor` aggregation/ratchet routing.
