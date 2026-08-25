@@ -131,7 +131,7 @@ Core hoàn thành khi:
 - [x] Evidence receipts immutable, source-bound và hash-validated. Verified for current Phase 1 receipt kinds by Slice 3/7 evidence and binding tests; run/handoff/verification/QA receipt kinds remain later phases.
 - [x] Documentation impact hỗ trợ `required`, `none` + rationale và policy-governed `deferred`. Verified by Slice 4 docs-impact model/CLI/policy tests.
 - [x] Documentation receipts source/content-bound; file thay đổi làm receipt cũ invalid. Verified by Slice 4/5 registry-aware receipt tests.
-- [ ] Generated docs freshness có deterministic contract/check. **Foundation complete:** generated `_index.md` projection state/check đã có; broader declared-generated source/link/profile enforcement remains Phase 3.
+- [x] Generated docs freshness có deterministic contract/check. Phase 3 Slice 2 chạy exact declared `freshness_check` bằng argv/no-shell, aggregate local link và `_index.md` projection findings, và fail closed trước execution khi registry invalid; profile-to-close-gate và receipt binding vẫn deferred.
 - [ ] Promotion candidates từ work handoff được promote, classify non-durable hoặc defer có authority.
 - [ ] `pulse doctor` phát hiện docs missing/stale/conflict/orphan/duplicate/generated/work-leak/context-gap và index/retrieval findings.
 - [x] `pulse docs index|status|search|get|tree` có stable human/JSON contracts. Verified by Slice 5 CLI contract and retrieval integration tests.

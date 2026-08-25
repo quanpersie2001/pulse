@@ -220,8 +220,11 @@ graph, evidence, docs, knowledge và default-deny authority dưới một Core w
 lock. Command preflight mọi canonical plane trước khi apply, preserve user
 content và authority grants hiện có, report thay vì rewrite `.gitignore`, dùng
 chung một repository identity xuyên các domain, và được chạy trên external copy
-của fixture `minimal-service`. `pulse doctor`, generated-doc freshness và typed
-operational `.pulse/config.yaml` vẫn là capability Phase 3 tiếp theo.
+của fixture `minimal-service`. `pulse docs validate` đã aggregate registry,
+local internal links, declared generated freshness command và deterministic
+navigation projection checks bằng read-only report; structural failure không
+execute repository code. `pulse doctor`, validation-profile/receipt binding và
+typed operational `.pulse/config.yaml` vẫn là capability Phase 3 tiếp theo.
 
 - Core-supported Agent responsibilities: orient, shape, plan, implement, debug, review, QA.
 - Hoàn thiện typed shaping flow + reusable decision-tree grilling/wayfinding primitive trên contract Phase 1/2: repo-grounded questions, one-question-at-a-time flow, recommended answers, destination, frontier, fog và risk-adaptive materialization.

@@ -114,6 +114,7 @@ fn setup_repo() -> TempDir {
         serde_json::to_vec_pretty(&registry).unwrap(),
     )
     .unwrap();
+    run_ok(&repo, &["docs", "index", "--json"]);
     repo
 }
 
@@ -225,7 +226,14 @@ fn docs_show_missing_and_validate_invalid_emit_json_errors() {
         serde_json::to_vec_pretty(&registry).unwrap(),
     )
     .unwrap();
-    let invalid = run_err(&repo, &["docs", "validate", "--json"]);
+    let output = run(&repo, &["docs", "validate", "--json"]);
+    assert!(!output.status.success());
+    let report: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["checks"][0]["result"], "failed");
+    assert_eq!(report["checks"][1]["result"], "skipped");
+    assert_eq!(report["checks"][2]["result"], "skipped");
+    assert_eq!(report["checks"][3]["result"], "skipped");
+    let invalid: Value = serde_json::from_slice(&output.stderr).unwrap();
     assert_eq!(invalid["code"], "invalid_docs_registry");
 }
 

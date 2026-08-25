@@ -12,6 +12,9 @@
 mod common_bin;
 #[path = "common/canon.rs"]
 mod common_canon;
+#[allow(dead_code)]
+#[path = "common/fixture_repo.rs"]
+mod common_fixture_repo;
 #[path = "common/git.rs"]
 mod common_git;
 
@@ -43,3 +46,5 @@ mod docs_retrieval_eval;
 mod docs_search_get_tree;
 #[path = "docs/docs_section_extraction.rs"]
 mod docs_section_extraction;
+#[path = "docs/docs_validation.rs"]
+mod docs_validation;

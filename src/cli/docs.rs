@@ -391,11 +391,7 @@ pub(crate) fn handle(store: &JsonGraphStore, command: DocsCommand) -> Result<(),
         }
         DocsCommand::Validate { json } => {
             let registry = crate::docs::registry::load_registry_unvalidated(store.repo_root())?;
-            let report = crate::docs::validate_registry(
-                store.repo_root(),
-                &registry.repository_id,
-                &registry,
-            )?;
+            let report = crate::docs::validate_repository(store.repo_root(), &registry)?;
             let ok = report.valid;
             render(
                 json,
@@ -405,9 +401,14 @@ pub(crate) fn handle(store: &JsonGraphStore, command: DocsCommand) -> Result<(),
             if ok {
                 Ok(())
             } else {
+                let code = if report.code == "invalid_docs_registry" {
+                    "invalid_docs_registry"
+                } else {
+                    "docs_validation_failed"
+                };
                 Err(PulseError::validation(
-                    "invalid_docs_registry",
-                    "docs registry is invalid",
+                    code,
+                    "documentation validation failed",
                 ))
             }
         }

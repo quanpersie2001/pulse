@@ -1,5 +1,6 @@
 pub mod applicability;
 pub mod cache;
+pub mod check;
 pub mod eval;
 pub mod get;
 pub mod index;
@@ -24,6 +25,10 @@ pub use cache::{
     generation_dir, generation_id_for_fingerprint, open_reader_generation, publish_current,
     read_current, validate_generation, CacheState, DocsSearchWriteLock, EngineState,
     ExtractorState, GenerationCounts, GenerationDocument, GenerationState, ValidatedGeneration,
+};
+pub use check::{
+    validate_repository, DocsCheckKind, DocsCheckReport, DocsCheckResult,
+    DocsRepositoryValidationReport,
 };
 pub use eval::{
     load_retrieval_eval_fixtures, run_retrieval_eval_fixtures, run_retrieval_evals,
