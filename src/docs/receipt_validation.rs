@@ -17,7 +17,7 @@
 //! review-policy interpretation lives here.
 
 use crate::canonical_json::hash_bytes;
-use crate::docs::{load_registry_or_empty, DocumentLifecycle, ReviewPolicy};
+use crate::docs::{DocsRegistry, DocumentLifecycle, ReviewPolicy};
 use crate::evidence::model::{
     DocumentationValidationDocument, DocumentationValidationPayload, ReceiptEnvelope,
     ReceiptPayload, ReceiptResult, ValidationDimension,
@@ -39,6 +39,7 @@ pub(crate) fn documentation_validation_dimensions(
     current: bool,
     integrity_valid: bool,
     bindings_current: bool,
+    registry: Option<&DocsRegistry>,
 ) -> Result<(
     ValidationDimension,
     ValidationDimension,
@@ -81,7 +82,10 @@ pub(crate) fn documentation_validation_dimensions(
         ));
     }
 
-    let registry = load_docs_registry(repo_root)?;
+    let registry = registry.map_or_else(
+        || load_docs_registry(repo_root),
+        |registry| Ok(snapshot_registry(registry)),
+    )?;
     let mut registry_codes = Vec::new();
     let mut policies = BTreeSet::new();
     for doc in &payload.documents {
@@ -259,21 +263,25 @@ struct DocsRegistryDocument {
 }
 
 fn load_docs_registry(repo_root: &Path) -> Result<DocsRegistrySnapshot> {
-    let registry = load_registry_or_empty(repo_root)?;
-    Ok(DocsRegistrySnapshot {
+    let registry = crate::docs::load_registry_or_empty(repo_root)?;
+    Ok(snapshot_registry(&registry))
+}
+
+fn snapshot_registry(registry: &DocsRegistry) -> DocsRegistrySnapshot {
+    DocsRegistrySnapshot {
         documents: registry
             .documents
-            .into_iter()
+            .iter()
             .map(|document| DocsRegistryDocument {
-                id: document.id,
+                id: document.id.clone(),
                 revision: document.revision,
-                path: document.path,
+                path: document.path.clone(),
                 lifecycle: lifecycle_name(document.lifecycle).to_string(),
                 review_policy: review_policy_name(document.review_policy).to_string(),
-                verification_profile: document.verification_profile,
+                verification_profile: document.verification_profile.clone(),
             })
             .collect(),
-    })
+    }
 }
 
 fn lifecycle_name(lifecycle: DocumentLifecycle) -> &'static str {

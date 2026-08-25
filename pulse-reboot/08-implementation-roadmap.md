@@ -140,11 +140,13 @@ removed from the current runtime path.
   Core proof close quyết định `done|rework|blocked`, và process exit không close
   Ticket.
 - Core proof close baseline đã support exact acceptance-to-check/evidence mapping
-  cho low-risk Ticket với docs impact `none`; QA impact `none`, `required` với
+  cho low-risk Ticket với docs impact `none|required`; `required` revalidate
+  current payload-v2 receipt và exact required document revision/content/profile.
+  QA impact `none`, `required` với
   current passed checkpoint, hoặc `covered_by_story_close` với current full
   Story qualification trên cùng source được close. Specialized Story lifecycle
   close đã gate terminal descendants, blockers, frozen source và full current
-  qualification; unsupported risk và documentation promotion vẫn fail closed.
+  qualification; unsupported risk và documentation defer/promotion vẫn fail closed.
 - Repository-owned Playwright executor contract đã support typed browser
   engine/base URL, per-case deterministic assertions, trace artifact ingestion,
   lifecycle cùng source/build/deployment binding và payload version 4. Dedicated
@@ -225,9 +227,10 @@ local internal links, declared generated freshness command và deterministic
 navigation projection checks bằng read-only report; structural failure không
 execute repository code. `pulse docs validate --record` đã tạo typed payload-v2
 receipt source/content-bound, bind exact `verification_profile`, reject snapshot
-drift và giữ historical payload v1. `pulse doctor`, profile-specific check
-selection, docs close-gate consumption và typed operational `.pulse/config.yaml`
-vẫn là capability Phase 3 tiếp theo.
+drift và giữ historical payload v1. Core close gate đã consume receipt này cho
+exact Ticket `required_documents`; payload v1 chỉ còn historical và `deferred`
+vẫn fail closed. `pulse doctor`, profile-specific check selection và typed
+operational `.pulse/config.yaml` vẫn là capability Phase 3 tiếp theo.
 
 - Core-supported Agent responsibilities: orient, shape, plan, implement, debug, review, QA.
 - Hoàn thiện typed shaping flow + reusable decision-tree grilling/wayfinding primitive trên contract Phase 1/2: repo-grounded questions, one-question-at-a-time flow, recommended answers, destination, frontier, fog và risk-adaptive materialization.

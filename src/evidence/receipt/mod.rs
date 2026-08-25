@@ -27,6 +27,7 @@ mod store;
 mod supersession;
 
 pub use bindings::{code_to_static, content_source_binding_codes};
+pub(crate) use store::verify_receipt_under_fence;
 pub use store::{
     list_receipts, load_receipt, record_receipt, record_receipt_envelope, show_receipt,
     verify_receipt, ReceiptList, ReceiptOutcome, ReceiptStatus, ReceiptSummary,

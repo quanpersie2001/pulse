@@ -246,6 +246,26 @@ pub fn verify_receipt(
     current: bool,
     source: Option<&str>,
 ) -> Result<ValidationReport> {
+    verify_receipt_inner(repo_root, id, current, source, None)
+}
+
+pub(crate) fn verify_receipt_under_fence(
+    repo_root: &Path,
+    id: &str,
+    current: bool,
+    source: Option<&str>,
+    registry: &crate::docs::DocsRegistry,
+) -> Result<ValidationReport> {
+    verify_receipt_inner(repo_root, id, current, source, Some(registry))
+}
+
+fn verify_receipt_inner(
+    repo_root: &Path,
+    id: &str,
+    current: bool,
+    source: Option<&str>,
+    docs_registry: Option<&crate::docs::DocsRegistry>,
+) -> Result<ValidationReport> {
     let (receipt, hash) = load_receipt(repo_root, id)?;
     let mut integrity = Vec::new();
     if let Err(err) = validate_envelope(repo_root, &receipt, false) {
@@ -277,6 +297,7 @@ pub fn verify_receipt(
             current,
             integrity.is_empty(),
             bindings.status == "current",
+            docs_registry,
         )?;
     Ok(ValidationReport {
         schema_version: 1,

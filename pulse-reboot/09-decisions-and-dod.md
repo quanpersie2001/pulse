@@ -131,7 +131,7 @@ Core hoàn thành khi:
 - [x] Evidence receipts immutable, source-bound và hash-validated. Verified for current Phase 1 receipt kinds by Slice 3/7 evidence and binding tests; run/handoff/verification/QA receipt kinds remain later phases.
 - [x] Documentation impact hỗ trợ `required`, `none` + rationale và policy-governed `deferred`. Verified by Slice 4 docs-impact model/CLI/policy tests.
 - [x] Documentation receipts source/content-bound; file thay đổi làm receipt cũ invalid. Verified by Slice 4/5 registry-aware receipt tests.
-- [x] Generated docs freshness có deterministic contract/check. Phase 3 Slice 2 chạy exact declared `freshness_check` bằng argv/no-shell, aggregate local link và `_index.md` projection findings, và fail closed trước execution khi registry invalid. Slice 3 ghi payload-v2 source/content-bound receipt, bind exact `verification_profile` và reject snapshot/profile drift; profile-specific check selection và docs close-gate consumption vẫn deferred.
+- [x] Generated docs freshness có deterministic contract/check. Phase 3 Slice 2 chạy exact declared `freshness_check` bằng argv/no-shell, aggregate local link và `_index.md` projection findings, và fail closed trước execution khi registry invalid. Slice 3 ghi payload-v2 source/content-bound receipt, bind exact `verification_profile` và reject snapshot/profile drift. Slice 4 consume current gate-eligible v2 receipt cho exact required-document close coverage; profile-specific review acquisition và documentation defer/promotion vẫn deferred.
 - [ ] Promotion candidates từ work handoff được promote, classify non-durable hoặc defer có authority.
 - [ ] `pulse doctor` phát hiện docs missing/stale/conflict/orphan/duplicate/generated/work-leak/context-gap và index/retrieval findings.
 - [x] `pulse docs index|status|search|get|tree` có stable human/JSON contracts. Verified by Slice 5 CLI contract and retrieval integration tests.
@@ -196,8 +196,8 @@ Runtime hoàn thành khi:
   acknowledgement/handoff.
 - [ ] Một Ticket standalone đi qua `ready -> reserved -> active -> verifying ->
   done|rework|blocked` bằng Core proof gate. **Partial:** low-risk + QA/docs
-  `none` close path và rework/blocked verification path đã có; required QA,
-  documentation promotion/defer và medium-or-higher risk còn fail closed.
+  `none|required` documentation close path và rework/blocked verification path
+  đã có; documentation defer/promotion và medium-or-higher risk còn fail closed.
 - [ ] Daemon restart recover registry, process, session, timeline và assignment
   saga không cần chat memory.
 - [ ] Hidden per-run supervisor và duplicate Core-owned

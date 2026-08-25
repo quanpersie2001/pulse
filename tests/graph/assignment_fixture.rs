@@ -2,6 +2,9 @@ use std::fs;
 
 use chrono::Utc;
 use pulse::canonical_json::to_canonical_bytes;
+use pulse::docs::{
+    DocumentAuthority, DocumentKind, DocumentLifecycle, DocumentRecord, DocumentScope, ReviewPolicy,
+};
 use pulse::graph::contract::{
     ContentRef, ContractItem, ContractScope, EffortMetadata, ImplementationContract,
     ImplementationMode, ImplementationSemanticImpact, PlanPolicy, PublicCreateClassification,
@@ -101,6 +104,82 @@ pub(super) fn setup_ready_ticket_with_story_qa(
     setup_ready_ticket_with_qa(root, store, FixtureQaPosture::CoveredByStoryClose)
 }
 
+pub(super) fn setup_ready_ticket_with_required_docs(
+    repo: &TestRepo,
+    store: &JsonGraphStore,
+) -> String {
+    let path = "docs/domain/reservation.md";
+    fs::create_dir_all(repo.path().join("docs/domain")).unwrap();
+    fs::write(
+        repo.path().join(path),
+        b"# Reservation contract\n\nThe reservation remains stable.\n",
+    )
+    .unwrap();
+    pulse::docs::register(
+        repo.path(),
+        1,
+        DocumentRecord {
+            id: "DOC-RESERVATION-CONTRACT".to_string(),
+            revision: 1,
+            path: path.to_string(),
+            kind: DocumentKind::Domain,
+            authority: DocumentAuthority::Approved,
+            lifecycle: DocumentLifecycle::Current,
+            owner: "team:platform".to_string(),
+            summary: "Reservation close contract".to_string(),
+            aliases: vec![],
+            scope: DocumentScope {
+                paths: vec!["src/**".to_string()],
+                domains: vec!["development".to_string()],
+                work_labels: vec!["reservation".to_string()],
+            },
+            review_policy: ReviewPolicy::None,
+            verification_profile: "domain-doc".to_string(),
+            generated: None,
+            superseded_by: None,
+            retrieval: None,
+        },
+        "human:tester",
+    )
+    .unwrap();
+    let optional_path = "docs/domain/operations.md";
+    fs::write(
+        repo.path().join(optional_path),
+        b"# Operations guidance\n\nOperational context.\n",
+    )
+    .unwrap();
+    pulse::docs::register(
+        repo.path(),
+        2,
+        DocumentRecord {
+            id: "DOC-OPERATIONS-GUIDANCE".to_string(),
+            revision: 1,
+            path: optional_path.to_string(),
+            kind: DocumentKind::Domain,
+            authority: DocumentAuthority::Approved,
+            lifecycle: DocumentLifecycle::Current,
+            owner: "team:platform".to_string(),
+            summary: "Optional operations guidance".to_string(),
+            aliases: vec![],
+            scope: DocumentScope::default(),
+            review_policy: ReviewPolicy::None,
+            verification_profile: "domain-doc".to_string(),
+            generated: None,
+            superseded_by: None,
+            retrieval: None,
+        },
+        "human:tester",
+    )
+    .unwrap();
+    repo.pulse_ok(&["docs", "index", "--json"]);
+    setup_ready_ticket_with_postures(
+        repo.path(),
+        store,
+        FixtureQaPosture::None,
+        FixtureDocsPosture::Required,
+    )
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum FixtureQaPosture {
     None,
@@ -108,10 +187,25 @@ enum FixtureQaPosture {
     CoveredByStoryClose,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum FixtureDocsPosture {
+    None,
+    Required,
+}
+
 fn setup_ready_ticket_with_qa(
     root: &std::path::Path,
     store: &JsonGraphStore,
     qa_posture: FixtureQaPosture,
+) -> String {
+    setup_ready_ticket_with_postures(root, store, qa_posture, FixtureDocsPosture::None)
+}
+
+fn setup_ready_ticket_with_postures(
+    root: &std::path::Path,
+    store: &JsonGraphStore,
+    qa_posture: FixtureQaPosture,
+    docs_posture: FixtureDocsPosture,
 ) -> String {
     let behavioral_qa = qa_posture != FixtureQaPosture::None;
     let node = store
@@ -230,9 +324,21 @@ fn setup_ready_ticket_with_qa(
             &ticket_id,
             current.revision,
             DocumentationImpactUpdate {
-                posture: DocumentationImpactPosture::None,
-                rationale: Some("No durable docs impact.".to_string()),
-                required_documents: vec![],
+                posture: match docs_posture {
+                    FixtureDocsPosture::None => DocumentationImpactPosture::None,
+                    FixtureDocsPosture::Required => DocumentationImpactPosture::Required,
+                },
+                rationale: Some(match docs_posture {
+                    FixtureDocsPosture::None => "No durable docs impact.".to_string(),
+                    FixtureDocsPosture::Required => {
+                        "Reservation contract must remain validated.".to_string()
+                    }
+                }),
+                required_documents: if docs_posture == FixtureDocsPosture::Required {
+                    vec!["DOC-RESERVATION-CONTRACT".to_string()]
+                } else {
+                    vec![]
+                },
                 deferred_to: vec![],
                 paths: vec![],
                 domains: vec!["development".to_string()],

@@ -371,6 +371,7 @@ impl JsonGraphStore {
             &verification.checks,
             &verification.acceptance_proofs,
         )?;
+        validate_documentation_close(&self.repo_root, &node, &verification)?;
         validate_qa_close(&self.repo_root, &node, &handoff, &verification)?;
         if implementation.acceptance.is_empty() {
             return Err(PulseError::validation(
@@ -631,7 +632,24 @@ fn validate_acceptance_proofs(
             }
         }
         for receipt_id in &proof.evidence_receipt_ids {
-            crate::evidence::receipt::verify_receipt(repo_root, receipt_id, true, None)?;
+            let (receipt, _) = crate::evidence::receipt::load_receipt(repo_root, receipt_id)?;
+            if matches!(
+                receipt.payload,
+                crate::evidence::model::ReceiptPayload::DocumentationValidation(_)
+            ) {
+                let registry = crate::docs::manifest::load_unlocked_preserve(repo_root)?
+                    .ok_or_else(|| {
+                        PulseError::validation(
+                            "verification_documentation_registry_missing",
+                            "documentation receipt verification requires a current registry",
+                        )
+                    })?;
+                crate::evidence::receipt::verify_receipt_under_fence(
+                    repo_root, receipt_id, true, None, &registry,
+                )?;
+            } else {
+                crate::evidence::receipt::verify_receipt(repo_root, receipt_id, true, None)?;
+            }
         }
     }
     Ok(())
@@ -655,10 +673,150 @@ fn validate_close_postures(node: &Node) -> Result<()> {
             "proof close requires assessed QA impact and its current assurance receipt",
         ));
     }
-    if node.documentation_posture() != DocumentationImpactPosture::None {
-        return Err(PulseError::validation(
+    match node.documentation_posture() {
+        DocumentationImpactPosture::None | DocumentationImpactPosture::Required => {}
+        DocumentationImpactPosture::Unknown | DocumentationImpactPosture::Deferred => {
+            return Err(PulseError::validation(
+                "close_documentation_gate_unavailable",
+                "proof close requires documentation impact none or current required-document validation; deferred documentation needs promotion authority",
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn validate_documentation_close(
+    repo_root: &Path,
+    node: &Node,
+    verification: &VerificationReceipt,
+) -> Result<()> {
+    if node.documentation_posture() == DocumentationImpactPosture::None {
+        return Ok(());
+    }
+    let documentation = node.documentation.as_ref().ok_or_else(|| {
+        PulseError::validation(
             "close_documentation_gate_unavailable",
-            "current proof close requires documentation impact none; required or deferred documentation needs promotion evidence",
+            "required documentation impact is missing its typed contract",
+        )
+    })?;
+    let registry = crate::docs::manifest::load_unlocked_preserve(repo_root)?.ok_or_else(|| {
+        PulseError::validation(
+            "close_documentation_registry_invalid",
+            "required documentation cannot close without a current registry",
+        )
+    })?;
+    let work = crate::docs::WorkDocumentationContext::from((
+        node.id.as_str(),
+        node.revision,
+        documentation,
+    ));
+    let applicable = crate::docs::applicable_docs(
+        &work,
+        &registry,
+        &crate::docs::FsContentResolver::new(repo_root),
+        crate::docs::ApplicabilityOptions::default(),
+    )?;
+    if applicable.gate.status != "complete" {
+        return Err(PulseError::validation(
+            "close_documentation_required_stale",
+            format!(
+                "required documentation is not current and authoritative: {:?}",
+                applicable.gate.reason_codes
+            ),
+        ));
+    }
+
+    let expected = applicable
+        .required
+        .iter()
+        .map(|document| (document.id.as_str(), document))
+        .collect::<std::collections::BTreeMap<_, _>>();
+    if expected.is_empty() {
+        return Err(PulseError::validation(
+            "close_documentation_required_missing",
+            "required documentation impact must resolve at least one exact document",
+        ));
+    }
+    let mut covered = std::collections::BTreeSet::new();
+    let mut saw_documentation_receipt = false;
+    let mut saw_current_profile_receipt = false;
+    for receipt_id in verification
+        .acceptance_proofs
+        .iter()
+        .flat_map(|proof| proof.evidence_receipt_ids.iter())
+    {
+        let (receipt, _) = crate::evidence::receipt::load_receipt(repo_root, receipt_id)?;
+        let crate::evidence::model::ReceiptPayload::DocumentationValidation(payload) =
+            &receipt.payload
+        else {
+            continue;
+        };
+        saw_documentation_receipt = true;
+        if payload.payload_version != 2 {
+            continue;
+        }
+        let source = receipt.bindings.source.as_ref().ok_or_else(|| {
+            PulseError::validation(
+                "close_documentation_source_missing",
+                "documentation validation receipt lacks an exact source binding",
+            )
+        })?;
+        if source.commit != verification.source_commit {
+            return Err(PulseError::validation(
+                "close_documentation_source_mismatch",
+                "documentation validation receipt is not bound to the verified source commit",
+            ));
+        }
+        let report = crate::evidence::receipt::verify_receipt_under_fence(
+            repo_root,
+            receipt_id,
+            true,
+            Some(&verification.source_commit),
+            &registry,
+        )?;
+        if !report.gate_eligible || receipt.result != crate::evidence::model::ReceiptResult::Passed
+        {
+            continue;
+        }
+        saw_current_profile_receipt = true;
+        for document in &payload.documents {
+            let Some(document_id) = document.document_id.as_deref() else {
+                continue;
+            };
+            let Some(required) = expected.get(document_id) else {
+                continue;
+            };
+            if document.document_revision == Some(required.document_revision)
+                && document.path == required.path
+                && document.content_hash == required.content_hash
+            {
+                covered.insert(document_id.to_string());
+            }
+        }
+    }
+    if !saw_documentation_receipt {
+        return Err(PulseError::validation(
+            "close_documentation_receipt_missing",
+            "required documentation needs a validation receipt in acceptance proof",
+        ));
+    }
+    if !saw_current_profile_receipt {
+        return Err(PulseError::validation(
+            "close_documentation_receipt_ineligible",
+            "required documentation needs a current gate-eligible payload-v2 receipt",
+        ));
+    }
+    let wanted = expected
+        .keys()
+        .map(|id| (*id).to_string())
+        .collect::<Vec<_>>();
+    let actual = covered.into_iter().collect::<Vec<_>>();
+    if actual != wanted {
+        return Err(PulseError::validation(
+            "close_documentation_coverage_incomplete",
+            format!(
+                "documentation receipt coverage must exactly include required documents: expected={wanted:?}, actual={actual:?}"
+            ),
         ));
     }
     Ok(())

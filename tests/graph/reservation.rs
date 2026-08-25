@@ -4,7 +4,7 @@ use pulse::evidence::model::{
 };
 use pulse::execution::{
     AcceptanceProof, CloseTicketArgs, CompleteVerificationArgs, SubmitHandoffArgs,
-    VerificationCheck, VerificationDisposition,
+    VerificationCheck, VerificationDisposition, VerificationReceipt,
 };
 use pulse::graph::node::NodeStatus;
 use pulse::qa::{
@@ -19,8 +19,9 @@ use pulse::storage::transaction::TransactionFailpoint;
 use pulse::JsonGraphStore;
 
 use super::assignment_fixture::{
-    bootstrap_repo, setup_ready_ticket, setup_ready_ticket_with_required_qa,
-    setup_ready_ticket_with_story_qa, valid_inventory_bytes, write_policy,
+    bootstrap_repo, setup_ready_ticket, setup_ready_ticket_with_required_docs,
+    setup_ready_ticket_with_required_qa, setup_ready_ticket_with_story_qa, valid_inventory_bytes,
+    write_policy,
 };
 use super::common_fixture_repo::TestRepo;
 
@@ -66,6 +67,224 @@ fn acceptance_proofs(check_name: &str) -> Vec<AcceptanceProof> {
         check_names: vec![check_name.to_string()],
         evidence_receipt_ids: vec![],
     }]
+}
+
+struct RequiredDocsCloseFixture {
+    repo: TestRepo,
+    store: JsonGraphStore,
+    ticket_id: String,
+    verification: VerificationReceipt,
+    source_commit: String,
+}
+
+#[derive(Clone, Copy)]
+enum DocumentationReceiptMode {
+    Missing,
+    Current,
+    Historical,
+    MissingRequiredCoverage,
+}
+
+fn required_docs_close_fixture(mode: DocumentationReceiptMode) -> RequiredDocsCloseFixture {
+    let repo = TestRepo::from_fixture("minimal-service");
+    let store = JsonGraphStore::new(repo.path());
+    bootstrap_repo(&repo, &store);
+    write_policy(repo.path(), &["work.assignment.release"]);
+    add_reviewer_policy(repo.path());
+    let ticket_id = setup_ready_ticket_with_required_docs(&repo, &store);
+    let reserved = reserve(&store, &ticket_id, "reservation-required-docs");
+    let active = store
+        .activate_reservation(ActivateReservationArgs {
+            lease_id: reserved.reservation.lease_id,
+            actor: "agent:tester".to_string(),
+            runtime_binding: binding(),
+            acknowledgement: acknowledgement(&reserved.reservation.packet_fingerprint),
+        })
+        .unwrap();
+    let handoff = store
+        .submit_execution_handoff(SubmitHandoffArgs {
+            lease_id: active.lease_id,
+            actor: "agent:tester".to_string(),
+            session_id: "ses_test".to_string(),
+            source_commit: active.source.commit,
+            summary: "Required documentation is ready for validation.".to_string(),
+            changed_paths: vec!["docs/domain/reservation.md".to_string()],
+            evidence_receipt_ids: vec![],
+            idempotency_key: "handoff-required-docs".to_string(),
+        })
+        .unwrap();
+    let evidence_receipt_ids = if matches!(mode, DocumentationReceiptMode::Missing) {
+        vec![]
+    } else {
+        let run = pulse::kernel::documentation::run_documentation_validation(
+            repo.path(),
+            None,
+            Some("human:docs-reviewer"),
+        )
+        .unwrap();
+        let receipt = run.receipt.unwrap().receipt;
+        if matches!(mode, DocumentationReceiptMode::Current) {
+            vec![receipt.id]
+        } else {
+            let mut derived = receipt;
+            derived.id = pulse::evidence::new_receipt_id();
+            let pulse::evidence::model::ReceiptPayload::DocumentationValidation(payload) =
+                &mut derived.payload
+            else {
+                unreachable!("docs validate records documentation payload")
+            };
+            match mode {
+                DocumentationReceiptMode::Historical => {
+                    payload.payload_version = 1;
+                    for document in &mut payload.documents {
+                        document.verification_profile = None;
+                    }
+                }
+                DocumentationReceiptMode::MissingRequiredCoverage => {
+                    payload.documents.retain(|document| {
+                        document.document_id.as_deref() == Some("DOC-OPERATIONS-GUIDANCE")
+                    });
+                }
+                DocumentationReceiptMode::Missing | DocumentationReceiptMode::Current => {
+                    unreachable!("handled before deriving a receipt")
+                }
+            }
+            let recorded =
+                pulse::evidence::record_receipt_envelope(repo.path(), None, derived).unwrap();
+            vec![recorded.receipt.id]
+        }
+    };
+    let verification = store
+        .complete_execution_verification(CompleteVerificationArgs {
+            handoff_id: handoff.handoff_id,
+            actor: "human:reviewer".to_string(),
+            source_commit: handoff.source_commit.clone(),
+            disposition: VerificationDisposition::Passed,
+            summary: "Implementation verification passed.".to_string(),
+            checks: vec![VerificationCheck {
+                name: "focused".to_string(),
+                command: "true".to_string(),
+                exit_code: 0,
+                artifact_ids: vec![],
+            }],
+            acceptance_proofs: vec![AcceptanceProof {
+                acceptance_id: "AC-1".to_string(),
+                check_names: vec!["focused".to_string()],
+                evidence_receipt_ids,
+            }],
+            idempotency_key: "verification-required-docs".to_string(),
+        })
+        .unwrap();
+    RequiredDocsCloseFixture {
+        repo,
+        store,
+        ticket_id,
+        verification,
+        source_commit: handoff.source_commit,
+    }
+}
+
+fn required_docs_close_args(fixture: &RequiredDocsCloseFixture, key: &str) -> CloseTicketArgs {
+    CloseTicketArgs {
+        verification_id: fixture.verification.verification_id.clone(),
+        actor: "human:reviewer".to_string(),
+        source_commit: fixture.source_commit.clone(),
+        summary: "Required documentation validation is current.".to_string(),
+        idempotency_key: key.to_string(),
+    }
+}
+
+#[test]
+fn required_documentation_close_requires_receipt_in_acceptance_proof() {
+    let fixture = required_docs_close_fixture(DocumentationReceiptMode::Missing);
+    let error = fixture
+        .store
+        .close_execution_ticket(required_docs_close_args(
+            &fixture,
+            "close-required-docs-missing",
+        ))
+        .unwrap_err();
+    assert_eq!(error.code(), "close_documentation_receipt_missing");
+    assert_eq!(
+        fixture.store.show_node(&fixture.ticket_id).unwrap().status,
+        NodeStatus::Verifying
+    );
+}
+
+#[test]
+fn historical_documentation_receipt_cannot_open_current_close_gate() {
+    let fixture = required_docs_close_fixture(DocumentationReceiptMode::Historical);
+    let error = fixture
+        .store
+        .close_execution_ticket(required_docs_close_args(
+            &fixture,
+            "close-required-docs-historical",
+        ))
+        .unwrap_err();
+    assert_eq!(error.code(), "close_documentation_receipt_ineligible");
+    assert_eq!(
+        fixture.store.show_node(&fixture.ticket_id).unwrap().status,
+        NodeStatus::Verifying
+    );
+}
+
+#[test]
+fn required_documentation_close_rejects_incomplete_document_coverage() {
+    let fixture = required_docs_close_fixture(DocumentationReceiptMode::MissingRequiredCoverage);
+    let error = fixture
+        .store
+        .close_execution_ticket(required_docs_close_args(
+            &fixture,
+            "close-required-docs-incomplete",
+        ))
+        .unwrap_err();
+    assert_eq!(error.code(), "close_documentation_coverage_incomplete");
+    assert_eq!(
+        fixture.store.show_node(&fixture.ticket_id).unwrap().status,
+        NodeStatus::Verifying
+    );
+}
+
+#[test]
+fn required_documentation_close_revalidates_profile_before_success() {
+    let fixture = required_docs_close_fixture(DocumentationReceiptMode::Current);
+    let registry_path = fixture.repo.path().join(".pulse/docs/registry.json");
+    let original = std::fs::read(&registry_path).unwrap();
+    let mut registry: serde_json::Value = serde_json::from_slice(&original).unwrap();
+    registry["documents"][0]["verification_profile"] =
+        serde_json::Value::String("domain-doc-changed".to_string());
+    std::fs::write(
+        &registry_path,
+        pulse::canonical_json::to_canonical_bytes(&registry).unwrap(),
+    )
+    .unwrap();
+
+    let error = fixture
+        .store
+        .close_execution_ticket(required_docs_close_args(
+            &fixture,
+            "close-required-docs-current",
+        ))
+        .unwrap_err();
+    assert_eq!(error.code(), "close_documentation_receipt_ineligible");
+    assert_eq!(
+        fixture.store.show_node(&fixture.ticket_id).unwrap().status,
+        NodeStatus::Verifying
+    );
+
+    std::fs::write(&registry_path, original).unwrap();
+    let close = fixture
+        .store
+        .close_execution_ticket(required_docs_close_args(
+            &fixture,
+            "close-required-docs-current",
+        ))
+        .unwrap();
+    assert_eq!(close.ticket_id, fixture.ticket_id);
+    assert_eq!(
+        fixture.store.show_node(&close.ticket_id).unwrap().status,
+        NodeStatus::Done
+    );
 }
 
 fn record_qa_checkpoint(repo: &std::path::Path, ticket_id: &str, source_commit: &str) -> String {

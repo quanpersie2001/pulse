@@ -62,5 +62,6 @@ compatibility và bootstrap upgrade v2 không đổi repository identity.
 - Profile-specific check selection/timeout contract ngoài mechanical check set
   hiện tại.
 - Semantic/human/independent review acquisition và authority resolver.
-- Docs close-gate consumption cho Ticket documentation impact.
+- Docs close-gate consumption cho Ticket `required` đã được triển khai ở Phase
+  3 Slice 4; `deferred` promotion authority vẫn chưa có resolver.
 - `pulse docs validate --changed` và `pulse doctor` aggregation/ratchet routing.
