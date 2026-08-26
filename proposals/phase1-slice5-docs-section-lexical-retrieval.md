@@ -1177,21 +1177,20 @@ It does produce machine-readable outputs that future verification can bind:
 
 Optional fixture/eval receipt extension may be proposed later. Search result is retrieval evidence, not proof that content is correct.
 
-### Documentation receipt compatibility owned by this slice
+### Documentation receipt contract owned by this slice
 
-Current implementation intentionally supports `documentation_validation` payload version `1` only, and evidence verification currently reads a reduced registry JSON model separately from `src/docs`. Slice 5 must make registry schema v2 safe without broadening the immutable receipt payload contract:
+Current implementation supports one `documentation_validation` payload contract, and evidence verification currently reads a reduced registry JSON model separately from `src/docs`. Slice 5 must keep registry evolution safe without introducing a parallel receipt contract:
 
-- `documentation_validation` payload remains version `1` in Slice 5;
-- evidence manifest/schema support remains version `1`; payload version `2` continues to be rejected;
-- existing receipts remain byte-for-byte immutable and verify with existing integrity/binding/registry/policy semantics;
+- documentation payload and evidence manifest/schema remain one current contract;
+- stored receipts remain byte-for-byte immutable and verify with existing integrity/binding/registry/policy semantics;
 - before registry v2 migration is enabled, evidence receipt verification must load registry records through a typed docs snapshot/interface, or its reduced parser must be explicitly version-aware and contract-tested against both exact registry v1 and v2;
 - retrieval-only metadata is ignored by documentation receipt verification;
 - retrieval-only registry edits do not bump `document_revision`, so they do not stale current receipts;
 - path, lifecycle, authority, owner/review-policy or other verification-relevant edits keep current Slice 4 document-revision and receipt invalidation behavior;
 - registry migration must not rewrite the evidence manifest, receipt schemas or stored receipts;
-- tests must prove a valid pre-migration v1 receipt has the same verification result before and after registry v2 migration.
+- tests must prove a valid receipt has the same verification result before and after registry migration.
 
-A future receipt payload v2, section-level review receipt or retrieval-eval receipt requires a separate explicit schema proposal. It is not smuggled into Slice 5.
+A section-level review receipt or retrieval-eval receipt requires a separate explicit proposal. It is not smuggled into Slice 5.
 
 ## Transaction, recovery and consistency
 
@@ -1418,7 +1417,7 @@ Initial quality gates are fixture-defined rather than one universal threshold. B
 | R28 | Registry retrieval metadata change | #31 | Relevant fingerprint invalidates and rebuilds |
 | R29 | Unrelated review-policy registry edit | incremental | No needless retrieval fingerprint change unless stored contract requires |
 | R29a | Retrieval-only document edit | receipt compatibility | Registry revision changes; document revision/valid receipt remain current; index invalidates as needed |
-| R29b | Pre-migration documentation receipt | compatibility | Same payload v1 verification result before/after registry v2 migration; payload v2 still rejected |
+| R29b | Documentation receipt across registry migration | compatibility | Same receipt verification result before/after registry v2 migration; no parallel receipt contract introduced |
 | R30 | Corrupt CURRENT/state/sections/Tantivy | #31 | Detect, discard/quarantine, rebuild; canonical docs untouched |
 | R31 | Incompatible extractor/engine version | #31 | Full rebuild with typed status |
 | R32 | Inputs change during build | concurrency | Stale build not published; retry/conflict rõ |
@@ -1476,7 +1475,7 @@ Tests cần real temporary repositories và real Markdown bytes. Cache concurren
 - [ ] Tree hoạt động từ registry khi cache absent.
 - [ ] Retrieval eval fixtures đo Recall@K/MRR, exclusions, context bytes, latency và incremental behavior.
 - [ ] Core fixtures pass top-K/budget expectations và zero must-exclude violations.
-- [ ] Documentation receipt payload/manifest remains v1; payload v2 is still rejected.
+- [ ] Documentation receipt payload/manifest remains one current contract.
 - [ ] Valid pre-migration documentation receipts retain identical verification outcomes after registry v2 migration.
 - [ ] Evidence receipt verification consumes a typed/version-aware docs registry boundary and ignores retrieval-only metadata.
 - [ ] Retrieval-only document metadata edits do not bump receipt-bound `document_revision`; verification-relevant edits still do.

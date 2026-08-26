@@ -523,7 +523,7 @@ Current executable baseline cài Core close gate cho standalone Ticket `risk=low
 và documentation impact `none|required`: exact contract acceptance IDs phải
 map sang passing verification checks hoặc current immutable receipts trên cùng
 handoff/source/revision. Documentation `required` cần current gate-eligible
-payload-v2 receipt cover exact required document revisions/content/profile;
+documentation receipt cover exact required document revisions/content/profile;
 QA `required` cần exact targeted checkpoint;
 `covered_by_story_close` cần full current Story receipt trên cùng source.
 Documentation defer/promotion và medium-or-higher risk vẫn fail closed; provider

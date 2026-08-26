@@ -9,7 +9,7 @@ validation rồi ghi một immutable `documentation_validation` receipt. CLI ch�
 record khi toàn bộ check pass; nếu validation fail, output vẫn là report Slice
 2 và không tạo receipt.
 
-Payload version 2 bind mỗi current document bằng exact:
+Documentation receipt bind mỗi current document bằng exact:
 
 - document ID và registry revision;
 - `verification_profile`;
@@ -18,9 +18,9 @@ Payload version 2 bind mỗi current document bằng exact:
 - registry, generated sources/outputs và generated navigation projections đã
   tham gia validation.
 
-Payload version 1 và schema cũ không bị rewrite. Bootstrap chỉ cài thêm schema
-v2/manifest entry còn thiếu và giữ nguyên `repository_id`, nên receipt lịch sử
-vẫn integrity-valid theo contract đã ghi.
+Pulse chưa release nên slice sửa trực tiếp contract hiện hành. Bootstrap chỉ
+cài một documentation schema/manifest entry; không tạo legacy/current branch
+hoặc migration path giả định khi chưa có installed base cần compatibility.
 
 ## Snapshot và failure posture
 
@@ -41,8 +41,8 @@ Snapshot:
 ## Current verification và authority
 
 `pulse evidence receipt verify <id> --current` giờ yêu cầu content/source,
-registry và review-policy structure đều current/applicable. Với payload v2,
-registry đổi `verification_profile` tạo
+registry và review-policy structure đều current/applicable. Registry đổi
+`verification_profile` tạo
 `document_receipt_profile_mismatch` và command trả non-zero.
 
 `review_policy=none` có thể gate-eligible khi các mechanical checks pass.
@@ -53,9 +53,9 @@ hoặc ineligible theo docs receipt policy hiện có.
 ## Verification
 
 Acceptance dùng mutable external copy của fixture `minimal-service`: validate,
-record v2, verify current/gate eligibility, mutate profile và chứng minh
-`--current` fail. Focused tests còn khóa registry/profile drift, historical v1
-compatibility và bootstrap upgrade v2 không đổi repository identity.
+record, verify current/gate eligibility, mutate profile và chứng minh
+`--current` fail. Focused tests còn khóa registry/profile drift và reject
+unsupported payload version.
 
 ## Deferred
 

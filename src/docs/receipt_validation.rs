@@ -64,7 +64,7 @@ pub(crate) fn documentation_validation_dimensions(
         ));
     };
 
-    if !matches!(payload.payload_version, 1 | 2) {
+    if payload.payload_version != 1 {
         return Ok((
             ValidationDimension {
                 status: "invalid".to_string(),
@@ -93,7 +93,6 @@ pub(crate) fn documentation_validation_dimensions(
             repo_root,
             &registry,
             doc,
-            payload.payload_version,
             &mut registry_codes,
             &mut policies,
         )?;
@@ -188,7 +187,6 @@ fn validate_doc_against_registry(
     repo_root: &Path,
     registry: &DocsRegistrySnapshot,
     doc: &DocumentationValidationDocument,
-    payload_version: u32,
     registry_codes: &mut Vec<String>,
     policies: &mut BTreeSet<String>,
 ) -> Result<()> {
@@ -218,9 +216,7 @@ fn validate_doc_against_registry(
     if doc.document_revision != Some(record.revision) {
         registry_codes.push("document_receipt_revision_stale".to_string());
     }
-    if payload_version == 2
-        && doc.verification_profile.as_deref() != Some(record.verification_profile.as_str())
-    {
+    if doc.verification_profile.as_deref() != Some(record.verification_profile.as_str()) {
         registry_codes.push("document_receipt_profile_mismatch".to_string());
     }
     validate_registry_record_state(repo_root, record, doc, registry_codes)

@@ -18,7 +18,7 @@ pub(super) fn validate_docs_payload(
     receipt: &ReceiptEnvelope,
     p: &DocumentationValidationPayload,
 ) -> Result<()> {
-    if !matches!(p.payload_version, 1 | 2) {
+    if p.payload_version != 1 {
         return Err(PulseError::validation(
             "receipt_version_unsupported",
             "payload",
@@ -30,7 +30,7 @@ pub(super) fn validate_docs_payload(
             "documentation requires source/content binding",
         ));
     }
-    if p.payload_version == 2 && p.documents.is_empty() {
+    if p.documents.is_empty() {
         return Err(PulseError::validation(
             "receipt_schema_invalid",
             "documentation receipt requires at least one document",
@@ -38,14 +38,12 @@ pub(super) fn validate_docs_payload(
     }
     for doc in &p.documents {
         validate_registry_document_identity(doc)?;
-        if p.payload_version == 2
-            && doc.verification_profile.as_deref().map_or(true, |profile| {
-                profile.trim().is_empty() || profile.chars().count() > 120
-            })
-        {
+        if doc.verification_profile.as_deref().map_or(true, |profile| {
+            profile.trim().is_empty() || profile.chars().count() > 120
+        }) {
             return Err(PulseError::validation(
                 "document_receipt_profile_mismatch",
-                "documentation payload v2 requires a bounded verification_profile",
+                "documentation receipt requires a bounded verification_profile",
             ));
         }
         validate_document_entry_common(receipt, &doc.path, &doc.content_hash)?;

@@ -141,7 +141,7 @@ removed from the current runtime path.
   Ticket.
 - Core proof close baseline đã support exact acceptance-to-check/evidence mapping
   cho low-risk Ticket với docs impact `none|required`; `required` revalidate
-  current payload-v2 receipt và exact required document revision/content/profile.
+  current documentation receipt và exact required document revision/content/profile.
   QA impact `none`, `required` với
   current passed checkpoint, hoặc `covered_by_story_close` với current full
   Story qualification trên cùng source được close. Specialized Story lifecycle
@@ -225,11 +225,11 @@ chung một repository identity xuyên các domain, và được chạy trên ex
 của fixture `minimal-service`. `pulse docs validate` đã aggregate registry,
 local internal links, declared generated freshness command và deterministic
 navigation projection checks bằng read-only report; structural failure không
-execute repository code. `pulse docs validate --record` đã tạo typed payload-v2
-receipt source/content-bound, bind exact `verification_profile`, reject snapshot
-drift và giữ historical payload v1. Core close gate đã consume receipt này cho
-exact Ticket `required_documents`; payload v1 chỉ còn historical và `deferred`
-vẫn fail closed. `pulse doctor`, profile-specific check selection và typed
+execute repository code. `pulse docs validate --record` đã tạo typed
+documentation receipt source/content-bound, bind exact `verification_profile`
+và reject snapshot drift. Core close gate đã consume cùng contract này cho exact
+Ticket `required_documents`; `deferred` vẫn fail closed. `pulse doctor`,
+profile-specific check selection và typed
 operational `.pulse/config.yaml` vẫn là capability Phase 3 tiếp theo.
 
 - Core-supported Agent responsibilities: orient, shape, plan, implement, debug, review, QA.

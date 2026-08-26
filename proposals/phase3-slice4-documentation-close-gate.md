@@ -13,7 +13,7 @@ Close gate revalidate:
 
 - current typed docs registry và applicability của exact Ticket revision;
 - mọi `required_documents` vẫn current, authoritative và content-readable;
-- ít nhất một passed, current, gate-eligible payload-v2 documentation receipt;
+- ít nhất một passed, current, gate-eligible documentation receipt;
 - exact verified source commit/repository identity;
 - exact document ID, revision, path, content hash và current
   `verification_profile`;
@@ -23,11 +23,11 @@ Receipt có thể cover thêm current documents vì `pulse docs validate --recor
 là repository-level validation. Coverage gate chỉ yêu cầu không thiếu document
 đã được Ticket khai báo explicit.
 
-## Historical compatibility và authority
+## Contract và authority
 
-Payload v1 tiếp tục integrity-readable/current-verifiable theo contract lịch sử,
-nhưng không mở current close gate vì không bind exact verification profile.
-`review_policy=none` là policy duy nhất hiện gate-eligible. Receipt của
+Pulse chưa release nên close gate consume trực tiếp documentation contract hiện
+hành, không duy trì historical/current payload split. `review_policy=none` là
+policy duy nhất hiện gate-eligible. Receipt của
 `light|standard|independent|human` tiếp tục ineligible nếu semantic review hoặc
 authority chưa được chứng minh; close không suy diễn approval từ mechanical
 validator.
@@ -50,8 +50,8 @@ Acceptance chạy trên external mutable copy của fixture `minimal-service` v�
 cover:
 
 - missing documentation receipt giữ Ticket ở `verifying`;
-- historical payload v1 không close;
-- gate-eligible payload v2 thiếu required document bị reject;
+- unsupported payload version bị reject ở evidence boundary;
+- gate-eligible receipt thiếu required document bị reject;
 - profile drift làm receipt ineligible;
 - restore exact registry snapshot cho phép close sang `done`.
 

@@ -40,7 +40,7 @@ pub struct DocumentationValidationRun {
 }
 
 /// Run repository documentation validation and optionally record an immutable
-/// payload-v2 receipt.
+/// documentation validation receipt.
 ///
 /// When `actor` is present, current document bytes are hashed before any
 /// declared freshness command runs. Evidence revalidates those hashes and the
@@ -181,7 +181,7 @@ fn build_receipt(
             graph_fingerprint_observed: None,
         },
         payload: ReceiptPayload::DocumentationValidation(DocumentationValidationPayload {
-            payload_version: 2,
+            payload_version: 1,
             documents,
             checks,
         }),

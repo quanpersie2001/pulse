@@ -134,7 +134,7 @@ fn docs_validate_checks_declared_freshness_links_and_navigation_on_fixture_copy(
     assert_eq!(recorded["receipt"]["receipt"]["result"], "passed");
     assert_eq!(
         recorded["receipt"]["receipt"]["payload"]["payload_version"],
-        2
+        1
     );
     assert_eq!(
         recorded["receipt"]["receipt"]["payload"]["documents"][0]["verification_profile"],
@@ -155,7 +155,7 @@ fn docs_validate_checks_declared_freshness_links_and_navigation_on_fixture_copy(
         .unwrap()
         .iter_mut()
         .find(|document| document["id"] == "DOC-AUTH-CONTRACT")
-        .unwrap()["verification_profile"] = json!("product-doc-v2");
+        .unwrap()["verification_profile"] = json!("product-doc-changed");
     fs::write(
         &registry_path,
         serde_json::to_vec_pretty(&registry).unwrap(),

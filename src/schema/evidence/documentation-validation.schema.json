@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Pulse documentation validation receipt payload",
-  "description": "Registry-aware documentation validation payload. Binds canonical document ID, document revision, path and content hash while preserving source/content bindings in the receipt envelope.",
+  "description": "Registry-aware documentation validation payload binding canonical document identity, revision, verification profile, path and content hash.",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -14,12 +14,14 @@
     },
     "documents": {
       "type": "array",
+      "minItems": 1,
       "items": {
         "type": "object",
         "additionalProperties": false,
         "required": [
           "document_id",
           "document_revision",
+          "verification_profile",
           "path",
           "content_hash",
           "result"
@@ -33,6 +35,11 @@
             "type": "integer",
             "minimum": 1
           },
+          "verification_profile": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 120
+          },
           "path": {
             "type": "string",
             "minLength": 1
@@ -42,27 +49,27 @@
             "pattern": "^sha256:[0-9a-f]{64}$"
           },
           "result": {
-            "enum": ["passed", "failed", "inconclusive"]
+            "const": "passed"
           }
         }
       }
     },
     "checks": {
       "type": "array",
+      "minItems": 1,
       "items": {
         "type": "object",
         "additionalProperties": false,
         "required": ["kind", "result"],
         "properties": {
           "kind": {"type": "string", "minLength": 1},
-          "result": {"enum": ["passed", "failed", "inconclusive"]},
+          "result": {"const": "passed"},
           "artifact": {
             "type": ["string", "null"],
             "pattern": "^sha256:[0-9a-f]{64}$"
           }
         }
-      },
-      "default": []
+      }
     }
   }
 }

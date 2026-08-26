@@ -81,7 +81,6 @@ struct RequiredDocsCloseFixture {
 enum DocumentationReceiptMode {
     Missing,
     Current,
-    Historical,
     MissingRequiredCoverage,
 }
 
@@ -134,12 +133,6 @@ fn required_docs_close_fixture(mode: DocumentationReceiptMode) -> RequiredDocsCl
                 unreachable!("docs validate records documentation payload")
             };
             match mode {
-                DocumentationReceiptMode::Historical => {
-                    payload.payload_version = 1;
-                    for document in &mut payload.documents {
-                        document.verification_profile = None;
-                    }
-                }
                 DocumentationReceiptMode::MissingRequiredCoverage => {
                     payload.documents.retain(|document| {
                         document.document_id.as_deref() == Some("DOC-OPERATIONS-GUIDANCE")
@@ -205,23 +198,6 @@ fn required_documentation_close_requires_receipt_in_acceptance_proof() {
         ))
         .unwrap_err();
     assert_eq!(error.code(), "close_documentation_receipt_missing");
-    assert_eq!(
-        fixture.store.show_node(&fixture.ticket_id).unwrap().status,
-        NodeStatus::Verifying
-    );
-}
-
-#[test]
-fn historical_documentation_receipt_cannot_open_current_close_gate() {
-    let fixture = required_docs_close_fixture(DocumentationReceiptMode::Historical);
-    let error = fixture
-        .store
-        .close_execution_ticket(required_docs_close_args(
-            &fixture,
-            "close-required-docs-historical",
-        ))
-        .unwrap_err();
-    assert_eq!(error.code(), "close_documentation_receipt_ineligible");
     assert_eq!(
         fixture.store.show_node(&fixture.ticket_id).unwrap().status,
         NodeStatus::Verifying

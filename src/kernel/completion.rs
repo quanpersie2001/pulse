@@ -739,7 +739,7 @@ fn validate_documentation_close(
     }
     let mut covered = std::collections::BTreeSet::new();
     let mut saw_documentation_receipt = false;
-    let mut saw_current_profile_receipt = false;
+    let mut saw_eligible_receipt = false;
     for receipt_id in verification
         .acceptance_proofs
         .iter()
@@ -752,7 +752,7 @@ fn validate_documentation_close(
             continue;
         };
         saw_documentation_receipt = true;
-        if payload.payload_version != 2 {
+        if payload.payload_version != 1 {
             continue;
         }
         let source = receipt.bindings.source.as_ref().ok_or_else(|| {
@@ -778,7 +778,7 @@ fn validate_documentation_close(
         {
             continue;
         }
-        saw_current_profile_receipt = true;
+        saw_eligible_receipt = true;
         for document in &payload.documents {
             let Some(document_id) = document.document_id.as_deref() else {
                 continue;
@@ -800,10 +800,10 @@ fn validate_documentation_close(
             "required documentation needs a validation receipt in acceptance proof",
         ));
     }
-    if !saw_current_profile_receipt {
+    if !saw_eligible_receipt {
         return Err(PulseError::validation(
             "close_documentation_receipt_ineligible",
-            "required documentation needs a current gate-eligible payload-v2 receipt",
+            "required documentation needs a current gate-eligible validation receipt",
         ));
     }
     let wanted = expected

@@ -1,9 +1,8 @@
 # Phase 1 — Slice 4: Document Registry + Applicable-Doc Projection
 
 > Trạng thái: **implemented và verified historical implementation record**.
-> Current documentation receipt contract dùng completed payload v1; proposed v2
-> wording trong planning history đã bị later single-baseline rebaseline thay thế
-> và không phải supported predecessor contract.
+> Current documentation receipt dùng một contract hiện hành; các draft
+> legacy/current trước đây đã bị single-baseline rebaseline thay thế.
 > Tiền đề: [`phase1-slice3-evidence-receipts.md`](phase1-slice3-evidence-receipts.md) đã hoàn thành và cung cấp immutable receipt identity, content-addressed artifacts, source/content/work bindings và documentation receipt foundation.
 > Sở hữu: implementation strategy cho lát cắt Phase 1 tiếp theo: canonical Document Registry, document identity/lifecycle/authority metadata, Ticket documentation-impact posture, deterministic applicable-doc projection và registry-aware documentation receipt validation.
 > Tham chiếu normative: [`PULSE_REBOOT.md`](../PULSE_REBOOT.md), [`02-work-graph.md`](../pulse-reboot/02-work-graph.md), [`04-runtime-harness.md`](../pulse-reboot/04-runtime-harness.md), [`07-verification-ratchet.md`](../pulse-reboot/07-verification-ratchet.md), [`08-implementation-roadmap.md`](../pulse-reboot/08-implementation-roadmap.md), [`09-decisions-and-dod.md`](../pulse-reboot/09-decisions-and-dod.md), [`10-documentation-system.md`](../pulse-reboot/10-documentation-system.md), [`11-documentation-retrieval.md`](../pulse-reboot/11-documentation-retrieval.md).
@@ -684,13 +683,15 @@ Nếu explicit old document đã superseded:
 
 ## Registry-aware documentation receipt validation
 
-Slice 3 payload dùng `proposed_document_id`. Slice 4 cần deliberate schema evolution thay vì reinterpret field im lặng.
+Slice 3 payload dùng `proposed_document_id`. Vì Pulse chưa release, Slice 4 sửa
+trực tiếp documentation contract hiện hành thay vì giữ song song một contract
+legacy không có consumer thực tế.
 
-### Payload v2 đề xuất
+### Documentation payload đề xuất
 
 ```jsonc
 {
-  "payload_version": 2,
+  "payload_version": 1,
   "documents": [
     {
       "document_id": "DOC-AUTH-DOMAIN",
@@ -709,12 +710,12 @@ Slice 3 payload dùng `proposed_document_id`. Slice 4 cần deliberate schema ev
 
 Rules:
 
-- New `documentation_validation` receipts dùng payload v2.
-- Historical v1 receipts vẫn integrity-verify theo schema cũ nhưng registry status là `legacy_unresolved` hoặc resolve conservatively bằng exact path only; không rewrite receipt.
+- `documentation_validation` chỉ có một payload contract hiện hành.
+- Trước release, schema/model/tests được cập nhật trực tiếp; không dựng legacy decoder hoặc migration branch giả định.
 - `document_id` phải tồn tại và revision/path/content hash khớp bound snapshot.
 - Receipt document path/hash phải có matching content binding như Slice 3.
 - Current verification detect registry revision/path/lifecycle changes.
-- Rename path làm receipt cũ không current cho new path dù stable document ID giữ nguyên; receipt vẫn historical-valid.
+- Rename path làm receipt đã ghi không current cho new path dù stable document ID giữ nguyên.
 - Retired/superseded/stale document receipt không gate-eligible cho current document state.
 - Generated doc receipt phải include declared freshness check kind khi policy yêu cầu; Slice 4 chỉ validate declaration/artifact, chưa chạy command.
 
@@ -823,14 +824,14 @@ src/
     validate.rs          # uniqueness, path, lifecycle, owner, generated, supersession rules
     applicability.rs     # deterministic work -> document buckets/reasons
     impact.rs            # Ticket docs-impact typed mutation/validation
-    receipt.rs           # documentation receipt v2 registry/policy validation
+    receipt.rs           # documentation receipt registry/policy validation
 
   graph/
     node.rs              # optional documentation metadata
     store.rs             # typed CAS impact mutation only
 
   evidence/
-    model.rs             # documentation payload v2 + historical v1 decoder
+    model.rs             # single current documentation payload contract
     receipt.rs           # registry validation hook, no docs-store ownership leak
 
   schema/
@@ -1001,8 +1002,7 @@ Tests phải dùng real temp Git repositories cho content/source binding cases. 
 - [ ] Required/current/approved docs route với exact current content hash.
 - [ ] Retired, superseded, stale, suspected-stale, draft, migration backup và generated-navigation docs được exclude/label đúng default policy.
 - [ ] Document supersession không silently rewrite Ticket references.
-- [ ] Documentation receipt payload v2 bind canonical document ID + document revision + path/content/source.
-- [ ] Historical receipt v1 vẫn inspect/verify integrity được mà không rewrite.
+- [ ] Documentation receipt bind canonical document ID + document revision + path/content/source.
 - [ ] Receipt validation tách integrity, bindings, registry, policy và authorization; không report authorized khi resolver chưa có.
 - [ ] Independent/human review policy không trở thành gate pass chỉ vì actor tự khai.
 - [ ] Registry/content changes invalidate applicable/receipt projections đúng mà không mutate immutable evidence.
