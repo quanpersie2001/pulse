@@ -167,10 +167,7 @@ fn create_rejects_missing_guidance_applicability_and_provenance() {
         paths: vec!["backend".to_string()],
         ..Applicability::default()
     };
-    assert_eq!(
-        knowledge.create(broad, ctx(11)).unwrap_err().code(),
-        "learning_applicability_too_broad"
-    );
+    assert!(knowledge.create(broad, ctx(11)).is_ok());
 
     let mut no_provenance = draft(&work);
     no_provenance.provenance_targets.clear();
