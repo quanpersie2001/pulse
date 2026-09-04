@@ -108,7 +108,7 @@ fn doc_record(id: &str, revision: u64) -> DocumentRecord {
 
 fn make_receipt(
     id: &str,
-    node: &pulse::graph::node::Node,
+    node: &pulse::graph::model::node::Node,
     manifest: &pulse::evidence::manifest::EvidenceManifest,
     source_commit: String,
 ) -> ReceiptEnvelope {
@@ -387,21 +387,5 @@ fn relation_endpoint_revision_and_hash_bindings_are_checked() {
             .unwrap_err()
             .code(),
         "knowledge_relation_endpoint_hash_mismatch"
-    );
-}
-
-#[test]
-fn schema_drift_is_detected_after_bootstrap() {
-    let (repo, _graph, knowledge, _work) = setup();
-    knowledge.bootstrap().unwrap();
-    fs::write(
-        repo.path()
-            .join(".pulse/knowledge/schemas/learning.schema.json"),
-        b"{}\n",
-    )
-    .unwrap();
-    assert_eq!(
-        knowledge.bootstrap().unwrap_err().code(),
-        "knowledge_schema_hash_mismatch"
     );
 }

@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
-use crate::graph::contract::{Materialization, QaImpactPosture, Risk, TicketRole};
-use crate::graph::node::NodeStatus;
+use crate::graph::model::contract::{Materialization, QaImpactPosture, Risk, TicketRole};
+use crate::graph::model::node::NodeStatus;
 use crate::id::WorkKind;
 use clap::{Subcommand, ValueEnum};
 
@@ -286,11 +286,11 @@ pub(crate) enum FrontierKindArg {
     Execution,
 }
 
-impl From<FrontierKindArg> for crate::graph::frontier::FrontierKind {
+impl From<FrontierKindArg> for crate::graph::read::frontier::FrontierKind {
     fn from(value: FrontierKindArg) -> Self {
         match value {
-            FrontierKindArg::Decision => crate::graph::frontier::FrontierKind::Decision,
-            FrontierKindArg::Execution => crate::graph::frontier::FrontierKind::Execution,
+            FrontierKindArg::Decision => crate::graph::read::frontier::FrontierKind::Decision,
+            FrontierKindArg::Execution => crate::graph::read::frontier::FrontierKind::Execution,
         }
     }
 }
@@ -394,8 +394,8 @@ impl From<MaterializationArg> for Materialization {
 use serde_json::json;
 
 use crate::cli::output::render;
-use crate::graph::contract::PublicCreateClassification;
-use crate::graph::lifecycle::TransitionReason;
+use crate::graph::model::contract::PublicCreateClassification;
+use crate::graph::model::lifecycle::TransitionReason;
 use crate::graph::store::{ContractSetRequest, QaImpactUpdate, SupersessionTarget};
 use crate::{policy, JsonGraphStore, PulseError};
 
@@ -539,13 +539,13 @@ pub(crate) fn handle(
         }
         WorkCommand::Ready { id, profile, json } => {
             if profile.is_some()
-                && profile.as_deref() != Some(crate::graph::readiness::READINESS_PROFILE)
+                && profile.as_deref() != Some(crate::graph::read::readiness::READINESS_PROFILE)
             {
                 return Err(PulseError::validation(
                     "readiness_profile_unsupported",
                     format!(
                         "unsupported readiness profile; only {} is available in this release",
-                        crate::graph::readiness::READINESS_PROFILE
+                        crate::graph::read::readiness::READINESS_PROFILE
                     ),
                 ));
             }
@@ -559,14 +559,14 @@ pub(crate) fn handle(
                     .filter(|family| {
                         matches!(
                             family.status,
-                            crate::graph::readiness::GateStatus::Passed
-                                | crate::graph::readiness::GateStatus::NotApplicable
+                            crate::graph::read::readiness::GateStatus::Passed
+                                | crate::graph::read::readiness::GateStatus::NotApplicable
                         )
                     })
                     .count()
             );
             render(json, &out, human)?;
-            if out.status == crate::graph::readiness::ReadinessStatus::Ready {
+            if out.status == crate::graph::read::readiness::ReadinessStatus::Ready {
                 Ok(())
             } else {
                 Err(PulseError::validation(
@@ -616,7 +616,7 @@ pub(crate) fn handle(
                 include_excluded,
             )?;
             match out {
-                crate::graph::frontier::FrontierReport::Decision(report) => {
+                crate::graph::read::frontier::FrontierReport::Decision(report) => {
                     let human = format!(
                         "decision frontier: {} item(s){}",
                         report.items.len(),
@@ -628,7 +628,7 @@ pub(crate) fn handle(
                     );
                     render(json, &report, human)
                 }
-                crate::graph::frontier::FrontierReport::Execution(report) => {
+                crate::graph::read::frontier::FrontierReport::Execution(report) => {
                     let human = format!(
                         "execution frontier: {} item(s){}",
                         report.items.len(),

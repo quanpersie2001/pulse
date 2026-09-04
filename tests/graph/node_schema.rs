@@ -1,11 +1,11 @@
 use chrono::{TimeZone, Utc};
-use pulse::graph::contract::{
+use pulse::graph::model::contract::{
     ContentRef, ContractItem, ExpectedEvidence, ExpectedHandoff, ImplementationContract,
     ImplementationMode, ImplementationSemanticImpact, Materialization, PlanPolicy, QaImpact,
     QaImpactPosture, QaMetadata, Risk, SurfaceRef, WorkSurface,
 };
-use pulse::graph::node::Node;
-use pulse::graph::validate::validate_node_schema_semantics;
+use pulse::graph::model::node::Node;
+use pulse::graph::validation::graph::validate_node_schema_semantics;
 use pulse::id::WorkKind;
 use serde_json::{json, Value};
 

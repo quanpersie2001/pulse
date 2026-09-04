@@ -92,8 +92,6 @@ pub fn knowledge_fingerprint(repo_root: &Path, manifest: &KnowledgeManifest) -> 
     let payload = json!({
         "fingerprint_version": 1,
         "manifest_hash": hash_value(manifest)?,
-        "learning_schema_hash": manifest.learning_schema.sha256,
-        "relation_schema_hash": manifest.relation_schema.sha256,
         "entries": entries,
         "relations": relations,
     });

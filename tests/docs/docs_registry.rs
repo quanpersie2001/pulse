@@ -47,9 +47,6 @@ fn bootstrap_reuses_evidence_repository_id_and_is_idempotent() {
     assert_eq!(first.registry.revision, 1);
     assert_eq!(first.registry.repository_id, evidence.repository_id);
     assert!(repo.join(".pulse/docs/registry.json").exists());
-    assert!(repo
-        .join(".pulse/docs/schemas/document.schema.json")
-        .exists());
 
     let second = docs_bootstrap(repo).unwrap();
     assert_eq!(second.registry, first.registry);
@@ -58,22 +55,6 @@ fn bootstrap_reuses_evidence_repository_id_and_is_idempotent() {
         .preserved
         .iter()
         .any(|path| path.ends_with("registry.json")));
-}
-
-#[test]
-fn bootstrap_rejects_existing_registry_schema_drift() {
-    let tmp = tempfile::tempdir().unwrap();
-    let repo = tmp.path();
-    let _ = pulse::evidence::manifest::bootstrap(repo).unwrap();
-    fs::create_dir_all(repo.join(".pulse/docs/schemas")).unwrap();
-    fs::write(
-        repo.join(".pulse/docs/schemas/document.schema.json"),
-        b"{}\n",
-    )
-    .unwrap();
-
-    let error = docs_bootstrap(repo).unwrap_err();
-    assert_eq!(error.code(), "docs_registry_schema_invalid");
 }
 
 #[test]

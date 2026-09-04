@@ -1,7 +1,7 @@
 use chrono::{TimeZone, Utc};
 use pulse::event::{EventActorKind, EventEnvelope};
-use pulse::graph::lifecycle::TransitionReason;
-use pulse::graph::node::NodeStatus;
+use pulse::graph::model::lifecycle::TransitionReason;
+use pulse::graph::model::node::NodeStatus;
 use pulse::graph::store::{
     OperationContext, SupersessionAssertion, SupersessionClaim, SupersessionTarget,
 };

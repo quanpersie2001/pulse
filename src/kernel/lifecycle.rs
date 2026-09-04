@@ -4,13 +4,13 @@ use chrono::Utc;
 use serde_json::json;
 
 use crate::canonical_json::{hash_bytes, to_canonical_bytes};
-use crate::graph::lifecycle::{
+use crate::graph::model::lifecycle::{
     installed_gate, status_requires_reason, validate_transition, GateProfile, TransitionReason,
 };
-use crate::graph::node::{Node, NodeStatus};
-use crate::graph::readiness::{evaluate as evaluate_readiness, EvalProfile};
+use crate::graph::model::node::{Node, NodeStatus};
+use crate::graph::read::readiness::{evaluate as evaluate_readiness, EvalProfile};
 use crate::graph::store::{JsonGraphStore, MutationOutcome, MutationStatus, OperationContext};
-use crate::graph::validate::validate_graph;
+use crate::graph::validation::graph::validate_graph;
 use crate::storage::transaction::{recover_prepared_transactions, FileState};
 use crate::storage::WriteGuard;
 use crate::{PulseError, PulseResult};
@@ -19,7 +19,7 @@ impl JsonGraphStore {
     pub fn transition_node_with_context(
         &self,
         id: &str,
-        to: crate::graph::node::NodeStatus,
+        to: crate::graph::model::node::NodeStatus,
         expected_revision: u64,
         reason: Option<TransitionReason>,
         ctx: OperationContext,
@@ -34,7 +34,7 @@ impl JsonGraphStore {
     pub fn transition_node_gated_with_context(
         &self,
         id: &str,
-        to: crate::graph::node::NodeStatus,
+        to: crate::graph::model::node::NodeStatus,
         expected_revision: u64,
         reason: Option<TransitionReason>,
         expected_readiness_fingerprint: Option<&str>,
@@ -151,7 +151,7 @@ impl JsonGraphStore {
     pub fn transition_node(
         &self,
         id: &str,
-        to: crate::graph::node::NodeStatus,
+        to: crate::graph::model::node::NodeStatus,
         expected_revision: u64,
         reason: Option<TransitionReason>,
         actor: String,

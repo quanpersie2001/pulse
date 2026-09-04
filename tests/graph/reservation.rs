@@ -6,7 +6,7 @@ use pulse::execution::{
     AcceptanceProof, CloseTicketArgs, CompleteVerificationArgs, SubmitHandoffArgs,
     VerificationCheck, VerificationDisposition, VerificationReceipt,
 };
-use pulse::graph::node::NodeStatus;
+use pulse::graph::model::node::NodeStatus;
 use pulse::qa::{
     QaCaseObservation, QaCaseOutcome, QaCheckpointPayload, QaExecutionScope, QaExecutor,
 };
@@ -786,7 +786,7 @@ fn proof_close_fails_closed_when_risk_policy_is_not_installed() {
         .join(".pulse/workgraph/nodes")
         .join(format!("{ticket_id}.json"));
     let mut node = store.show_node(&ticket_id).unwrap();
-    node.risk = Some(pulse::graph::contract::Risk::Medium);
+    node.risk = Some(pulse::graph::model::contract::Risk::Medium);
     node.revision += 1;
     node.updated_at = chrono::Utc::now();
     std::fs::write(

@@ -3,13 +3,13 @@ use std::fs;
 
 use serde::{Deserialize, Serialize};
 
-use crate::graph::contract::TicketRole;
-use crate::graph::frontier::{
+use crate::graph::model::contract::TicketRole;
+use crate::graph::model::node::{Node, NodeStatus};
+use crate::graph::read::frontier::{
     self, branch_context_from_shaping, DecisionBranchContext, FrontierKind, FrontierReport,
 };
-use crate::graph::node::{Node, NodeStatus};
-use crate::graph::projection::GraphProjection;
-use crate::graph::readiness::{evaluate as evaluate_readiness, EvalProfile, ReadinessReport};
+use crate::graph::read::projection::GraphProjection;
+use crate::graph::read::readiness::{evaluate as evaluate_readiness, EvalProfile, ReadinessReport};
 use crate::graph::store::JsonGraphStore;
 use crate::id::WorkKind;
 use crate::reservation::ReservationState;
@@ -86,7 +86,7 @@ pub struct EnrichedExecutionFrontierReport {
     pub readiness_profile: String,
     pub items: Vec<EnrichedFrontierItem>,
     pub active_assignments: Vec<ActiveAssignmentEntry>,
-    pub excluded: Vec<crate::graph::frontier::FrontierExcluded>,
+    pub excluded: Vec<crate::graph::read::frontier::FrontierExcluded>,
 }
 
 impl JsonGraphStore {

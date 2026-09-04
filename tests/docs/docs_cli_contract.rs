@@ -43,15 +43,9 @@ fn setup_repo() -> TempDir {
     fs::write(repo.path().join("docs/domain/optional.md"), b"optional").unwrap();
     run_ok(&repo, &["evidence", "bootstrap", "--json"]);
     run_ok(&repo, &["graph", "bootstrap", "--json"]);
+    fs::create_dir_all(repo.path().join(".pulse/docs")).unwrap();
     let manifest: Value = serde_json::from_slice(
         &fs::read(repo.path().join(".pulse/evidence/manifest.json")).unwrap(),
-    )
-    .unwrap();
-    fs::create_dir_all(repo.path().join(".pulse/docs/schemas")).unwrap();
-    let schema_value: Value = serde_json::from_str(pulse::docs::manifest::DOCUMENT_SCHEMA).unwrap();
-    fs::write(
-        repo.path().join(".pulse/docs/schemas/document.schema.json"),
-        pulse::canonical_json::to_canonical_bytes(&schema_value).unwrap(),
     )
     .unwrap();
     let registry = json!({

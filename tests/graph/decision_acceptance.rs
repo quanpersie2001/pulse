@@ -9,7 +9,7 @@ use std::fs;
 
 fn make_receipt(
     id: &str,
-    decision: &pulse::graph::node::Node,
+    decision: &pulse::graph::model::node::Node,
     manifest: &pulse::evidence::manifest::EvidenceManifest,
     path: &str,
     content_hash: String,

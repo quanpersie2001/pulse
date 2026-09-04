@@ -10,7 +10,7 @@
 use crate::canonical_json::hash_bytes;
 use crate::evidence::manifest;
 use crate::evidence::model::{ReceiptBindings, ReceiptEnvelope, WorkRevisionRef};
-use crate::graph::node::Node;
+use crate::graph::model::node::Node;
 use crate::{PulseError, Result};
 use std::collections::BTreeMap;
 use std::fs;

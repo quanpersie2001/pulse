@@ -6,12 +6,12 @@
 use chrono::Utc;
 use pulse::canonical_json::{hash_bytes, to_canonical_bytes};
 use pulse::evidence::model::*;
-use pulse::graph::contract::{
+use pulse::graph::model::contract::{
     ContentRef, ContractItem, ContractScope, EffortMetadata, ImplementationContract,
     ImplementationMode, ImplementationSemanticImpact, Materialization, PlanPolicy, QaImpactPosture,
     Risk, SurfaceRef, TicketRole, WorkSurface,
 };
-use pulse::graph::node::DocumentationImpactPosture;
+use pulse::graph::model::node::DocumentationImpactPosture;
 use pulse::graph::store::{
     ContractSetRequest, DocumentationImpactUpdate, OperationContext, QaImpactUpdate,
 };
@@ -77,7 +77,7 @@ fn ready_ticket(repo: &TempDir, store: &JsonGraphStore) -> String {
         .create_node_public_with_context(
             WorkKind::Ticket,
             "Ready ticket".to_string(),
-            pulse::graph::contract::PublicCreateClassification {
+            pulse::graph::model::contract::PublicCreateClassification {
                 role: Some(TicketRole::Implementation),
                 risk: Some(Risk::Low),
                 materialization: Some(Materialization::R1),
@@ -240,7 +240,7 @@ fn ready_ticket(repo: &TempDir, store: &JsonGraphStore) -> String {
     let node = store
         .transition_node_with_context(
             &node.id,
-            pulse::graph::node::NodeStatus::Shaped,
+            pulse::graph::model::node::NodeStatus::Shaped,
             node.revision,
             None,
             ctx(),
@@ -250,7 +250,7 @@ fn ready_ticket(repo: &TempDir, store: &JsonGraphStore) -> String {
     let ready = store
         .transition_node_with_context(
             &node.id,
-            pulse::graph::node::NodeStatus::Ready,
+            pulse::graph::model::node::NodeStatus::Ready,
             node.revision,
             None,
             ctx(),
@@ -296,7 +296,7 @@ fn work_ready_returns_nonzero_for_not_ready_work() {
         .create_node_public_with_context(
             WorkKind::Ticket,
             "Draft".to_string(),
-            pulse::graph::contract::PublicCreateClassification {
+            pulse::graph::model::contract::PublicCreateClassification {
                 role: Some(TicketRole::Implementation),
                 risk: Some(Risk::Low),
                 materialization: Some(Materialization::R1),

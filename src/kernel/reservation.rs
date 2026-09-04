@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 
 use crate::canonical_json::{hash_bytes, to_canonical_bytes};
 use crate::event::{new_event_id, EventEnvelope};
-use crate::graph::node::{Node, NodeStatus};
+use crate::graph::model::node::{Node, NodeStatus};
 use crate::graph::store::JsonGraphStore;
 use crate::reservation::{
     AcknowledgeReservationArgs, ActivateReservationArgs, CapabilityInventory, CoreReservation,

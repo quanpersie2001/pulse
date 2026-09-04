@@ -8,7 +8,7 @@
 use pulse::docs::{
     ApplicabilityOptions, DocsRegistry, DocumentAuthority, DocumentKind, DocumentLifecycle,
     DocumentRecord, DocumentScope, GetOptions, IndexOptions, RetrievalConfig, ReviewPolicy,
-    SearchOptions, TreeOptions, DOCUMENT_SCHEMA,
+    SearchOptions, TreeOptions,
 };
 use pulse::event::{EventActor, EventActorKind, EventCorrelation, EventEnvelope, EventSubject};
 use pulse::evidence::model::{
@@ -67,7 +67,6 @@ fn docs_evidence_knowledge_storage_and_identity_public_paths_compile() {
         TreeOptions::default(),
     );
     assert_eq!(RetrievalConfig::defaults().default_search_limit, 8);
-    assert!(DOCUMENT_SCHEMA.contains("Document Registry"));
 
     let actor = EventActor::new(EventActorKind::Human, "tester");
     let subject = EventSubject::new("ticket", "TK-001", Some(1));

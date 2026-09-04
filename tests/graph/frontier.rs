@@ -14,19 +14,19 @@
 use chrono::Utc;
 use pulse::canonical_json::hash_bytes;
 use pulse::evidence::model::*;
-use pulse::graph::contract::{
+use pulse::graph::model::contract::{
     ContentRef, ContractItem, ContractScope, DecisionWorkContract, DecisionWorkProvenance,
     EffortMetadata, ExpectedEvidence, GapKind, ImplementationContract, ImplementationMode,
     ImplementationSemanticImpact, Materialization, PlanPolicy, PublicCreateClassification,
     QaImpactPosture, ResolutionTarget, ResolutionTargetKind, Risk, SurfaceRef, TicketRole,
     WorkSurface,
 };
-use pulse::graph::edge::EdgeType;
-use pulse::graph::executability::StructuralState;
-use pulse::graph::frontier::{
+use pulse::graph::model::edge::EdgeType;
+use pulse::graph::model::node::{DocumentationImpactPosture, NodeStatus};
+use pulse::graph::read::executability::StructuralState;
+use pulse::graph::read::frontier::{
     DecisionFrontierReport, ExecutionFrontierReport, FrontierKind, FrontierReport,
 };
-use pulse::graph::node::{DocumentationImpactPosture, NodeStatus};
 use pulse::graph::store::{
     ContractSetRequest, DocumentationImpactUpdate, OperationContext, QaImpactUpdate,
 };
@@ -77,8 +77,8 @@ fn ctx() -> OperationContext {
 
 fn set_docs_none(
     store: &JsonGraphStore,
-    node: &pulse::graph::node::Node,
-) -> pulse::graph::node::Node {
+    node: &pulse::graph::model::node::Node,
+) -> pulse::graph::model::node::Node {
     store
         .update_documentation_impact(
             &node.id,
@@ -100,8 +100,8 @@ fn set_docs_none(
 
 fn set_qa_none(
     store: &JsonGraphStore,
-    node: &pulse::graph::node::Node,
-) -> pulse::graph::node::Node {
+    node: &pulse::graph::model::node::Node,
+) -> pulse::graph::model::node::Node {
     store
         .set_qa_impact_with_context(
             &node.id,
@@ -119,7 +119,7 @@ fn set_qa_none(
 }
 
 fn implementation_contract(
-    node: &pulse::graph::node::Node,
+    node: &pulse::graph::model::node::Node,
     brief_hash: &str,
 ) -> ImplementationContract {
     ImplementationContract {
@@ -162,7 +162,7 @@ fn implementation_contract(
     }
 }
 
-fn write_brief(repo: &std::path::Path, node: &pulse::graph::node::Node) -> String {
+fn write_brief(repo: &std::path::Path, node: &pulse::graph::model::node::Node) -> String {
     let rel = format!("{}/ticket.md", node.content_dir);
     let path = repo.join(&rel);
     fs::create_dir_all(path.parent().unwrap()).unwrap();
@@ -172,7 +172,7 @@ fn write_brief(repo: &std::path::Path, node: &pulse::graph::node::Node) -> Strin
 
 fn record_concise_shaping(
     repo: &std::path::Path,
-    node: &pulse::graph::node::Node,
+    node: &pulse::graph::model::node::Node,
     receipt_id: &str,
     brief_rel: &str,
     brief_hash: &str,
@@ -243,7 +243,7 @@ fn ready_implementation_ticket(
     repo: &std::path::Path,
     store: &JsonGraphStore,
     receipt_id: &str,
-) -> pulse::graph::node::Node {
+) -> pulse::graph::model::node::Node {
     write_policy(repo, FULL_GRANTS);
     let node = store
         .create_node_public_with_context(
@@ -290,7 +290,7 @@ fn ready_implementation_ticket(
         .value
 }
 
-fn create_story(store: &JsonGraphStore, title: &str) -> pulse::graph::node::Node {
+fn create_story(store: &JsonGraphStore, title: &str) -> pulse::graph::model::node::Node {
     store
         .create_node_public_with_context(
             WorkKind::Story,
@@ -303,11 +303,11 @@ fn create_story(store: &JsonGraphStore, title: &str) -> pulse::graph::node::Node
 }
 
 fn decision_work_contract(
-    owner: &pulse::graph::node::Node,
+    owner: &pulse::graph::model::node::Node,
     branch_id: &str,
 ) -> DecisionWorkContract {
     DecisionWorkContract {
-        destination_owner: pulse::graph::contract::RevisionedWorkRef {
+        destination_owner: pulse::graph::model::contract::RevisionedWorkRef {
             id: owner.id.clone(),
             contract_revision: owner.contract_revision,
         },
@@ -330,9 +330,9 @@ fn decision_work_contract(
 /// Create a decision-work Ticket serving `owner`, linked via a `parent` edge.
 fn decision_work_ticket(
     store: &JsonGraphStore,
-    owner: &pulse::graph::node::Node,
+    owner: &pulse::graph::model::node::Node,
     branch_id: &str,
-) -> pulse::graph::node::Node {
+) -> pulse::graph::model::node::Node {
     let node = store
         .create_node_public_with_context(
             WorkKind::Ticket,
@@ -373,7 +373,7 @@ fn decision_work_ticket(
 fn apply_owner_shaping_with_branch(
     repo: &std::path::Path,
     store: &JsonGraphStore,
-    owner: &pulse::graph::node::Node,
+    owner: &pulse::graph::model::node::Node,
     receipt_id: &str,
     branch_id: &str,
     disposition: BranchDisposition,
@@ -487,11 +487,11 @@ fn execution_report(store: &JsonGraphStore, for_owner: Option<&str>) -> Executio
     }
 }
 
-fn decision_item_ids(items: &[pulse::graph::frontier::DecisionFrontierItem]) -> Vec<String> {
+fn decision_item_ids(items: &[pulse::graph::read::frontier::DecisionFrontierItem]) -> Vec<String> {
     items.iter().map(|i| i.id.clone()).collect()
 }
 
-fn exec_item_ids(items: &[pulse::graph::frontier::ExecutionFrontierItem]) -> Vec<String> {
+fn exec_item_ids(items: &[pulse::graph::read::frontier::ExecutionFrontierItem]) -> Vec<String> {
     items.iter().map(|i| i.id.clone()).collect()
 }
 

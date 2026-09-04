@@ -7,14 +7,14 @@
 use chrono::Utc;
 use pulse::canonical_json::hash_bytes;
 use pulse::evidence::model::*;
-use pulse::graph::contract::{
+use pulse::graph::model::contract::{
     ContentRef, ContractItem, ContractScope, EffortMetadata, ImplementationContract,
     ImplementationMode, ImplementationSemanticImpact, Materialization, PlanPolicy, QaImpactPosture,
     Risk, SurfaceRef, TicketRole, WorkSurface,
 };
-use pulse::graph::lifecycle::{installed_gate, GateProfile};
-use pulse::graph::node::{DocumentationImpactPosture, NodeStatus};
-use pulse::graph::readiness::{
+use pulse::graph::model::lifecycle::{installed_gate, GateProfile};
+use pulse::graph::model::node::{DocumentationImpactPosture, NodeStatus};
+use pulse::graph::read::readiness::{
     self, GateFamilyReport, GateStatus, ReadinessReport, ReadinessStatus, READINESS_PROFILE,
 };
 use pulse::graph::store::{
@@ -63,8 +63,8 @@ fn ctx() -> OperationContext {
     }
 }
 
-fn create_ticket(store: &JsonGraphStore) -> pulse::graph::node::Node {
-    let classification = pulse::graph::contract::PublicCreateClassification {
+fn create_ticket(store: &JsonGraphStore) -> pulse::graph::model::node::Node {
+    let classification = pulse::graph::model::contract::PublicCreateClassification {
         role: Some(TicketRole::Implementation),
         risk: Some(Risk::Low),
         materialization: Some(Materialization::R1),
@@ -80,7 +80,7 @@ fn create_ticket(store: &JsonGraphStore) -> pulse::graph::node::Node {
         .value
 }
 
-fn write_brief(repo: &std::path::Path, node: &pulse::graph::node::Node) -> String {
+fn write_brief(repo: &std::path::Path, node: &pulse::graph::model::node::Node) -> String {
     let rel = format!("{}/ticket.md", node.content_dir);
     let path = repo.join(&rel);
     fs::create_dir_all(path.parent().unwrap()).unwrap();
@@ -124,7 +124,7 @@ fn write_qa_baseline(repo: &std::path::Path, story_id: &str, case_id: &str) {
 }
 
 fn implementation_contract(
-    node: &pulse::graph::node::Node,
+    node: &pulse::graph::model::node::Node,
     brief_hash: &str,
 ) -> ImplementationContract {
     ImplementationContract {
@@ -172,9 +172,9 @@ fn implementation_contract(
 
 fn set_contract(
     store: &JsonGraphStore,
-    node: &pulse::graph::node::Node,
+    node: &pulse::graph::model::node::Node,
     contract: ImplementationContract,
-) -> pulse::graph::node::Node {
+) -> pulse::graph::model::node::Node {
     store
         .set_contract_with_context(
             &node.id,
@@ -192,9 +192,9 @@ fn set_contract(
 
 fn set_qa(
     store: &JsonGraphStore,
-    node: &pulse::graph::node::Node,
+    node: &pulse::graph::model::node::Node,
     posture: QaImpactPosture,
-) -> pulse::graph::node::Node {
+) -> pulse::graph::model::node::Node {
     store
         .set_qa_impact_with_context(
             &node.id,
@@ -213,8 +213,8 @@ fn set_qa(
 
 fn set_docs_none(
     store: &JsonGraphStore,
-    node: &pulse::graph::node::Node,
-) -> pulse::graph::node::Node {
+    node: &pulse::graph::model::node::Node,
+) -> pulse::graph::model::node::Node {
     store
         .update_documentation_impact(
             &node.id,
@@ -236,7 +236,7 @@ fn set_docs_none(
 
 fn record_shaping(
     repo: &std::path::Path,
-    node: &pulse::graph::node::Node,
+    node: &pulse::graph::model::node::Node,
     receipt_id: &str,
     brief_hash: &str,
 ) {
@@ -306,9 +306,9 @@ fn record_shaping(
 
 fn apply_shaping(
     store: &JsonGraphStore,
-    node: &pulse::graph::node::Node,
+    node: &pulse::graph::model::node::Node,
     receipt_id: &str,
-) -> pulse::graph::node::Node {
+) -> pulse::graph::model::node::Node {
     store
         .apply_shaping_with_context(&node.id, node.revision, receipt_id, None, ctx())
         .unwrap()
@@ -324,7 +324,7 @@ fn prepare_with_shaping(
     receipt_id: &str,
     with_qa_none: bool,
     with_docs_none: bool,
-) -> pulse::graph::node::Node {
+) -> pulse::graph::model::node::Node {
     let mut node = create_ticket(store);
     let brief_hash = write_brief(repo, &node);
     node = set_contract(store, &node, implementation_contract(&node, &brief_hash));
@@ -338,7 +338,7 @@ fn prepare_with_shaping(
     apply_shaping(store, &node, receipt_id)
 }
 
-fn ready_ticket(repo: &std::path::Path, store: &JsonGraphStore) -> pulse::graph::node::Node {
+fn ready_ticket(repo: &std::path::Path, store: &JsonGraphStore) -> pulse::graph::model::node::Node {
     write_policy(repo, full_grants());
     let node = prepare_with_shaping(repo, store, "rcpt_01J00000000000000000000001", true, true);
     let shaped = store
@@ -436,7 +436,7 @@ fn fingerprint_stable_across_unrelated_mutation_and_status_transition() {
             &node.id,
             NodeStatus::Shaped,
             node.revision,
-            Some(pulse::graph::lifecycle::TransitionReason {
+            Some(pulse::graph::model::lifecycle::TransitionReason {
                 code: "rework_needed".to_string(),
                 summary: "back to shaped".to_string(),
                 reference: None,
@@ -562,10 +562,10 @@ fn required_decisions_gate_consumes_decision_acceptance_proof() {
     let brief_hash = write_brief(repo, &ticket);
     let mut contract = implementation_contract(&ticket, &brief_hash);
     contract.mode = ImplementationMode::Locked;
-    contract.required_decisions = vec![pulse::graph::contract::RequiredDecisionRef {
+    contract.required_decisions = vec![pulse::graph::model::contract::RequiredDecisionRef {
         id: decision.id.clone(),
         contract_revision: decision.contract_revision,
-        acceptance_receipt: pulse::graph::contract::ReceiptRef {
+        acceptance_receipt: pulse::graph::model::contract::ReceiptRef {
             id: acceptance_id.to_string(),
             hash: "sha256:0000000000000000000000000000000000000000000000000000000000000000"
                 .to_string(),
@@ -898,7 +898,7 @@ fn decision_work_ticket_is_not_ready_under_implementation_profile() {
     let tmp = tempfile::tempdir().unwrap();
     let repo = tmp.path();
     let store = JsonGraphStore::new(repo);
-    let classification = pulse::graph::contract::PublicCreateClassification {
+    let classification = pulse::graph::model::contract::PublicCreateClassification {
         role: Some(TicketRole::DecisionWork),
         risk: Some(Risk::Low),
         materialization: Some(Materialization::R0),
@@ -1028,7 +1028,7 @@ fn readiness_query_does_not_bootstrap_docs_or_evidence_plane() {
     // The frontier projection must observe the same invariant.
     let _ = store
         .frontier(
-            pulse::graph::frontier::FrontierKind::Execution,
+            pulse::graph::read::frontier::FrontierKind::Execution,
             None,
             None,
             false,
@@ -1057,7 +1057,7 @@ fn blocked_resume_goes_via_shaped_not_direct_ready() {
             &ready.id,
             NodeStatus::Blocked,
             ready.revision,
-            Some(pulse::graph::lifecycle::TransitionReason {
+            Some(pulse::graph::model::lifecycle::TransitionReason {
                 code: "dependency_unavailable".to_string(),
                 summary: "blocked".to_string(),
                 reference: None,
@@ -1086,7 +1086,7 @@ fn blocked_resume_goes_via_shaped_not_direct_ready() {
             &blocked.id,
             NodeStatus::Shaped,
             blocked.revision,
-            Some(pulse::graph::lifecycle::TransitionReason {
+            Some(pulse::graph::model::lifecycle::TransitionReason {
                 code: "dependency_restored".to_string(),
                 summary: "resume".to_string(),
                 reference: None,

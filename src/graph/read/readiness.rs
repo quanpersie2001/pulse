@@ -25,11 +25,12 @@ use crate::evidence::model::{
     BranchCriticality, BranchDisposition, DecisionAcceptancePayload, ReceiptKind, ReceiptResult,
     ShapeMode, ShapingValidationPayload,
 };
-use crate::graph::contract::{
-    validate_node_contract, ContractValidationMode, ImplementationMode, QaImpactPosture, TicketRole,
+use crate::graph::model::contract::{
+    ContractValidationMode, ImplementationMode, QaImpactPosture, TicketRole,
 };
-use crate::graph::executability::{StructuralExecutabilityReport, StructuralState};
-use crate::graph::node::{Node, NodeStatus};
+use crate::graph::model::node::{Node, NodeStatus};
+use crate::graph::read::executability::{StructuralExecutabilityReport, StructuralState};
+use crate::graph::validation::contract::validate_node_contract;
 use crate::id::WorkKind;
 use crate::policy::AuthorityPolicyReport;
 use crate::PulseResult;
@@ -461,7 +462,7 @@ impl FamilyEvaluator<'_> {
             StructuralState::Candidate => GateStatus::Passed,
             StructuralState::Blocked => {
                 if report.hard_blockers.iter().any(|b| {
-                    b.resolution != crate::graph::executability::BlockerResolution::Satisfied
+                    b.resolution != crate::graph::read::executability::BlockerResolution::Satisfied
                 }) {
                     self.note("hard_blocker_open");
                 }
@@ -758,7 +759,7 @@ impl FamilyEvaluator<'_> {
         // materialization grant. This catches a policy revocation after apply.
         if let Some(shaping) = self.inputs.shaping {
             let materialization = &shaping.payload.materialization;
-            match crate::graph::shaping::materialization_approve_grant(materialization) {
+            match crate::graph::read::shaping::materialization_approve_grant(materialization) {
                 Ok(grant) => {
                     if !report.principals.iter().any(|principal| {
                         principal.kind == shaping.payload.approval.approved_by.kind
@@ -781,13 +782,13 @@ impl FamilyEvaluator<'_> {
     fn documentation_impact(&mut self) -> GateStatus {
         let posture = self.inputs.subject.documentation_posture();
         match posture {
-            crate::graph::node::DocumentationImpactPosture::Unknown => {
+            crate::graph::model::node::DocumentationImpactPosture::Unknown => {
                 self.note("documentation_impact_unknown");
                 GateStatus::Failed
             }
-            crate::graph::node::DocumentationImpactPosture::Required
-            | crate::graph::node::DocumentationImpactPosture::None
-            | crate::graph::node::DocumentationImpactPosture::Deferred => GateStatus::Passed,
+            crate::graph::model::node::DocumentationImpactPosture::Required
+            | crate::graph::model::node::DocumentationImpactPosture::None
+            | crate::graph::model::node::DocumentationImpactPosture::Deferred => GateStatus::Passed,
         }
     }
 
@@ -800,7 +801,9 @@ impl FamilyEvaluator<'_> {
             .as_ref()
             .map(|d| !d.impact.required_documents.is_empty())
             .unwrap_or(false);
-        if !has_required && posture != crate::graph::node::DocumentationImpactPosture::Required {
+        if !has_required
+            && posture != crate::graph::model::node::DocumentationImpactPosture::Required
+        {
             return GateStatus::NotApplicable;
         }
         let gate = &self.inputs.docs.gate;
@@ -1060,7 +1063,7 @@ fn fingerprint(inputs: &ReadinessInputs, profile: EvalProfile) -> PulseResult<St
     Ok(hash_bytes(&canonical))
 }
 
-fn documentation_projection(doc: &crate::graph::node::DocumentationMetadata) -> Value {
+fn documentation_projection(doc: &crate::graph::model::node::DocumentationMetadata) -> Value {
     json!({
         "posture": doc.impact.posture,
         "rationale": doc.impact.rationale,
@@ -1072,7 +1075,7 @@ fn documentation_projection(doc: &crate::graph::node::DocumentationMetadata) -> 
     })
 }
 
-fn qa_projection(qa: &crate::graph::contract::QaMetadata) -> Value {
+fn qa_projection(qa: &crate::graph::model::contract::QaMetadata) -> Value {
     json!({
         "posture": qa.impact.posture,
         "rationale": qa.impact.rationale,
@@ -1081,7 +1084,9 @@ fn qa_projection(qa: &crate::graph::contract::QaMetadata) -> Value {
     })
 }
 
-fn implementation_projection(contract: &crate::graph::contract::ImplementationContract) -> Value {
+fn implementation_projection(
+    contract: &crate::graph::model::contract::ImplementationContract,
+) -> Value {
     let acceptance: Vec<Value> = contract
         .acceptance
         .iter()
@@ -1141,7 +1146,9 @@ fn implementation_projection(contract: &crate::graph::contract::ImplementationCo
     })
 }
 
-fn decision_work_projection(contract: &crate::graph::contract::DecisionWorkContract) -> Value {
+fn decision_work_projection(
+    contract: &crate::graph::model::contract::DecisionWorkContract,
+) -> Value {
     json!({
         "destination_owner": contract.destination_owner,
         "branch_id": contract.branch_id,

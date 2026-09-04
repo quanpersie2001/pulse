@@ -2,9 +2,9 @@ use std::fs;
 use std::path::Path;
 
 use crate::canonical_json::hash_bytes;
-use crate::graph::executability::{structural_executability, StructuralExecutabilityReport};
-use crate::graph::node::{Node, NodeStatus};
-use crate::graph::readiness::{
+use crate::graph::model::node::{Node, NodeStatus};
+use crate::graph::read::executability::{structural_executability, StructuralExecutabilityReport};
+use crate::graph::read::readiness::{
     evaluate as evaluate_readiness, ContentHashBinding, DecisionProofSnapshot, EvalProfile,
     QaCaseResolutionSnapshot, ReadinessInputs, ReadinessReport, ShapingReceiptSnapshot,
 };
@@ -49,7 +49,7 @@ impl JsonGraphStore {
     pub(crate) fn build_readiness_snapshot_from_projection(
         &self,
         node: &Node,
-        projection: &crate::graph::projection::GraphProjection,
+        projection: &crate::graph::read::projection::GraphProjection,
     ) -> PulseResult<ReadinessSnapshot> {
         let structural = structural_executability(projection, &node.id).or_else(|err| {
             if matches!(err, PulseError::NotFound { .. }) {
@@ -78,7 +78,7 @@ impl JsonGraphStore {
 
     fn build_qa_resolution(&self, node: &Node) -> Option<QaCaseResolutionSnapshot> {
         if node.qa.as_ref().map(|qa| qa.impact.posture)
-            != Some(crate::graph::contract::QaImpactPosture::Required)
+            != Some(crate::graph::model::contract::QaImpactPosture::Required)
         {
             return None;
         }
@@ -113,9 +113,9 @@ impl JsonGraphStore {
             schema_version: 1,
             subject: id.to_string(),
             graph_fingerprint: String::new(),
-            structural_state: crate::graph::executability::StructuralState::Invalid,
+            structural_state: crate::graph::read::executability::StructuralState::Invalid,
             dispatch_authorized: false,
-            lifecycle: crate::graph::executability::LifecycleSummary {
+            lifecycle: crate::graph::read::executability::LifecycleSummary {
                 status: NodeStatus::Draft,
                 revision: 0,
             },

@@ -1,10 +1,12 @@
 use chrono::{TimeZone, Utc};
-use pulse::graph::edge::{Edge, EdgeType};
-use pulse::graph::executability::{structural_executability, BlockerResolution, StructuralState};
-use pulse::graph::node::{Node, NodeStatus};
-use pulse::graph::projection::{GraphProjection, InverseIndexes, LifecycleProjection};
-use pulse::graph::rollup::{rollup, CompletionClaim};
-use pulse::graph::traversal::{affected_by, neighborhood};
+use pulse::graph::model::edge::{Edge, EdgeType};
+use pulse::graph::model::node::{Node, NodeStatus};
+use pulse::graph::read::executability::{
+    structural_executability, BlockerResolution, StructuralState,
+};
+use pulse::graph::read::projection::{GraphProjection, InverseIndexes, LifecycleProjection};
+use pulse::graph::read::rollup::{rollup, CompletionClaim};
+use pulse::graph::read::traversal::{affected_by, neighborhood};
 use pulse::id::WorkKind;
 
 fn node(id: &str, kind: WorkKind, status: NodeStatus) -> Node {

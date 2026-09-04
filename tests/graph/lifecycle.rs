@@ -2,10 +2,10 @@ use std::fs;
 
 use chrono::{TimeZone, Utc};
 use pulse::canonical_json::to_canonical_bytes;
-use pulse::graph::lifecycle::{
+use pulse::graph::model::lifecycle::{
     expectation, validate_transition, TransitionPolicy, TransitionReason,
 };
-use pulse::graph::node::{NodeStatus, StatusReason};
+use pulse::graph::model::node::{NodeStatus, StatusReason};
 use pulse::graph::store::OperationContext;
 use pulse::id::WorkKind;
 use pulse::{JsonGraphStore, PulseError};
@@ -91,7 +91,7 @@ fn table_covers_every_from_to_expectation() {
 
 #[test]
 fn l1_draft_to_shaped_has_installed_shaped_gate() {
-    use pulse::graph::lifecycle::{installed_gate, GateProfile};
+    use pulse::graph::model::lifecycle::{installed_gate, GateProfile};
     // The shaped gate is now installed: the pure direction check no longer
     // reports the gate as unavailable; the store evaluates the gate.
     let exp = validate_transition(
@@ -147,7 +147,7 @@ fn l3_illegal_transition_reports_code() {
 
 #[test]
 fn l4_shaped_to_ready_has_installed_ready_gate() {
-    use pulse::graph::lifecycle::{installed_gate, GateProfile};
+    use pulse::graph::model::lifecycle::{installed_gate, GateProfile};
     let exp = validate_transition(
         NodeStatus::Shaped,
         NodeStatus::Ready,
@@ -227,7 +227,7 @@ fn l6_transition_clears_stale_reason_when_target_does_not_require_it() {
 
 #[test]
 fn l7_ready_to_active_has_installed_reservation_activation_gate() {
-    use pulse::graph::lifecycle::{installed_gate, GateProfile};
+    use pulse::graph::model::lifecycle::{installed_gate, GateProfile};
     // The reservation-activation gate is installed for Ready -> Active.
     // validate_transition must pass (was transition_gate_unavailable before).
     let exp = validate_transition(NodeStatus::Ready, NodeStatus::Active, None).unwrap();
@@ -272,7 +272,7 @@ fn l8_ready_to_active_public_transition_requires_reservation_activation() {
 fn l9_ready_to_active_reject_is_not_transition_gate_unavailable() {
     // Verify the exact error code is reservation_activation_required, not
     // transition_gate_unavailable. This is a pure model-level assertion.
-    use pulse::graph::lifecycle::{validate_transition, GateProfile, TransitionPolicy};
+    use pulse::graph::model::lifecycle::{validate_transition, GateProfile, TransitionPolicy};
     // validate_transition must succeed because the gate is installed.
     let exp = validate_transition(NodeStatus::Ready, NodeStatus::Active, None).unwrap();
     assert_eq!(exp.policy, TransitionPolicy::Gated);
@@ -280,9 +280,9 @@ fn l9_ready_to_active_reject_is_not_transition_gate_unavailable() {
     assert_ne!(exp.policy, TransitionPolicy::Illegal);
     // Installed gate must be ReservationActivation.
     assert_eq!(
-        pulse::graph::lifecycle::installed_gate(
-            pulse::graph::node::NodeStatus::Ready,
-            pulse::graph::node::NodeStatus::Active
+        pulse::graph::model::lifecycle::installed_gate(
+            pulse::graph::model::node::NodeStatus::Ready,
+            pulse::graph::model::node::NodeStatus::Active
         ),
         Some(GateProfile::ReservationActivation)
     );
@@ -300,11 +300,11 @@ fn validation_rejects_stale_and_missing_status_reason() {
         summary: "stale".to_string(),
         reference: None,
     });
-    let err = pulse::graph::validate::validate_node_schema_semantics(&node).unwrap_err();
+    let err = pulse::graph::validation::graph::validate_node_schema_semantics(&node).unwrap_err();
     assert_eq!(err.code(), "stale_status_reason");
 
     node.status = NodeStatus::Cancelled;
     node.status_reason = None;
-    let err = pulse::graph::validate::validate_node_schema_semantics(&node).unwrap_err();
+    let err = pulse::graph::validation::graph::validate_node_schema_semantics(&node).unwrap_err();
     assert_eq!(err.code(), "missing_status_reason");
 }

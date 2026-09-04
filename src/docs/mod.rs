@@ -1,7 +1,6 @@
 pub mod applicability;
 pub mod cache;
 pub mod check;
-pub mod eval;
 pub mod get;
 pub mod index;
 pub mod lexical;
@@ -30,11 +29,6 @@ pub use check::{
     validate_repository, DocsCheckKind, DocsCheckReport, DocsCheckResult,
     DocsRepositoryValidationReport,
 };
-pub use eval::{
-    load_retrieval_eval_fixtures, run_retrieval_eval_fixtures, run_retrieval_evals,
-    RetrievalEvalExpected, RetrievalEvalFilters, RetrievalEvalFixture, RetrievalEvalReport,
-    RetrievalEvalResult, RetrievalEvalWorkContext,
-};
 pub use get::{
     get_docs, stale_anchor_report, GetDocument, GetOptions, GetOutlineItem, GetReport, GetSection,
     StaleAnchorReport,
@@ -51,10 +45,7 @@ pub use lexical::{
     query as query_lexical_index, tokenize_query_text, write_sections_jsonl, LexicalHit,
     LexicalSchema, TANTIVY_COMPAT_VERSION,
 };
-pub use manifest::{
-    bootstrap, load, load_existing, DocsBootstrapOutcome, DOCS_INDEX_STATE_SCHEMA,
-    DOCS_SECTION_SCHEMA, DOCUMENT_SCHEMA, RETRIEVAL_EVAL_SCHEMA,
-};
+pub use manifest::{bootstrap, load, load_existing, DocsBootstrapOutcome};
 pub use markdown::{
     extract_document_title, extract_sections, ExtractionOutcome, ExtractionWarning, TitleSource,
 };

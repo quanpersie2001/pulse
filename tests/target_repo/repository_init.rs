@@ -85,7 +85,7 @@ fn public_init_enrolls_fixture_preserves_user_files_and_is_idempotent() {
 }
 
 #[test]
-fn public_init_completes_safe_partial_workgraph_and_preserves_authority() {
+fn public_init_completes_safe_partial_state_and_preserves_authority() {
     let repo = TestRepo::from_fixture("minimal-service");
     let schema_path = repo
         .path()
@@ -93,26 +93,16 @@ fn public_init_completes_safe_partial_workgraph_and_preserves_authority() {
     fs::create_dir_all(schema_path.parent().unwrap()).unwrap();
     fs::write(&schema_path, NODE_SCHEMA_JSON).unwrap();
 
-    write_canonical_schema(
-        &repo
-            .path()
-            .join(".pulse/evidence/schemas/receipt-envelope.schema.json"),
-        pulse::evidence::manifest::RECEIPT_ENVELOPE_SCHEMA,
-    );
-    fs::create_dir_all(repo.path().join(".pulse/evidence/artifacts/sha256")).unwrap();
-    fs::create_dir_all(repo.path().join(".pulse/evidence/receipts")).unwrap();
-    write_canonical_schema(
-        &repo.path().join(".pulse/docs/schemas/document.schema.json"),
-        pulse::docs::manifest::DOCUMENT_SCHEMA,
-    );
-    write_canonical_schema(
-        &repo
-            .path()
-            .join(".pulse/knowledge/schemas/learning.schema.json"),
-        pulse::knowledge::manifest::LEARNING_SCHEMA,
-    );
-    fs::create_dir_all(repo.path().join(".pulse/knowledge/entries")).unwrap();
-    fs::create_dir_all(repo.path().join(".pulse/knowledge/relations")).unwrap();
+    // Safe partial managed directories without their identity manifests are
+    // completed rather than refused.
+    for dir in [
+        ".pulse/evidence/receipts",
+        ".pulse/evidence/artifacts/sha256",
+        ".pulse/knowledge/entries",
+        ".pulse/knowledge/relations",
+    ] {
+        fs::create_dir_all(repo.path().join(dir)).unwrap();
+    }
 
     let policy_path = repo.path().join(".pulse/policy/authority.json");
     fs::create_dir_all(policy_path.parent().unwrap()).unwrap();
@@ -132,23 +122,26 @@ fn public_init_completes_safe_partial_workgraph_and_preserves_authority() {
     assert_eq!(report["status"], "initialized");
     assert_eq!(report["authority_policy_revision"], 7);
     assert!(repo.path().join(".pulse/workgraph/manifest.json").is_file());
+    assert!(repo.path().join(".pulse/evidence/manifest.json").is_file());
+    assert!(repo.path().join(".pulse/docs/registry.json").is_file());
+    assert!(repo.path().join(".pulse/knowledge/manifest.json").is_file());
     assert_eq!(fs::read(&policy_path).unwrap(), policy_bytes);
 }
 
 #[test]
-fn public_init_refuses_late_domain_drift_before_canonical_writes() {
+fn public_init_refuses_partial_evidence_records_before_canonical_writes() {
     let repo = TestRepo::from_fixture("minimal-service");
-    let drift_path = repo.path().join(".pulse/docs/schemas/document.schema.json");
-    fs::create_dir_all(drift_path.parent().unwrap()).unwrap();
-    fs::write(&drift_path, b"{\"title\":\"user-owned drift\"}\n").unwrap();
-    let drift_before = fs::read(&drift_path).unwrap();
+    let record_path = repo.path().join(".pulse/evidence/receipts/rcpt_owned.json");
+    fs::create_dir_all(record_path.parent().unwrap()).unwrap();
+    fs::write(&record_path, b"{\"id\":\"user-owned\"}\n").unwrap();
+    let record_before = fs::read(&record_path).unwrap();
     let ignore_before = fs::read(repo.path().join(".gitignore")).unwrap();
 
     let output = repo.pulse(&["init", "--json"]);
     assert!(!output.status.success());
     let error: Value = serde_json::from_slice(&output.stderr).unwrap();
-    assert_eq!(error["code"], "docs_registry_schema_invalid");
-    assert_eq!(fs::read(&drift_path).unwrap(), drift_before);
+    assert_eq!(error["code"], "repository_init_evidence_partial_refused");
+    assert_eq!(fs::read(&record_path).unwrap(), record_before);
     assert_eq!(
         fs::read(repo.path().join(".gitignore")).unwrap(),
         ignore_before
@@ -156,7 +149,7 @@ fn public_init_refuses_late_domain_drift_before_canonical_writes() {
 
     for path in [
         ".pulse/workgraph",
-        ".pulse/evidence",
+        ".pulse/evidence/manifest.json",
         ".pulse/knowledge",
         ".pulse/policy",
         ".pulse/events",
@@ -210,7 +203,7 @@ fn public_init_refuses_nested_managed_symlink_without_external_writes() {
     let repo = TestRepo::from_fixture("minimal-service");
     let outside = tempfile::tempdir().unwrap();
     fs::create_dir_all(repo.path().join(".pulse/evidence")).unwrap();
-    symlink(outside.path(), repo.path().join(".pulse/evidence/schemas")).unwrap();
+    symlink(outside.path(), repo.path().join(".pulse/evidence/receipts")).unwrap();
 
     let output = repo.pulse(&["init", "--json"]);
     assert!(!output.status.success());
@@ -218,10 +211,4 @@ fn public_init_refuses_nested_managed_symlink_without_external_writes() {
     assert_eq!(error["code"], "repository_init_path_conflict");
     assert!(!repo.path().join(".pulse/runtime").exists());
     assert!(fs::read_dir(outside.path()).unwrap().next().is_none());
-}
-
-fn write_canonical_schema(path: &std::path::Path, schema: &str) {
-    fs::create_dir_all(path.parent().unwrap()).unwrap();
-    let value: Value = serde_json::from_str(schema).unwrap();
-    fs::write(path, to_canonical_bytes(&value).unwrap()).unwrap();
 }

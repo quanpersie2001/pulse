@@ -654,7 +654,7 @@ impl KnowledgeStore {
         Ok(())
     }
 
-    fn load_target_node(&self, id: &str) -> PulseResult<crate::graph::node::Node> {
+    fn load_target_node(&self, id: &str) -> PulseResult<crate::graph::model::node::Node> {
         let path = self
             .repo_root
             .join(".pulse/workgraph/nodes")

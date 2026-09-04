@@ -16,7 +16,7 @@ use std::path::{Path, PathBuf};
 
 use crate::canonical_json;
 use crate::error::{PulseError, Result};
-use crate::graph::manifest::{EDGE_SCHEMA, NODE_SCHEMA};
+use crate::graph::model::manifest::{EDGE_SCHEMA, NODE_SCHEMA};
 
 pub const MANIFEST_JSON: &str = r#"{
   "schema_version": 1,

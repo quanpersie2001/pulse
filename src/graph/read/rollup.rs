@@ -2,9 +2,9 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use serde::{Deserialize, Serialize};
 
-use crate::graph::edge::EdgeType;
-use crate::graph::node::NodeStatus;
-use crate::graph::projection::GraphProjection;
+use crate::graph::model::edge::EdgeType;
+use crate::graph::model::node::NodeStatus;
+use crate::graph::read::projection::GraphProjection;
 use crate::id::WorkKind;
 use crate::{PulseError, PulseResult};
 

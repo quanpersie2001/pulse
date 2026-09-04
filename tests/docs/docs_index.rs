@@ -33,14 +33,8 @@ fn doc(id: &str, path: &str, summary: &str) -> DocumentRecord {
 fn setup_repo() -> tempfile::TempDir {
     let tmp = tempfile::tempdir().unwrap();
     let repo = tmp.path();
+    fs::create_dir_all(repo.join(".pulse/docs")).unwrap();
     let manifest = pulse::evidence::manifest::bootstrap(repo).unwrap().manifest;
-    fs::create_dir_all(repo.join(".pulse/docs/schemas")).unwrap();
-    let schema: serde_json::Value = serde_json::from_str(pulse::docs::DOCUMENT_SCHEMA).unwrap();
-    fs::write(
-        repo.join(".pulse/docs/schemas/document.schema.json"),
-        to_canonical_bytes(&schema).unwrap(),
-    )
-    .unwrap();
     fs::create_dir_all(repo.join("docs/domain")).unwrap();
     fs::write(repo.join("docs/domain/token.md"), b"# Token Lifecycle\n\n## Expired tokens\n\nTokenExpired means a refresh-token expired in v2.1.\n").unwrap();
     let registry = DocsRegistry {

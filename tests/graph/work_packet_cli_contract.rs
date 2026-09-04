@@ -9,12 +9,12 @@ use chrono::Utc;
 use pulse::canonical_json::hash_bytes;
 use pulse::canonical_json::to_canonical_bytes;
 use pulse::evidence::model::*;
-use pulse::graph::contract::{
+use pulse::graph::model::contract::{
     ContentRef, ContractItem, ContractScope, EffortMetadata, ImplementationContract,
     ImplementationMode, ImplementationSemanticImpact, Materialization, PlanPolicy, QaImpactPosture,
     Risk, SurfaceRef, TicketRole, WorkSurface,
 };
-use pulse::graph::node::DocumentationImpactPosture;
+use pulse::graph::model::node::DocumentationImpactPosture;
 use pulse::graph::store::{
     ContractSetRequest, DocumentationImpactUpdate, OperationContext, QaImpactUpdate,
 };
@@ -134,7 +134,7 @@ fn ready_ticket(repo: &TempDir, store: &JsonGraphStore) -> String {
         .create_node_public_with_context(
             WorkKind::Ticket,
             "Rotate refresh tokens".to_string(),
-            pulse::graph::contract::PublicCreateClassification {
+            pulse::graph::model::contract::PublicCreateClassification {
                 role: Some(TicketRole::Implementation),
                 risk: Some(Risk::Low),
                 materialization: Some(Materialization::R1),
@@ -327,7 +327,7 @@ fn ready_ticket(repo: &TempDir, store: &JsonGraphStore) -> String {
     let node = store
         .transition_node_with_context(
             &node.id,
-            pulse::graph::node::NodeStatus::Shaped,
+            pulse::graph::model::node::NodeStatus::Shaped,
             node.revision,
             None,
             ctx(),
@@ -337,7 +337,7 @@ fn ready_ticket(repo: &TempDir, store: &JsonGraphStore) -> String {
     let ready = store
         .transition_node_with_context(
             &node.id,
-            pulse::graph::node::NodeStatus::Ready,
+            pulse::graph::model::node::NodeStatus::Ready,
             node.revision,
             None,
             ctx(),
@@ -566,7 +566,7 @@ fn work_packet_rejects_draft_ticket() {
         .create_node_public_with_context(
             WorkKind::Ticket,
             "Draft ticket".to_string(),
-            pulse::graph::contract::PublicCreateClassification {
+            pulse::graph::model::contract::PublicCreateClassification {
                 role: Some(TicketRole::Implementation),
                 risk: Some(Risk::Low),
                 materialization: Some(Materialization::R1),
@@ -590,7 +590,7 @@ fn work_packet_rejects_story_kind() {
         .create_node_public_with_context(
             WorkKind::Story,
             "A story".to_string(),
-            pulse::graph::contract::PublicCreateClassification {
+            pulse::graph::model::contract::PublicCreateClassification {
                 role: None,
                 risk: None,
                 materialization: None,
@@ -614,7 +614,7 @@ fn work_packet_rejects_non_implementation_role() {
         .create_node_public_with_context(
             WorkKind::Ticket,
             "Decision work ticket".to_string(),
-            pulse::graph::contract::PublicCreateClassification {
+            pulse::graph::model::contract::PublicCreateClassification {
                 role: Some(TicketRole::DecisionWork),
                 risk: Some(Risk::Low),
                 materialization: Some(Materialization::R1),

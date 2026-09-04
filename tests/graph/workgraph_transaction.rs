@@ -4,8 +4,8 @@ use std::thread;
 use chrono::{TimeZone, Utc};
 use pulse::canonical_json::{hash_bytes, to_canonical_bytes};
 use pulse::event::EventEnvelope;
-use pulse::graph::edge::{Edge, EdgeType};
-use pulse::graph::node::{Node, NodeStatus, StatusReason};
+use pulse::graph::model::edge::{Edge, EdgeType};
+use pulse::graph::model::node::{Node, NodeStatus, StatusReason};
 use pulse::graph::store::OperationContext;
 use pulse::id::WorkKind;
 use pulse::storage::atomic::atomic_replace;
@@ -71,7 +71,7 @@ fn mutation_recovers_prior_after_canonical_intent_before_allocating_next_id() {
     store.bootstrap().unwrap();
 
     let target = repo.join(".pulse/workgraph/nodes/TK-001.json");
-    let node = pulse::graph::node::Node::new(
+    let node = pulse::graph::model::node::Node::new(
         "TK-001".to_string(),
         WorkKind::Ticket,
         "Recovered".to_string(),

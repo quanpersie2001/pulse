@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use crate::graph::node::{NodeStatus, StatusReason};
+use crate::graph::model::node::{NodeStatus, StatusReason};
 use crate::{PulseError, PulseResult};
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]

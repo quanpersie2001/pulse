@@ -2,8 +2,8 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use serde::{Deserialize, Serialize};
 
-use crate::graph::edge::{Edge, EdgeType};
-use crate::graph::projection::GraphProjection;
+use crate::graph::model::edge::{Edge, EdgeType};
+use crate::graph::read::projection::GraphProjection;
 use crate::{PulseError, PulseResult};
 
 pub const MAX_NEIGHBORHOOD_DEPTH: usize = 5;

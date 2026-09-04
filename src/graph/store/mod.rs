@@ -9,25 +9,30 @@ use serde_json::json;
 use crate::canonical_json::{hash_bytes, to_canonical_bytes};
 use crate::event::new_event_id;
 use crate::event::{event_path, EventEnvelope};
-use crate::graph::contract::{
-    validate_node_contract_result, validate_public_create_classification, ContractValidationMode,
-    DecisionWorkContract, ImplementationContract, PublicCreateClassification, QaImpactPosture,
-    QaMetadata, ShapingPointer, TicketRole,
+use crate::graph::model::contract::{
+    ContractValidationMode, DecisionWorkContract, ImplementationContract,
+    PublicCreateClassification, QaImpactPosture, QaMetadata, ShapingPointer, TicketRole,
 };
-use crate::graph::edge::{canonical_endpoints, deterministic_edge_id, Edge, EdgeType};
-use crate::graph::executability::{structural_executability, StructuralExecutabilityReport};
-use crate::graph::manifest::{Manifest, EDGE_SCHEMA, NODE_SCHEMA};
-use crate::graph::node::{
+use crate::graph::model::edge::{canonical_endpoints, deterministic_edge_id, Edge, EdgeType};
+use crate::graph::model::manifest::{Manifest, EDGE_SCHEMA, NODE_SCHEMA};
+use crate::graph::model::node::{
     DocumentationImpact, DocumentationImpactPosture, DocumentationMetadata, DocumentationRouting,
     Node, NodeStatus, StatusReason,
 };
-use crate::graph::projection::{graph_fingerprint, GraphProjection};
-use crate::graph::rollup::{rollup, RollupReport};
-use crate::graph::traversal::{affected_by, neighborhood, AffectedByReport, NeighborhoodReport};
-use crate::graph::validate::{
-    validate_edge_filename, validate_edge_for_add, validate_graph, validate_node_filename,
-    ValidationReport,
+use crate::graph::read::executability::{structural_executability, StructuralExecutabilityReport};
+use crate::graph::read::projection::{graph_fingerprint, GraphProjection};
+use crate::graph::read::rollup::{rollup, RollupReport};
+use crate::graph::read::traversal::{
+    affected_by, neighborhood, AffectedByReport, NeighborhoodReport,
 };
+use crate::graph::validation::contract::{
+    validate_node_contract_result, validate_public_create_classification,
+};
+use crate::graph::validation::graph::validate_edge_filename;
+use crate::graph::validation::graph::validate_edge_for_add;
+use crate::graph::validation::graph::validate_graph;
+use crate::graph::validation::graph::validate_node_filename;
+use crate::graph::validation::graph::ValidationReport;
 use crate::id::{format_id, parse_numeric, validate_id_for_kind, WorkKind};
 use crate::storage::transaction::{
     commit_prepared_multi_target_transaction, commit_prepared_transaction, current_file_state,
@@ -71,7 +76,7 @@ fn export_with_cache(
         if let Ok(cache) = serde_json::from_slice::<CachedProjection>(&bytes) {
             if cache.cache_schema_version == 1
                 && cache.projection_schema_version
-                    == crate::graph::projection::PROJECTION_SCHEMA_VERSION
+                    == crate::graph::read::projection::PROJECTION_SCHEMA_VERSION
                 && cache.graph_fingerprint == fingerprint
                 && cache.projection.graph_fingerprint == fingerprint
             {
@@ -80,11 +85,11 @@ fn export_with_cache(
         }
     }
     let projection =
-        crate::graph::projection::build_projection(fingerprint, node_files, edge_files);
+        crate::graph::read::projection::build_projection(fingerprint, node_files, edge_files);
     let cache = CachedProjection {
         cache_schema_version: 1,
         graph_fingerprint: projection.graph_fingerprint.clone(),
-        projection_schema_version: crate::graph::projection::PROJECTION_SCHEMA_VERSION,
+        projection_schema_version: crate::graph::read::projection::PROJECTION_SCHEMA_VERSION,
         projection: projection.clone(),
     };
     let bytes = to_canonical_bytes(&cache)?;

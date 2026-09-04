@@ -3,7 +3,7 @@ use std::process::Command;
 
 use chrono::{TimeZone, Utc};
 use pulse::event::EventEnvelope;
-use pulse::graph::node::DocumentationImpactPosture;
+use pulse::graph::model::node::DocumentationImpactPosture;
 use pulse::graph::store::{DocumentationImpactUpdate, OperationContext};
 use pulse::id::WorkKind;
 use pulse::{JsonGraphStore, PulseError};
@@ -74,7 +74,7 @@ fn missing_documentation_metadata_derives_unknown() {
     );
     let json = serde_json::to_string(&ticket).unwrap();
     assert!(!json.contains("documentation"));
-    let round_trip: pulse::graph::node::Node = serde_json::from_str(&json).unwrap();
+    let round_trip: pulse::graph::model::node::Node = serde_json::from_str(&json).unwrap();
     assert_eq!(
         round_trip.documentation_posture(),
         DocumentationImpactPosture::Unknown

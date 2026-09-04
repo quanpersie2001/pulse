@@ -3,30 +3,18 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use crate::canonical_json::{hash_bytes, to_canonical_bytes};
+use crate::canonical_json::to_canonical_bytes;
 use crate::evidence::manifest as evidence_manifest;
 use crate::{PulseError, Result};
-
-pub const LEARNING_SCHEMA: &str = include_str!("../schema/knowledge/learning.schema.json");
-pub const RELATION_SCHEMA: &str = include_str!("../schema/knowledge/relation.schema.json");
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct KnowledgeManifest {
     pub schema_version: u32,
     pub repository_id: String,
-    pub learning_schema: SchemaRef,
-    pub relation_schema: SchemaRef,
     pub id_pattern: String,
     pub content_root: String,
     pub projection_schema_version: u32,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-pub struct SchemaRef {
-    pub path: String,
-    pub sha256: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -45,35 +33,21 @@ pub fn bootstrap(repo_root: &Path) -> Result<KnowledgeBootstrapOutcome> {
 pub(crate) fn bootstrap_unlocked(repo_root: &Path) -> Result<KnowledgeBootstrapOutcome> {
     let evidence = evidence_manifest::load(repo_root)?;
     let root = repo_root.join(".pulse/knowledge");
-    let schemas = root.join("schemas");
     let entries = root.join("entries");
     let relations = root.join("relations");
     let cache = repo_root.join(".pulse/cache");
     let mut created = Vec::new();
     let mut preserved = Vec::new();
 
-    for dir in [&root, &schemas, &entries, &relations, &cache] {
+    for dir in [&root, &entries, &relations, &cache] {
         create_dir_if_missing(dir, &mut created, &mut preserved)?;
     }
-    write_schema_if_absent(
-        &schemas.join("learning.schema.json"),
-        LEARNING_SCHEMA,
-        &mut created,
-        &mut preserved,
-    )?;
-    write_schema_if_absent(
-        &schemas.join("relation.schema.json"),
-        RELATION_SCHEMA,
-        &mut created,
-        &mut preserved,
-    )?;
-    verify_schema_hashes(repo_root)?;
 
     let manifest_path = root.join("manifest.json");
     let manifest = if manifest_path.exists() {
         preserved.push(manifest_path.clone());
         let manifest: KnowledgeManifest = crate::storage::read_json(&manifest_path)?;
-        validate_manifest(repo_root, &manifest, &evidence.repository_id)?;
+        validate_manifest(&manifest, &evidence.repository_id)?;
         manifest
     } else {
         let manifest = default_manifest(evidence.repository_id)?;
@@ -98,7 +72,7 @@ pub fn load(repo_root: &Path) -> Result<KnowledgeManifest> {
     }
     let evidence = evidence_manifest::load(repo_root)?;
     let manifest: KnowledgeManifest = crate::storage::read_json(&manifest_path)?;
-    validate_manifest(repo_root, &manifest, &evidence.repository_id)?;
+    validate_manifest(&manifest, &evidence.repository_id)?;
     Ok(manifest)
 }
 
@@ -119,14 +93,14 @@ pub fn load_existing(repo_root: &Path) -> Result<Option<KnowledgeManifest>> {
         )
     })?;
     let manifest: KnowledgeManifest = crate::storage::read_json(&manifest_path)?;
-    validate_manifest(repo_root, &manifest, &evidence.repository_id)?;
+    validate_manifest(&manifest, &evidence.repository_id)?;
     Ok(Some(manifest))
 }
 
 /// Validate existing knowledge bootstrap state without writing.
 ///
-/// A partial installation is resumable only while it contains current schemas
-/// and no learning or relation records without a repository identity manifest.
+/// A partial installation is resumable only while it holds no learning or
+/// relation records without a repository identity manifest.
 pub(crate) fn preflight_bootstrap(repo_root: &Path) -> Result<()> {
     let root = repo_root.join(".pulse/knowledge");
     if !root.exists() {
@@ -142,24 +116,7 @@ pub(crate) fn preflight_bootstrap(repo_root: &Path) -> Result<()> {
         return Ok(());
     }
 
-    ensure_only_known_partial_entries(&root, &["schemas", "entries", "relations"])?;
-    let schemas = root.join("schemas");
-    ensure_only_known_partial_entries(&schemas, &["learning.schema.json", "relation.schema.json"])?;
-    for (name, schema) in [
-        ("learning.schema.json", LEARNING_SCHEMA),
-        ("relation.schema.json", RELATION_SCHEMA),
-    ] {
-        let path = schemas.join(name);
-        if path.exists() {
-            let bytes = fs::read(&path).map_err(|error| PulseError::io(&path, error))?;
-            if hash_bytes(&bytes) != schema_hash(schema)? {
-                return Err(PulseError::validation(
-                    "knowledge_schema_hash_mismatch",
-                    format!("schema drift at {}", path.display()),
-                ));
-            }
-        }
-    }
+    ensure_only_known_partial_entries(&root, &["entries", "relations"])?;
     ensure_no_files(&root.join("entries"))?;
     ensure_no_files(&root.join("relations"))?;
     Ok(())
@@ -169,25 +126,13 @@ pub fn default_manifest(repository_id: String) -> Result<KnowledgeManifest> {
     Ok(KnowledgeManifest {
         schema_version: 1,
         repository_id,
-        learning_schema: SchemaRef {
-            path: "schemas/learning.schema.json".to_string(),
-            sha256: schema_hash(LEARNING_SCHEMA)?,
-        },
-        relation_schema: SchemaRef {
-            path: "schemas/relation.schema.json".to_string(),
-            sha256: schema_hash(RELATION_SCHEMA)?,
-        },
         id_pattern: "^LRN-[0-9]{3,}$".to_string(),
         content_root: "../../knowledge/learnings".to_string(),
         projection_schema_version: 1,
     })
 }
 
-pub fn validate_manifest(
-    repo_root: &Path,
-    manifest: &KnowledgeManifest,
-    repository_id: &str,
-) -> Result<()> {
+pub fn validate_manifest(manifest: &KnowledgeManifest, repository_id: &str) -> Result<()> {
     if manifest.schema_version != 1 || manifest.projection_schema_version != 1 {
         return Err(PulseError::validation(
             "knowledge_manifest_schema_invalid",
@@ -207,37 +152,6 @@ pub fn validate_manifest(
             "knowledge_manifest_schema_invalid",
             "knowledge manifest contract fields differ from current contract",
         ));
-    }
-    if manifest.learning_schema != expected.learning_schema
-        || manifest.relation_schema != expected.relation_schema
-    {
-        return Err(PulseError::validation(
-            "knowledge_schema_hash_mismatch",
-            "knowledge schema refs differ from embedded contract",
-        ));
-    }
-    verify_schema_hashes(repo_root)
-}
-
-pub fn schema_hash(schema: &str) -> Result<String> {
-    let value: serde_json::Value = serde_json::from_str(schema)?;
-    Ok(hash_bytes(&to_canonical_bytes(&value)?))
-}
-
-fn verify_schema_hashes(repo_root: &Path) -> Result<()> {
-    for (relative, schema) in [
-        ("learning.schema.json", LEARNING_SCHEMA),
-        ("relation.schema.json", RELATION_SCHEMA),
-    ] {
-        let path = repo_root.join(".pulse/knowledge/schemas").join(relative);
-        let bytes = fs::read(&path).map_err(|error| PulseError::io(&path, error))?;
-        let expected = schema_hash(schema)?;
-        if hash_bytes(&bytes) != expected {
-            return Err(PulseError::validation(
-                "knowledge_schema_hash_mismatch",
-                format!("schema drift at {}", path.display()),
-            ));
-        }
     }
     Ok(())
 }
@@ -289,37 +203,12 @@ fn ensure_no_files(root: &Path) -> Result<()> {
             return Err(PulseError::validation(
                 "repository_init_knowledge_partial_refused",
                 format!(
-                    "knowledge records exist without a manifest at {}",
+                    "knowledge records exist without a repository identity manifest at {}",
                     entry.path().display()
                 ),
             ));
         }
         ensure_no_files(&entry.path())?;
-    }
-    Ok(())
-}
-
-fn write_schema_if_absent(
-    path: &Path,
-    schema: &str,
-    created: &mut Vec<PathBuf>,
-    preserved: &mut Vec<PathBuf>,
-) -> Result<()> {
-    let value: serde_json::Value = serde_json::from_str(schema)?;
-    let bytes = to_canonical_bytes(&value)?;
-    if path.exists() {
-        preserved.push(path.to_path_buf());
-        if hash_bytes(&fs::read(path).map_err(|error| PulseError::io(path, error))?)
-            != hash_bytes(&bytes)
-        {
-            return Err(PulseError::validation(
-                "knowledge_schema_hash_mismatch",
-                format!("schema drift at {}", path.display()),
-            ));
-        }
-    } else {
-        crate::storage::create_new(path, &bytes)?;
-        created.push(path.to_path_buf());
     }
     Ok(())
 }

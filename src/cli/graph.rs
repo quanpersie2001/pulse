@@ -1,4 +1,4 @@
-use crate::graph::edge::EdgeType;
+use crate::graph::model::edge::EdgeType;
 use clap::{Subcommand, ValueEnum};
 
 #[derive(Subcommand)]

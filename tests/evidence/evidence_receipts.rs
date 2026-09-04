@@ -91,7 +91,7 @@ fn tree_bytes(root: &std::path::Path) -> Vec<(String, Vec<u8>)> {
 
 fn make_shaping_receipt(
     id: &str,
-    node: &pulse::graph::node::Node,
+    node: &pulse::graph::model::node::Node,
     manifest: &pulse::evidence::manifest::EvidenceManifest,
     content_rel: &str,
     content_hash: String,

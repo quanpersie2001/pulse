@@ -7,8 +7,8 @@ use std::path::Path;
 use serde::{Deserialize, Serialize};
 
 use crate::canonical_json::hash_bytes;
-use crate::graph::contract::QaImpactPosture;
-use crate::graph::node::Node;
+use crate::graph::model::contract::QaImpactPosture;
+use crate::graph::model::node::Node;
 use crate::id::WorkKind;
 use crate::{PulseError, Result};
 

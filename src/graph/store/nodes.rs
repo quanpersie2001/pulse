@@ -69,7 +69,7 @@ impl JsonGraphStore {
             &edge_values,
         )
         .into_result()?;
-        crate::graph::contract::validate_node_contract_result(&node, validation_mode)?;
+        crate::graph::validation::contract::validate_node_contract_result(&node, validation_mode)?;
         let after_bytes = to_canonical_bytes(&node)?;
         self.commit_mutation(
             "work.node.created",

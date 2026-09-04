@@ -139,13 +139,13 @@ fn packet_identity_observation_does_not_recover_until_packet_fence() -> TestResu
 use pulse::canonical_json::hash_bytes;
 use pulse::evidence::model::*;
 use pulse::evidence::record_receipt;
-use pulse::graph::contract::{
+use pulse::graph::model::contract::{
     ContentRef, ContractItem, ContractScope, EffortMetadata, ImplementationContract,
     ImplementationMode, ImplementationSemanticImpact, PlanPolicy, QaImpactPosture, SurfaceRef,
     TicketRole, WorkSurface,
 };
-use pulse::graph::node::DocumentationImpactPosture;
-use pulse::graph::node::NodeStatus;
+use pulse::graph::model::node::DocumentationImpactPosture;
+use pulse::graph::model::node::NodeStatus;
 use pulse::graph::store::{ContractSetRequest, DocumentationImpactUpdate, QaImpactUpdate};
 use pulse::identity::ActorKind;
 use pulse::policy::{AuthorityPolicy, AuthorityPrincipal};

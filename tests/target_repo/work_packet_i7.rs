@@ -11,13 +11,13 @@ use pulse::docs::{
     DocumentScope, ReviewPolicy,
 };
 use pulse::evidence::model::*;
-use pulse::graph::contract::{
+use pulse::graph::model::contract::{
     ContentRef, ContractItem, ContractScope, EffortMetadata, ImplementationContract,
     ImplementationMode, ImplementationSemanticImpact, Materialization, PlanPolicy, QaImpactPosture,
     Risk, SurfaceRef, TicketRole, WorkSurface,
 };
-use pulse::graph::edge::EdgeType;
-use pulse::graph::node::DocumentationImpactPosture;
+use pulse::graph::model::edge::EdgeType;
+use pulse::graph::model::node::DocumentationImpactPosture;
 use pulse::graph::store::{
     ContractSetRequest, DocumentationImpactUpdate, OperationContext, QaImpactUpdate,
 };
@@ -359,7 +359,7 @@ fn setup_ready_ticket_with_required_docs(repo: &TestRepo, require_auth_doc: bool
     store
         .transition_node_with_context(
             &ticket_id,
-            pulse::graph::node::NodeStatus::Shaped,
+            pulse::graph::model::node::NodeStatus::Shaped,
             node.revision,
             None,
             ctx(),
@@ -369,7 +369,7 @@ fn setup_ready_ticket_with_required_docs(repo: &TestRepo, require_auth_doc: bool
     store
         .transition_node_with_context(
             &ticket_id,
-            pulse::graph::node::NodeStatus::Ready,
+            pulse::graph::model::node::NodeStatus::Ready,
             node.revision,
             None,
             ctx(),
@@ -861,7 +861,7 @@ fn relation_overflow_rejects_more_than_128_incident_edges() {
             .create_node_public_with_context(
                 WorkKind::Ticket,
                 format!("Related {i}"),
-                pulse::graph::contract::PublicCreateClassification {
+                pulse::graph::model::contract::PublicCreateClassification {
                     role: Some(TicketRole::Implementation),
                     risk: Some(Risk::Low),
                     materialization: Some(Materialization::R0),

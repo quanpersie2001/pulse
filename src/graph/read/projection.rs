@@ -5,12 +5,12 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use crate::canonical_json::hash_bytes;
-use crate::graph::edge::{Edge, EdgeType};
-use crate::graph::executability::{structural_executability, StructuralExecutabilityReport};
-use crate::graph::lifecycle::{status_class, StatusClass};
-use crate::graph::manifest::Manifest;
-use crate::graph::node::{Node, NodeStatus};
-use crate::graph::rollup::{rollup, RollupReport};
+use crate::graph::model::edge::{Edge, EdgeType};
+use crate::graph::model::lifecycle::{status_class, StatusClass};
+use crate::graph::model::manifest::Manifest;
+use crate::graph::model::node::{Node, NodeStatus};
+use crate::graph::read::executability::{structural_executability, StructuralExecutabilityReport};
+use crate::graph::read::rollup::{rollup, RollupReport};
 use crate::id::WorkKind;
 use crate::{PulseError, PulseResult};
 

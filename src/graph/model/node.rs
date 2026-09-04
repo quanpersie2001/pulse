@@ -1,4 +1,4 @@
-use crate::graph::contract::{
+use crate::graph::model::contract::{
     DecisionWorkContract, ImplementationContract, Materialization, QaMetadata, Risk,
     ShapingPointer, TicketRole, NODE_SCHEMA_VERSION,
 };

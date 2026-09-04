@@ -29,13 +29,14 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
 
-use crate::graph::contract::{validate_node_contract, ContractValidationMode, GapKind, TicketRole};
-use crate::graph::executability::{
+use crate::graph::model::contract::{ContractValidationMode, GapKind, TicketRole};
+use crate::graph::model::node::NodeStatus;
+use crate::graph::read::executability::{
     structural_executability, BlockerResolution, StructuralExecutabilityReport, StructuralState,
 };
-use crate::graph::node::NodeStatus;
-use crate::graph::projection::GraphProjection;
-use crate::graph::readiness::{ReadinessReport, ReadinessStatus, READINESS_PROFILE};
+use crate::graph::read::projection::GraphProjection;
+use crate::graph::read::readiness::{ReadinessReport, ReadinessStatus, READINESS_PROFILE};
+use crate::graph::validation::contract::validate_node_contract;
 use crate::id::WorkKind;
 use crate::PulseResult;
 
@@ -549,7 +550,7 @@ fn collect_scope(projection: &GraphProjection, owner: &str) -> BTreeSet<String> 
 /// Helper for the store dispatcher: derive branch-disposal context from a
 /// destination owner's current shaping receipt snapshot.
 pub fn branch_context_from_shaping(
-    shaping: Option<&crate::graph::readiness::ShapingReceiptSnapshot>,
+    shaping: Option<&crate::graph::read::readiness::ShapingReceiptSnapshot>,
 ) -> DecisionBranchContext {
     let Some(shaping) = shaping else {
         return DecisionBranchContext::default();

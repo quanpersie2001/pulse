@@ -3,8 +3,8 @@ use pulse::evidence::model::{
     ReceiptPayload, ReceiptResult, SourceBinding, SubjectRef,
 };
 use pulse::execution::CloseStoryArgs;
-use pulse::graph::edge::EdgeType;
-use pulse::graph::node::{Node, NodeStatus};
+use pulse::graph::model::edge::EdgeType;
+use pulse::graph::model::node::{Node, NodeStatus};
 use pulse::qa::{
     QaCaseObservation, QaCaseOutcome, QaCheckpointPayload, QaExecutionScope, QaExecutor,
 };

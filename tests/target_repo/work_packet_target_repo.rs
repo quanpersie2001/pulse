@@ -8,12 +8,12 @@ use chrono::Utc;
 use pulse::canonical_json::hash_bytes;
 use pulse::canonical_json::to_canonical_bytes;
 use pulse::evidence::model::*;
-use pulse::graph::contract::{
+use pulse::graph::model::contract::{
     ContentRef, ContractItem, ContractScope, EffortMetadata, ImplementationContract,
     ImplementationMode, ImplementationSemanticImpact, PlanPolicy, QaImpactPosture, SurfaceRef,
     TicketRole, WorkSurface,
 };
-use pulse::graph::node::DocumentationImpactPosture;
+use pulse::graph::model::node::DocumentationImpactPosture;
 use pulse::graph::store::{
     ContractSetRequest, DocumentationImpactUpdate, OperationContext, QaImpactUpdate,
 };
@@ -288,7 +288,7 @@ fn setup_ready_ticket(repo: &TestRepo) -> String {
     store
         .transition_node_with_context(
             &ticket_id,
-            pulse::graph::node::NodeStatus::Shaped,
+            pulse::graph::model::node::NodeStatus::Shaped,
             node.revision,
             None,
             ctx(),
@@ -299,7 +299,7 @@ fn setup_ready_ticket(repo: &TestRepo) -> String {
     store
         .transition_node_with_context(
             &ticket_id,
-            pulse::graph::node::NodeStatus::Ready,
+            pulse::graph::model::node::NodeStatus::Ready,
             node.revision,
             None,
             ctx(),

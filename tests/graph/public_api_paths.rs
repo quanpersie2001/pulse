@@ -5,15 +5,15 @@
 //! are not a snapshot of every internal API.
 
 use chrono::Utc;
-use pulse::graph::contract::{
+use pulse::graph::model::contract::{
     ContractValidationMode, ImplementationMode, Materialization, PlanPolicy,
     PublicCreateClassification, QaImpactPosture, Risk, TicketRole, WorkSurface,
 };
-use pulse::graph::edge::{deterministic_edge_id, Edge, EdgeType};
-use pulse::graph::frontier::{FrontierKind, FRONTIER_CLAIM_STATE};
-use pulse::graph::lifecycle::TransitionReason;
-use pulse::graph::node::{DocumentationImpactPosture, NodeStatus};
-use pulse::graph::readiness::READINESS_PROFILE;
+use pulse::graph::model::edge::{deterministic_edge_id, Edge, EdgeType};
+use pulse::graph::model::lifecycle::TransitionReason;
+use pulse::graph::model::node::{DocumentationImpactPosture, NodeStatus};
+use pulse::graph::read::frontier::{FrontierKind, FRONTIER_CLAIM_STATE};
+use pulse::graph::read::readiness::READINESS_PROFILE;
 use pulse::graph::store::{ContractSetRequest, OperationContext, QaImpactUpdate};
 use pulse::id::{format_id, WorkId, WorkKind};
 use pulse::JsonGraphStore;

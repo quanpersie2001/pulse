@@ -1,14 +1,14 @@
 use chrono::{TimeZone, Utc};
 use pulse::canonical_json::to_canonical_bytes;
-use pulse::graph::contract::{
+use pulse::graph::model::contract::{
     ContentRef, ContractItem, ContractValidationMode, DecisionWorkContract, DecisionWorkProvenance,
     EffortMetadata, ExpectedEvidence, ExpectedHandoff, GapKind, ImplementationContract,
     ImplementationMode, ImplementationSemanticImpact, Materialization, PlanPolicy,
     PublicCreateClassification, QaImpactPosture, QaMetadata, ReceiptRef, ResolutionTarget,
     ResolutionTargetKind, RevisionedWorkRef, Risk, SurfaceRef, TicketRole, WorkSurface,
 };
-use pulse::graph::node::Node;
-use pulse::graph::validate::validate_node_schema_semantics;
+use pulse::graph::model::node::Node;
+use pulse::graph::validation::graph::validate_node_schema_semantics;
 use pulse::id::WorkKind;
 
 const HASH: &str = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
@@ -38,7 +38,7 @@ fn item(id: &str) -> ContractItem {
 
 fn qa(posture: QaImpactPosture) -> QaMetadata {
     QaMetadata {
-        impact: pulse::graph::contract::QaImpact {
+        impact: pulse::graph::model::contract::QaImpact {
             posture,
             rationale: None,
             behavioral_owner: None,
@@ -85,7 +85,7 @@ fn assessed_implementation_ticket() -> Node {
     node.materialization = Some(Materialization::R1);
     node.implementation = Some(valid_implementation());
     node.qa = Some(QaMetadata {
-        impact: pulse::graph::contract::QaImpact {
+        impact: pulse::graph::model::contract::QaImpact {
             posture: QaImpactPosture::Required,
             rationale: Some("Behavior changes require a targeted case.".to_string()),
             behavioral_owner: Some("ST-001".to_string()),
@@ -118,7 +118,7 @@ fn decision_work() -> DecisionWorkContract {
 }
 
 fn error_codes(node: &Node, mode: ContractValidationMode) -> Vec<String> {
-    pulse::graph::contract::validate_node_contract(node, mode)
+    pulse::graph::validation::contract::validate_node_contract(node, mode)
         .errors
         .into_iter()
         .map(|finding| finding.code)
@@ -135,7 +135,7 @@ fn canonical_storage_ticket_defaults_do_not_fabricate_contract() {
     assert_eq!(node.materialization, Some(Materialization::Unassessed));
     assert!(node.implementation.is_none());
     assert!(
-        pulse::graph::contract::validate_node_contract(
+        pulse::graph::validation::contract::validate_node_contract(
             &node,
             ContractValidationMode::CanonicalStorage
         )
@@ -144,7 +144,7 @@ fn canonical_storage_ticket_defaults_do_not_fabricate_contract() {
     assert!(error_codes(&node, ContractValidationMode::Completeness)
         .contains(&"implementation_contract_missing".to_string()));
     assert_eq!(
-        pulse::graph::contract::validate_public_create_classification(
+        pulse::graph::validation::contract::validate_public_create_classification(
             WorkKind::Ticket,
             &PublicCreateClassification::default(),
         )
@@ -275,7 +275,7 @@ fn locked_work_requires_decision_or_shared_approach_ref() {
     );
 
     locked.implementation.as_mut().unwrap().shared_approach_refs =
-        vec![pulse::graph::contract::SharedApproachRef {
+        vec![pulse::graph::model::contract::SharedApproachRef {
             owner: RevisionedWorkRef {
                 id: "ST-001".to_string(),
                 contract_revision: 2,
@@ -300,7 +300,7 @@ fn valid_concise_r0_needs_no_plan_map_or_decision() {
     implementation.required_decisions.clear();
     implementation.shared_approach_refs.clear();
     assert!(
-        pulse::graph::contract::validate_node_contract(
+        pulse::graph::validation::contract::validate_node_contract(
             &node,
             ContractValidationMode::CanonicalStorage
         )
@@ -354,7 +354,7 @@ fn precise_decision_work_contract_is_model_valid_without_nested_shaping() {
     node.qa = Some(qa(QaImpactPosture::Unknown));
     node.decision_work = Some(decision_work());
     assert!(
-        pulse::graph::contract::validate_node_contract(
+        pulse::graph::validation::contract::validate_node_contract(
             &node,
             ContractValidationMode::CanonicalStorage
         )
@@ -398,7 +398,7 @@ fn effort_flags_and_typed_semantic_impact_are_present() {
     };
     implementation.semantic_impact = ImplementationSemanticImpact::NoBehaviorOrPublicRiskChange;
     node.qa = Some(QaMetadata {
-        impact: pulse::graph::contract::QaImpact {
+        impact: pulse::graph::model::contract::QaImpact {
             posture: QaImpactPosture::None,
             rationale: Some(
                 "Internal refactor with no behavior or public-risk change.".to_string(),
@@ -409,7 +409,7 @@ fn effort_flags_and_typed_semantic_impact_are_present() {
     });
     assert!(implementation.effort.requires_r2_map());
     assert!(
-        pulse::graph::contract::validate_node_contract(
+        pulse::graph::validation::contract::validate_node_contract(
             &node,
             ContractValidationMode::CanonicalStorage
         )
@@ -419,7 +419,7 @@ fn effort_flags_and_typed_semantic_impact_are_present() {
 
 #[test]
 fn shaping_pointer_allowed_for_story_ticket_but_not_decision() {
-    let pointer = pulse::graph::contract::ShapingPointer {
+    let pointer = pulse::graph::model::contract::ShapingPointer {
         receipt: ReceiptRef {
             id: "rcpt_01JTEST".to_string(),
             hash: RECEIPT_HASH.to_string(),
@@ -437,7 +437,7 @@ fn shaping_pointer_allowed_for_story_ticket_but_not_decision() {
     .unwrap();
     story.shaping = Some(pointer.clone());
     assert!(
-        pulse::graph::contract::validate_node_contract(
+        pulse::graph::validation::contract::validate_node_contract(
             &story,
             ContractValidationMode::CanonicalStorage
         )
@@ -465,7 +465,7 @@ fn revision_and_contract_revision_are_distinct() {
     node.contract_revision = 4;
     assert_ne!(node.revision, node.contract_revision);
     assert!(
-        pulse::graph::contract::validate_node_contract(
+        pulse::graph::validation::contract::validate_node_contract(
             &node,
             ContractValidationMode::CanonicalStorage
         )
@@ -484,13 +484,16 @@ fn public_create_classification_requires_assessed_ticket_values_only() {
         risk: Some(Risk::Low),
         materialization: Some(Materialization::R0),
     };
-    pulse::graph::contract::validate_public_create_classification(WorkKind::Ticket, &complete)
-        .unwrap();
+    pulse::graph::validation::contract::validate_public_create_classification(
+        WorkKind::Ticket,
+        &complete,
+    )
+    .unwrap();
 
     let mut unassessed = complete.clone();
     unassessed.risk = Some(Risk::Unassessed);
     assert_eq!(
-        pulse::graph::contract::validate_public_create_classification(
+        pulse::graph::validation::contract::validate_public_create_classification(
             WorkKind::Ticket,
             &unassessed,
         )
@@ -500,9 +503,12 @@ fn public_create_classification_requires_assessed_ticket_values_only() {
     );
 
     assert_eq!(
-        pulse::graph::contract::validate_public_create_classification(WorkKind::Story, &complete)
-            .unwrap_err()
-            .code(),
+        pulse::graph::validation::contract::validate_public_create_classification(
+            WorkKind::Story,
+            &complete
+        )
+        .unwrap_err()
+        .code(),
         "work_classification_not_allowed"
     );
 }
@@ -515,17 +521,19 @@ fn canonical_storage_validation_allows_assessed_ticket_missing_contract_but_comp
     node.materialization = Some(Materialization::R0);
 
     assert!(
-        pulse::graph::contract::validate_node_contract(
+        pulse::graph::validation::contract::validate_node_contract(
             &node,
             ContractValidationMode::CanonicalStorage,
         )
         .valid
     );
-    assert!(pulse::graph::contract::validate_node_contract(
-        &node,
-        ContractValidationMode::PublicCreate,
-    )
-    .valid);
+    assert!(
+        pulse::graph::validation::contract::validate_node_contract(
+            &node,
+            ContractValidationMode::PublicCreate,
+        )
+        .valid
+    );
     assert!(error_codes(&node, ContractValidationMode::Completeness)
         .contains(&"implementation_contract_missing".to_string()));
 }
@@ -536,17 +544,19 @@ fn completeness_reports_unknown_qa_impact_but_storage_modes_allow_it_for_impleme
     node.qa = Some(qa(QaImpactPosture::Unknown));
 
     assert!(
-        pulse::graph::contract::validate_node_contract(
+        pulse::graph::validation::contract::validate_node_contract(
             &node,
             ContractValidationMode::CanonicalStorage,
         )
         .valid
     );
-    assert!(pulse::graph::contract::validate_node_contract(
-        &node,
-        ContractValidationMode::PublicCreate,
-    )
-    .valid);
+    assert!(
+        pulse::graph::validation::contract::validate_node_contract(
+            &node,
+            ContractValidationMode::PublicCreate,
+        )
+        .valid
+    );
 
     let completeness = error_codes(&node, ContractValidationMode::Completeness);
     assert!(completeness.contains(&"qa_impact_unknown".to_string()));
@@ -563,17 +573,19 @@ fn completeness_reports_unknown_qa_impact_but_storage_modes_allow_it_for_decisio
     node.decision_work = Some(decision_work());
 
     assert!(
-        pulse::graph::contract::validate_node_contract(
+        pulse::graph::validation::contract::validate_node_contract(
             &node,
             ContractValidationMode::CanonicalStorage,
         )
         .valid
     );
-    assert!(pulse::graph::contract::validate_node_contract(
-        &node,
-        ContractValidationMode::PublicCreate,
-    )
-    .valid);
+    assert!(
+        pulse::graph::validation::contract::validate_node_contract(
+            &node,
+            ContractValidationMode::PublicCreate,
+        )
+        .valid
+    );
 
     let completeness = error_codes(&node, ContractValidationMode::Completeness);
     assert_eq!(
@@ -592,7 +604,7 @@ fn qa_case_ids_are_portable_bounded_and_unique() {
     valid.qa.as_mut().unwrap().impact.affected_case_ids =
         vec!["QA-AUTH-001".to_string(), "A".repeat(64)];
     assert!(
-        pulse::graph::contract::validate_node_contract(
+        pulse::graph::validation::contract::validate_node_contract(
             &valid,
             ContractValidationMode::CanonicalStorage,
         )
@@ -606,7 +618,7 @@ fn qa_case_ids_are_portable_bounded_and_unique() {
     ] {
         let mut invalid = assessed_implementation_ticket();
         invalid.qa.as_mut().unwrap().impact.affected_case_ids = vec![case_id];
-        let report = pulse::graph::contract::validate_node_contract(
+        let report = pulse::graph::validation::contract::validate_node_contract(
             &invalid,
             ContractValidationMode::CanonicalStorage,
         );
@@ -619,7 +631,7 @@ fn qa_case_ids_are_portable_bounded_and_unique() {
     let mut duplicate = assessed_implementation_ticket();
     duplicate.qa.as_mut().unwrap().impact.affected_case_ids =
         vec!["QA-AUTH-DUP".to_string(), "QA-AUTH-DUP".to_string()];
-    let report = pulse::graph::contract::validate_node_contract(
+    let report = pulse::graph::validation::contract::validate_node_contract(
         &duplicate,
         ContractValidationMode::CanonicalStorage,
     );
@@ -646,7 +658,7 @@ fn decision_work_provenance_requires_shaping_receipt_and_optional_fog() {
     fogged.provenance.fog_id = Some("FOG-AUTH-TELEMETRY".to_string());
     node.decision_work = Some(fogged);
     assert!(
-        pulse::graph::contract::validate_node_contract(
+        pulse::graph::validation::contract::validate_node_contract(
             &node,
             ContractValidationMode::CanonicalStorage,
         )
@@ -658,7 +670,7 @@ fn decision_work_provenance_requires_shaping_receipt_and_optional_fog() {
 fn decision_acceptance_receipt_refs_use_decision_specific_error_codes() {
     let mut node = assessed_implementation_ticket();
     node.implementation.as_mut().unwrap().required_decisions =
-        vec![pulse::graph::contract::RequiredDecisionRef {
+        vec![pulse::graph::model::contract::RequiredDecisionRef {
             id: "DEC-006".to_string(),
             contract_revision: 1,
             acceptance_receipt: ReceiptRef {
@@ -708,6 +720,9 @@ fn every_contract_finding_has_stable_return_code_mapping() {
         "shaping_map_revision_stale",
         "shaping_map_content_stale",
     ] {
-        assert_eq!(pulse::graph::contract::stable_contract_code(code), code);
+        assert_eq!(
+            pulse::graph::validation::contract::stable_contract_code(code),
+            code
+        );
     }
 }

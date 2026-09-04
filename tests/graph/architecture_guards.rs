@@ -144,24 +144,6 @@ fn current_contract_names_do_not_embed_version_suffixes() {
             );
         }
     }
-
-    let evidence_schemas = repo_root().join("src/schema/evidence");
-    for entry in fs::read_dir(&evidence_schemas).expect("evidence schemas should be readable") {
-        let path = entry.expect("schema entry should be readable").path();
-        let name = path
-            .file_name()
-            .and_then(|value| value.to_str())
-            .expect("schema filename should be UTF-8");
-        let embeds_schema_version = name.split(".v").skip(1).any(|suffix| {
-            suffix.split_once('.').is_some_and(|(version, _)| {
-                !version.is_empty() && version.chars().all(|character| character.is_ascii_digit())
-            })
-        });
-        assert!(
-            !embeds_schema_version,
-            "current schema filename embeds a version suffix: {name}"
-        );
-    }
 }
 
 #[test]
@@ -250,7 +232,7 @@ fn cli_binary_remains_thin_adapter_over_public_library_paths() {
 }
 
 #[test]
-fn graph_internal_tree_exposes_layered_modules_with_compatibility_shims() {
+fn graph_internal_tree_exposes_layered_modules_without_shims() {
     for path in [
         "src/graph/model/node.rs",
         "src/graph/model/edge.rs",
@@ -277,37 +259,24 @@ fn graph_internal_tree_exposes_layered_modules_with_compatibility_shims() {
         );
     }
 
-    for (shim, target) in [
-        ("src/graph/node.rs", "pub use crate::graph::model::node::*;"),
-        ("src/graph/edge.rs", "pub use crate::graph::model::edge::*;"),
-        (
-            "src/graph/contract.rs",
-            "pub use crate::graph::model::contract::*;",
-        ),
-        (
-            "src/graph/lifecycle.rs",
-            "pub use crate::graph::model::lifecycle::*;",
-        ),
-        (
-            "src/graph/validate.rs",
-            "pub use crate::graph::validation::graph::*;",
-        ),
-        (
-            "src/graph/readiness.rs",
-            "pub use crate::graph::read::readiness::*;",
-        ),
-        (
-            "src/graph/frontier.rs",
-            "pub use crate::graph::read::frontier::*;",
-        ),
-        (
-            "src/graph/executability.rs",
-            "pub use crate::graph::read::executability::*;",
-        ),
+    for shim in [
+        "src/graph/node.rs",
+        "src/graph/edge.rs",
+        "src/graph/contract.rs",
+        "src/graph/lifecycle.rs",
+        "src/graph/manifest.rs",
+        "src/graph/projection.rs",
+        "src/graph/shaping.rs",
+        "src/graph/traversal.rs",
+        "src/graph/validate.rs",
+        "src/graph/readiness.rs",
+        "src/graph/frontier.rs",
+        "src/graph/executability.rs",
+        "src/graph/rollup.rs",
     ] {
         assert!(
-            source(shim).contains(target),
-            "{shim} should remain a compatibility re-export"
+            !repo_root().join(shim).exists(),
+            "graph compatibility shim must be removed: {shim}"
         );
     }
 }
@@ -568,8 +537,8 @@ fn workgraph_bootstrap_ownership_lives_in_graph_store() {
         "graph::store::bootstrap should own the workgraph bootstrap function"
     );
     assert!(
-        bootstrap.contains("crate::graph::manifest"),
-        "graph::store::bootstrap should source schema templates from graph::manifest"
+        bootstrap.contains("crate::graph::model::manifest"),
+        "graph::store::bootstrap should source schema templates from graph::model::manifest"
     );
     let storage = source("src/storage/mod.rs");
     assert!(

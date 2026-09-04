@@ -369,21 +369,25 @@ impl From<(&str, u64, &NodeDocumentation)> for WorkDocumentationContext {
     }
 }
 
-impl From<(&str, u64, &crate::graph::node::DocumentationMetadata)> for WorkDocumentationContext {
-    fn from(value: (&str, u64, &crate::graph::node::DocumentationMetadata)) -> Self {
+impl From<(&str, u64, &crate::graph::model::node::DocumentationMetadata)>
+    for WorkDocumentationContext
+{
+    fn from(value: (&str, u64, &crate::graph::model::node::DocumentationMetadata)) -> Self {
         let (work_id, revision, documentation) = value;
         Self {
             work_id: work_id.to_string(),
             revision,
             posture: match documentation.impact.posture {
-                crate::graph::node::DocumentationImpactPosture::Unknown => {
+                crate::graph::model::node::DocumentationImpactPosture::Unknown => {
                     DocumentationPosture::Unknown
                 }
-                crate::graph::node::DocumentationImpactPosture::Required => {
+                crate::graph::model::node::DocumentationImpactPosture::Required => {
                     DocumentationPosture::Required
                 }
-                crate::graph::node::DocumentationImpactPosture::None => DocumentationPosture::None,
-                crate::graph::node::DocumentationImpactPosture::Deferred => {
+                crate::graph::model::node::DocumentationImpactPosture::None => {
+                    DocumentationPosture::None
+                }
+                crate::graph::model::node::DocumentationImpactPosture::Deferred => {
                     DocumentationPosture::Deferred
                 }
             },

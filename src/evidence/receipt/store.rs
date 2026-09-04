@@ -11,9 +11,7 @@
 //! [`crate::docs::receipt_validation`]).
 
 use super::bindings::binding_staleness;
-use super::envelope::{
-    normalize_bindings, validate_envelope, validate_manifest_kind, validate_receipt_id,
-};
+use super::envelope::{normalize_bindings, validate_envelope, validate_receipt_id};
 use crate::canonical_json::{hash_bytes, to_canonical_bytes};
 use crate::event::new_event_id;
 use crate::event::{event_path, EventActor, EventActorKind, EventEnvelope, EventSubject};
@@ -116,7 +114,6 @@ fn record_receipt_envelope_with_size(
             "receipt exceeds manifest max_inline_receipt_bytes",
         ));
     }
-    validate_manifest_kind(&manifest, &receipt)?;
     validate_envelope(repo_root, &receipt, true)?;
     let canonical = to_canonical_bytes(&receipt)?;
     let receipt_hash = hash_bytes(&canonical);

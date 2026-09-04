@@ -1,7 +1,7 @@
 use crate::common_canon::write_json;
 use crate::common_git::commit_all;
 use chrono::Utc;
-use pulse::canonical_json::{hash_bytes, to_canonical_bytes};
+use pulse::canonical_json::hash_bytes;
 use pulse::docs::model::{
     DocsRegistry, DocumentAuthority, DocumentKind, DocumentLifecycle, DocumentRecord,
     DocumentScope, ReviewPolicy,
@@ -18,18 +18,12 @@ fn setup_repo(
     let tmp = tempfile::tempdir().unwrap();
     let repo = tmp.path();
     let manifest = pulse::evidence::bootstrap(repo).unwrap().manifest;
+    fs::create_dir_all(repo.join(".pulse/docs")).unwrap();
     let path = "docs/domain/token-lifecycle.md".to_string();
     let full = repo.join(&path);
     fs::create_dir_all(full.parent().unwrap()).unwrap();
     fs::write(&full, b"# Token lifecycle\n").unwrap();
     let hash = hash_bytes(&fs::read(&full).unwrap());
-    fs::create_dir_all(repo.join(".pulse/docs/schemas")).unwrap();
-    let schema: serde_json::Value = serde_json::from_str(pulse::docs::DOCUMENT_SCHEMA).unwrap();
-    fs::write(
-        repo.join(".pulse/docs/schemas/document.schema.json"),
-        to_canonical_bytes(&schema).unwrap(),
-    )
-    .unwrap();
     let mut documents = vec![document(
         doc_id,
         revision,

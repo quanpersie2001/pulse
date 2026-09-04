@@ -6,15 +6,15 @@ use serde_json::json;
 
 use crate::canonical_json::{hash_bytes, to_canonical_bytes};
 use crate::event::EventEnvelope;
-use crate::graph::contract::{
-    validate_node_contract_result, ContractValidationMode, ReceiptRef, ShapingMapRef,
-    ShapingPointer,
+use crate::graph::model::contract::{
+    ContractValidationMode, ReceiptRef, ShapingMapRef, ShapingPointer,
 };
-use crate::graph::node::Node;
+use crate::graph::model::node::Node;
 use crate::graph::store::{
     JsonGraphStore, MutationOutcome, MutationStatus, OperationContext, ShapingView,
 };
-use crate::graph::validate::validate_graph;
+use crate::graph::validation::contract::validate_node_contract_result;
+use crate::graph::validation::graph::validate_graph;
 use crate::id::WorkKind;
 use crate::storage::transaction::{recover_prepared_transactions, FileState};
 use crate::storage::{self, WriteGuard};
@@ -137,7 +137,7 @@ impl JsonGraphStore {
         let caller = crate::policy::parse_actor(&ctx.actor);
         crate::policy::authorize(&policy_report, &caller, &["shape.apply"])?;
         let approve_grant =
-            crate::graph::shaping::materialization_approve_grant(&payload.materialization)?;
+            crate::graph::read::shaping::materialization_approve_grant(&payload.materialization)?;
         crate::policy::authorize(
             &policy_report,
             &payload.approval.approved_by,

@@ -5,12 +5,12 @@ use pulse::canonical_json::to_canonical_bytes;
 use pulse::docs::{
     DocumentAuthority, DocumentKind, DocumentLifecycle, DocumentRecord, DocumentScope, ReviewPolicy,
 };
-use pulse::graph::contract::{
+use pulse::graph::model::contract::{
     ContentRef, ContractItem, ContractScope, EffortMetadata, ImplementationContract,
     ImplementationMode, ImplementationSemanticImpact, PlanPolicy, PublicCreateClassification,
     QaImpactPosture, SurfaceRef, TicketRole, WorkSurface,
 };
-use pulse::graph::node::{DocumentationImpactPosture, NodeStatus};
+use pulse::graph::model::node::{DocumentationImpactPosture, NodeStatus};
 use pulse::graph::store::{
     ContractSetRequest, DocumentationImpactUpdate, OperationContext, QaImpactUpdate,
 };
@@ -214,8 +214,8 @@ fn setup_ready_ticket_with_postures(
             "Test reservation ticket".to_string(),
             PublicCreateClassification {
                 role: Some(TicketRole::Implementation),
-                risk: Some(pulse::graph::contract::Risk::Low),
-                materialization: Some(pulse::graph::contract::Materialization::R1),
+                risk: Some(pulse::graph::model::contract::Risk::Low),
+                materialization: Some(pulse::graph::model::contract::Materialization::R1),
             },
             context(),
         )

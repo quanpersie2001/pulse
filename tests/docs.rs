@@ -40,8 +40,6 @@ mod docs_receipt_registry;
 mod docs_registry;
 #[path = "docs/docs_registry_schema.rs"]
 mod docs_registry_schema;
-#[path = "docs/docs_retrieval_eval.rs"]
-mod docs_retrieval_eval;
 #[path = "docs/docs_search_get_tree.rs"]
 mod docs_search_get_tree;
 #[path = "docs/docs_section_extraction.rs"]

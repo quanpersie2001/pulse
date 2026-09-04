@@ -170,7 +170,7 @@ impl JsonGraphStore {
         ctx: OperationContext,
     ) -> PulseResult<MutationOutcome<Node>> {
         let qa = QaMetadata {
-            impact: crate::graph::contract::QaImpact {
+            impact: crate::graph::model::contract::QaImpact {
                 posture: update.posture,
                 rationale: update.rationale,
                 behavioral_owner: update.behavioral_owner,

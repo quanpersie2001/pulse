@@ -2,12 +2,12 @@ use std::fs;
 
 use chrono::{TimeZone, Utc};
 use pulse::canonical_json::{hash_bytes, to_canonical_bytes};
-use pulse::graph::edge::{deterministic_edge_id, Edge, EdgeType};
-use pulse::graph::node::NodeStatus;
+use pulse::graph::model::edge::{deterministic_edge_id, Edge, EdgeType};
+use pulse::graph::model::node::NodeStatus;
 use pulse::graph::store::{
     OperationContext, SupersessionAssertion, SupersessionClaim, SupersessionTarget,
 };
-use pulse::graph::validate::ValidationReport;
+use pulse::graph::validation::graph::ValidationReport;
 use pulse::id::WorkKind;
 use pulse::{JsonGraphStore, PulseError};
 use tempfile::TempDir;
@@ -100,7 +100,7 @@ fn bootstrap_refuses_node_schema_drift_without_overwrite() {
     fs::create_dir_all(wg.join("edges")).unwrap();
     fs::write(
         wg.join("manifest.json"),
-        to_canonical_bytes(&pulse::graph::manifest::Manifest::default()).unwrap(),
+        to_canonical_bytes(&pulse::graph::model::manifest::Manifest::default()).unwrap(),
     )
     .unwrap();
     fs::write(wg.join("schemas/node.schema.json"), NON_CURRENT_NODE_SCHEMA).unwrap();
@@ -140,7 +140,7 @@ fn bootstrap_completes_safe_partial_current_layout_with_node_schema_only() {
     fs::create_dir_all(wg.join("schemas")).unwrap();
     fs::write(
         wg.join("schemas/node.schema.json"),
-        pulse::graph::manifest::NODE_SCHEMA.as_bytes(),
+        pulse::graph::model::manifest::NODE_SCHEMA.as_bytes(),
     )
     .unwrap();
 
@@ -148,7 +148,7 @@ fn bootstrap_completes_safe_partial_current_layout_with_node_schema_only() {
 
     assert_eq!(
         fs::read(wg.join("schemas/node.schema.json")).unwrap(),
-        pulse::graph::manifest::NODE_SCHEMA.as_bytes()
+        pulse::graph::model::manifest::NODE_SCHEMA.as_bytes()
     );
     assert!(wg.join("manifest.json").exists());
     assert!(wg.join("schemas/edge.schema.json").exists());
@@ -163,12 +163,12 @@ fn bootstrap_recovers_safe_current_manifest_edge_partial_layout_missing_node_sch
     fs::create_dir_all(wg.join("schemas")).unwrap();
     fs::write(
         wg.join("manifest.json"),
-        to_canonical_bytes(&pulse::graph::manifest::Manifest::default()).unwrap(),
+        to_canonical_bytes(&pulse::graph::model::manifest::Manifest::default()).unwrap(),
     )
     .unwrap();
     fs::write(
         wg.join("schemas/edge.schema.json"),
-        pulse::graph::manifest::EDGE_SCHEMA.as_bytes(),
+        pulse::graph::model::manifest::EDGE_SCHEMA.as_bytes(),
     )
     .unwrap();
 
@@ -176,7 +176,7 @@ fn bootstrap_recovers_safe_current_manifest_edge_partial_layout_missing_node_sch
 
     assert_eq!(
         fs::read(wg.join("schemas/node.schema.json")).unwrap(),
-        pulse::graph::manifest::NODE_SCHEMA.as_bytes()
+        pulse::graph::model::manifest::NODE_SCHEMA.as_bytes()
     );
     assert!(wg.join("manifest.json").exists());
     assert!(wg.join("schemas/edge.schema.json").exists());
@@ -197,15 +197,15 @@ fn bootstrap_completes_directory_only_current_scaffold() {
 
     assert_eq!(
         fs::read(wg.join("schemas/node.schema.json")).unwrap(),
-        pulse::graph::manifest::NODE_SCHEMA.as_bytes()
+        pulse::graph::model::manifest::NODE_SCHEMA.as_bytes()
     );
     assert_eq!(
         fs::read(wg.join("schemas/edge.schema.json")).unwrap(),
-        pulse::graph::manifest::EDGE_SCHEMA.as_bytes()
+        pulse::graph::model::manifest::EDGE_SCHEMA.as_bytes()
     );
     assert_eq!(
         fs::read(wg.join("manifest.json")).unwrap(),
-        to_canonical_bytes(&pulse::graph::manifest::Manifest::default()).unwrap()
+        to_canonical_bytes(&pulse::graph::model::manifest::Manifest::default()).unwrap()
     );
     assert!(fs::read_dir(wg.join("nodes")).unwrap().next().is_none());
     assert!(fs::read_dir(wg.join("edges")).unwrap().next().is_none());
@@ -221,7 +221,7 @@ fn bootstrap_completes_storage_scaffold_with_current_manifest_and_node_schema() 
 
     assert_eq!(
         fs::read(wg.join("schemas/edge.schema.json")).unwrap(),
-        pulse::graph::manifest::EDGE_SCHEMA.as_bytes()
+        pulse::graph::model::manifest::EDGE_SCHEMA.as_bytes()
     );
     assert!(wg.join("nodes").is_dir());
     assert!(wg.join("edges").is_dir());
@@ -262,7 +262,7 @@ fn bootstrap_refuses_existing_nodes_with_conflicting_manifest() {
     fs::write(wg.join("manifest.json"), b"{\"schema_version\":999}\n").unwrap();
     fs::write(
         wg.join("schemas/node.schema.json"),
-        pulse::graph::manifest::NODE_SCHEMA.as_bytes(),
+        pulse::graph::model::manifest::NODE_SCHEMA.as_bytes(),
     )
     .unwrap();
     fs::write(wg.join("nodes/TK-001.json"), b"{}\n").unwrap();
@@ -418,7 +418,7 @@ fn epic_story_ticket_projection_has_inverse_children() {
         projection
             .lifecycle
             .status_classes
-            .get(&pulse::graph::lifecycle::StatusClass::Preparation)
+            .get(&pulse::graph::model::lifecycle::StatusClass::Preparation)
             .unwrap(),
         &vec![ep.id.clone(), st.id.clone(), tk.id.clone()]
     );
@@ -657,7 +657,7 @@ fn supersede_rejects_self_cycle_terminal_and_bad_assertion() {
             &old.id,
             NodeStatus::Cancelled,
             1,
-            Some(pulse::graph::lifecycle::TransitionReason {
+            Some(pulse::graph::model::lifecycle::TransitionReason {
                 code: "cancelled".into(),
                 summary: "not needed".into(),
                 reference: None,

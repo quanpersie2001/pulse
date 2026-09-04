@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use crate::graph::node::DocumentationImpactPosture;
+use crate::graph::model::node::DocumentationImpactPosture;
 use clap::{Subcommand, ValueEnum};
 
 #[derive(Subcommand)]

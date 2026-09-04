@@ -20,15 +20,15 @@ use std::process::Command;
 use crate::docs::applicability::{ApplicableDocsReport, ApplicableDocument};
 use crate::docs::model::{DocumentAuthority, DocumentKind, WorkDocumentationContext};
 use crate::evidence::model::{BranchCriticality, BranchDisposition, ShapeMode};
-use crate::graph::contract::{
+use crate::graph::model::contract::{
     ExpectedEvidence, ImplementationMode, PlanPolicy, QaImpactPosture, Risk, TicketRole,
     WorkSurface,
 };
-use crate::graph::edge::EdgeType;
-use crate::graph::executability::StructuralState;
-use crate::graph::node::{DocumentationImpactPosture, Node, NodeStatus};
-use crate::graph::projection::GraphProjection;
-use crate::graph::readiness::{
+use crate::graph::model::edge::EdgeType;
+use crate::graph::model::node::{DocumentationImpactPosture, Node, NodeStatus};
+use crate::graph::read::executability::StructuralState;
+use crate::graph::read::projection::GraphProjection;
+use crate::graph::read::readiness::{
     evaluate as evaluate_readiness, EvalProfile, ReadinessReport, ReadinessStatus,
     ShapingReceiptSnapshot,
 };
@@ -1799,13 +1799,13 @@ fn risk_str(risk: Option<Risk>) -> String {
     .to_string()
 }
 
-fn materialization_str(mat: Option<crate::graph::contract::Materialization>) -> String {
+fn materialization_str(mat: Option<crate::graph::model::contract::Materialization>) -> String {
     match mat {
-        None | Some(crate::graph::contract::Materialization::Unassessed) => "unassessed",
-        Some(crate::graph::contract::Materialization::R0) => "R0",
-        Some(crate::graph::contract::Materialization::R1) => "R1",
-        Some(crate::graph::contract::Materialization::R2) => "R2",
-        Some(crate::graph::contract::Materialization::R3) => "R3",
+        None | Some(crate::graph::model::contract::Materialization::Unassessed) => "unassessed",
+        Some(crate::graph::model::contract::Materialization::R0) => "R0",
+        Some(crate::graph::model::contract::Materialization::R1) => "R1",
+        Some(crate::graph::model::contract::Materialization::R2) => "R2",
+        Some(crate::graph::model::contract::Materialization::R3) => "R3",
     }
     .to_string()
 }
@@ -1839,8 +1839,10 @@ fn pkt_plan_policy_str(policy: PlanPolicy) -> String {
     .to_string()
 }
 
-fn pkt_semantic_impact_str(impact: crate::graph::contract::ImplementationSemanticImpact) -> String {
-    use crate::graph::contract::ImplementationSemanticImpact;
+fn pkt_semantic_impact_str(
+    impact: crate::graph::model::contract::ImplementationSemanticImpact,
+) -> String {
+    use crate::graph::model::contract::ImplementationSemanticImpact;
     match impact {
         ImplementationSemanticImpact::NoBehaviorOrPublicRiskChange => {
             "no_behavior_or_public_risk_change"
@@ -1852,7 +1854,7 @@ fn pkt_semantic_impact_str(impact: crate::graph::contract::ImplementationSemanti
     .to_string()
 }
 
-fn pkt_surface_ref(ref_: &crate::graph::contract::SurfaceRef) -> PacketSurfaceRef {
+fn pkt_surface_ref(ref_: &crate::graph::model::contract::SurfaceRef) -> PacketSurfaceRef {
     PacketSurfaceRef {
         path: ref_.path.clone(),
         symbol: ref_.symbol.clone(),
@@ -1860,7 +1862,7 @@ fn pkt_surface_ref(ref_: &crate::graph::contract::SurfaceRef) -> PacketSurfaceRe
     }
 }
 
-fn pkt_contract_item(item: &crate::graph::contract::ContractItem) -> PacketContractItem {
+fn pkt_contract_item(item: &crate::graph::model::contract::ContractItem) -> PacketContractItem {
     PacketContractItem {
         id: item.id.clone(),
         summary: item.summary.clone(),
@@ -1917,8 +1919,8 @@ fn expected_evidence_str(evidence: ExpectedEvidence) -> &'static str {
     }
 }
 
-fn expected_handoff_str(handoff: crate::graph::contract::ExpectedHandoff) -> &'static str {
-    use crate::graph::contract::ExpectedHandoff;
+fn expected_handoff_str(handoff: crate::graph::model::contract::ExpectedHandoff) -> &'static str {
+    use crate::graph::model::contract::ExpectedHandoff;
     match handoff {
         ExpectedHandoff::SourceSnapshot => "source_snapshot",
         ExpectedHandoff::AcceptanceToEvidence => "acceptance_to_evidence",
@@ -2290,11 +2292,12 @@ mod tests {
         ShapingFog, ShapingResolutionPointer, ShapingValidationPayload, ShapingWorkBinding,
         SourcePosture,
     };
-    use crate::graph::edge::Edge;
-    use crate::graph::executability::{LifecycleSummary, StructuralExecutabilityReport};
-    use crate::graph::projection::{self, GraphProjection};
-    use crate::graph::readiness::{GateFamilyReport, GateStatus};
-    use crate::graph::{contract, node};
+    use crate::graph::model::contract;
+    use crate::graph::model::edge::Edge;
+    use crate::graph::model::node;
+    use crate::graph::read::executability::{LifecycleSummary, StructuralExecutabilityReport};
+    use crate::graph::read::projection::{self, GraphProjection};
+    use crate::graph::read::readiness::{GateFamilyReport, GateStatus};
     use crate::identity::ActorKind;
     use crate::policy::{AuthorityPolicy, AuthorityPolicyReport, AuthorityPrincipal};
     use chrono::Utc;
@@ -3206,7 +3209,7 @@ mod tests {
         let report = ReadinessReport {
             schema_version: 1,
             code: "ready".to_string(),
-            subject: crate::graph::readiness::ReadinessSubject {
+            subject: crate::graph::read::readiness::ReadinessSubject {
                 id: "TK-001".to_string(),
                 revision: 1,
                 contract_revision: 1,
@@ -3361,7 +3364,7 @@ mod tests {
         let report = ReadinessReport {
             schema_version: 1,
             code: "ready".to_string(),
-            subject: crate::graph::readiness::ReadinessSubject {
+            subject: crate::graph::read::readiness::ReadinessSubject {
                 id: "TK-001".to_string(),
                 revision: 1,
                 contract_revision: 1,
@@ -3485,7 +3488,7 @@ mod tests {
         let base_report = ReadinessReport {
             schema_version: 1,
             code: "ready".to_string(),
-            subject: crate::graph::readiness::ReadinessSubject {
+            subject: crate::graph::read::readiness::ReadinessSubject {
                 id: "TK-001".to_string(),
                 revision: 1,
                 contract_revision: 1,

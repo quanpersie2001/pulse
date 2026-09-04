@@ -3,7 +3,7 @@ use pulse::docs::{
     DocsRegistryStore, DocumentAuthority, DocumentKind, DocumentLifecycle, DocumentRecord,
     DocumentScope, OperationContext as DocsOperationContext, ReviewPolicy,
 };
-use pulse::graph::node::DocumentationImpactPosture;
+use pulse::graph::model::node::DocumentationImpactPosture;
 use pulse::graph::store::{
     DocumentationImpactUpdate, JsonGraphStore, OperationContext as GraphOperationContext,
 };

@@ -1,11 +1,12 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::Path;
 
-use crate::graph::contract::{self, ContractValidationMode, NODE_SCHEMA_VERSION};
-use crate::graph::edge::{deterministic_edge_id, Edge, EdgeType};
-use crate::graph::lifecycle::{status_requires_reason, validate_reason, TransitionReason};
-use crate::graph::manifest::Manifest;
-use crate::graph::node::{Node, NodeStatus};
+use crate::graph::model::contract::{ContractValidationMode, NODE_SCHEMA_VERSION};
+use crate::graph::model::edge::{deterministic_edge_id, Edge, EdgeType};
+use crate::graph::model::lifecycle::{status_requires_reason, validate_reason, TransitionReason};
+use crate::graph::model::manifest::Manifest;
+use crate::graph::model::node::{Node, NodeStatus};
+use crate::graph::validation::contract::validate_node_contract_result;
 use crate::id::validate_id_for_kind;
 use crate::{PulseError, PulseResult};
 use serde::{Deserialize, Serialize};
@@ -302,7 +303,7 @@ pub fn validate_node_schema_semantics(node: &Node) -> PulseResult<()> {
     if let Some(documentation) = &node.documentation {
         documentation.validate(false)?;
     }
-    contract::validate_node_contract_result(node, ContractValidationMode::CanonicalStorage)?;
+    validate_node_contract_result(node, ContractValidationMode::CanonicalStorage)?;
     Ok(())
 }
 

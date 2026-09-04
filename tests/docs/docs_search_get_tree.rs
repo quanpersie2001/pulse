@@ -6,7 +6,7 @@ use pulse::docs::{
     RetrievalConfig, RetrievalScope, ReviewPolicy, SearchOptions, TreeOptions,
     WorkDocumentationContext,
 };
-use pulse::graph::node::DocumentationImpactPosture;
+use pulse::graph::model::node::DocumentationImpactPosture;
 use pulse::graph::store::{DocumentationImpactUpdate, OperationContext};
 use pulse::id::WorkKind;
 use pulse::JsonGraphStore;
@@ -58,14 +58,8 @@ fn setup_repo() -> tempfile::TempDir {
     let tmp = tempfile::tempdir().unwrap();
     let repo = tmp.path();
     let manifest = pulse::evidence::manifest::bootstrap(repo).unwrap().manifest;
+    fs::create_dir_all(repo.join(".pulse/docs")).unwrap();
     pulse::storage::bootstrap(repo).unwrap();
-    fs::create_dir_all(repo.join(".pulse/docs/schemas")).unwrap();
-    let schema: serde_json::Value = serde_json::from_str(pulse::docs::DOCUMENT_SCHEMA).unwrap();
-    fs::write(
-        repo.join(".pulse/docs/schemas/document.schema.json"),
-        to_canonical_bytes(&schema).unwrap(),
-    )
-    .unwrap();
     fs::create_dir_all(repo.join("docs/domain")).unwrap();
     fs::create_dir_all(repo.join("docs/authentication")).unwrap();
     fs::write(repo.join("docs/domain/token.md"), b"# Token Lifecycle\n\nPreamble text.\n\n## Expired Tokens\n\nTokenExpired means the refresh-token expired in v2.1.\n").unwrap();
@@ -783,22 +777,6 @@ fn stale_section_ref_candidates_rank_by_anchor_tokens_and_cached_source_proximit
         .candidate_section_refs
         .iter()
         .any(|candidate| candidate == "DOC-AUTH-DOMAIN#renewal-flow"));
-}
-
-#[test]
-fn docs_retrieval_schemas_are_embedded_and_well_formed() {
-    for schema in [
-        pulse::docs::DOCS_SECTION_SCHEMA,
-        pulse::docs::DOCS_INDEX_STATE_SCHEMA,
-        pulse::docs::RETRIEVAL_EVAL_SCHEMA,
-    ] {
-        let value: serde_json::Value = serde_json::from_str(schema).unwrap();
-        assert_eq!(
-            value["$schema"],
-            "https://json-schema.org/draft/2020-12/schema"
-        );
-        assert_eq!(value["type"], "object");
-    }
 }
 
 #[test]

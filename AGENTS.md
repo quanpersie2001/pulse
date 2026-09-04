@@ -19,9 +19,9 @@ Do not add features until the golden path in `PRODUCT.md` §7 runs for real.
 ## Repository roles
 
 - This repository **develops** Pulse. Never run Pulse mutations with
-  `--repo-root .` here. The tracked `.pulse/workgraph/items.jsonl`,
-  `.pulse/workgraph/schema.json` and `.pulse/docs/retrieval-evals/` at the
-  root are legacy development artifacts, not evidence of self-hosting.
+  `--repo-root .` here. The legacy Node-era `.pulse/workgraph/items.jsonl`,
+  `schema.json` and `.pulse/docs/retrieval-evals/` at the root were deleted;
+  a tracked `.pulse/` at the root is not evidence of self-hosting.
 - `examples/todolist/` is the **dogfood target**: a small app inside this Git
   repository where Pulse is run for real. Its `.pulse/` and `works/` are
   tracked; its `runtime/` and `cache/` are ignored. Run Pulse there with
@@ -66,8 +66,8 @@ Layers sit bottom-up; never reach up the ladder. Guarded by
   reservation, completion, story completion, init). No trait abstractions.
 - `src/graph/`: `model/` (pure values) → `validation/` → `read/` (pure
   snapshot evaluators, no I/O) → `store/` (persistence, CAS, supersession,
-  bootstrap). Single-file `src/graph/<name>.rs` are one-line re-export shims
-  scheduled for removal; use layered paths.
+  bootstrap). Only layered paths exist; do not re-add one-line re-export
+  shims under `src/graph/`.
 - `src/docs/`: registry, applicability, markdown section extraction, tantivy
   index, search/get/tree, validation and checks, receipt policy.
 - `src/evidence/`: immutable receipt envelope, bindings, store, kind

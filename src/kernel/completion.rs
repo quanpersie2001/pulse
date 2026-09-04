@@ -12,9 +12,9 @@ use crate::execution::{
     HandoffReceipt, SubmitHandoffArgs, VerificationCheck, VerificationDisposition,
     VerificationReceipt,
 };
-use crate::graph::contract::{QaImpactPosture, Risk};
-use crate::graph::lifecycle::TransitionReason;
-use crate::graph::node::{DocumentationImpactPosture, Node, NodeStatus};
+use crate::graph::model::contract::{QaImpactPosture, Risk};
+use crate::graph::model::lifecycle::TransitionReason;
+use crate::graph::model::node::{DocumentationImpactPosture, Node, NodeStatus};
 use crate::graph::store::JsonGraphStore;
 use crate::reservation::ReservationState;
 use crate::storage::transaction::{

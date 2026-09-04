@@ -17,7 +17,6 @@ use super::documentation::validate_docs_payload;
 use super::shaping::validate_shaping_payload;
 use super::supersession::validate_supersession_payload;
 use crate::evidence::artifact::artifact_exists;
-use crate::evidence::manifest::{self, EvidenceManifest};
 use crate::evidence::model::{ReceiptBindings, ReceiptEnvelope, ReceiptPayload};
 use crate::{PulseError, Result};
 use std::collections::BTreeSet;
@@ -35,7 +34,6 @@ pub(super) fn validate_envelope(
         ));
     }
     validate_receipt_id(&receipt.id)?;
-    validate_manifest_kind(&manifest::load(repo_root)?, receipt)?;
     if receipt.actor.id.trim().is_empty() || receipt.subject.id.trim().is_empty() {
         return Err(PulseError::validation(
             "receipt_schema_invalid",
@@ -82,41 +80,6 @@ pub(super) fn normalize_bindings(receipt: &mut ReceiptEnvelope) {
         .bindings
         .artifacts
         .sort_by(|a, b| a.sha256.cmp(&b.sha256));
-}
-
-pub(super) fn validate_manifest_kind(
-    manifest: &EvidenceManifest,
-    receipt: &ReceiptEnvelope,
-) -> Result<()> {
-    if !manifest
-        .receipt_schemas
-        .contains_key(&receipt.receipt_version.to_string())
-    {
-        return Err(PulseError::validation(
-            "receipt_version_unsupported",
-            "unknown receipt envelope version",
-        ));
-    }
-    let versions = manifest
-        .receipt_kinds
-        .get(receipt.kind.as_str())
-        .ok_or_else(|| {
-            PulseError::validation("receipt_kind_unsupported", "unknown receipt kind")
-        })?;
-    let payload_version = match &receipt.payload {
-        ReceiptPayload::SupersessionReconciliation(payload) => payload.payload_version,
-        ReceiptPayload::ShapingValidation(payload) => payload.payload_version,
-        ReceiptPayload::DecisionAcceptance(payload) => payload.payload_version,
-        ReceiptPayload::DocumentationValidation(payload) => payload.payload_version,
-        ReceiptPayload::QaCheckpoint(payload) => payload.payload_version,
-    };
-    if !versions.contains_key(&payload_version.to_string()) {
-        return Err(PulseError::validation(
-            "receipt_version_unsupported",
-            "unknown receipt payload version",
-        ));
-    }
-    Ok(())
 }
 
 fn validate_bindings(

@@ -11,7 +11,7 @@ use crate::common_git::commit_all;
 use chrono::Utc;
 use pulse::canonical_json::hash_bytes;
 use pulse::evidence::model::*;
-use pulse::graph::contract::{
+use pulse::graph::model::contract::{
     ContentRef, ContractItem, ContractScope, DecisionWorkContract, DecisionWorkProvenance,
     EffortMetadata, GapKind, ImplementationContract, ImplementationMode,
     ImplementationSemanticImpact, Materialization, PlanPolicy, QaImpactPosture, ResolutionTarget,
@@ -43,8 +43,8 @@ fn create_ticket(
     store: &JsonGraphStore,
     role: TicketRole,
     materialization: Materialization,
-) -> pulse::graph::node::Node {
-    let classification = pulse::graph::contract::PublicCreateClassification {
+) -> pulse::graph::model::node::Node {
+    let classification = pulse::graph::model::contract::PublicCreateClassification {
         role: Some(role),
         risk: Some(Risk::Low),
         materialization: Some(materialization),
@@ -60,7 +60,7 @@ fn create_ticket(
         .value
 }
 
-fn make_implementation_contract(node: &pulse::graph::node::Node) -> ImplementationContract {
+fn make_implementation_contract(node: &pulse::graph::model::node::Node) -> ImplementationContract {
     let brief_path = format!("{}/ticket.md", node.content_dir);
     ImplementationContract {
         mode: ImplementationMode::Guided,
@@ -105,7 +105,7 @@ fn make_implementation_contract(node: &pulse::graph::node::Node) -> Implementati
     }
 }
 
-fn make_decision_work_contract(owner: &pulse::graph::node::Node) -> DecisionWorkContract {
+fn make_decision_work_contract(owner: &pulse::graph::model::node::Node) -> DecisionWorkContract {
     DecisionWorkContract {
         destination_owner: RevisionedWorkRef {
             id: owner.id.clone(),
@@ -129,7 +129,7 @@ fn make_decision_work_contract(owner: &pulse::graph::node::Node) -> DecisionWork
 
 fn make_shaping_receipt(
     id: &str,
-    node: &pulse::graph::node::Node,
+    node: &pulse::graph::model::node::Node,
     manifest: &pulse::evidence::manifest::EvidenceManifest,
     content_rel: &str,
     content_hash: String,
@@ -200,7 +200,7 @@ fn make_shaping_receipt(
 
 fn record_shaping(
     repo: &std::path::Path,
-    node: &pulse::graph::node::Node,
+    node: &pulse::graph::model::node::Node,
     receipt_id: &str,
     materialization: &str,
 ) -> String {
@@ -229,7 +229,7 @@ fn record_shaping(
 #[allow(clippy::too_many_arguments)]
 fn record_shaping_at(
     repo: &std::path::Path,
-    node: &pulse::graph::node::Node,
+    node: &pulse::graph::model::node::Node,
     receipt_id: &str,
     materialization: &str,
     manifest: &pulse::evidence::manifest::EvidenceManifest,

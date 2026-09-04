@@ -638,11 +638,11 @@ fn validate_revision_match(
     }
 }
 
-fn load_work_node(repo_root: &Path, id: &str) -> Result<crate::graph::node::Node> {
+fn load_work_node(repo_root: &Path, id: &str) -> Result<crate::graph::model::node::Node> {
     let path = repo_root
         .join(".pulse/workgraph/nodes")
         .join(format!("{id}.json"));
-    crate::storage::read_json::<crate::graph::node::Node>(&path)
+    crate::storage::read_json::<crate::graph::model::node::Node>(&path)
 }
 
 fn validate_cross_relations(
