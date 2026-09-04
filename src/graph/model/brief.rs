@@ -128,7 +128,7 @@ pub fn parse_ticket_brief(markdown: &str) -> PulseResult<TicketBrief> {
     let sections = sections(markdown);
     let title = markdown.lines().find_map(|line| {
         let (level, text) = heading(line)?;
-        (level == 1).then(|| text)
+        (level == 1).then_some(text)
     });
     let objective = text_section(&sections, "objective");
     let current_behavior = text_section(&sections, "current behavior");
@@ -147,7 +147,7 @@ pub fn parse_ticket_brief(markdown: &str) -> PulseResult<TicketBrief> {
             "Acceptance items must use `AC-ID: summary`",
         ));
     }
-    let open_questions = parse_questions(&sections);
+    let open_questions = parse_questions(&sections)?;
     let implementation_freedom = parse_freedom(&sections);
     let documentation = parse_documentation(&sections);
     let qa = parse_qa(&sections);
@@ -281,30 +281,55 @@ fn parse_acceptance(sections: &BTreeMap<String, String>) -> Vec<AcceptanceItem> 
         .unwrap_or_default()
 }
 
-fn parse_questions(sections: &BTreeMap<String, String>) -> Vec<OpenQuestion> {
-    sections
-        .get("open questions")
-        .map(|body| {
-            body.lines()
-                .filter_map(|line| {
-                    let value = line.trim().strip_prefix(['-', '*'])?.trim();
-                    let (disposition, text) = value.strip_prefix('(')?.split_once(')')?;
-                    let disposition = match disposition.trim().to_ascii_lowercase().as_str() {
-                        "resolved" => OpenQuestionDisposition::Resolved,
-                        "rejected" => OpenQuestionDisposition::Rejected,
-                        "delegated" => OpenQuestionDisposition::Delegated,
-                        "deferred" => OpenQuestionDisposition::Deferred,
-                        "blocking" => OpenQuestionDisposition::Blocking,
-                        _ => return None,
-                    };
-                    Some(OpenQuestion {
-                        disposition,
-                        text: text.trim().to_string(),
-                    })
-                })
-                .collect()
-        })
-        .unwrap_or_default()
+fn parse_questions(sections: &BTreeMap<String, String>) -> PulseResult<Vec<OpenQuestion>> {
+    let Some(body) = sections.get("open questions") else {
+        return Ok(Vec::new());
+    };
+    let mut questions = Vec::new();
+    for line in body.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let Some(value) = trimmed.strip_prefix(['-', '*']).map(str::trim) else {
+            return Err(invalid(
+                "ticket_brief_open_question_disposition_missing",
+                "every open question must be a list item with a disposition",
+            ));
+        };
+        let Some((disposition, text)) = value.strip_prefix('(').and_then(|v| v.split_once(')'))
+        else {
+            return Err(invalid(
+                "ticket_brief_open_question_disposition_missing",
+                "every open question must declare a disposition",
+            ));
+        };
+        let disposition = match disposition.trim().to_ascii_lowercase().as_str() {
+            "resolved" => OpenQuestionDisposition::Resolved,
+            "rejected" => OpenQuestionDisposition::Rejected,
+            "delegated" => OpenQuestionDisposition::Delegated,
+            "deferred" => OpenQuestionDisposition::Deferred,
+            "blocking" => OpenQuestionDisposition::Blocking,
+            _ => {
+                return Err(invalid(
+                    "ticket_brief_open_question_disposition_missing",
+                    "open question disposition must be resolved, rejected, delegated, deferred, or blocking",
+                ))
+            }
+        };
+        let text = text.trim();
+        if text.is_empty() {
+            return Err(invalid(
+                "ticket_brief_open_question_empty",
+                "open question text must not be empty",
+            ));
+        }
+        questions.push(OpenQuestion {
+            disposition,
+            text: text.to_string(),
+        });
+    }
+    Ok(questions)
 }
 
 fn parse_freedom(sections: &BTreeMap<String, String>) -> ImplementationFreedom {
@@ -406,7 +431,7 @@ fn invalid(code: &'static str, message: impl Into<String>) -> PulseError {
 /// Render the initial implementation Ticket contract.
 pub fn implementation_template(id: &str, title: &str, materialization: Materialization) -> String {
     let full = materialization != Materialization::R0;
-    format!("# {id} {title}\n\n## Objective\nDescribe the outcome this Ticket must achieve.\n\n{}## Code anchors\n- src/\n\n## Acceptance\n- AC-1: Describe a testable acceptance condition.\n\n## Verify\n- cargo test\n\n{}## Required changes\n- Describe the required change.\n\n## Invariants\n- Describe the invariant that must remain true.\n\n## Implementation freedom\nguided: agent chooses internal structure within this contract.\n\n## Scope\n- Included work.\n\n## Non-scope\n- Work excluded from this Ticket.\n\n## Open questions\n- (delegated) Record implementation choices that are safe to delegate.\n\n## Documentation impact\n- Posture: none\n- Rationale: Explain why durable docs are unaffected.\n- Documents:\n\n## QA impact\n- Owner: ST-000\n- Posture: none\n- Cases:\n- Reason: Explain QA posture.\n\n## Expected handoff\n- Diff and verification results.\n", if full { "## Current behavior\nDescribe the current behavior.\n\n## Target behavior\nDescribe the target behavior.\n\n" } else { "" }, if full { "" } else { "" })
+    format!("# {id} {title}\n\n## Objective\nDescribe the outcome this Ticket must achieve.\n\n{}## Code anchors\n- src/\n\n## Acceptance\n- AC-1: Describe a testable acceptance condition.\n\n## Verify\n- cargo test\n\n## Required changes\n- Describe the required change.\n\n## Invariants\n- Describe the invariant that must remain true.\n\n## Implementation freedom\nguided: agent chooses internal structure within this contract.\n\n## Scope\n- Included work.\n\n## Non-scope\n- Work excluded from this Ticket.\n\n## Open questions\n- (delegated) Record implementation choices that are safe to delegate.\n\n## Documentation impact\n- Posture: none\n- Rationale: Explain why durable docs are unaffected.\n- Documents:\n\n## QA impact\n- Owner: ST-000\n- Posture: none\n- Cases:\n- Reason: Explain QA posture.\n\n## Expected handoff\n- Diff and verification results.\n", if full { "## Current behavior\nDescribe the current behavior.\n\n## Target behavior\nDescribe the target behavior.\n\n" } else { "" })
 }
 
 /// Render the question-oriented contract for a decision-work Ticket.
@@ -467,6 +492,15 @@ mod tests {
         assert_eq!(
             brief.validate_for(Materialization::R0).unwrap_err().code(),
             "ticket_brief_open_question_blocking"
+        );
+    }
+
+    #[test]
+    fn undispositioned_open_question_is_not_silently_ignored() {
+        let text = format!("{R0}\n## Open questions\n- Which API?\n");
+        assert_eq!(
+            parse_ticket_brief(&text).unwrap_err().code(),
+            "ticket_brief_open_question_disposition_missing"
         );
     }
 }

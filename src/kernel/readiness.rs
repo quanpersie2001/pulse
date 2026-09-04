@@ -2,6 +2,8 @@ use std::fs;
 use std::path::Path;
 
 use crate::canonical_json::hash_bytes;
+use crate::graph::model::brief::TicketBrief;
+use crate::graph::model::contract::Materialization;
 use crate::graph::model::node::{Node, NodeStatus};
 use crate::graph::read::executability::{structural_executability, StructuralExecutabilityReport};
 use crate::graph::read::readiness::{
@@ -59,6 +61,7 @@ impl JsonGraphStore {
             }
         })?;
         let shaping = self.build_shaping_snapshot(node)?;
+        let (ticket_brief, ticket_brief_error) = self.build_ticket_brief_snapshot(node);
         let decision_proofs = self.build_decision_proofs(node)?;
         let docs = self.build_docs_applicability(node)?;
         let qa_resolution = self.build_qa_resolution(node);
@@ -68,12 +71,53 @@ impl JsonGraphStore {
             graph_fingerprint: projection.graph_fingerprint.clone(),
             structural,
             shaping,
+            ticket_brief,
+            ticket_brief_error,
             decision_proofs,
             docs,
             qa_resolution,
             authority,
             content_bindings,
         })
+    }
+
+    /// Parse the current ticket.md for the ambiguity gate without mutating the
+    /// graph. Errors are carried into the pure report so `work readiness` can
+    /// explain the failed gate instead of turning malformed prose into an I/O
+    /// failure.
+    fn build_ticket_brief_snapshot(&self, node: &Node) -> (Option<TicketBrief>, Option<String>) {
+        if node.kind != crate::id::WorkKind::Ticket
+            || node.role != Some(crate::graph::model::contract::TicketRole::Implementation)
+        {
+            return (None, None);
+        }
+        let path = self.repo_root.join(&node.content_dir).join("ticket.md");
+        let bytes = match fs::read(&path) {
+            Ok(bytes) => bytes,
+            Err(error) => {
+                return (
+                    None,
+                    Some(if error.kind() == std::io::ErrorKind::NotFound {
+                        "ticket_brief_missing".to_string()
+                    } else {
+                        "ticket_brief_unreadable".to_string()
+                    }),
+                )
+            }
+        };
+        let markdown = match std::str::from_utf8(&bytes) {
+            Ok(markdown) => markdown,
+            Err(_) => return (None, Some("ticket_brief_invalid".to_string())),
+        };
+        let brief = match crate::graph::model::brief::parse_ticket_brief(markdown) {
+            Ok(brief) => brief,
+            Err(error) => return (None, Some(error.code().to_string())),
+        };
+        let materialization = node.materialization.unwrap_or(Materialization::R0);
+        if let Err(error) = brief.validate_for(materialization) {
+            return (Some(brief), Some(error.code().to_string()));
+        }
+        (Some(brief), None)
     }
 
     fn build_qa_resolution(&self, node: &Node) -> Option<QaCaseResolutionSnapshot> {
@@ -360,6 +404,8 @@ pub(crate) struct ReadinessSnapshot {
     pub(crate) graph_fingerprint: String,
     pub(crate) structural: StructuralExecutabilityReport,
     pub(crate) shaping: Option<ShapingReceiptSnapshot>,
+    pub(crate) ticket_brief: Option<TicketBrief>,
+    pub(crate) ticket_brief_error: Option<String>,
     pub(crate) decision_proofs: Vec<DecisionProofSnapshot>,
     pub(crate) docs: crate::docs::applicability::ApplicableDocsReport,
     pub(crate) qa_resolution: Option<QaCaseResolutionSnapshot>,
@@ -374,6 +420,8 @@ impl ReadinessSnapshot {
             graph_valid: true,
             structural: &self.structural,
             shaping: self.shaping.as_ref(),
+            ticket_brief: self.ticket_brief.as_ref(),
+            ticket_brief_error: self.ticket_brief_error.as_deref(),
             decision_proofs: self.decision_proofs.clone(),
             docs: &self.docs,
             qa_resolution: self.qa_resolution.as_ref(),

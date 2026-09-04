@@ -2574,6 +2574,8 @@ mod tests {
                 reason_codes: vec![],
             },
             shaping: None,
+            ticket_brief: None,
+            ticket_brief_error: None,
             decision_proofs: vec![],
             qa_resolution: None,
             docs: docs_report_complete(),

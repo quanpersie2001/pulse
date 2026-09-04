@@ -25,6 +25,7 @@ use crate::evidence::model::{
     BranchCriticality, BranchDisposition, DecisionAcceptancePayload, ReceiptKind, ReceiptResult,
     ShapeMode, ShapingValidationPayload,
 };
+use crate::graph::model::brief::TicketBrief;
 use crate::graph::model::contract::{
     ContractValidationMode, ImplementationMode, QaImpactPosture, TicketRole,
 };
@@ -190,6 +191,11 @@ pub struct ReadinessInputs<'a> {
     pub graph_valid: bool,
     pub structural: &'a StructuralExecutabilityReport,
     pub shaping: Option<&'a ShapingReceiptSnapshot>,
+    /// The current ticket.md parse and materialization validation result.
+    /// Shaping uses this ambiguity gate; the full ready gate continues to use
+    /// the synchronized typed contract and other gate families.
+    pub ticket_brief: Option<&'a TicketBrief>,
+    pub ticket_brief_error: Option<&'a str>,
     pub decision_proofs: Vec<DecisionProofSnapshot>,
     pub qa_resolution: Option<&'a QaCaseResolutionSnapshot>,
     pub docs: &'a ApplicableDocsReport,
@@ -333,14 +339,7 @@ fn active_families_status(
         .any(|f| active.contains(&f.family.as_str()) && predicate(f.status))
 }
 
-const SHAPED_FAMILIES: &[&str] = &[
-    "shaping_receipt_integrity",
-    "shaping_bindings",
-    "branch_dispositions",
-    "destination_and_map",
-    "bounded_fog",
-    "authority",
-];
+const SHAPED_FAMILIES: &[&str] = &["ticket_ambiguity"];
 
 /// All gate families in fixed evaluation order, paired with whether the family
 /// is part of the *full readiness* profile. The shaped profile further filters
@@ -352,6 +351,9 @@ const ALL_FAMILIES: &[(&str, bool)] = &[
     ("structural_executability", true),
     ("implementation_contract", true),
     ("required_decisions", true),
+    ("ticket_ambiguity", true),
+    // Kept as read-only projections for old receipts and packet consumers;
+    // they are not part of either lifecycle gate anymore.
     ("shaping_receipt_integrity", true),
     ("shaping_bindings", true),
     ("branch_dispositions", true),
@@ -385,6 +387,7 @@ impl<'a> FamilyEvaluator<'a> {
             "structural_executability" => self.structural_executability(),
             "implementation_contract" => self.implementation_contract()?,
             "required_decisions" => self.required_decisions(),
+            "ticket_ambiguity" => self.ticket_ambiguity(),
             "shaping_receipt_integrity" => self.shaping_receipt_integrity(),
             "shaping_bindings" => self.shaping_bindings(),
             "branch_dispositions" => self.branch_dispositions(),
@@ -570,10 +573,31 @@ impl FamilyEvaluator<'_> {
         worst
     }
 
+    fn ticket_ambiguity(&mut self) -> GateStatus {
+        if self.inputs.subject.role != Some(TicketRole::Implementation) {
+            return GateStatus::NotApplicable;
+        }
+        if let Some(code) = self.inputs.ticket_brief_error {
+            // A legacy shaping pointer is tolerated for read compatibility, but
+            // a normal draft -> shaped transition has no receipt escape hatch.
+            if self.inputs.shaping.is_none() {
+                self.note(code);
+                return GateStatus::Failed;
+            }
+            return GateStatus::Passed;
+        }
+        if self.inputs.ticket_brief.is_none() {
+            self.note("ticket_brief_missing");
+            return GateStatus::Failed;
+        }
+        GateStatus::Passed
+    }
+
     fn shaping_receipt_integrity(&mut self) -> GateStatus {
         let Some(shaping) = self.inputs.shaping else {
-            self.note("shaping_receipt_missing");
-            return GateStatus::Failed;
+            // Shaping is now represented by ticket.md and is not a mandatory
+            // evidence family for either transition.
+            return GateStatus::NotApplicable;
         };
         let payload = &shaping.payload;
         if payload.payload_version != 1 {

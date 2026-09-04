@@ -21,7 +21,7 @@ pub enum TransitionPolicy {
     Illegal,
 }
 
-/// Typed gate profiles installed by the readiness/shaping subsystem.
+/// Typed gate profiles installed by the readiness subsystem.
 ///
 /// A direction may be a valid `Gated` direction in the lifecycle table but only
 /// a subset of those gates are actually implemented. [`installed_gate`] reports
@@ -256,13 +256,10 @@ fn transition_policy(from: NodeStatus, to: NodeStatus) -> TransitionPolicy {
 
 fn required_gate_families(from: NodeStatus, to: NodeStatus) -> Vec<&'static str> {
     match (from, to) {
-        (NodeStatus::Draft, NodeStatus::Shaped) => {
-            vec!["source_revision", "shaping_authority"]
-        }
+        (NodeStatus::Draft, NodeStatus::Shaped) => vec!["ticket_brief_ambiguity"],
         (NodeStatus::Shaped, NodeStatus::Ready) | (NodeStatus::Blocked, NodeStatus::Ready) => {
             vec![
                 "implementation_contract",
-                "shaping_authority",
                 "documentation_impact",
                 "qa_impact",
             ]
@@ -286,7 +283,9 @@ fn required_gate_families(from: NodeStatus, to: NodeStatus) -> Vec<&'static str>
         (NodeStatus::Verifying, NodeStatus::Blocked) => {
             vec!["verification_receipt", "run_authority"]
         }
-        (NodeStatus::Rework, NodeStatus::Shaped) => vec!["rework_receipt", "shaping_authority"],
+        (NodeStatus::Rework, NodeStatus::Shaped) => {
+            vec!["rework_receipt", "ticket_brief_ambiguity"]
+        }
         (NodeStatus::Rework, NodeStatus::Ready) => vec!["rework_receipt", "ready_gate"],
         (NodeStatus::Rework, NodeStatus::Cancelled) => vec!["authority"],
         _ => vec![],

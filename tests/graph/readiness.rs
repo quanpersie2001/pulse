@@ -921,16 +921,54 @@ fn decision_work_ticket_is_not_ready_under_implementation_profile() {
 }
 
 #[test]
-fn shaped_gate_fails_without_shaping_pointer() {
+fn shaped_gate_requires_only_a_parseable_unambiguous_ticket_brief() {
     let tmp = tempfile::tempdir().unwrap();
     let repo = tmp.path();
     let store = JsonGraphStore::new(repo);
     write_policy(repo, &["work.transition.shaped"]);
     let node = create_ticket(&store);
-    let err = store
+    let shaped = store
+        .transition_node_with_context(&node.id, NodeStatus::Shaped, node.revision, None, ctx())
+        .unwrap()
+        .value;
+    assert_eq!(shaped.status, NodeStatus::Shaped);
+    assert!(shaped.shaping.is_none());
+
+    let node = create_ticket(&store);
+    let path = repo.join(format!("{}/ticket.md", node.content_dir));
+    fs::write(&path, "# Ticket\\n\\n## Objective\\nDo it.\\n\\n## Code anchors\\n- src/lib.rs\\n\\n## Acceptance\\n- AC-1: It works.\\n\\n## Verify\\n- cargo test\\n\\n## Open questions\\n- Which API?").unwrap();
+    let error = store
         .transition_node_with_context(&node.id, NodeStatus::Shaped, node.revision, None, ctx())
         .unwrap_err();
-    assert_eq!(err.code(), "readiness_not_ready");
+    assert_eq!(error.code(), "readiness_not_ready");
+}
+
+#[test]
+fn shaped_to_ready_does_not_require_a_shaping_receipt() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path();
+    let store = JsonGraphStore::new(repo);
+    write_policy(repo, &["work.transition.shaped", "work.transition.ready"]);
+    let node = create_ticket(&store);
+    let brief_path = repo.join(format!("{}/ticket.md", node.content_dir));
+    let brief = fs::read_to_string(&brief_path)
+        .unwrap()
+        .replace("- Owner: ST-000\n", "");
+    fs::write(&brief_path, brief).unwrap();
+    let synced = store
+        .sync_ticket_with_context(&node.id, node.revision, ctx())
+        .unwrap()
+        .value;
+    let shaped = store
+        .transition_node_with_context(&synced.id, NodeStatus::Shaped, synced.revision, None, ctx())
+        .unwrap()
+        .value;
+    let ready = store
+        .transition_node_with_context(&shaped.id, NodeStatus::Ready, shaped.revision, None, ctx())
+        .unwrap()
+        .value;
+    assert_eq!(ready.status, NodeStatus::Ready);
+    assert!(ready.shaping.is_none());
 }
 
 #[test]

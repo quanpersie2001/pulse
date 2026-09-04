@@ -10,7 +10,6 @@ use crate::{PulseError, PulseResult};
 
 pub const MISSING_GATE_FAMILIES: &[&str] = &[
     "implementation_contract",
-    "shaping_authority",
     "documentation_impact",
     "qa_impact",
     "receipts",
