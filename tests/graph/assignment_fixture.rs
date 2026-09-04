@@ -400,28 +400,16 @@ fn write_required_qa_baseline(root: &std::path::Path, story_id: &str) {
   "story_id": "{story_id}",
   "revision": 1,
   "scope": "Reservation behavior remains observable.",
-  "requirements": ["AC-1"],
-  "protected_risks": ["RISK-DUPLICATE"],
-  "matrix": [{{
-    "id": "default",
-    "environment_profile": "fixture",
-    "platform": "any",
-    "case_ids": ["QA-001"]
-  }}],
+  "risks": ["RISK-DUPLICATE"],
   "cases": [{{
     "id": "QA-001",
     "revision": 1,
     "intent": "Reservation is not duplicated.",
-    "case_types": ["acceptance", "idempotency"],
     "priority": "critical",
-    "requirement_refs": ["AC-1"],
     "risk_refs": ["RISK-DUPLICATE"],
-    "preconditions": ["ready ticket"],
-    "actions": ["reserve twice with one idempotency key"],
-    "expected_observations": ["one stable reservation"],
+    "steps": ["reserve twice with one idempotency key"],
+    "expected": ["one stable reservation"],
     "surface": "api",
-    "required_capabilities": ["api"],
-    "required_evidence": [],
     "applicability": "required"
   }}],
   "exit_criteria": ["The required case passes on the candidate source."]

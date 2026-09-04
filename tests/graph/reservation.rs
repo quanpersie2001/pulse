@@ -9,7 +9,6 @@ use pulse::execution::{
 use pulse::graph::node::NodeStatus;
 use pulse::qa::{
     QaCaseObservation, QaCaseOutcome, QaCheckpointPayload, QaExecutionScope, QaExecutor,
-    QaQualificationContext, QaRuntimeEnvironment,
 };
 use pulse::reservation::{
     AcknowledgeReservationArgs, ActivateReservationArgs, AssignmentAcknowledgement,
@@ -315,16 +314,7 @@ fn record_qa_checkpoint(repo: &std::path::Path, ticket_id: &str, source_commit: 
                 version: "1.0.0".to_string(),
                 capabilities: vec!["api".to_string()],
             },
-            environment: QaRuntimeEnvironment {
-                profile: "test-api".to_string(),
-                platform: std::env::consts::OS.to_string(),
-                fixture_revision: "reservation-fixture-1".to_string(),
-                lifecycle: None,
-            },
-            browser: None,
-            qualification: None,
             observations: vec!["Repeated reservation returned one stable identity.".to_string()],
-            cleanup_passed: true,
         }),
     };
     let file = repo.join("qa-checkpoint-input.json");
@@ -403,21 +393,7 @@ fn record_story_qualification(
                 version: "1.0.0".to_string(),
                 capabilities: vec!["api".to_string()],
             },
-            environment: QaRuntimeEnvironment {
-                profile: "fixture".to_string(),
-                platform: std::env::consts::OS.to_string(),
-                fixture_revision: "reservation-fixture-1".to_string(),
-                lifecycle: None,
-            },
-            browser: None,
-            qualification: Some(QaQualificationContext {
-                matrix_entry_id: "default".to_string(),
-                attempt: 1,
-                previous_attempt_receipt_id: None,
-                flaky_waiver: None,
-            }),
             observations: vec!["Full applicable Story baseline passed.".to_string()],
-            cleanup_passed: true,
         }),
     };
     let file = repo.join("story-qualification-input.json");

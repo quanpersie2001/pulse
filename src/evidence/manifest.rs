@@ -17,12 +17,6 @@ pub const DECISION_ACCEPTANCE_SCHEMA: &str =
 pub const DOCUMENTATION_SCHEMA: &str =
     include_str!("../schema/evidence/documentation-validation.schema.json");
 pub const QA_CHECKPOINT_SCHEMA: &str = include_str!("../schema/evidence/qa-checkpoint.schema.json");
-pub const QA_CHECKPOINT_LIFECYCLE_SCHEMA: &str =
-    include_str!("../schema/evidence/qa-checkpoint-lifecycle.schema.json");
-pub const QA_CHECKPOINT_BROWSER_SCHEMA: &str =
-    include_str!("../schema/evidence/qa-checkpoint-browser.schema.json");
-pub const QA_CHECKPOINT_BROWSER_DEPLOYMENT_SCHEMA: &str =
-    include_str!("../schema/evidence/qa-checkpoint-browser-deployment.schema.json");
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
@@ -174,7 +168,7 @@ pub(crate) fn preflight_bootstrap(repo_root: &Path) -> Result<()> {
     Ok(())
 }
 
-fn schema_contracts() -> [(&'static str, &'static str); 10] {
+fn schema_contracts() -> [(&'static str, &'static str); 7] {
     [
         ("receipt-envelope.schema.json", RECEIPT_ENVELOPE_SCHEMA),
         (
@@ -192,18 +186,6 @@ fn schema_contracts() -> [(&'static str, &'static str); 10] {
         ),
         ("documentation-validation.schema.json", DOCUMENTATION_SCHEMA),
         ("qa-checkpoint.schema.json", QA_CHECKPOINT_SCHEMA),
-        (
-            "qa-checkpoint-lifecycle.schema.json",
-            QA_CHECKPOINT_LIFECYCLE_SCHEMA,
-        ),
-        (
-            "qa-checkpoint-browser.schema.json",
-            QA_CHECKPOINT_BROWSER_SCHEMA,
-        ),
-        (
-            "qa-checkpoint-browser-deployment.schema.json",
-            QA_CHECKPOINT_BROWSER_DEPLOYMENT_SCHEMA,
-        ),
     ]
 }
 
@@ -303,24 +285,6 @@ fn default_manifest(repo_root: &Path) -> Result<EvidenceManifest> {
             "schemas/qa-checkpoint.schema.json",
             QA_CHECKPOINT_SCHEMA,
         ),
-        (
-            "qa_checkpoint",
-            "2",
-            "schemas/qa-checkpoint-lifecycle.schema.json",
-            QA_CHECKPOINT_LIFECYCLE_SCHEMA,
-        ),
-        (
-            "qa_checkpoint",
-            "3",
-            "schemas/qa-checkpoint-browser.schema.json",
-            QA_CHECKPOINT_BROWSER_SCHEMA,
-        ),
-        (
-            "qa_checkpoint",
-            "4",
-            "schemas/qa-checkpoint-browser-deployment.schema.json",
-            QA_CHECKPOINT_BROWSER_DEPLOYMENT_SCHEMA,
-        ),
     ] {
         receipt_kinds
             .entry(kind.to_string())
@@ -367,36 +331,6 @@ fn install_qa_contract(manifest: &mut EvidenceManifest) -> Result<bool> {
             SchemaRef {
                 schema: "schemas/qa-checkpoint.schema.json".to_string(),
                 schema_hash: schema_hash(QA_CHECKPOINT_SCHEMA)?,
-            },
-        );
-        changed = true;
-    }
-    if !qa.contains_key("2") {
-        qa.insert(
-            "2".to_string(),
-            SchemaRef {
-                schema: "schemas/qa-checkpoint-lifecycle.schema.json".to_string(),
-                schema_hash: schema_hash(QA_CHECKPOINT_LIFECYCLE_SCHEMA)?,
-            },
-        );
-        changed = true;
-    }
-    if !qa.contains_key("3") {
-        qa.insert(
-            "3".to_string(),
-            SchemaRef {
-                schema: "schemas/qa-checkpoint-browser.schema.json".to_string(),
-                schema_hash: schema_hash(QA_CHECKPOINT_BROWSER_SCHEMA)?,
-            },
-        );
-        changed = true;
-    }
-    if !qa.contains_key("4") {
-        qa.insert(
-            "4".to_string(),
-            SchemaRef {
-                schema: "schemas/qa-checkpoint-browser-deployment.schema.json".to_string(),
-                schema_hash: schema_hash(QA_CHECKPOINT_BROWSER_DEPLOYMENT_SCHEMA)?,
             },
         );
         changed = true;

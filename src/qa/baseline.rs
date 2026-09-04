@@ -20,11 +20,7 @@ pub struct QaBaseline {
     pub revision: u64,
     pub scope: String,
     #[serde(default)]
-    pub requirements: Vec<String>,
-    #[serde(default)]
-    pub protected_risks: Vec<String>,
-    #[serde(default)]
-    pub matrix: Vec<QaMatrixEntry>,
+    pub risks: Vec<String>,
     pub cases: Vec<QaCase>,
     pub exit_criteria: Vec<String>,
 }
@@ -35,45 +31,15 @@ pub struct QaCase {
     pub id: String,
     pub revision: u64,
     pub intent: String,
-    #[serde(default)]
-    pub case_types: Vec<String>,
     pub priority: QaCasePriority,
     #[serde(default)]
-    pub requirement_refs: Vec<String>,
-    #[serde(default)]
     pub risk_refs: Vec<String>,
-    #[serde(default)]
-    pub preconditions: Vec<String>,
-    pub actions: Vec<String>,
-    pub expected_observations: Vec<String>,
+    pub steps: Vec<String>,
+    pub expected: Vec<String>,
     pub surface: String,
-    #[serde(default)]
-    pub required_capabilities: Vec<String>,
-    #[serde(default)]
-    pub required_evidence: Vec<String>,
     pub applicability: QaCaseApplicability,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub non_applicable_reason: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub non_applicable_approval: Option<QaAuthorityApproval>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-pub struct QaMatrixEntry {
-    pub id: String,
-    pub environment_profile: String,
-    pub platform: String,
-    pub case_ids: Vec<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-pub struct QaAuthorityApproval {
-    pub actor: crate::identity::actor::ActorRef,
-    pub rationale: String,
-    pub policy_revision: u64,
-    pub policy_fingerprint: String,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -99,7 +65,6 @@ pub struct QaBaselineResolution {
     pub revision: u64,
     pub content_hash: String,
     pub cases: Vec<QaCase>,
-    pub matrix: Vec<QaMatrixEntry>,
 }
 
 /// Load and semantically validate the canonical baseline owned by a Story.
@@ -132,14 +97,13 @@ pub fn load_story_baseline(repo_root: &Path, story_id: &str) -> Result<QaBaselin
         )
     })?;
     normalize_baseline(&mut baseline);
-    validate_baseline(repo_root, &baseline, story_id)?;
+    validate_baseline(&baseline, story_id)?;
     Ok(QaBaselineResolution {
         owner_id: story_id.to_string(),
         path: relative,
         revision: baseline.revision,
         content_hash: hash_bytes(&bytes),
         cases: baseline.cases,
-        matrix: baseline.matrix,
     })
 }
 
@@ -161,50 +125,6 @@ pub fn resolve_story_cases(repo_root: &Path, story_id: &str) -> Result<QaBaselin
             "Story qualification requires at least one applicable baseline case",
         ));
     }
-    Ok(baseline)
-}
-
-/// Resolve the exact case set owned by one required Story qualification matrix entry.
-///
-/// # Errors
-///
-/// Returns a typed validation error when the matrix entry is absent or references
-/// a case that is not currently required.
-pub fn resolve_story_matrix_entry(
-    repo_root: &Path,
-    story_id: &str,
-    matrix_entry_id: &str,
-) -> Result<QaBaselineResolution> {
-    validate_behavioral_owner(repo_root, story_id)?;
-    let mut baseline = load_story_baseline(repo_root, story_id)?;
-    if baseline.matrix.is_empty() {
-        if matrix_entry_id != "default" {
-            return Err(PulseError::validation(
-                "qa_matrix_entry_missing",
-                "legacy QA baselines expose only the synthetic default matrix entry",
-            ));
-        }
-        baseline
-            .cases
-            .retain(|case| case.applicability == QaCaseApplicability::Required);
-        return Ok(baseline);
-    }
-    let entry = baseline
-        .matrix
-        .iter()
-        .find(|entry| entry.id == matrix_entry_id)
-        .cloned()
-        .ok_or_else(|| {
-            PulseError::validation(
-                "qa_matrix_entry_missing",
-                format!("Story QA matrix has no entry {matrix_entry_id}"),
-            )
-        })?;
-    let wanted = entry.case_ids.iter().cloned().collect::<BTreeSet<_>>();
-    baseline.cases.retain(|case| {
-        wanted.contains(&case.id) && case.applicability == QaCaseApplicability::Required
-    });
-    baseline.matrix = vec![entry];
     Ok(baseline)
 }
 
@@ -318,29 +238,17 @@ fn extract_contract_block(markdown: &str) -> Result<&str> {
 }
 
 fn normalize_baseline(baseline: &mut QaBaseline) {
-    normalize(&mut baseline.requirements);
-    normalize(&mut baseline.protected_risks);
+    normalize(&mut baseline.risks);
     normalize(&mut baseline.exit_criteria);
-    baseline
-        .matrix
-        .sort_by(|left, right| left.id.cmp(&right.id));
-    for entry in &mut baseline.matrix {
-        normalize(&mut entry.case_ids);
-    }
     baseline.cases.sort_by(|left, right| left.id.cmp(&right.id));
     for case in &mut baseline.cases {
-        normalize(&mut case.case_types);
-        normalize(&mut case.requirement_refs);
         normalize(&mut case.risk_refs);
-        normalize(&mut case.preconditions);
-        normalize(&mut case.actions);
-        normalize(&mut case.expected_observations);
-        normalize(&mut case.required_capabilities);
-        normalize(&mut case.required_evidence);
+        normalize(&mut case.steps);
+        normalize(&mut case.expected);
     }
 }
 
-fn validate_baseline(repo_root: &Path, baseline: &QaBaseline, story_id: &str) -> Result<()> {
+fn validate_baseline(baseline: &QaBaseline, story_id: &str) -> Result<()> {
     if baseline.schema_version != 1 || baseline.revision == 0 || baseline.story_id != story_id {
         return Err(PulseError::validation(
             "qa_baseline_invalid",
@@ -350,34 +258,22 @@ fn validate_baseline(repo_root: &Path, baseline: &QaBaseline, story_id: &str) ->
     if baseline.scope.trim().is_empty()
         || baseline.exit_criteria.is_empty()
         || baseline.cases.is_empty()
-        || (baseline.requirements.is_empty() && baseline.protected_risks.is_empty())
     {
         return Err(PulseError::validation(
             "qa_baseline_invalid",
-            "QA baseline needs scope, requirements/risks, cases, and exit criteria",
+            "QA baseline needs scope, cases, and exit criteria",
         ));
     }
-    let requirements = baseline
-        .requirements
-        .iter()
-        .cloned()
-        .collect::<BTreeSet<_>>();
-    let risks = baseline
-        .protected_risks
-        .iter()
-        .cloned()
-        .collect::<BTreeSet<_>>();
+    let risks = baseline.risks.iter().cloned().collect::<BTreeSet<_>>();
     let mut ids = BTreeSet::new();
-    let mut covered_requirements = BTreeSet::new();
     let mut covered_risks = BTreeSet::new();
     for case in &baseline.cases {
         if !ids.insert(&case.id)
             || case.id.trim().is_empty()
             || case.revision == 0
             || case.intent.trim().is_empty()
-            || case.case_types.is_empty()
-            || case.actions.is_empty()
-            || case.expected_observations.is_empty()
+            || case.steps.is_empty()
+            || case.expected.is_empty()
             || case.surface.trim().is_empty()
         {
             return Err(PulseError::validation(
@@ -386,45 +282,15 @@ fn validate_baseline(repo_root: &Path, baseline: &QaBaseline, story_id: &str) ->
             ));
         }
         if case.applicability == QaCaseApplicability::NotApplicable
-            && (case
+            && case
                 .non_applicable_reason
                 .as_deref()
                 .map_or(true, str::is_empty)
-                || case.non_applicable_approval.is_none())
         {
             return Err(PulseError::validation(
                 "qa_case_invalid",
-                format!(
-                    "non-applicable QA case {} needs a rationale and authority approval",
-                    case.id
-                ),
+                format!("non-applicable QA case {} needs a rationale", case.id),
             ));
-        }
-        if let Some(approval) = &case.non_applicable_approval {
-            if case.applicability != QaCaseApplicability::NotApplicable
-                || case.non_applicable_reason.as_deref() != Some(approval.rationale.as_str())
-            {
-                return Err(PulseError::validation(
-                    "qa_case_invalid",
-                    format!(
-                        "QA case {} has an inconsistent non-applicability approval",
-                        case.id
-                    ),
-                ));
-            }
-            validate_approval(repo_root, approval, "qa.non_applicable.approve")?;
-        }
-        for reference in &case.requirement_refs {
-            if !requirements.contains(reference) {
-                return Err(PulseError::validation(
-                    "qa_coverage_reference_invalid",
-                    format!(
-                        "QA case {} references unknown requirement {reference}",
-                        case.id
-                    ),
-                ));
-            }
-            covered_requirements.insert(reference.clone());
         }
         for reference in &case.risk_refs {
             if !risks.contains(reference) {
@@ -436,81 +302,13 @@ fn validate_baseline(repo_root: &Path, baseline: &QaBaseline, story_id: &str) ->
             covered_risks.insert(reference.clone());
         }
     }
-    if covered_requirements != requirements || covered_risks != risks {
+    if covered_risks != risks {
         return Err(PulseError::validation(
             "qa_coverage_incomplete",
-            "every declared requirement and protected risk must map to a QA case",
+            "every declared protected risk must map to a QA case",
         ));
-    }
-    validate_matrix(baseline)?;
-    Ok(())
-}
-
-fn validate_matrix(baseline: &QaBaseline) -> Result<()> {
-    let required = baseline
-        .cases
-        .iter()
-        .filter(|case| case.applicability == QaCaseApplicability::Required)
-        .map(|case| case.id.as_str())
-        .collect::<BTreeSet<_>>();
-    let mut ids = BTreeSet::new();
-    for entry in &baseline.matrix {
-        let cases = entry
-            .case_ids
-            .iter()
-            .map(String::as_str)
-            .collect::<BTreeSet<_>>();
-        if !ids.insert(entry.id.as_str())
-            || entry.id.trim().is_empty()
-            || entry.environment_profile.trim().is_empty()
-            || entry.platform.trim().is_empty()
-            || cases.is_empty()
-            || cases.len() != entry.case_ids.len()
-            || !cases.is_subset(&required)
-        {
-            return Err(PulseError::validation(
-                "qa_matrix_invalid",
-                "QA matrix entries need unique identities, environment/platform values, and only current required cases",
-            ));
-        }
-    }
-    if !baseline.matrix.is_empty() {
-        let covered = baseline
-            .matrix
-            .iter()
-            .flat_map(|entry| entry.case_ids.iter().map(String::as_str))
-            .collect::<BTreeSet<_>>();
-        if covered != required {
-            return Err(PulseError::validation(
-                "qa_matrix_coverage_incomplete",
-                "the required QA matrix must cover every currently required case",
-            ));
-        }
     }
     Ok(())
-}
-
-pub(crate) fn validate_approval(
-    repo_root: &Path,
-    approval: &QaAuthorityApproval,
-    grant: &str,
-) -> Result<()> {
-    if approval.rationale.trim().is_empty() || approval.policy_revision == 0 {
-        return Err(PulseError::validation(
-            "qa_approval_invalid",
-            "QA approval requires a rationale and positive policy revision",
-        ));
-    }
-    let report = crate::policy::load_authority_policy(repo_root)?;
-    if report.policy_revision != Some(approval.policy_revision)
-        || report.fingerprint.as_deref() != Some(approval.policy_fingerprint.as_str())
-    {
-        return Err(PulseError::validation(
-            "qa_approval_stale",
-            "QA approval does not bind the current authority policy",
-        ));
-    }
-    crate::policy::authorize(&report, &approval.actor, &[grant])
 }
 
 fn normalize(values: &mut Vec<String>) {
