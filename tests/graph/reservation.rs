@@ -19,8 +19,7 @@ use pulse::JsonGraphStore;
 
 use super::assignment_fixture::{
     bootstrap_repo, setup_ready_ticket, setup_ready_ticket_with_required_docs,
-    setup_ready_ticket_with_required_qa, setup_ready_ticket_with_story_qa, valid_inventory_bytes,
-    write_policy,
+    setup_ready_ticket_with_required_qa, setup_ready_ticket_with_story_qa, write_policy,
 };
 use super::common_fixture_repo::TestRepo;
 
@@ -34,7 +33,6 @@ fn reserve(
             ticket_id: ticket_id.to_string(),
             actor: "agent:tester".to_string(),
             assignee: "agent:codex-local".to_string(),
-            capability_inventory_bytes: valid_inventory_bytes("agent:codex-local"),
             ttl_seconds: 1800,
             idempotency_key: key.to_string(),
         })
@@ -662,7 +660,7 @@ fn zero_exit_check_without_receipt_keeps_ticket_nonterminal() {
         store.show_node(&ticket_id).unwrap().status,
         NodeStatus::Ready
     );
-    assert!(first.packet.workspace.workspace_id.is_none());
+    assert!(first.packet.ticket.plan_md.is_none());
 
     let binding = RuntimeBinding {
         project_id: "prj_test".to_string(),
@@ -1211,7 +1209,6 @@ fn unauthorized_reserve_activate_and_recover_preserve_expired_lease_bytes() {
                     ticket_id: ticket_id.clone(),
                     actor: "agent:intruder".to_string(),
                     assignee: "agent:codex-local".to_string(),
-                    capability_inventory_bytes: valid_inventory_bytes("agent:codex-local"),
                     ttl_seconds: 1800,
                     idempotency_key: format!("unauthorized-{operation}-replacement"),
                 })
@@ -1511,7 +1508,7 @@ fn assert_fresh_generation_retry(
         retry_packet.packet_fingerprint,
         retry.reservation.packet_fingerprint
     );
-    assert_eq!(retry_packet.subject.id, ticket_id);
+    assert_eq!(retry_packet.ticket.node.id, ticket_id);
 
     // Exactly one live lease remains for the key: the fresh generation.
     assert_eq!(
@@ -1583,7 +1580,6 @@ fn concurrent_terminal_retry_reuses_one_fresh_live_generation() {
                 ticket_id: left_ticket,
                 actor: "agent:tester".to_string(),
                 assignee: "agent:codex-local".to_string(),
-                capability_inventory_bytes: valid_inventory_bytes("agent:codex-local"),
                 ttl_seconds: 1800,
                 idempotency_key: key.to_string(),
             })
@@ -1595,7 +1591,6 @@ fn concurrent_terminal_retry_reuses_one_fresh_live_generation() {
                 ticket_id: right_ticket,
                 actor: "agent:tester".to_string(),
                 assignee: "agent:codex-local".to_string(),
-                capability_inventory_bytes: valid_inventory_bytes("agent:codex-local"),
                 ttl_seconds: 1800,
                 idempotency_key: key.to_string(),
             })

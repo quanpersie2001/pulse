@@ -27,23 +27,6 @@ fn context() -> OperationContext {
     }
 }
 
-pub(super) fn valid_inventory_bytes(principal: &str) -> Vec<u8> {
-    serde_json::json!({
-        "schema_version": 1,
-        "principal": principal,
-        "inventory_id": "test-inventory",
-        "capabilities": [
-            "repository.inspect",
-            "source.read",
-            "source.write",
-            "test.run",
-            "workspace.worktree"
-        ]
-    })
-    .to_string()
-    .into_bytes()
-}
-
 pub(super) fn write_policy(root: &std::path::Path, extra_grants: &[&str]) {
     let path = root.join(".pulse/policy/authority.json");
     fs::create_dir_all(path.parent().unwrap()).unwrap();

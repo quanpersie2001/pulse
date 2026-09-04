@@ -10,9 +10,9 @@ use crate::event::{new_event_id, EventEnvelope};
 use crate::graph::model::node::{Node, NodeStatus};
 use crate::graph::store::JsonGraphStore;
 use crate::reservation::{
-    AcknowledgeReservationArgs, ActivateReservationArgs, CapabilityInventory, CoreReservation,
-    ReservationSource, ReservationState, ReservationSubject, ReserveWorkArgs, ReserveWorkOutcome,
-    CAP_MATCH_MATCHED, MAX_TTL_SECONDS, MIN_TTL_SECONDS, RESERVATION_SCHEMA_VERSION,
+    AcknowledgeReservationArgs, ActivateReservationArgs, CoreReservation, ReservationSource,
+    ReservationState, ReservationSubject, ReserveWorkArgs, ReserveWorkOutcome, MAX_TTL_SECONDS,
+    MIN_TTL_SECONDS, RESERVATION_SCHEMA_VERSION,
 };
 use crate::storage::transaction::{
     commit_prepared_multi_target_transaction, new_transaction_id, prepare_multi_target_transaction,
@@ -42,7 +42,6 @@ impl JsonGraphStore {
                 ),
             ));
         }
-        let inventory = CapabilityInventory::from_json_bytes(&args.capability_inventory_bytes)?;
         let key_hash = hash_bytes(args.idempotency_key.as_bytes());
         for _ in 0..2 {
             let guard = WriteGuard::acquire(&self.repo_root)?;
@@ -85,7 +84,7 @@ impl JsonGraphStore {
                 });
             }
             let lease_id = deterministic_lease_id(&args.idempotency_key, matching.len() + 1);
-            match self.reserve_work_under_fence(&args, &inventory, &lease_id) {
+            match self.reserve_work_under_fence(&args, &lease_id) {
                 Ok(outcome) => return Ok(outcome),
                 Err(error) if error.code() == "work_packet_docs_cache_needs_refresh" => {
                     drop(guard);
@@ -106,7 +105,6 @@ impl JsonGraphStore {
     fn reserve_work_under_fence(
         &self,
         args: &ReserveWorkArgs,
-        inventory: &CapabilityInventory,
         lease_id: &str,
     ) -> Result<ReserveWorkOutcome> {
         if let Some(existing) = find_live_reservation_for_ticket(&self.repo_root, &args.ticket_id)?
@@ -120,35 +118,14 @@ impl JsonGraphStore {
             ));
         }
         let packet = self.work_packet_under_fence(&args.ticket_id)?;
-        if !packet.dispatch.reservation_candidate || packet.dispatch.dispatch_authorized {
-            return Err(PulseError::validation(
-                "assignment_packet_invalid",
-                "packet is not an unassigned reservation candidate",
-            ));
-        }
         let node_path = self.node_path(&args.ticket_id);
         let node_bytes = fs::read(&node_path).map_err(|error| PulseError::io(&node_path, error))?;
         let node: Node = serde_json::from_slice(&node_bytes)
             .map_err(|error| PulseError::json(&node_path, error))?;
-        if node.status != NodeStatus::Ready || node.revision != packet.subject.revision {
+        if node.status != NodeStatus::Ready || node.revision != packet.ticket.node.revision {
             return Err(PulseError::validation(
                 "assignment_subject_not_ready",
                 "Ticket is no longer the exact ready revision captured by the packet",
-            ));
-        }
-        inventory.validate_principal(&args.assignee)?;
-        let capability_match = inventory.match_required(
-            &args.assignee,
-            &packet.capabilities.required,
-            packet.workspace.required_strategy == "isolated_worktree_required",
-        )?;
-        if capability_match.status != CAP_MATCH_MATCHED {
-            return Err(PulseError::validation(
-                "assignment_capability_missing",
-                format!(
-                    "required capabilities missing: {}",
-                    capability_match.missing.join(", ")
-                ),
             ));
         }
         let now = Utc::now();
@@ -168,7 +145,9 @@ impl JsonGraphStore {
             issued_at: now.to_rfc3339(),
             expires_at: expires_at.to_rfc3339(),
             packet_fingerprint: packet.packet_fingerprint.clone(),
-            readiness_fingerprint: packet.snapshot.readiness_fingerprint.clone(),
+            // The packet fingerprint binds the complete readiness snapshot
+            // now that readiness/dispatch DTOs are not packet content.
+            readiness_fingerprint: packet.packet_fingerprint.clone(),
             source: ReservationSource {
                 repository_id: packet.source.repository_id.clone(),
                 commit: packet.source.commit.clone(),
