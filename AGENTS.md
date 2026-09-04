@@ -63,15 +63,17 @@ Layers sit bottom-up; never reach up the ladder. Guarded by
 - `src/bin/pulse.rs`: parse, run, render error; delegates to `pulse::cli`.
 - `src/cli/`: thin transport/renderer per command domain. Owns no domain
   semantics.
-- `src/kernel/`: concrete cross-domain composition (readiness, shaping,
-  lifecycle, packet, reservation, completion, story completion, documentation,
-  init). No trait abstractions.
+- `src/kernel/`: concrete cross-domain composition (readiness, lifecycle,
+  packet, reservation, completion, story completion, documentation, init).
+  Ticket ambiguity is parsed by `graph::model::brief`; shaping is not a
+  separate receipt ceremony. No trait abstractions.
 - `src/graph/`: `model/` (pure values) → `validation/` → `read/` (pure
   snapshot evaluators, no I/O) → `store/` (persistence, CAS, supersession,
   bootstrap). Only layered paths exist; do not re-add one-line re-export
   shims under `src/graph/`.
-- `src/docs/`: registry, applicability, markdown section extraction, tantivy
-  index, search/get/tree, validation and checks, receipt policy.
+- `src/docs/`: eight-field registry, controlled tags, applicability, markdown
+  section extraction, tantivy index, search/get/tree, validation and checks,
+  receipt policy.
 - `src/evidence/`: immutable receipt envelope, bindings, store, kind
   validators. Docs receipt policy lives in `src/docs/receipt_validation.rs`.
 - `src/qa/`: Story baseline parsing, checkpoint receipt semantics, executor

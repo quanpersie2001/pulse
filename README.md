@@ -46,15 +46,15 @@ seven-step golden path in `PRODUCT.md` §7 against `examples/todolist/`.
 
 | Area | Commands | Notes |
 |---|---|---|
-| Repository init | `pulse init` | Creates `.pulse/` planes and a default-deny authority policy |
-| Work graph | `pulse work create\|show\|list\|edit\|transition\|supersede\|ready\|rollup\|packet` | Sharded JSON nodes/edges, CAS revisions, lifecycle gates |
+| Repository init | `pulse init --actor kind:id` | Creates `.pulse/` planes, tags vocabulary, and a default-deny policy with Core grants |
+| Work graph | `pulse work create\|show\|list\|edit\|sync\|transition\|close\|supersede\|ready\|rollup\|packet` | Sharded JSON nodes/edges, CAS revisions, markdown Ticket contracts, lifecycle gates |
 | Graph queries | `pulse graph edge add\|validate\|export\|neighborhood\|affected-by` | Deterministic edge IDs, cycle checks |
-| Docs | `pulse docs register\|list\|show\|applicable\|search\|get\|tree\|index\|validate` | Registry sidecar, path-scope applicability, section-level BM25 search |
+| Docs | `pulse docs register\|tags\|list\|show\|applicable\|search\|get\|tree\|index\|validate` | Eight-field registry, controlled tags, path/tag applicability, section-level search |
 | Evidence | `pulse evidence receipt record\|show\|verify`, `artifact put\|verify` | Immutable content-hashed receipts |
 | QA baseline | `pulse qa baseline\|resolve` | Parses the `pulse-qa` block in `works/<story>/qa.md` |
 | Knowledge | `pulse knowledge create\|show\|list\|edit\|validate` | Store and validation only; no promotion or recall yet |
 
-Every command accepts `--json` and `--repo-root <path>`.
+Every command accepts `--json` and `--repo-root <path>`. A Ticket is created with a generated `works/<id>/ticket.md`; edit that file and run `work sync` before transitioning it.
 
 ## Install
 
@@ -66,7 +66,17 @@ pulse --help
 Initialise only an explicit target repository, never this repository's root:
 
 ```bash
-pulse --repo-root <target-repo> init --json
+pulse --repo-root <target-repo> init --actor human:<name> --json
+```
+
+A minimal Ticket path is:
+
+```bash
+pulse --repo-root <target-repo> work create --kind ticket --title "Fix token errors" --risk low --json
+# edit works/TK-001/ticket.md
+pulse --repo-root <target-repo> work sync TK-001 --expected-revision 1 --actor human:<name>
+pulse --repo-root <target-repo> work transition TK-001 --to shaped --expected-revision 2 --actor human:<name>
+pulse --repo-root <target-repo> work transition TK-001 --to ready --expected-revision 3 --actor human:<name>
 ```
 
 ## Development

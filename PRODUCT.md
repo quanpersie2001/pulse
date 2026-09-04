@@ -1026,11 +1026,11 @@ done và qualification pass.
 
 | Tính năng | Hiện trạng | Việc cần làm |
 |---|---|---|
-| 5.1 Work graph | Có, tốt | ticket.md thành nguồn contract, bỏ JSON contract 25 trường; bỏ shaping map/receipt bắt buộc; default grants khi init |
-| 5.2 Packet | Có, quá dày | Nhúng ticket.md; bỏ section `not_installed`; bỏ DTO mirror |
+| 5.1 Work graph | Đã có spine | `pulse init` cấp Core grants; Ticket tạo `ticket.md`, `work sync` bind hash/metadata, ambiguity và ready gates hoạt động. Legacy JSON contract API vẫn tồn tại cho callers cũ. |
+| 5.2 Packet | Đã rút gọn | Packet có ticket prose, context, docs/QA/source/tags/handoff; không còn dispatch, capability, scope enforcement, assurance hay `not_installed`. |
 | 5.3 Runner | Chưa có | Tách contract chạy lệnh từ `qa/executor.rs` thành `runner/`; thay `daemon/` |
-| 5.4 Docs | Có | Metadata 17 → 8 trường; `tags` + `tags.json`; bỏ eval, bench, schema JSON không dùng, per-doc retrieval knob |
-| 5.5 Evidence/QA | Có | Bỏ Playwright kind, env lifecycle, story matrix, flaky waiver grant; qa.md 16 → 6 trường; mở close cho mọi risk với human gate |
+| 5.4 Docs | Đã rút gọn | Registry tám trường, `tags.json`, `docs tags add/list`, tag filtering và path/tag applicability đã có. |
+| 5.5 Evidence/QA | Đã có spine | Close hỗ trợ mọi risk; high/critical yêu cầu actor human. Runner và QA execution vẫn là Bước 4. |
 | 5.6 Ratchet | Chỉ có store + validate | `capture`, `validate`, `promote`, `applicable`; packet inject; usage feedback |
 | 5.7 Giao tiếp | Event log có | `events tail`, `note`; thay `communication.rs`, `timeline.rs` |
 | 5.8 MCP | Stub không bind | Server thật, sau CLI |
