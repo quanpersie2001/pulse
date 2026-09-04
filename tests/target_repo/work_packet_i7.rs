@@ -517,7 +517,7 @@ fn graph_mutation_during_docs_search_returns_snapshot_changed_and_retry_succeeds
     commit_all(repo.path(), "stable graph mutation");
     let packet = packet_ok(&repo, &ticket_id);
     assert_eq!(
-        packet["subject"]["title"],
+        packet["ticket"]["node"]["title"],
         "Implement refresh token rotation changed concurrently"
     );
 }
@@ -599,12 +599,12 @@ fn source_status_matrix_dirty_untracked_ignored_detached_and_operation_state() {
     fs::create_dir_all(repo.path().join(".pulse/cache/i7")).unwrap();
     fs::write(repo.path().join(".pulse/cache/i7/ignored"), b"ignored\n").unwrap();
     let packet = packet_ok(&repo, &ticket_id);
-    assert_eq!(packet["source"]["cleanliness"], "clean");
+    assert_eq!(packet["source"]["dirty"], false);
 
     let head = repo.git_head();
     git(repo.path(), &["checkout", "--detach", &head]);
     let packet = packet_ok(&repo, &ticket_id);
-    assert!(packet["source"]["head_ref"].is_null());
+    assert_eq!(packet["source"]["dirty"], false);
 
     let git_path = git(
         repo.path(),
@@ -629,9 +629,9 @@ fn same_inputs_cache_rebuild_and_required_doc_hash_have_exact_fingerprint_behavi
     let ticket_id = setup_ready_ticket_with_required_docs(&repo, true);
     let first = packet_ok(&repo, &ticket_id);
     let first_fp = first["packet_fingerprint"].as_str().unwrap().to_string();
-    let first_size = first["budget"]["actual_canonical_json_bytes"]
-        .as_u64()
-        .unwrap();
+    let first_size = pulse::canonical_json::to_canonical_bytes(&first)
+        .unwrap()
+        .len();
 
     let cache = repo.path().join(".pulse/cache/docs-search");
     if cache.exists() {
@@ -640,13 +640,13 @@ fn same_inputs_cache_rebuild_and_required_doc_hash_have_exact_fingerprint_behavi
     let second = packet_ok(&repo, &ticket_id);
     assert_eq!(second["packet_fingerprint"].as_str().unwrap(), first_fp);
     assert_eq!(
-        second["budget"]["actual_canonical_json_bytes"]
-            .as_u64()
-            .unwrap(),
+        pulse::canonical_json::to_canonical_bytes(&second)
+            .unwrap()
+            .len(),
         first_size
     );
     let canonical = pulse::canonical_json::to_canonical_bytes(&second).unwrap();
-    assert_eq!(canonical.len() as u64, first_size);
+    assert_eq!(canonical.len(), first_size);
 
     fn assert_no_float(value: &Value) {
         match value {
@@ -678,9 +678,7 @@ fn selected_suggestion_hash_rank_and_score_changes_affect_fingerprint() {
     let ticket_id = setup_ready_ticket_with_required_docs(&repo, true);
     let first = packet_ok(&repo, &ticket_id);
     let first_fp = first["packet_fingerprint"].as_str().unwrap().to_string();
-    let first_suggestions = first["documentation"]["suggested_sections"]
-        .as_array()
-        .unwrap();
+    let first_suggestions = first["docs"]["suggested"].as_array().unwrap();
     assert!(
         !first_suggestions.is_empty(),
         "fixture must produce at least one selected suggestion"
@@ -706,9 +704,7 @@ fn selected_suggestion_hash_rank_and_score_changes_affect_fingerprint() {
         first_fp,
         "selected suggestion identity/hash/rank/score must participate in fingerprint"
     );
-    let changed_suggestions = changed["documentation"]["suggested_sections"]
-        .as_array()
-        .unwrap();
+    let changed_suggestions = changed["docs"]["suggested"].as_array().unwrap();
     let changed_refs: Vec<String> = changed_suggestions
         .iter()
         .map(|section| section["section_ref"].as_str().unwrap().to_string())
@@ -807,7 +803,7 @@ fn packet_accepts_nested_gitignore_for_operational_paths() {
     );
 
     let packet = packet_ok(&repo, &ticket_id);
-    assert_eq!(packet["code"], "reservation_candidate");
+    assert_eq!(packet["code"], "ready_ticket");
     assert!(repo.git_is_clean());
 }
 

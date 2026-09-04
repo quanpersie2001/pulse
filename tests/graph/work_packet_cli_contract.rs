@@ -420,65 +420,21 @@ fn work_packet_emits_stable_json_for_ready_ticket() {
 
     // Top-level shape
     assert_eq!(packet["schema_version"], 1);
-    assert_eq!(packet["profile"], "work_packet_preview");
-    assert_eq!(packet["code"], "reservation_candidate");
+    assert_eq!(packet["profile"], "work_packet");
+    assert_eq!(packet["code"], "ready_ticket");
     let typed: pulse::work_packet::WorkPacket = serde_json::from_value(packet.clone()).unwrap();
     typed.validate_schema_contract().unwrap();
 
-    // Subject
-    assert_eq!(packet["subject"]["kind"], "ticket");
-    assert_eq!(packet["subject"]["role"], "implementation");
-    assert_eq!(packet["subject"]["status"], "ready");
+    // Ticket node
+    assert_eq!(packet["ticket"]["node"]["kind"], "ticket");
+    assert_eq!(packet["ticket"]["node"]["role"], "implementation");
+    assert_eq!(packet["ticket"]["node"]["status"], "ready");
 
-    // Dispatch constants per P2S1-D1
-    assert_eq!(packet["dispatch"]["reservation_candidate"], true);
-    assert_eq!(packet["dispatch"]["dispatch_authorized"], false);
-    assert_eq!(packet["dispatch"]["authorization_status"], "not_reserved");
-
-    // Snapshot has revalidation fingerprints
-    assert!(packet["snapshot"]["readiness_fingerprint"]
-        .as_str()
-        .unwrap()
-        .starts_with("sha256:"));
-
-    // Source
-    assert_eq!(packet["source"]["kind"], "git_commit");
-    assert_eq!(packet["source"]["cleanliness"], "clean");
-
-    // Capabilities
-    let caps = packet["capabilities"]["required"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|v| v.as_str().unwrap())
-        .collect::<Vec<_>>();
-    assert!(caps.contains(&"repository.inspect"));
-    assert!(caps.contains(&"source.read"));
-
-    // Knowledge is typed not-installed per P2S1-D10
-    assert_eq!(packet["knowledge"]["status"], "not_installed");
-    assert_eq!(packet["knowledge"]["owner_phase"], 4);
-    assert!(packet["knowledge"]["knowledge_fingerprint"].is_null());
-
-    // Workspace
-    assert_eq!(packet["workspace"]["binding_status"], "not_allocated");
-    assert!(packet["workspace"]["workspace_id"].is_null());
-
-    // Budget
-    assert!(
-        packet["budget"]["actual_canonical_json_bytes"]
-            .as_u64()
-            .unwrap()
-            > 0
-    );
-    assert!(
-        packet["budget"]["actual_canonical_json_bytes"]
-            .as_u64()
-            .unwrap()
-            <= packet["budget"]["max_canonical_json_bytes"]
-                .as_u64()
-                .unwrap()
-    );
+    // Source and future knowledge/notes sections are explicit and bounded.
+    assert!(!packet["source"]["dirty"].as_bool().unwrap());
+    assert!(packet["knowledge"].as_array().unwrap().is_empty());
+    assert!(packet["notes"].as_array().unwrap().is_empty());
+    assert!(packet["handoff"]["commands"].is_array());
 
     // Packet fingerprint present
     assert!(packet["packet_fingerprint"]
@@ -486,9 +442,10 @@ fn work_packet_emits_stable_json_for_ready_ticket() {
         .unwrap()
         .starts_with("sha256:"));
 
-    // Context includes shaping, parents, decisions
-    assert!(packet["shaping"]["owning_work"]["id"].as_str().is_some());
-    assert!(packet["graph"]["structural_state"].as_str().is_some());
+    // Context includes ticket content, parents, and decisions.
+    assert!(packet["ticket"]["ticket_md"]["content"].as_str().is_some());
+    assert!(packet["parents"].is_array());
+    assert!(packet["decisions"].is_array());
 }
 
 #[test]
@@ -524,7 +481,7 @@ fn work_packet_human_output_contains_key_fields() {
     // workspace strategy and fingerprint.
     assert!(text.contains(&id), "human output should contain ticket ID");
     assert!(
-        text.contains("reservation_candidate"),
+        text.contains("ready_ticket"),
         "human output should contain packet code"
     );
     assert!(
@@ -536,8 +493,8 @@ fn work_packet_human_output_contains_key_fields() {
         "human output should contain fingerprint"
     );
     assert!(
-        text.contains("dispatch authorized: no"),
-        "human output should state no dispatch authorization"
+        text.contains("required docs:"),
+        "human output should state docs"
     );
 }
 

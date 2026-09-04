@@ -5,7 +5,6 @@
 //! supplied by the daemon after explicit acknowledgement.
 
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 
 use crate::canonical_json::hash_serializable;
 use crate::{PulseError, Result};
@@ -14,141 +13,6 @@ pub const RESERVATION_SCHEMA_VERSION: u32 = 1;
 pub const DEFAULT_TTL_SECONDS: u64 = 1800;
 pub const MIN_TTL_SECONDS: u64 = 60;
 pub const MAX_TTL_SECONDS: u64 = 86_400;
-pub const CAP_MATCH_MATCHED: &str = "matched";
-pub const CAP_MATCH_FAILED: &str = "failed";
-pub const ERR_CAP_INVENTORY_INVALID: &str = "assignment_capability_inventory_invalid";
-pub const ERR_CAP_PRINCIPAL_MISMATCH: &str = "assignment_capability_principal_mismatch";
-pub const ERR_CAP_MISSING: &str = "assignment_capability_missing";
-pub const CAPABILITY_INVENTORY_SCHEMA: &str =
-    include_str!("schema/capability-inventory.schema.json");
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-pub struct CapabilityInventory {
-    pub schema_version: u32,
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    pub principal: String,
-    pub inventory_id: String,
-    pub capabilities: Vec<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-pub struct CapabilityMatchReport {
-    pub inventory_identity: String,
-    pub principal: String,
-    pub status: String,
-    pub required: Vec<String>,
-    pub matched: Vec<String>,
-    pub missing: Vec<String>,
-    pub extra: Vec<String>,
-    pub reason_codes: Vec<String>,
-}
-
-impl CapabilityInventory {
-    pub fn from_json_bytes(bytes: &[u8]) -> Result<Self> {
-        let value: Value = serde_json::from_slice(bytes).map_err(|error| {
-            PulseError::validation(
-                ERR_CAP_INVENTORY_INVALID,
-                format!("capability inventory JSON is invalid: {error}"),
-            )
-        })?;
-        let schema: Value = serde_json::from_str(CAPABILITY_INVENTORY_SCHEMA)?;
-        let validator = jsonschema::JSONSchema::compile(&schema).map_err(|error| {
-            PulseError::validation(
-                ERR_CAP_INVENTORY_INVALID,
-                format!("capability inventory schema is invalid: {error}"),
-            )
-        })?;
-        if let Err(errors) = validator.validate(&value) {
-            return Err(PulseError::validation(
-                ERR_CAP_INVENTORY_INVALID,
-                errors
-                    .map(|error| error.to_string())
-                    .collect::<Vec<_>>()
-                    .join("; "),
-            ));
-        }
-        serde_json::from_value(value).map_err(|error| {
-            PulseError::validation(
-                ERR_CAP_INVENTORY_INVALID,
-                format!("capability inventory JSON is invalid: {error}"),
-            )
-        })
-    }
-
-    pub fn validate_principal(&self, expected: &str) -> Result<()> {
-        if !self.principal.is_empty() && self.principal != expected {
-            return Err(PulseError::validation(
-                ERR_CAP_PRINCIPAL_MISMATCH,
-                format!(
-                    "capability inventory principal '{}' does not match assignee '{expected}'",
-                    self.principal
-                ),
-            ));
-        }
-        Ok(())
-    }
-
-    pub fn match_required(
-        &self,
-        assignee: &str,
-        required: &[String],
-        isolated_worktree: bool,
-    ) -> Result<CapabilityMatchReport> {
-        self.validate_principal(assignee)?;
-        let mut final_required = required.to_vec();
-        if isolated_worktree {
-            final_required.push("workspace.worktree".to_string());
-        }
-        normalize(&mut final_required);
-        let mut inventory = self.capabilities.clone();
-        normalize(&mut inventory);
-        let matched = final_required
-            .iter()
-            .filter(|item| inventory.contains(item))
-            .cloned()
-            .collect::<Vec<_>>();
-        let missing = final_required
-            .iter()
-            .filter(|item| !inventory.contains(item))
-            .cloned()
-            .collect::<Vec<_>>();
-        let extra = inventory
-            .iter()
-            .filter(|item| !final_required.contains(item))
-            .cloned()
-            .collect::<Vec<_>>();
-        let mut normalized = self.clone();
-        normalize(&mut normalized.capabilities);
-        let inventory_identity = hash_serializable(&normalized)?;
-        Ok(CapabilityMatchReport {
-            inventory_identity,
-            principal: assignee.to_string(),
-            status: if missing.is_empty() {
-                CAP_MATCH_MATCHED
-            } else {
-                CAP_MATCH_FAILED
-            }
-            .to_string(),
-            required: final_required,
-            matched,
-            missing: missing.clone(),
-            extra,
-            reason_codes: if missing.is_empty() {
-                vec![]
-            } else {
-                vec![ERR_CAP_MISSING.to_string()]
-            },
-        })
-    }
-}
-
-fn normalize(values: &mut Vec<String>) {
-    values.retain(|value| !value.trim().is_empty());
-    values.sort();
-    values.dedup();
-}
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -275,7 +139,6 @@ pub struct ReserveWorkArgs {
     pub ticket_id: String,
     pub actor: String,
     pub assignee: String,
-    pub capability_inventory_bytes: Vec<u8>,
     pub ttl_seconds: u64,
     pub idempotency_key: String,
 }

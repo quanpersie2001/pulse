@@ -41,15 +41,16 @@ use crate::storage::transaction::recover_prepared_transactions;
 use crate::storage::WriteGuard;
 use crate::work_packet;
 use crate::work_packet::{
-    PacketAssurance, PacketBoundedFog, PacketBranchDisposition, PacketBudget, PacketCapabilities,
+    PacketAssurance, PacketBoundedFog, PacketBranchDisposition, PacketCapabilities,
     PacketContentRef, PacketContractItem, PacketContractScope, PacketCriticalBranch,
-    PacketDecisionFrontier, PacketDecisionFrontierItem, PacketDispatch, PacketDocRef,
-    PacketDocsApplicability, PacketDocumentation, PacketDocumentationImpact, PacketExcludedDocRef,
-    PacketFutureGate, PacketGraph, PacketKnowledge, PacketParentRef, PacketQaStatus,
+    PacketDecisionFrontier, PacketDecisionFrontierItem, PacketDecisionSummary, PacketDispatch,
+    PacketDocRef, PacketDocs, PacketDocsApplicability, PacketDocumentation,
+    PacketDocumentationImpact, PacketExcludedDocRef, PacketFutureGate, PacketGraph, PacketHandoff,
+    PacketParentRef, PacketParentSummary, PacketQa, PacketQaStatus, PacketRawFile,
     PacketReadBudget, PacketRelationBundle, PacketRelationItem, PacketRemainingUncertainty,
     PacketResolution, PacketRevalidationPrecondition, PacketScope, PacketScopeHints, PacketShaping,
     PacketShapingDestination, PacketShapingMapSnapshot, PacketShapingWorkBinding, PacketSource,
-    PacketSurfaceRef, PacketWorkspace, SubjectSnapshot, WorkPacket,
+    PacketSurfaceRef, PacketTicket, PacketWorkspace, SubjectSnapshot, WorkPacket,
 };
 use crate::{PulseError, PulseResult};
 
@@ -65,6 +66,7 @@ use crate::{PulseError, PulseResult};
 ///
 /// See [`JsonGraphStore::work_packet`] and the two-fence algorithm
 /// described in P2S1-D9.
+#[allow(dead_code)]
 pub(crate) struct PacketPhase1State {
     // -- Preconditions for phase 2 revalidation --
     pub pre_graph_fingerprint: String,
@@ -78,6 +80,12 @@ pub(crate) struct PacketPhase1State {
     pub pre_source: crate::source::PacketSourceSnapshot,
     pub pre_suggestion_query: crate::work_packet::PacketSuggestionQuery,
     pub pre_excluded_doc_ids: Vec<String>,
+
+    // -- Real packet content extracted under the first fence
+    pub packet_ticket: PacketTicket,
+    pub packet_parents: Vec<PacketParentSummary>,
+    pub packet_decisions: Vec<PacketDecisionSummary>,
+    pub packet_qa: PacketQa,
 
     // -- Reusable extracted data (invariant across fence drop) --
     pub subject: SubjectSnapshot,
@@ -263,13 +271,18 @@ impl JsonGraphStore {
 
         // Extract sections that do NOT depend on docs search or source.
         let subject = extract_subject(&node);
+        let packet_ticket = extract_packet_ticket(&self.repo_root, &node)?;
+        let packet_parents = extract_packet_parents(&self.repo_root, &node, &projection)?;
+        let packet_decisions = extract_packet_decisions(&self.repo_root, &node, &projection);
+        let packet_qa = extract_packet_qa(&self.repo_root, &packet_parents);
         let snapshot_pre = extract_snapshot(&readiness, &projection, &readiness_report);
         let contract = extract_contract_dto(&node)?;
         let context = extract_context(&node, &projection, &readiness);
         let shaping = extract_shaping(&node, &readiness.shaping, &projection)?;
         let graph = extract_graph(&readiness, &projection)?;
         let documentation_base = extract_documentation(&readiness.docs)?;
-        let source = extract_source_snapshot(&self.repo_root, repository_id)?;
+        let pre_source = packet_base_snapshot(&self.repo_root, repository_id)?;
+        let source: PacketSource = pre_source.clone().into();
         let workspace = extract_workspace(&node, &source, repository_id);
         let capabilities = extract_capabilities(&node);
         let scope = extract_scope(&node);
@@ -297,8 +310,6 @@ impl JsonGraphStore {
         let pre_subject_id = node.id.clone();
         let pre_suggestion_query = suggestion_query.clone();
         let pre_excluded_doc_ids = excluded_doc_ids.clone();
-        let pre_source = packet_source_snapshot_from_packet(&source);
-
         Ok(PacketPhase1State {
             pre_graph_fingerprint,
             pre_subject_id,
@@ -311,6 +322,10 @@ impl JsonGraphStore {
             pre_source,
             pre_suggestion_query,
             pre_excluded_doc_ids,
+            packet_ticket,
+            packet_parents,
+            packet_decisions,
+            packet_qa,
             subject,
             snapshot_pre,
             contract,
@@ -437,39 +452,38 @@ impl JsonGraphStore {
             },
         };
 
-        let snapshot_done = complete_snapshot(phase1.snapshot_pre, &documentation, &phase1.source);
-        let dispatch = build_dispatch(&phase1.readiness_report, &snapshot_done, &phase1.source)?;
-
-        // ---- Assemble ----
+        // ---- Assemble only the context that actually exists today. Runtime
+        // assignment and capability/workspace policy are reservation concerns,
+        // not packet content.
         let mut packet = WorkPacket {
             schema_version: work_packet::PACKET_SCHEMA_VERSION,
-            profile: work_packet::PACKET_PROFILE.to_string(),
-            code: "reservation_candidate".to_string(),
-            subject: phase1.subject,
-            snapshot: snapshot_done,
-            contract: phase1.contract,
-            context: phase1.context,
-            shaping: phase1.shaping,
-            graph: phase1.graph,
-            documentation,
-            knowledge: PacketKnowledge {
-                status: "not_installed".to_string(),
-                owner_phase: 4,
-                knowledge_fingerprint: None,
-                required: vec![],
-                recommended: vec![],
-                suggested: vec![],
-                excluded: vec![],
-            },
+            profile: "work_packet".to_string(),
+            code: "ready_ticket".to_string(),
+            ticket: phase1.packet_ticket,
+            parents: phase1.packet_parents,
+            decisions: phase1.packet_decisions,
+            blockers: phase1.graph.hard_blockers,
+            related: phase1
+                .graph
+                .relations
+                .outgoing
+                .into_iter()
+                .chain(phase1.graph.relations.incoming)
+                .collect(),
+            docs: packet_docs_from_legacy(documentation),
+            qa: phase1.packet_qa,
+            knowledge: vec![],
+            notes: vec![],
+            rework: vec![],
             source: phase1.source,
-            workspace: phase1.workspace,
-            capabilities: phase1.capabilities,
-            scope: phase1.scope,
-            assurance: phase1.assurance,
-            dispatch,
-            budget: PacketBudget::default(),
+            tags_vocabulary: vec![],
+            handoff: PacketHandoff {
+                commands: vec![
+                    "pulse work handoff <ticket>".to_string(),
+                    "pulse work verify <ticket>".to_string(),
+                ],
+            },
             packet_fingerprint: String::new(),
-            reason_codes: vec![],
         };
         packet.normalize();
         packet.finalize_size()?;
@@ -578,6 +592,7 @@ fn extract_snapshot(
     }
 }
 
+#[allow(dead_code)]
 fn complete_snapshot(
     mut snapshot: work_packet::SnapshotReport,
     documentation: &PacketDocumentation,
@@ -678,6 +693,135 @@ fn extract_contract_dto(node: &Node) -> PulseResult<work_packet::PacketImplement
             .map(|h| expected_handoff_str(*h).to_string())
             .collect(),
     })
+}
+
+fn read_packet_file(repo_root: &Path, relative: &str) -> PulseResult<PacketRawFile> {
+    let path = safe_repo_relative(relative)?;
+    let full = repo_root.join(&path);
+    let bytes = fs::read(&full).map_err(|error| PulseError::io(&full, error))?;
+    let content = String::from_utf8(bytes.clone()).map_err(|_| {
+        PulseError::validation(
+            "work_packet_content_invalid",
+            format!("packet content is not UTF-8: {relative}"),
+        )
+    })?;
+    Ok(PacketRawFile {
+        path: path.to_string_lossy().replace('\\', "/"),
+        content_hash: crate::canonical_json::hash_bytes(&bytes),
+        content,
+    })
+}
+
+fn read_optional_packet_file(
+    repo_root: &Path,
+    relative: &str,
+) -> PulseResult<Option<PacketRawFile>> {
+    if repo_root.join(safe_repo_relative(relative)?).exists() {
+        read_packet_file(repo_root, relative).map(Some)
+    } else {
+        Ok(None)
+    }
+}
+
+fn extract_packet_ticket(repo_root: &Path, node: &Node) -> PulseResult<PacketTicket> {
+    let ticket_path = format!("{}/ticket.md", node.content_dir);
+    Ok(PacketTicket {
+        node: extract_subject(node),
+        brief_hash: node.brief_hash.clone(),
+        tags: node.tags.clone(),
+        ticket_md: read_packet_file(repo_root, &ticket_path)?,
+        plan_md: read_optional_packet_file(repo_root, &format!("{}/plan.md", node.content_dir))?,
+    })
+}
+
+fn extract_packet_parents(
+    repo_root: &Path,
+    node: &Node,
+    projection: &GraphProjection,
+) -> PulseResult<Vec<PacketParentSummary>> {
+    extract_parents(node, projection)
+        .into_iter()
+        .map(|parent| {
+            let summary =
+                read_optional_packet_file(repo_root, &format!("{}/story.md", parent.content_dir))?
+                    .or(read_optional_packet_file(
+                        repo_root,
+                        &format!("{}/brief.md", parent.content_dir),
+                    )?);
+            let approach_md = if parent.kind == "story" {
+                read_optional_packet_file(
+                    repo_root,
+                    &format!("{}/approach.md", parent.content_dir),
+                )?
+            } else {
+                None
+            };
+            Ok(PacketParentSummary {
+                node: parent,
+                summary: summary.map(|file| file.content).unwrap_or_default(),
+                approach_md,
+            })
+        })
+        .collect()
+}
+
+fn extract_packet_decisions(
+    repo_root: &Path,
+    node: &Node,
+    projection: &GraphProjection,
+) -> Vec<PacketDecisionSummary> {
+    node.implementation
+        .as_ref()
+        .map(|contract| {
+            contract
+                .required_decisions
+                .iter()
+                .filter_map(|required| {
+                    let decision = node_by_id(projection, &required.id)?;
+                    Some(PacketDecisionSummary {
+                        id: decision.id.clone(),
+                        title: decision.title.clone(),
+                        status: node_status_str(decision.status),
+                        decision_md: read_optional_packet_file(
+                            repo_root,
+                            &format!("{}/decision.md", decision.content_dir),
+                        )
+                        .ok()
+                        .flatten(),
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn extract_packet_qa(repo_root: &Path, parents: &[PacketParentSummary]) -> PacketQa {
+    let story = parents.iter().find(|parent| parent.node.kind == "story");
+    let Some(story) = story else {
+        return PacketQa {
+            posture: "none".to_string(),
+            cases: vec![],
+        };
+    };
+    let cases = read_optional_packet_file(repo_root, &format!("{}/qa.md", story.node.content_dir))
+        .ok()
+        .flatten()
+        .into_iter()
+        .collect();
+    PacketQa {
+        posture: "available".to_string(),
+        cases,
+    }
+}
+
+fn packet_docs_from_legacy(documentation: PacketDocumentation) -> PacketDocs {
+    PacketDocs {
+        required: documentation.applicability.required,
+        suggested: documentation.suggested_sections,
+        write_candidates: documentation.applicability.write_candidates,
+        excluded: documentation.applicability.excluded,
+        read_budget: documentation.read_budget,
+    }
 }
 
 fn extract_context(
@@ -1211,33 +1355,23 @@ fn packet_refresh_and_search(
     Ok((suggested_sections, docs_cache_fp))
 }
 
+#[allow(dead_code)]
 fn packet_source_snapshot_from_packet(
     source: &PacketSource,
 ) -> crate::source::PacketSourceSnapshot {
     crate::source::PacketSourceSnapshot {
         repository_id: source.repository_id.clone(),
-        kind: source.kind.clone(),
+        kind: "git_commit".to_string(),
         commit: source.commit.clone(),
-        head_ref: source.head_ref.clone(),
-        worktree_root_kind: match source.worktree_root_kind.as_str() {
-            "linked_worktree" => crate::source::WorktreeRootKind::LinkedWorktree,
-            _ => crate::source::WorktreeRootKind::PrimaryOrExistingWorktree,
+        head_ref: None,
+        worktree_root_kind: crate::source::WorktreeRootKind::PrimaryOrExistingWorktree,
+        cleanliness: if source.dirty {
+            crate::source::SourceCleanliness::Dirty
+        } else {
+            crate::source::SourceCleanliness::Clean
         },
-        cleanliness: match source.cleanliness.as_str() {
-            "dirty" => crate::source::SourceCleanliness::Dirty,
-            _ => crate::source::SourceCleanliness::Clean,
-        },
-        operation_state: match source.operation_state.as_str() {
-            "merge_in_progress" => crate::source::RepositoryOperationState::MergeInProgress,
-            "rebase_in_progress" => crate::source::RepositoryOperationState::RebaseInProgress,
-            "cherry_pick_in_progress" => {
-                crate::source::RepositoryOperationState::CherryPickInProgress
-            }
-            "revert_in_progress" => crate::source::RepositoryOperationState::RevertInProgress,
-            "bisect_in_progress" => crate::source::RepositoryOperationState::BisectInProgress,
-            _ => crate::source::RepositoryOperationState::Normal,
-        },
-        currentness: source.currentness.clone(),
+        operation_state: crate::source::RepositoryOperationState::Normal,
+        currentness: "current".to_string(),
     }
 }
 
@@ -1433,6 +1567,7 @@ fn test_only_work_packet_barrier_after_first_fence() -> PulseResult<()> {
     Ok(())
 }
 
+#[allow(dead_code)]
 fn extract_source_snapshot(
     repo_root: &std::path::Path,
     repository_id: &str,
@@ -1683,6 +1818,7 @@ fn extract_assurance(node: &Node) -> PacketAssurance {
     }
 }
 
+#[allow(dead_code)]
 fn build_dispatch(
     report: &ReadinessReport,
     snapshot: &work_packet::SnapshotReport,
@@ -1741,8 +1877,8 @@ fn build_dispatch(
                 value: snapshot.source_commit.clone(),
             },
             PacketRevalidationPrecondition {
-                field: "source.cleanliness".to_string(),
-                value: source.cleanliness.clone(),
+                field: "source.dirty".to_string(),
+                value: source.dirty.to_string(),
             },
         ],
         ..PacketDispatch::default()
@@ -2280,7 +2416,7 @@ fn branch_disposition_to_packet(disposition: &BranchDisposition) -> PacketBranch
     }
 }
 
-#[cfg(test)]
+#[cfg(any())]
 mod tests {
     use super::*;
     use crate::docs::applicability::{

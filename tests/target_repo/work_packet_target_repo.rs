@@ -348,94 +348,29 @@ fn target_repo_happy_path_work_packet() {
     let repo = TestRepo::from_fixture("minimal-service");
     let ticket_id = setup_ready_ticket(&repo);
 
-    // Use CLI to build the packet
+    // Use CLI to build the packet.
     let packet_value = repo.pulse_ok(&["work", "packet", &ticket_id, "--json"]);
     assert_eq!(packet_value["schema_version"], 1);
-    assert_eq!(packet_value["code"], "reservation_candidate");
+    assert_eq!(packet_value["profile"], "work_packet");
+    assert_eq!(packet_value["code"], "ready_ticket");
 
-    // Subject binds exact revision and status
-    assert_eq!(packet_value["subject"]["id"], ticket_id);
-    assert_eq!(packet_value["subject"]["status"], "ready");
-    assert!(packet_value["subject"]["revision"].as_u64().unwrap() >= 5);
+    // Ticket node and raw contract bind exact revision and status.
+    assert_eq!(packet_value["ticket"]["node"]["id"], ticket_id);
+    assert_eq!(packet_value["ticket"]["node"]["status"], "ready");
+    assert!(packet_value["ticket"]["node"]["revision"].as_u64().unwrap() >= 5);
+    assert!(packet_value["ticket"]["ticket_md"]["content"].is_string());
 
-    // Source binds exact clean HEAD
+    // Source binds exact clean HEAD; operational state is not packet content.
     let head = repo.git_head();
     assert_eq!(packet_value["source"]["commit"], head);
-    assert_eq!(packet_value["source"]["cleanliness"], "clean");
-
-    // Dispatch constants
-    assert_eq!(packet_value["dispatch"]["reservation_candidate"], true);
-    assert_eq!(packet_value["dispatch"]["dispatch_authorized"], false);
-    assert_eq!(
-        packet_value["dispatch"]["authorization_status"],
-        "not_reserved"
-    );
-
-    // Lease/workspace/capability remain typed not-evaluated
-    let gate_families = packet_value["dispatch"]["gate_families"]
-        .as_array()
-        .unwrap();
-    for gate in gate_families {
-        match gate["family"].as_str().unwrap() {
-            "lease" => {
-                assert_eq!(gate["status"], "not_evaluated");
-                assert_eq!(gate["reason_codes"][0], "lease_resolver_not_installed");
-            }
-            "workspace_binding" => {
-                assert_eq!(gate["status"], "not_evaluated");
-                assert_eq!(gate["reason_codes"][0], "workspace_not_allocated");
-            }
-            "capability_match" => {
-                assert_eq!(gate["status"], "not_evaluated");
-                assert_eq!(gate["reason_codes"][0], "capability_inventory_not_bound");
-            }
-            "qa_baseline_and_cases" => {
-                assert_eq!(gate["status"], "not_applicable");
-            }
-            "readiness" | "packet_completeness" | "source_base" | "documentation_context" => {
-                assert_eq!(gate["status"], "passed");
-            }
-            other => panic!("unexpected gate family: {other}"),
-        }
-    }
-
-    // Packet stays within budget
-    assert!(
-        packet_value["budget"]["actual_canonical_json_bytes"]
-            .as_u64()
-            .unwrap()
-            > 0
-    );
-    assert!(
-        packet_value["budget"]["actual_canonical_json_bytes"]
-            .as_u64()
-            .unwrap()
-            <= packet_value["budget"]["max_canonical_json_bytes"]
-                .as_u64()
-                .unwrap()
-    );
-
-    // Packet fingerprint exists
+    assert_eq!(packet_value["source"]["dirty"], false);
     assert!(packet_value["packet_fingerprint"]
         .as_str()
         .unwrap()
         .starts_with("sha256:"));
-
-    // Workspace strategy: low risk => in_place_allowed
-    assert_eq!(
-        packet_value["workspace"]["required_strategy"],
-        "in_place_allowed"
-    );
-
-    // Required capabilities include source.read and repository.inspect
-    let caps = packet_value["capabilities"]["required"].as_array().unwrap();
-    let cap_strs: Vec<&str> = caps.iter().map(|c| c.as_str().unwrap()).collect();
-    assert!(cap_strs.contains(&"repository.inspect"));
-    assert!(cap_strs.contains(&"source.read"));
-    assert!(cap_strs.contains(&"source.write"));
-
-    // Knowledge typed not-installed
-    assert_eq!(packet_value["knowledge"]["status"], "not_installed");
+    assert!(packet_value["knowledge"].as_array().unwrap().is_empty());
+    assert!(packet_value["notes"].as_array().unwrap().is_empty());
+    assert!(packet_value["rework"].as_array().unwrap().is_empty());
 }
 
 // -----------------------------------------------------------------------

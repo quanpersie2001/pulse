@@ -818,17 +818,14 @@ pub(crate) fn handle(
 
 fn packet_human(packet: &crate::work_packet::WorkPacket) -> String {
     format!(
-        "{} packet: {}\nsource: {} ({})\nreadiness: {} ({})\nworkspace: {}\nrequired docs: {}\nsuggested sections: {}\nrequired capabilities: {}\ndispatch authorized: no (lease/workspace/capability assignment not evaluated)\npacket fingerprint: {}",
-        packet.subject.id,
+        "{} packet: {}\nsource: {} ({})\nrequired docs: {}\nsuggested sections: {}\nblockers: {}\npacket fingerprint: {}",
+        packet.ticket.node.id,
         packet.code,
         packet.source.commit,
-        packet.source.cleanliness,
-        packet.snapshot.readiness_status,
-        packet.snapshot.readiness_fingerprint,
-        packet.workspace.required_strategy,
-        packet.documentation.applicability.required.len(),
-        packet.documentation.suggested_sections.len(),
-        packet.capabilities.required.join(", "),
+        if packet.source.dirty { "dirty" } else { "clean" },
+        packet.docs.required.len(),
+        packet.docs.suggested.len(),
+        packet.blockers.len(),
         packet.packet_fingerprint,
     )
 }

@@ -1638,13 +1638,8 @@ impl From<PacketSourceSnapshot> for crate::work_packet::PacketSource {
     fn from(snapshot: PacketSourceSnapshot) -> Self {
         Self {
             repository_id: snapshot.repository_id,
-            kind: snapshot.kind,
             commit: snapshot.commit,
-            head_ref: snapshot.head_ref,
-            worktree_root_kind: snapshot.worktree_root_kind.as_str().to_string(),
-            cleanliness: snapshot.cleanliness.as_str().to_string(),
-            operation_state: snapshot.operation_state.as_str().to_string(),
-            currentness: snapshot.currentness,
+            dirty: snapshot.cleanliness == SourceCleanliness::Dirty,
         }
     }
 }
@@ -2302,18 +2297,10 @@ mod tests {
         };
         let packet_source: crate::work_packet::PacketSource = snapshot.into();
         assert_eq!(packet_source.repository_id, "repo_test_123");
-        assert_eq!(packet_source.kind, "git_commit");
         assert_eq!(
             packet_source.commit,
             "0123456789abcdef0123456789abcdef01234567"
         );
-        assert_eq!(packet_source.head_ref, Some("refs/heads/main".to_string()));
-        assert_eq!(
-            packet_source.worktree_root_kind,
-            "primary_or_existing_worktree"
-        );
-        assert_eq!(packet_source.cleanliness, "clean");
-        assert_eq!(packet_source.operation_state, "normal");
-        assert_eq!(packet_source.currentness, "current");
+        assert!(!packet_source.dirty);
     }
 }

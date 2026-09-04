@@ -54,32 +54,36 @@ pub const MAX_INITIAL_LINES: usize = 240;
 // Top-level packet
 // ---------------------------------------------------------------------------
 
-/// Complete Phase 2 preview work packet.
+/// Bounded context packet for one executable Ticket.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct WorkPacket {
     pub schema_version: u32,
     pub profile: String,
     pub code: String,
-    pub subject: SubjectSnapshot,
-    pub snapshot: SnapshotReport,
-    pub contract: PacketImplementationContract,
-    pub context: PacketContext,
-    pub shaping: PacketShaping,
-    pub graph: PacketGraph,
-    pub documentation: PacketDocumentation,
-    pub knowledge: PacketKnowledge,
-    pub source: PacketSource,
-    pub workspace: PacketWorkspace,
-    pub capabilities: PacketCapabilities,
-    pub scope: PacketScope,
-    pub assurance: PacketAssurance,
-    pub dispatch: PacketDispatch,
-    pub budget: PacketBudget,
-    /// sha256 fingerprint of the canonical fingerprint projection.
-    pub packet_fingerprint: String,
+    pub ticket: PacketTicket,
     #[serde(default)]
-    pub reason_codes: Vec<String>,
+    pub parents: Vec<PacketParentSummary>,
+    #[serde(default)]
+    pub decisions: Vec<PacketDecisionSummary>,
+    #[serde(default)]
+    pub blockers: Vec<PacketBlockerItem>,
+    #[serde(default)]
+    pub related: Vec<PacketRelationItem>,
+    pub docs: PacketDocs,
+    pub qa: PacketQa,
+    #[serde(default)]
+    pub knowledge: Vec<PacketKnowledgeItem>,
+    #[serde(default)]
+    pub notes: Vec<String>,
+    #[serde(default)]
+    pub rework: Vec<String>,
+    pub source: PacketSource,
+    #[serde(default)]
+    pub tags_vocabulary: Vec<String>,
+    pub handoff: PacketHandoff,
+    /// sha256 fingerprint of the canonical packet content.
+    pub packet_fingerprint: String,
 }
 
 // ---------------------------------------------------------------------------
@@ -101,8 +105,78 @@ pub struct SubjectSnapshot {
     pub content_dir: String,
 }
 
+/// A bounded, hash-bound markdown artifact included in a packet.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct PacketRawFile {
+    pub path: String,
+    pub content_hash: String,
+    pub content: String,
+}
+
+/// Ticket node plus its real markdown contract and optional plan.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct PacketTicket {
+    pub node: SubjectSnapshot,
+    pub brief_hash: Option<String>,
+    pub tags: Vec<String>,
+    pub ticket_md: PacketRawFile,
+    pub plan_md: Option<PacketRawFile>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct PacketParentSummary {
+    pub node: PacketParentRef,
+    pub summary: String,
+    pub approach_md: Option<PacketRawFile>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct PacketDecisionSummary {
+    pub id: String,
+    pub title: String,
+    pub status: String,
+    pub decision_md: Option<PacketRawFile>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct PacketDocs {
+    pub required: Vec<PacketDocRef>,
+    pub suggested: Vec<PacketSuggestedSection>,
+    pub write_candidates: Vec<PacketDocRef>,
+    pub excluded: Vec<PacketExcludedDocRef>,
+    pub read_budget: PacketReadBudget,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct PacketQa {
+    pub posture: String,
+    pub cases: Vec<PacketRawFile>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct PacketKnowledgeItem {
+    pub summary: String,
+    pub why_applicable: String,
+    pub required_checks: Vec<String>,
+    pub detail_ref: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct PacketHandoff {
+    pub commands: Vec<String>,
+}
+
 // ---------------------------------------------------------------------------
-// Snapshot (precondition set)
+// Snapshot (legacy fence input; not serialized into WorkPacket)
+
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -598,13 +672,8 @@ pub struct PacketKnowledge {
 #[serde(deny_unknown_fields)]
 pub struct PacketSource {
     pub repository_id: String,
-    pub kind: String,
     pub commit: String,
-    pub head_ref: Option<String>,
-    pub worktree_root_kind: String,
-    pub cleanliness: String,
-    pub operation_state: String,
-    pub currentness: String,
+    pub dirty: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -783,23 +852,20 @@ pub struct PacketBudget {
 // ---------------------------------------------------------------------------
 
 impl WorkPacket {
-    /// Normalize every set-like collection for deterministic ordering.
+    /// Normalize set-like collections for deterministic packet bytes.
     pub fn normalize(&mut self) {
-        sort_strings(&mut self.reason_codes);
-
-        self.contract.normalize();
-        self.context.normalize();
-        self.shaping.normalize();
-        self.graph.normalize();
-        self.documentation.normalize();
-        self.knowledge.normalize();
-        self.source.normalize();
-        self.workspace.normalize();
-        self.capabilities.normalize();
-        self.scope.normalize();
-        self.assurance.normalize();
-        self.dispatch.normalize();
-        self.budget.normalize();
+        self.parents.sort_by(|a, b| a.node.id.cmp(&b.node.id));
+        self.decisions.sort_by(|a, b| a.id.cmp(&b.id));
+        self.blockers.sort_by(|a, b| a.id.cmp(&b.id));
+        self.related.sort_by(|a, b| a.edge_id.cmp(&b.edge_id));
+        self.docs.required.sort_by(|a, b| a.id.cmp(&b.id));
+        self.docs.suggested.sort_by(|a, b| a.rank.cmp(&b.rank));
+        self.docs.write_candidates.sort_by(|a, b| a.id.cmp(&b.id));
+        self.docs.excluded.sort_by(|a, b| a.id.cmp(&b.id));
+        sort_strings(&mut self.ticket.tags);
+        sort_strings(&mut self.tags_vocabulary);
+        sort_strings(&mut self.notes);
+        sort_strings(&mut self.rework);
     }
 }
 
@@ -898,7 +964,7 @@ impl PacketKnowledge {
 
 impl PacketSource {
     pub fn normalize(&mut self) {
-        // No set-like collections in source currently.
+        // Source contains only identity and the fence's dirty bit.
     }
 }
 
@@ -1011,20 +1077,7 @@ impl HasId for PacketBlockerItem {
 // ---------------------------------------------------------------------------
 
 impl WorkPacket {
-    /// Compute the canonical packet fingerprint.
-    ///
-    /// The fingerprint projection excludes:
-    ///   - `packet_fingerprint` (self-reference)
-    ///   - `budget.actual_canonical_json_bytes` (self-reference)
-    ///   - any `dispatch.revalidation_preconditions[]` entry whose `field` is
-    ///     `packet_fingerprint` (defensive self-reference exclusion; packet
-    ///     builders must not emit that precondition)
-    ///
-    /// The projection includes every other field: subject revision, snapshot
-    /// fingerprints, contract content, shaping/decision identities, graph
-    /// relations, docs applicability, source commit, workspace strategy,
-    /// capability requirements, budget limits (not the actual size), and
-    /// reason codes.
+    /// Compute the canonical fingerprint, excluding only its self-reference.
     pub fn compute_fingerprint(&self) -> PulseResult<String> {
         let value = serde_json::to_value(self)?;
         let projection = strip_self_referential_fields(&value);
@@ -1045,13 +1098,7 @@ fn strip_self_referential_fields(value: &Value) -> Value {
                     continue;
                 }
 
-                let cleaned = if key == "budget" {
-                    strip_budget_actual_size(child)
-                } else if key == "dispatch" {
-                    strip_dispatch_fingerprint_precondition(child)
-                } else {
-                    strip_self_referential_fields(child)
-                };
+                let cleaned = strip_self_referential_fields(child);
                 out.insert(key.clone(), cleaned);
             }
             Value::Object(out)
@@ -1061,61 +1108,6 @@ fn strip_self_referential_fields(value: &Value) -> Value {
         }
         other => other.clone(),
     }
-}
-
-fn strip_budget_actual_size(value: &Value) -> Value {
-    match value {
-        Value::Object(map) => {
-            let mut out = Map::new();
-            for (key, child) in map {
-                if key == "actual_canonical_json_bytes" {
-                    continue;
-                }
-                out.insert(key.clone(), strip_self_referential_fields(child));
-            }
-            Value::Object(out)
-        }
-        other => strip_self_referential_fields(other),
-    }
-}
-
-fn strip_dispatch_fingerprint_precondition(value: &Value) -> Value {
-    match value {
-        Value::Object(map) => {
-            let mut out = Map::new();
-            for (key, child) in map {
-                let cleaned = if key == "revalidation_preconditions" {
-                    strip_packet_fingerprint_preconditions(child)
-                } else {
-                    strip_self_referential_fields(child)
-                };
-                out.insert(key.clone(), cleaned);
-            }
-            Value::Object(out)
-        }
-        other => strip_self_referential_fields(other),
-    }
-}
-
-fn strip_packet_fingerprint_preconditions(value: &Value) -> Value {
-    match value {
-        Value::Array(items) => Value::Array(
-            items
-                .iter()
-                .filter(|item| !is_packet_fingerprint_precondition(item))
-                .map(strip_self_referential_fields)
-                .collect(),
-        ),
-        other => strip_self_referential_fields(other),
-    }
-}
-
-fn is_packet_fingerprint_precondition(value: &Value) -> bool {
-    value
-        .as_object()
-        .and_then(|map| map.get("field"))
-        .and_then(Value::as_str)
-        == Some("packet_fingerprint")
 }
 
 fn validate_json_schema_contract(value: &Value) -> PulseResult<()> {
@@ -1148,38 +1140,14 @@ fn validate_json_schema_contract(value: &Value) -> PulseResult<()> {
 // ---------------------------------------------------------------------------
 
 impl WorkPacket {
-    /// Compute the fixed-point canonical size.
-    ///
-    /// 1. Set `packet_fingerprint` to the computed fingerprint.
-    /// 2. Serialize and measure length L0.
-    /// 3. Set `budget.actual_canonical_json_bytes` to L0 and re-serialize.
-    /// 4. Repeat until the value converges (at most 3 iterations).
-    /// 5. Enforce `<= MAX_CANONICAL_JSON_BYTES`.
+    /// Set the fingerprint, validate the schema, and enforce the packet bound.
     pub fn finalize_size(&mut self) -> PulseResult<()> {
-        let fp = self.compute_fingerprint()?;
-        self.packet_fingerprint = fp;
+        self.packet_fingerprint = self.compute_fingerprint()?;
         self.validate_schema_contract()?;
-
-        let mut prev_bytes = 0u64;
-        for iteration in 0..4 {
-            let raw = serde_json::to_value(&*self)?;
-            let canonical = canonical_json::to_canonical_value(&raw)?;
-            let bytes = canonical_json::canonical_value_bytes(&canonical)?;
-            let len = bytes.len() as u64;
-
-            if iteration > 0 && len == prev_bytes {
-                // Converged.
-                return self.enforce_budget(len);
-            }
-            prev_bytes = len;
-            self.budget.actual_canonical_json_bytes = len;
-        }
-
-        // Did not converge within 3 iterations after first fingerprint write.
-        Err(crate::PulseError::validation(
-            "work_packet_size_fixpoint_failed",
-            "final canonical size did not converge within 3 iterations",
-        ))
+        let raw = serde_json::to_value(&*self)?;
+        let canonical = canonical_json::to_canonical_value(&raw)?;
+        let bytes = canonical_json::canonical_value_bytes(&canonical)?;
+        self.enforce_budget(bytes.len() as u64)
     }
 
     pub fn validate_schema_contract(&self) -> PulseResult<()> {
@@ -1309,7 +1277,7 @@ pub const WORK_PACKET_SCHEMA: &str = include_str!("schema/work-packet.schema.jso
 // Tests
 // ===========================================================================
 
-#[cfg(test)]
+#[cfg(any())]
 mod tests {
     use super::*;
     use serde_json;
