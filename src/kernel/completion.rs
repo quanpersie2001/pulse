@@ -16,6 +16,7 @@ use crate::graph::model::contract::{QaImpactPosture, Risk};
 use crate::graph::model::lifecycle::TransitionReason;
 use crate::graph::model::node::{DocumentationImpactPosture, Node, NodeStatus};
 use crate::graph::store::JsonGraphStore;
+use crate::identity::actor::ActorKind;
 use crate::reservation::ReservationState;
 use crate::storage::transaction::{
     commit_prepared_multi_target_transaction, new_transaction_id, prepare_multi_target_transaction,
@@ -279,8 +280,82 @@ impl JsonGraphStore {
         Ok(verification)
     }
 
-    /// Close a verified low-risk standalone Ticket through Core-owned proof
-    /// gates. Unsupported QA, documentation, or risk policies fail closed.
+    /// Resolve the current passed verification for a Ticket and close it.
+    ///
+    /// This is the Ticket-oriented entry point used by the CLI. Resolution is
+    /// deliberately narrow: exactly one passed verification must bind the
+    /// Ticket's current verifying revision. A live lease is checked when one
+    /// exists so an ambiguous assignment can never be silently selected.
+    pub fn close_execution_ticket_for_ticket(
+        &self,
+        ticket_id: &str,
+        actor: String,
+        source_commit: String,
+        summary: String,
+        idempotency_key: String,
+    ) -> Result<CloseReceipt> {
+        let node = self.show_node(ticket_id)?;
+        let mut candidates = list_verifications(&self.repo_root)?
+            .into_iter()
+            .filter(|verification| {
+                verification.ticket_id == ticket_id
+                    && verification.disposition == VerificationDisposition::Passed
+                    && verification.resulting_status == "verifying"
+                    && verification.resulting_revision == node.revision
+            })
+            .collect::<Vec<_>>();
+        candidates.sort_by(|left, right| left.verification_id.cmp(&right.verification_id));
+        let verification = match candidates.as_slice() {
+            [] => {
+                return Err(PulseError::validation(
+                    "close_verification_missing",
+                    format!("no passed verification binds current revision of Ticket {ticket_id}"),
+                ));
+            }
+            [verification] => verification,
+            _ => {
+                return Err(PulseError::validation(
+                    "close_verification_ambiguous",
+                    format!("more than one passed verification binds Ticket {ticket_id}"),
+                ));
+            }
+        };
+
+        let live_leases = crate::kernel::reservation::list_reservations(&self.repo_root)?
+            .into_iter()
+            .filter(|reservation| {
+                reservation.subject.ticket_id == ticket_id
+                    && reservation.state == ReservationState::Active
+            })
+            .collect::<Vec<_>>();
+        if live_leases.len() > 1 {
+            return Err(PulseError::validation(
+                "close_live_lease_ambiguous",
+                format!("more than one live lease is bound to Ticket {ticket_id}"),
+            ));
+        }
+        if let Some(lease) = live_leases.first() {
+            if lease.lease_id != verification.lease_id {
+                return Err(PulseError::validation(
+                    "close_live_lease_mismatch",
+                    "current live lease does not match the verification receipt",
+                ));
+            }
+        }
+
+        self.close_execution_ticket(CloseTicketArgs {
+            verification_id: verification.verification_id.clone(),
+            actor,
+            source_commit,
+            summary,
+            idempotency_key,
+        })
+    }
+
+    /// Close a verified Ticket through Core-owned proof gates.
+    ///
+    /// All assessed risk levels use the same evidence gates. High- and
+    /// critical-risk Tickets additionally require a human closing actor.
     ///
     /// # Errors
     ///
@@ -303,7 +378,7 @@ impl JsonGraphStore {
         let close_id = deterministic_evidence_id("close", &args.idempotency_key);
         let close_path = close_path(&self.repo_root, &close_id);
         let _guard = WriteGuard::acquire(&self.repo_root)?;
-        authorize(&self.repo_root, &args.actor, "work.assignment.close")?;
+        authorize(&self.repo_root, &args.actor, "work.close")?;
         recover_prepared_transactions(&self.repo_root)?;
         if close_path.exists() {
             let existing = load_close(&self.repo_root, &close_id)?;
@@ -358,7 +433,7 @@ impl JsonGraphStore {
                 "Ticket is not the exact verified revision",
             ));
         }
-        validate_close_postures(&node)?;
+        validate_close_postures(&node, &args.actor)?;
         let implementation = node.implementation.as_ref().ok_or_else(|| {
             PulseError::validation(
                 "close_contract_missing",
@@ -493,6 +568,37 @@ pub fn load_handoff(repo_root: &Path, handoff_id: &str) -> Result<HandoffReceipt
         ));
     }
     Ok(receipt)
+}
+
+fn list_verifications(repo_root: &Path) -> Result<Vec<VerificationReceipt>> {
+    let directory = repo_root.join(".pulse/evidence/execution/verifications");
+    if !directory.exists() {
+        return Ok(Vec::new());
+    }
+    let mut paths = fs::read_dir(&directory)
+        .map_err(|error| PulseError::io(&directory, error))?
+        .collect::<std::io::Result<Vec<_>>>()
+        .map_err(|error| PulseError::io(&directory, error))?
+        .into_iter()
+        .map(|entry| entry.path())
+        .filter(|path| path.extension().and_then(|ext| ext.to_str()) == Some("json"))
+        .collect::<Vec<_>>();
+    paths.sort();
+    paths
+        .into_iter()
+        .map(|path| {
+            let verification_id =
+                path.file_stem()
+                    .and_then(|stem| stem.to_str())
+                    .ok_or_else(|| {
+                        PulseError::validation(
+                            "verification_record_invalid",
+                            format!("verification path has no valid id: {}", path.display()),
+                        )
+                    })?;
+            load_verification(repo_root, verification_id)
+        })
+        .collect()
 }
 
 pub fn load_verification(repo_root: &Path, verification_id: &str) -> Result<VerificationReceipt> {
@@ -655,11 +761,13 @@ fn validate_acceptance_proofs(
     Ok(())
 }
 
-fn validate_close_postures(node: &Node) -> Result<()> {
-    if node.risk != Some(Risk::Low) {
+fn validate_close_postures(node: &Node, actor: &str) -> Result<()> {
+    if matches!(node.risk, Some(Risk::High | Risk::Critical))
+        && crate::policy::parse_actor(actor).kind != ActorKind::Human
+    {
         return Err(PulseError::validation(
-            "close_risk_policy_unavailable",
-            "current proof close supports only assessed low-risk Tickets",
+            "close_high_risk_human_required",
+            "high- and critical-risk Tickets require a human closing actor",
         ));
     }
     let qa_posture = node

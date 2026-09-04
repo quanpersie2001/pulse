@@ -54,6 +54,7 @@ pub(super) fn write_policy(root: &std::path::Path, extra_grants: &[&str]) {
         "work.transition.shaped".to_string(),
         "work.transition.ready".to_string(),
         "work.assignment.prepare".to_string(),
+        "work.close".to_string(),
         "work.node.create".to_string(),
     ];
     grants.extend(extra_grants.iter().map(|grant| grant.to_string()));

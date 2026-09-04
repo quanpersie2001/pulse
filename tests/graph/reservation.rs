@@ -774,7 +774,7 @@ fn zero_exit_check_without_receipt_keeps_ticket_nonterminal() {
 }
 
 #[test]
-fn proof_close_fails_closed_when_risk_policy_is_not_installed() {
+fn medium_risk_ticket_closes_with_the_same_proof_gates() {
     let repo = TestRepo::from_fixture("minimal-service");
     let store = JsonGraphStore::new(repo.path());
     bootstrap_repo(&repo, &store);
@@ -816,7 +816,7 @@ fn proof_close_fails_closed_when_risk_policy_is_not_installed() {
             idempotency_key: "handoff-medium-risk".to_string(),
         })
         .unwrap();
-    let verification = store
+    store
         .complete_execution_verification(CompleteVerificationArgs {
             handoff_id: handoff.handoff_id,
             actor: "human:reviewer".to_string(),
@@ -833,16 +833,94 @@ fn proof_close_fails_closed_when_risk_policy_is_not_installed() {
             idempotency_key: "verification-medium-risk".to_string(),
         })
         .unwrap();
+    let close = store
+        .close_execution_ticket_for_ticket(
+            &ticket_id,
+            "human:reviewer".to_string(),
+            handoff.source_commit,
+            "Medium-risk close gates passed.".to_string(),
+            "close-medium-risk".to_string(),
+        )
+        .unwrap();
+    assert_eq!(close.ticket_id, ticket_id);
+    assert_eq!(
+        store.show_node(&ticket_id).unwrap().status,
+        NodeStatus::Done
+    );
+}
+
+#[test]
+fn high_risk_ticket_requires_a_human_closing_actor() {
+    let repo = TestRepo::from_fixture("minimal-service");
+    let store = JsonGraphStore::new(repo.path());
+    bootstrap_repo(&repo, &store);
+    write_policy(repo.path(), &["work.assignment.release"]);
+    add_reviewer_policy(repo.path());
+    let ticket_id = setup_ready_ticket(repo.path(), &store);
+    let node_path = repo
+        .path()
+        .join(".pulse/workgraph/nodes")
+        .join(format!("{ticket_id}.json"));
+    let mut node = store.show_node(&ticket_id).unwrap();
+    node.risk = Some(pulse::graph::model::contract::Risk::High);
+    node.revision += 1;
+    node.updated_at = chrono::Utc::now();
+    std::fs::write(
+        &node_path,
+        pulse::canonical_json::to_canonical_bytes(&node).unwrap(),
+    )
+    .unwrap();
+
+    let reserved = reserve(&store, &ticket_id, "reservation-high-risk");
+    let active = store
+        .activate_reservation(ActivateReservationArgs {
+            lease_id: reserved.reservation.lease_id,
+            actor: "agent:tester".to_string(),
+            runtime_binding: binding(),
+            acknowledgement: acknowledgement(&reserved.reservation.packet_fingerprint),
+        })
+        .unwrap();
+    let handoff = store
+        .submit_execution_handoff(SubmitHandoffArgs {
+            lease_id: active.lease_id,
+            actor: "agent:tester".to_string(),
+            session_id: "ses_test".to_string(),
+            source_commit: active.source.commit,
+            summary: "High-risk handoff is ready for review.".to_string(),
+            changed_paths: vec![],
+            evidence_receipt_ids: vec![],
+            idempotency_key: "handoff-high-risk".to_string(),
+        })
+        .unwrap();
+    let verification = store
+        .complete_execution_verification(CompleteVerificationArgs {
+            handoff_id: handoff.handoff_id,
+            actor: "human:reviewer".to_string(),
+            source_commit: handoff.source_commit.clone(),
+            disposition: VerificationDisposition::Passed,
+            summary: "Independent verification passed.".to_string(),
+            checks: vec![VerificationCheck {
+                name: "focused".to_string(),
+                command: "true".to_string(),
+                exit_code: 0,
+                artifact_ids: vec![],
+            }],
+            acceptance_proofs: acceptance_proofs("focused"),
+            idempotency_key: "verification-high-risk".to_string(),
+        })
+        .unwrap();
+
     let error = store
         .close_execution_ticket(CloseTicketArgs {
             verification_id: verification.verification_id,
-            actor: "human:reviewer".to_string(),
+            actor: "agent:tester".to_string(),
             source_commit: handoff.source_commit,
-            summary: "Attempt unsupported close.".to_string(),
-            idempotency_key: "close-medium-risk".to_string(),
+            summary: "Agent cannot close high-risk work.".to_string(),
+            idempotency_key: "close-high-risk-agent".to_string(),
         })
         .unwrap_err();
-    assert_eq!(error.code(), "close_risk_policy_unavailable");
+    assert_eq!(error.code(), "close_high_risk_human_required");
+    assert!(error.to_string().contains("human"));
     assert_eq!(
         store.show_node(&ticket_id).unwrap().status,
         NodeStatus::Verifying
@@ -1221,7 +1299,7 @@ fn add_reviewer_policy(root: &std::path::Path) {
         principal.grants.extend([
             "work.assignment.handoff".to_string(),
             "work.assignment.verify".to_string(),
-            "work.assignment.close".to_string(),
+            "work.close".to_string(),
         ]);
     }
     policy.principals.push(pulse::policy::AuthorityPrincipal {
@@ -1229,7 +1307,7 @@ fn add_reviewer_policy(root: &std::path::Path) {
         id: "reviewer".to_string(),
         grants: vec![
             "work.assignment.verify".to_string(),
-            "work.assignment.close".to_string(),
+            "work.close".to_string(),
         ],
     });
     policy.normalize();

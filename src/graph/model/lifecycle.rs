@@ -222,6 +222,7 @@ fn supported_targets(from: NodeStatus) -> Vec<NodeStatus> {
             NodeStatus::Blocked,
             NodeStatus::Cancelled,
         ],
+        NodeStatus::Rework => vec![NodeStatus::Active],
         NodeStatus::Blocked => vec![NodeStatus::Draft, NodeStatus::Shaped, NodeStatus::Cancelled],
         _ => vec![],
     }
@@ -246,7 +247,6 @@ fn transition_policy(from: NodeStatus, to: NodeStatus) -> TransitionPolicy {
         | (NodeStatus::Verifying, NodeStatus::Blocked)
         | (NodeStatus::Rework, NodeStatus::Shaped)
         | (NodeStatus::Rework, NodeStatus::Ready)
-        | (NodeStatus::Rework, NodeStatus::Active)
         | (NodeStatus::Rework, NodeStatus::Cancelled)
         | (NodeStatus::Blocked, NodeStatus::Ready)
         | (NodeStatus::Blocked, NodeStatus::Active) => TransitionPolicy::Gated,
@@ -264,9 +264,9 @@ fn required_gate_families(from: NodeStatus, to: NodeStatus) -> Vec<&'static str>
                 "qa_impact",
             ]
         }
-        (NodeStatus::Ready, NodeStatus::Active)
-        | (NodeStatus::Rework, NodeStatus::Active)
-        | (NodeStatus::Blocked, NodeStatus::Active) => vec!["lease"],
+        (NodeStatus::Ready, NodeStatus::Active) | (NodeStatus::Blocked, NodeStatus::Active) => {
+            vec!["lease"]
+        }
         (NodeStatus::Active, NodeStatus::Blocked) | (NodeStatus::Active, NodeStatus::Cancelled) => {
             vec!["lease", "run_authority"]
         }

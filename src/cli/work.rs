@@ -110,6 +110,18 @@ pub(crate) enum WorkCommand {
         #[arg(long)]
         json: bool,
     },
+    Close {
+        /// Ticket ID whose current passed verification should be closed.
+        id: String,
+        #[arg(long)]
+        actor: String,
+        #[arg(long)]
+        source_commit: String,
+        #[arg(long)]
+        summary: String,
+        #[arg(long)]
+        json: bool,
+    },
     CloseStory {
         story_id: String,
         #[arg(long, required = true, value_delimiter = ',')]
@@ -623,6 +635,22 @@ pub(crate) fn handle(
             let out = store.rollup(&id)?;
             render(json, &out, format!("rollup {}", out.subject))
         }
+        WorkCommand::Close {
+            id,
+            actor,
+            source_commit,
+            summary,
+            json,
+        } => {
+            let out = store.close_execution_ticket_for_ticket(
+                &id,
+                actor,
+                source_commit,
+                summary,
+                explicit_key.unwrap_or_default().to_string(),
+            )?;
+            render(json, &out, format!("closed Ticket {}", out.ticket_id))
+        }
         WorkCommand::CloseStory {
             story_id,
             qualification_receipt,
@@ -827,6 +855,31 @@ mod tests {
     use clap::Parser;
 
     use super::WorkCommand;
+
+    #[test]
+    fn cli_parses_ticket_close_request_by_ticket_id() {
+        let cli = crate::cli::Cli::try_parse_from([
+            "pulse",
+            "--idempotency-key",
+            "ticket-close-test",
+            "work",
+            "close",
+            "TK-01J00000000000000000000000",
+            "--actor",
+            "human:reviewer",
+            "--source-commit",
+            "0123456789012345678901234567890123456789",
+            "--summary",
+            "All close gates passed.",
+        ])
+        .expect("Ticket close CLI should parse");
+        assert!(matches!(
+            cli.command,
+            crate::cli::args::Command::Work {
+                command: WorkCommand::Close { id, .. }
+            } if id == "TK-01J00000000000000000000000"
+        ));
+    }
 
     #[test]
     fn cli_parses_story_close_request_without_versioned_naming() {

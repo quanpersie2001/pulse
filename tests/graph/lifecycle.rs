@@ -50,6 +50,7 @@ fn table_covers_every_from_to_expectation() {
         (Blocked, Draft),
         (Blocked, Shaped),
         (Blocked, Cancelled),
+        (Rework, Active),
     ];
     let gated = [
         (Draft, Shaped),
@@ -63,7 +64,6 @@ fn table_covers_every_from_to_expectation() {
         (Verifying, Blocked),
         (Rework, Shaped),
         (Rework, Ready),
-        (Rework, Active),
         (Rework, Cancelled),
         (Blocked, Ready),
         (Blocked, Active),
@@ -172,6 +172,38 @@ fn l4b_direct_blocked_to_ready_remains_gate_unavailable() {
     )
     .unwrap_err();
     assert_eq!(err.code(), "transition_gate_unavailable");
+}
+
+#[test]
+fn rework_returns_directly_to_active_without_shaped_gate() {
+    let exp = validate_transition(NodeStatus::Rework, NodeStatus::Active, None).unwrap();
+    assert_eq!(exp.policy, TransitionPolicy::Supported);
+    assert!(exp.required_gate_families.is_empty());
+
+    let (_dir, store) = repo();
+    let mut ticket = store
+        .create_node_with_context(WorkKind::Ticket, "Ticket".into(), ctx(1))
+        .unwrap()
+        .value;
+    ticket.status = NodeStatus::Rework;
+    fs::write(
+        _dir.path()
+            .join(".pulse/workgraph/nodes")
+            .join(format!("{}.json", ticket.id)),
+        to_canonical_bytes(&ticket).unwrap(),
+    )
+    .unwrap();
+    let active = store
+        .transition_node_with_context(
+            &ticket.id,
+            NodeStatus::Active,
+            ticket.revision,
+            None,
+            ctx(2),
+        )
+        .unwrap()
+        .value;
+    assert_eq!(active.status, NodeStatus::Active);
 }
 
 #[test]
