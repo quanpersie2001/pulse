@@ -27,6 +27,10 @@ pub struct Cli {
 #[derive(Subcommand)]
 pub(crate) enum Command {
     Init {
+        /// Principal that owns the initial Core grants (for example,
+        /// `human:alice`). Defaults to the repository's Git user.name.
+        #[arg(long)]
+        actor: Option<String>,
         #[arg(long)]
         json: bool,
     },

@@ -9,6 +9,49 @@ use std::path::{Path, PathBuf};
 const MAX_PRINCIPALS: usize = 256;
 const MAX_GRANTS: usize = 128;
 
+/// Every authority grant used by the current Core implementation.
+///
+/// This is deliberately an explicit, sorted list. Grants are capabilities,
+/// not roles, so initialization must never use a wildcard or infer authority
+/// from an actor kind. Keep this list in sync with every grant passed to
+/// [`authorize`] (including the materialization-specific shaping grants).
+pub const CORE_GRANTS: &[&str] = &[
+    "decision.accept",
+    "decision.propose",
+    "docs.write",
+    "documentation.defer",
+    "evidence.record",
+    "knowledge.capture",
+    "note",
+    "qa.defer_to_story_close",
+    "qa.none.approve",
+    "shape.apply",
+    "shape.approve.R0",
+    "shape.approve.R1",
+    "shape.approve.R2",
+    "shape.approve.R3",
+    "shape.destination.redraw",
+    "shape.invalidate",
+    "work.assignment.close",
+    "work.assignment.handoff",
+    "work.assignment.prepare",
+    "work.assignment.release",
+    "work.assignment.verify",
+    "work.close",
+    "work.edge.create",
+    "work.materialization.downgrade",
+    "work.node.create",
+    "work.node.update",
+    "work.story.close",
+    "work.transition.ready",
+    "work.transition.shaped",
+];
+
+/// Return whether `grant` is part of the closed Core grant vocabulary.
+pub fn is_core_grant(grant: &str) -> bool {
+    CORE_GRANTS.binary_search(&grant).is_ok()
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct AuthorityPolicy {
@@ -48,6 +91,7 @@ pub(crate) struct AuthorityBootstrapOutcome {
     pub created: Vec<PathBuf>,
     pub preserved: Vec<PathBuf>,
     pub policy: AuthorityPolicy,
+    pub changed: bool,
 }
 
 impl AuthorityPolicy {
@@ -189,7 +233,10 @@ pub(crate) fn preflight_bootstrap(repo_root: &Path) -> Result<()> {
 ///
 /// Returns a typed validation or I/O error when existing authority state is
 /// invalid or the new policy cannot be created durably.
-pub(crate) fn bootstrap_default_deny(repo_root: &Path) -> Result<AuthorityBootstrapOutcome> {
+pub(crate) fn bootstrap_default_deny(
+    repo_root: &Path,
+    principal: &AuthorityPrincipal,
+) -> Result<AuthorityBootstrapOutcome> {
     preflight_bootstrap(repo_root)?;
     let directory = repo_root.join(".pulse/policy");
     let path = authority_path(repo_root);
@@ -203,7 +250,7 @@ pub(crate) fn bootstrap_default_deny(repo_root: &Path) -> Result<AuthorityBootst
         created.push(directory);
     }
 
-    let policy = if path.exists() {
+    let (policy, changed) = if path.exists() {
         preserved.push(path.clone());
         let report = load_authority_policy(repo_root)?;
         let revision = report.policy_revision.ok_or_else(|| {
@@ -212,26 +259,48 @@ pub(crate) fn bootstrap_default_deny(repo_root: &Path) -> Result<AuthorityBootst
                 "existing authority policy has no revision",
             )
         })?;
-        AuthorityPolicy {
+        let mut policy = AuthorityPolicy {
             schema_version: 1,
             revision,
             principals: report.principals,
+        };
+        // Existing authority is maintainer-owned. Preserve an existing
+        // principal and its grants byte-for-byte; only enroll a requested
+        // actor when no matching principal exists.
+        let has_principal = policy
+            .principals
+            .iter()
+            .any(|candidate| candidate.kind == principal.kind && candidate.id == principal.id);
+        if has_principal {
+            (policy, false)
+        } else {
+            policy.principals.push(principal.clone());
+            policy.revision = policy.revision.checked_add(1).ok_or_else(|| {
+                PulseError::validation(
+                    "repository_init_authority_invalid",
+                    "authority policy revision overflow",
+                )
+            })?;
+            policy.normalize();
+            crate::storage::atomic_write(&path, &to_canonical_bytes(&policy)?)?;
+            (policy, true)
         }
     } else {
         let policy = AuthorityPolicy {
             schema_version: 1,
             revision: 1,
-            principals: Vec::new(),
+            principals: vec![principal.clone()],
         };
         crate::storage::create_new(&path, &to_canonical_bytes(&policy)?)?;
         created.push(path);
-        policy
+        (policy, true)
     };
 
     Ok(AuthorityBootstrapOutcome {
         created,
         preserved,
         policy,
+        changed,
     })
 }
 

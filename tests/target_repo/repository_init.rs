@@ -14,7 +14,7 @@ fn public_init_enrolls_fixture_preserves_user_files_and_is_idempotent() {
     let readme_before = fs::read(repo.path().join("README.md")).unwrap();
     let docs_before = fs::read(repo.path().join("docs/product/authentication.md")).unwrap();
 
-    let first = repo.pulse_ok(&["init", "--json"]);
+    let first = repo.pulse_ok(&["init", "--actor", "human:Pulse Test", "--json"]);
     assert_eq!(first["schema_version"], 1);
     assert_eq!(first["code"], "repository_initialized");
     assert_eq!(first["status"], "initialized");
@@ -58,7 +58,19 @@ fn public_init_enrolls_fixture_preserves_user_files_and_is_idempotent() {
     let authority = pulse::policy::load_authority_policy(repo.path()).unwrap();
     assert!(authority.available);
     assert!(authority.valid);
-    assert!(authority.principals.is_empty());
+    assert_eq!(authority.principals.len(), 1);
+    assert_eq!(
+        authority.principals[0].kind,
+        pulse::identity::actor::ActorKind::Human
+    );
+    assert_eq!(authority.principals[0].id, "Pulse Test");
+    assert_eq!(
+        authority.principals[0].grants,
+        pulse::policy::CORE_GRANTS
+            .iter()
+            .map(|grant| (*grant).to_string())
+            .collect::<Vec<_>>()
+    );
     assert_eq!(authority.policy_revision, Some(1));
 
     assert_eq!(
@@ -74,7 +86,7 @@ fn public_init_enrolls_fixture_preserves_user_files_and_is_idempotent() {
         docs_before
     );
 
-    let second = repo.pulse_ok(&["init", "--json"]);
+    let second = repo.pulse_ok(&["init", "--actor", "human:Pulse Test", "--json"]);
     assert_eq!(second["status"], "unchanged");
     assert_eq!(second["repository_id"], repository_id);
     assert_eq!(second["created"], serde_json::json!([]));
@@ -118,7 +130,7 @@ fn public_init_completes_safe_partial_state_and_preserves_authority() {
     let policy_bytes = to_canonical_bytes(&policy).unwrap();
     fs::write(&policy_path, &policy_bytes).unwrap();
 
-    let report = repo.pulse_ok(&["init", "--json"]);
+    let report = repo.pulse_ok(&["init", "--actor", "human:maintainer", "--json"]);
     assert_eq!(report["status"], "initialized");
     assert_eq!(report["authority_policy_revision"], 7);
     assert!(repo.path().join(".pulse/workgraph/manifest.json").is_file());

@@ -4,8 +4,8 @@ use crate::cli::output::render;
 use crate::kernel::init::{initialize_repository, RepositoryInitStatus};
 use crate::PulseError;
 
-pub(crate) fn handle(repo_root: &Path, json: bool) -> Result<(), PulseError> {
-    let report = initialize_repository(repo_root)?;
+pub(crate) fn handle(repo_root: &Path, actor: Option<&str>, json: bool) -> Result<(), PulseError> {
+    let report = initialize_repository(repo_root, actor)?;
     let status = match report.status {
         RepositoryInitStatus::Initialized => "initialized",
         RepositoryInitStatus::Unchanged => "already initialized",

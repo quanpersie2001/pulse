@@ -9,6 +9,7 @@
 use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 
 use serde::{Deserialize, Serialize};
 
@@ -48,8 +49,12 @@ pub(crate) struct RepositoryInitReport {
 /// Returns a typed error when the repository root is invalid, a managed path is
 /// unsafe, existing domain state is incompatible, or durable initialization
 /// cannot complete.
-pub(crate) fn initialize_repository(repo_root: &Path) -> Result<RepositoryInitReport> {
+pub(crate) fn initialize_repository(
+    repo_root: &Path,
+    actor: Option<&str>,
+) -> Result<RepositoryInitReport> {
     let repo_root = crate::storage::paths::canonicalize_existing_dir(repo_root)?;
+    let principal = initial_principal(&repo_root, actor)?;
     // The lock owner creates `.pulse/runtime/locks`, so reject managed symlinks
     // and file collisions before acquiring it, then revalidate under the lock.
     preflight_managed_paths(&repo_root)?;
@@ -85,13 +90,13 @@ pub(crate) fn initialize_repository(repo_root: &Path) -> Result<RepositoryInitRe
     created.extend(knowledge.created);
     preserved.extend(knowledge.preserved);
 
-    let authority = crate::policy::authority::bootstrap_default_deny(&repo_root)?;
+    let authority = crate::policy::authority::bootstrap_default_deny(&repo_root, &principal)?;
     created.extend(authority.created);
     preserved.extend(authority.preserved);
 
     let created = stable_relative_paths(&repo_root, created)?;
     let preserved = stable_relative_paths(&repo_root, preserved)?;
-    let status = if created.is_empty() {
+    let status = if created.is_empty() && !authority.changed {
         RepositoryInitStatus::Unchanged
     } else {
         RepositoryInitStatus::Initialized
@@ -110,6 +115,79 @@ pub(crate) fn initialize_repository(repo_root: &Path) -> Result<RepositoryInitRe
             .map(|entry| (*entry).to_string())
             .collect(),
     })
+}
+
+fn initial_principal(
+    repo_root: &Path,
+    actor: Option<&str>,
+) -> Result<crate::policy::AuthorityPrincipal> {
+    let actor = match actor {
+        Some(actor) if !actor.trim().is_empty() => actor.trim().to_string(),
+        Some(_) => {
+            return Err(PulseError::validation(
+                "init_actor_invalid",
+                "--actor must use kind:id syntax with a non-empty id",
+            ));
+        }
+        None => git_user_name(repo_root)?
+            .map(|name| format!("human:{name}"))
+            .ok_or_else(|| {
+                PulseError::validation(
+                    "init_actor_required",
+                    "pulse init requires --actor kind:id when Git user.name is unavailable",
+                )
+            })?,
+    };
+
+    let (kind, id) = actor.split_once(':').ok_or_else(|| {
+        PulseError::validation(
+            "init_actor_invalid",
+            "--actor must use kind:id syntax (kind is human, agent, or system)",
+        )
+    })?;
+    if id.trim().is_empty() || id.len() > 128 {
+        return Err(PulseError::validation(
+            "init_actor_invalid",
+            "--actor id must contain between 1 and 128 characters",
+        ));
+    }
+    let kind = match kind {
+        "human" => crate::identity::actor::ActorKind::Human,
+        "agent" => crate::identity::actor::ActorKind::Agent,
+        "system" => crate::identity::actor::ActorKind::System,
+        _ => {
+            return Err(PulseError::validation(
+                "init_actor_invalid",
+                "--actor kind must be human, agent, or system",
+            ));
+        }
+    };
+    Ok(crate::policy::AuthorityPrincipal {
+        kind,
+        id: id.to_string(),
+        grants: crate::policy::CORE_GRANTS
+            .iter()
+            .map(|grant| (*grant).to_string())
+            .collect(),
+    })
+}
+
+fn git_user_name(repo_root: &Path) -> Result<Option<String>> {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(repo_root)
+        .args(["config", "--get", "user.name"])
+        .output()
+        .map_err(|error| PulseError::io(repo_root, error))?;
+    if !output.status.success() {
+        return Ok(None);
+    }
+    let name = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if name.is_empty() {
+        Ok(None)
+    } else {
+        Ok(Some(name))
+    }
 }
 
 fn preflight_managed_paths(repo_root: &Path) -> Result<()> {
