@@ -13,6 +13,7 @@ pub mod receipt_validation;
 pub mod registry;
 pub mod search;
 pub mod section;
+pub mod tags;
 pub mod tree;
 pub mod validate;
 
@@ -75,5 +76,6 @@ pub use section::{
     SectionRecord, ANCHOR_VERSION, CHUNK_HARD_MAX_BYTES, CHUNK_OVERLAP_LINES, CHUNK_SOFT_MAX_BYTES,
     CHUNK_SOFT_MAX_LINES, CHUNK_VERSION, EXTRACTOR_VERSION,
 };
+pub use tags::{add as add_tag, load as load_tags, normalize_tag, tags_path, TagsRegistry};
 pub use tree::{docs_tree, tree_from_registry, DocsTreeReport, TreeNode, TreeOptions};
 pub use validate::{validate_registry, DocsFinding, DocsValidationReport};

@@ -6,8 +6,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::canonical_json::hash_bytes;
 use crate::docs::model::{
-    DocsRegistry, DocumentAuthority, DocumentKind, DocumentLifecycle, DocumentRecord,
-    DocumentationPosture, WorkDocumentationContext,
+    DocsRegistry, DocumentKind, DocumentRecord, DocumentStatus, DocumentationPosture,
+    WorkDocumentationContext,
 };
 use crate::docs::registry::registry_fingerprint;
 use crate::storage;
@@ -101,8 +101,9 @@ pub struct ApplicableDocument {
     pub id: String,
     pub path: String,
     pub kind: DocumentKind,
-    pub authority: DocumentAuthority,
+    pub status: DocumentStatus,
     pub owner: String,
+    pub tags: Vec<String>,
     pub summary: String,
     pub content_hash: String,
     pub document_revision: u64,
@@ -200,7 +201,7 @@ pub fn applicable_docs(
             }
             if is_required {
                 gate_reasons.extend(required_gate_reasons(&ineligible.reason_codes));
-                if document.lifecycle == DocumentLifecycle::Superseded {
+                if document.superseded_by.is_some() {
                     if let Some(replacement_id) = &document.superseded_by {
                         match by_id.get(replacement_id) {
                             Some(replacement) => {
@@ -310,8 +311,9 @@ fn applicable_document(
         id: document.id.clone(),
         path: document.path.clone(),
         kind: document.kind,
-        authority: document.authority,
+        status: document.status,
         owner: document.owner.clone(),
+        tags: document.tags.clone(),
         summary: document.summary.clone(),
         content_hash,
         document_revision: document.revision,
@@ -330,29 +332,22 @@ fn ineligible_reasons(
     options: ApplicabilityOptions,
 ) -> Ineligible {
     let mut reasons = Vec::new();
-    match document.lifecycle {
-        DocumentLifecycle::Current => {}
-        DocumentLifecycle::SuspectedStale => {
-            if !options.include_stale {
-                reasons.push("document_suspected_stale".to_string());
-            }
-        }
-        DocumentLifecycle::Stale => {
-            if !options.include_stale {
-                reasons.push("document_stale".to_string());
-            }
-        }
-        DocumentLifecycle::Retired => reasons.push("document_retired".to_string()),
-        DocumentLifecycle::Superseded => reasons.push("document_superseded".to_string()),
-    }
-    match document.authority {
-        DocumentAuthority::Approved | DocumentAuthority::Generated => {}
-        DocumentAuthority::Draft => {
+    match document.status {
+        DocumentStatus::Approved => {}
+        DocumentStatus::Draft => {
             if !options.include_draft {
                 reasons.push("document_draft".to_string());
             }
         }
-        DocumentAuthority::Informational => reasons.push("document_not_authoritative".to_string()),
+        DocumentStatus::Stale => {
+            if !options.include_stale {
+                reasons.push("document_stale".to_string());
+            }
+        }
+        DocumentStatus::Retired => reasons.push("document_retired".to_string()),
+    }
+    if document.superseded_by.is_some() {
+        reasons.push("document_superseded".to_string());
     }
     if is_protected_path(&document.path) {
         reasons.push("document_protected".to_string());
@@ -376,11 +371,8 @@ fn scope_reasons(document: &DocumentRecord, work: &WorkDocumentationContext) -> 
     if any_path_scope_matches(&document.scope.paths, &work.paths) {
         reasons.push("path_scope_match".to_string());
     }
-    if intersects(&document.scope.domains, &work.domains) {
-        reasons.push("domain_scope_match".to_string());
-    }
-    if intersects(&document.scope.work_labels, &work.labels) {
-        reasons.push("label_scope_match".to_string());
+    if intersects(&document.tags, &work.tags) {
+        reasons.push("tag_scope_match".to_string());
     }
     sort_reasons(reasons)
 }
@@ -415,8 +407,8 @@ fn glob_match(pattern: &str, value: &str) -> bool {
 }
 
 fn should_always_exclude(document: &DocumentRecord, reasons: &[String]) -> bool {
-    document.lifecycle == DocumentLifecycle::Retired
-        || document.lifecycle == DocumentLifecycle::Superseded
+    document.status == DocumentStatus::Retired
+        || document.superseded_by.is_some()
         || reasons.iter().any(|reason| {
             matches!(
                 reason.as_str(),
@@ -431,9 +423,7 @@ fn required_gate_reasons(ineligible: &[String]) -> Vec<String> {
         .map(|reason| match reason.as_str() {
             "document_content_missing" => "required_document_missing",
             "document_stale" | "document_suspected_stale" => "required_document_stale",
-            "document_draft" | "document_not_authoritative" => {
-                "required_document_not_authoritative"
-            }
+            "document_draft" => "required_document_not_authoritative",
             "document_retired" => "required_document_retired",
             "document_superseded" => "required_document_superseded",
             "document_protected" | "document_generated_navigation" | "document_path_unsafe" => {
@@ -486,8 +476,7 @@ const REASON_PRECEDENCE: &[&str] = &[
     "explicit_required_document_replacement",
     "supersession_replacement",
     "path_scope_match",
-    "domain_scope_match",
-    "label_scope_match",
+    "tag_scope_match",
     "required_document_missing",
     "required_document_stale",
     "required_document_not_authoritative",

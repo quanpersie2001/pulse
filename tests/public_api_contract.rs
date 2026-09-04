@@ -6,9 +6,8 @@
 //! not exhaustive API snapshots.
 
 use pulse::docs::{
-    ApplicabilityOptions, DocsRegistry, DocumentAuthority, DocumentKind, DocumentLifecycle,
-    DocumentRecord, DocumentScope, GetOptions, IndexOptions, RetrievalConfig, ReviewPolicy,
-    SearchOptions, TreeOptions,
+    ApplicabilityOptions, DocsRegistry, DocumentKind, DocumentRecord, DocumentScope,
+    DocumentStatus, GetOptions, IndexOptions, RetrievalConfig, SearchOptions, TreeOptions,
 };
 use pulse::event::{EventActor, EventActorKind, EventCorrelation, EventEnvelope, EventSubject};
 use pulse::evidence::model::{
@@ -42,21 +41,17 @@ fn docs_evidence_knowledge_storage_and_identity_public_paths_compile() {
 
     let _registry = DocsRegistry::empty("repo-test".to_string());
     let _record = DocumentRecord {
+        tags: vec![],
         id: "DOC-ARCH".to_string(),
         revision: 1,
         path: "docs/architecture/graph.md".to_string(),
         kind: DocumentKind::Architecture,
-        authority: DocumentAuthority::Approved,
-        lifecycle: DocumentLifecycle::Current,
+        status: DocumentStatus::Approved,
         owner: "team:test".to_string(),
         summary: "Graph architecture.".to_string(),
-        aliases: vec![],
         scope: DocumentScope::default(),
-        review_policy: ReviewPolicy::Standard,
-        verification_profile: "architecture-doc".to_string(),
         generated: None,
         superseded_by: None,
-        retrieval: None,
     };
 
     let _docs_options = (

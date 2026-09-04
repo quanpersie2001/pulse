@@ -38,14 +38,6 @@ pub(super) fn validate_docs_payload(
     }
     for doc in &p.documents {
         validate_registry_document_identity(doc)?;
-        if doc.verification_profile.as_deref().map_or(true, |profile| {
-            profile.trim().is_empty() || profile.chars().count() > 120
-        }) {
-            return Err(PulseError::validation(
-                "document_receipt_profile_mismatch",
-                "documentation receipt requires a bounded verification_profile",
-            ));
-        }
         validate_document_entry_common(receipt, &doc.path, &doc.content_hash)?;
     }
     for check in &p.checks {

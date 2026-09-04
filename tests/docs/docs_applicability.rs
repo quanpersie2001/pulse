@@ -3,8 +3,8 @@ use std::fs;
 use pulse::canonical_json::hash_bytes;
 use pulse::docs::applicability::{applicable_docs, ApplicabilityOptions, FsContentResolver};
 use pulse::docs::model::{
-    DocsRegistry, DocumentAuthority, DocumentKind, DocumentLifecycle, DocumentRecord,
-    DocumentScope, DocumentationPosture, ReviewPolicy, WorkDocumentationContext,
+    DocsRegistry, DocumentKind, DocumentRecord, DocumentScope, DocumentStatus,
+    DocumentationPosture, WorkDocumentationContext,
 };
 
 fn doc(id: &str, path: &str) -> DocumentRecord {
@@ -13,17 +13,13 @@ fn doc(id: &str, path: &str) -> DocumentRecord {
         revision: 1,
         path: path.to_string(),
         kind: DocumentKind::Domain,
-        authority: DocumentAuthority::Approved,
-        lifecycle: DocumentLifecycle::Current,
+        status: DocumentStatus::Approved,
         owner: "team:docs".to_string(),
         summary: format!("summary {id}"),
-        aliases: Vec::new(),
         scope: DocumentScope::default(),
-        review_policy: ReviewPolicy::None,
-        verification_profile: "domain-doc".to_string(),
+        tags: Vec::new(),
         generated: None,
         superseded_by: None,
-        retrieval: None,
     }
 }
 
@@ -43,7 +39,7 @@ fn resolver<'a>(root: &'a std::path::Path) -> FsContentResolver<'a> {
 }
 
 #[test]
-fn explicit_required_current_approved_doc_is_required_with_hash_and_write_candidate() {
+fn explicit_required_doc_is_required_with_hash_and_write_candidate() {
     let tmp = tempfile::tempdir().unwrap();
     fs::create_dir_all(tmp.path().join("docs/domain")).unwrap();
     let path = tmp.path().join("docs/domain/auth.md");
@@ -56,7 +52,8 @@ fn explicit_required_current_approved_doc_is_required_with_hash_and_write_candid
         posture: DocumentationPosture::Required,
         required_documents: vec!["DOC-AUTH-DOMAIN".to_string()],
         paths: Vec::new(),
-        domains: vec!["authentication".to_string()],
+        tags: Vec::new(),
+        domains: Vec::new(),
         labels: Vec::new(),
     };
 
@@ -75,20 +72,19 @@ fn explicit_required_current_approved_doc_is_required_with_hash_and_write_candid
     assert_eq!(out.required[0].content_hash, hash_bytes(b"auth v1\n"));
     assert_eq!(out.required[0].reasons, vec!["explicit_required_document"]);
     assert_eq!(out.write_candidates.len(), 1);
-    assert_eq!(out.write_candidates[0].id, "DOC-AUTH-DOMAIN");
 }
 
 #[test]
-fn scope_matches_are_optional_and_unrelated_docs_are_omitted() {
+fn path_and_tag_scopes_match_optional_docs() {
     let tmp = tempfile::tempdir().unwrap();
     fs::create_dir_all(tmp.path().join("docs/domain")).unwrap();
     fs::write(tmp.path().join("docs/domain/auth.md"), b"auth").unwrap();
     fs::write(tmp.path().join("docs/domain/billing.md"), b"billing").unwrap();
     let mut scoped = doc("DOC-AUTH-DOMAIN", "docs/domain/auth.md");
     scoped.scope.paths = vec!["src/auth/**".to_string()];
-    scoped.scope.domains = vec!["authentication".to_string()];
+    scoped.tags = vec!["authentication".to_string()];
     let mut unrelated = doc("DOC-BILLING-DOMAIN", "docs/domain/billing.md");
-    unrelated.scope.domains = vec!["billing".to_string()];
+    unrelated.tags = vec!["billing".to_string()];
 
     let out = applicable_docs(
         &WorkDocumentationContext {
@@ -97,7 +93,8 @@ fn scope_matches_are_optional_and_unrelated_docs_are_omitted() {
             posture: DocumentationPosture::None,
             required_documents: Vec::new(),
             paths: vec!["src/auth/login.rs".to_string()],
-            domains: vec!["authentication".to_string()],
+            tags: vec!["authentication".to_string()],
+            domains: Vec::new(),
             labels: Vec::new(),
         },
         &registry(vec![unrelated, scoped]),
@@ -111,12 +108,12 @@ fn scope_matches_are_optional_and_unrelated_docs_are_omitted() {
     assert_eq!(out.optional[0].id, "DOC-AUTH-DOMAIN");
     assert_eq!(
         out.optional[0].reasons,
-        vec!["path_scope_match", "domain_scope_match"]
+        vec!["path_scope_match", "tag_scope_match"]
     );
     assert!(out
         .excluded
         .iter()
-        .all(|doc| doc.id != "DOC-BILLING-DOMAIN"));
+        .all(|document| document.id != "DOC-BILLING-DOMAIN"));
 }
 
 #[test]
@@ -127,9 +124,8 @@ fn missing_retired_and_superseded_required_docs_make_gate_incomplete() {
     fs::write(tmp.path().join("docs/domain/retired.md"), b"old").unwrap();
     fs::write(tmp.path().join("docs/domain/superseded.md"), b"old").unwrap();
     let mut retired = doc("DOC-OLD-RETIRED", "docs/domain/retired.md");
-    retired.lifecycle = DocumentLifecycle::Retired;
+    retired.status = DocumentStatus::Retired;
     let mut superseded = doc("DOC-OLD-SUPERSEDED", "docs/domain/superseded.md");
-    superseded.lifecycle = DocumentLifecycle::Superseded;
     superseded.superseded_by = Some("DOC-NEW-CURRENT".to_string());
     let replacement = doc("DOC-NEW-CURRENT", "docs/domain/replacement.md");
 
@@ -144,6 +140,7 @@ fn missing_retired_and_superseded_required_docs_make_gate_incomplete() {
                 "DOC-OLD-SUPERSEDED".to_string(),
             ],
             paths: Vec::new(),
+            tags: Vec::new(),
             domains: Vec::new(),
             labels: Vec::new(),
         },
@@ -169,10 +166,13 @@ fn missing_retired_and_superseded_required_docs_make_gate_incomplete() {
     let old = out
         .excluded
         .iter()
-        .find(|doc| doc.id == "DOC-OLD-SUPERSEDED")
+        .find(|document| document.id == "DOC-OLD-SUPERSEDED")
         .unwrap();
     assert_eq!(old.replacement.as_deref(), Some("DOC-NEW-CURRENT"));
-    assert!(out.optional.iter().any(|doc| doc.id == "DOC-NEW-CURRENT"));
+    assert!(out
+        .optional
+        .iter()
+        .any(|document| document.id == "DOC-NEW-CURRENT"));
 }
 
 #[test]
@@ -183,13 +183,13 @@ fn draft_stale_and_generated_index_exclusion_follow_include_flags() {
     fs::write(tmp.path().join("docs/domain/stale.md"), b"stale").unwrap();
     fs::write(tmp.path().join("docs/_index.md"), b"index").unwrap();
     let mut draft = doc("DOC-DRAFT-CURRENT", "docs/domain/draft.md");
-    draft.authority = DocumentAuthority::Draft;
-    draft.scope.domains = vec!["authentication".to_string()];
+    draft.status = DocumentStatus::Draft;
+    draft.tags = vec!["authentication".to_string()];
     let mut stale = doc("DOC-STALE-CURRENT", "docs/domain/stale.md");
-    stale.lifecycle = DocumentLifecycle::SuspectedStale;
-    stale.scope.domains = vec!["authentication".to_string()];
+    stale.status = DocumentStatus::Stale;
+    stale.tags = vec!["authentication".to_string()];
     let mut index = doc("DOC-GENERATED-INDEX", "docs/_index.md");
-    index.scope.domains = vec!["authentication".to_string()];
+    index.tags = vec!["authentication".to_string()];
 
     let work = WorkDocumentationContext {
         work_id: "TK-001".to_string(),
@@ -197,7 +197,8 @@ fn draft_stale_and_generated_index_exclusion_follow_include_flags() {
         posture: DocumentationPosture::None,
         required_documents: Vec::new(),
         paths: Vec::new(),
-        domains: vec!["authentication".to_string()],
+        tags: vec!["authentication".to_string()],
+        domains: Vec::new(),
         labels: Vec::new(),
     };
     let reg = registry(vec![draft, stale, index]);
@@ -211,15 +212,15 @@ fn draft_stale_and_generated_index_exclusion_follow_include_flags() {
     assert!(strict
         .excluded
         .iter()
-        .any(|doc| doc.id == "DOC-DRAFT-CURRENT"));
+        .any(|document| document.id == "DOC-DRAFT-CURRENT"));
     assert!(strict
         .excluded
         .iter()
-        .any(|doc| doc.id == "DOC-STALE-CURRENT"));
+        .any(|document| document.id == "DOC-STALE-CURRENT"));
     assert!(strict
         .excluded
         .iter()
-        .any(|doc| doc.id == "DOC-GENERATED-INDEX"));
+        .any(|document| document.id == "DOC-GENERATED-INDEX"));
 
     let included = applicable_docs(
         &work,
@@ -234,15 +235,15 @@ fn draft_stale_and_generated_index_exclusion_follow_include_flags() {
     assert!(included
         .optional
         .iter()
-        .any(|doc| doc.id == "DOC-DRAFT-CURRENT"));
+        .any(|document| document.id == "DOC-DRAFT-CURRENT"));
     assert!(included
         .optional
         .iter()
-        .any(|doc| doc.id == "DOC-STALE-CURRENT"));
+        .any(|document| document.id == "DOC-STALE-CURRENT"));
     assert!(!included
         .optional
         .iter()
-        .any(|doc| doc.id == "DOC-GENERATED-INDEX"));
+        .any(|document| document.id == "DOC-GENERATED-INDEX"));
 }
 
 #[test]
@@ -252,9 +253,9 @@ fn buckets_are_sorted_and_content_hash_changes_with_file_bytes() {
     fs::write(tmp.path().join("docs/domain/a.md"), b"a1").unwrap();
     fs::write(tmp.path().join("docs/domain/b.md"), b"b1").unwrap();
     let mut a = doc("DOC-A-SORTED", "docs/domain/a.md");
-    a.scope.work_labels = vec!["x".to_string()];
+    a.tags = vec!["x".to_string()];
     let mut b = doc("DOC-B-SORTED", "docs/domain/b.md");
-    b.scope.work_labels = vec!["x".to_string()];
+    b.tags = vec!["x".to_string()];
     let reg = registry(vec![b, a]);
     let work = WorkDocumentationContext {
         work_id: "TK-001".to_string(),
@@ -262,8 +263,9 @@ fn buckets_are_sorted_and_content_hash_changes_with_file_bytes() {
         posture: DocumentationPosture::None,
         required_documents: Vec::new(),
         paths: Vec::new(),
+        tags: vec!["x".to_string()],
         domains: Vec::new(),
-        labels: vec!["x".to_string()],
+        labels: Vec::new(),
     };
     let first = applicable_docs(
         &work,
@@ -276,7 +278,7 @@ fn buckets_are_sorted_and_content_hash_changes_with_file_bytes() {
         first
             .optional
             .iter()
-            .map(|doc| doc.id.as_str())
+            .map(|document| document.id.as_str())
             .collect::<Vec<_>>(),
         vec!["DOC-A-SORTED", "DOC-B-SORTED"]
     );

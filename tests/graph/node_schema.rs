@@ -35,12 +35,12 @@ fn valid_ticket_value() -> Value {
     node.risk = Some(Risk::Low);
     node.materialization = Some(Materialization::R0);
     node.implementation = Some(ImplementationContract {
+        verification_profile: "standard".to_string(),
         mode: ImplementationMode::Open,
         work_surface: WorkSurface::Code,
         plan_policy: PlanPolicy::None,
         semantic_impact: ImplementationSemanticImpact::BehaviorOrPublicRiskChange,
         effort: Default::default(),
-        verification_profile: "service-change".to_string(),
         brief: Some(ContentRef {
             path: "works/TK-001/ticket.md".to_string(),
             content_hash: HASH.to_string(),

@@ -17,8 +17,7 @@
 
 use pulse::canonical_json::hash_bytes;
 use pulse::docs::model::{
-    DocumentAuthority, DocumentKind, DocumentLifecycle, DocumentRecord, DocumentScope,
-    RetrievalConfig, ReviewPolicy,
+    DocumentKind, DocumentRecord, DocumentScope, DocumentStatus, RetrievalConfig,
 };
 use pulse::docs::{
     anchor_for_heading, extract_document_title, extract_sections, ExtractionWarning, TitleSource,
@@ -27,24 +26,19 @@ use pulse::docs::{
 /// An approved / current / domain document used by every scenario.
 fn doc() -> DocumentRecord {
     DocumentRecord {
+        tags: vec!["authentication".to_string(), "refresh tokens".to_string()],
         id: "DOC-AUTH-DOMAIN".to_string(),
         revision: 3,
         path: "docs/domain/token-lifecycle.md".to_string(),
         kind: DocumentKind::Domain,
-        authority: DocumentAuthority::Approved,
-        lifecycle: DocumentLifecycle::Current,
+        status: DocumentStatus::Approved,
         owner: "team:identity".to_string(),
         summary: "Token types, lifecycle transitions and invariants.".to_string(),
-        aliases: vec!["refresh tokens".to_string()],
         scope: DocumentScope {
-            domains: vec!["authentication".to_string()],
-            ..Default::default()
+            paths: vec!["authentication".to_string()],
         },
-        review_policy: ReviewPolicy::Independent,
-        verification_profile: "domain-doc".to_string(),
         generated: None,
         superseded_by: None,
-        retrieval: None,
     }
 }
 
@@ -181,12 +175,12 @@ fn r8_utf8_lf_exact_paths_ranges_hashes() {
     assert!(sections
         .iter()
         .all(|s| s.document_title == "Token Lifecycle"));
-    assert!(sections.iter().all(|s| s.authority == "approved"));
-    assert!(sections.iter().all(|s| s.lifecycle == "current"));
+    assert!(sections.iter().all(|s| s.status == "approved"));
     assert!(sections.iter().all(|s| s.kind == "domain"));
     assert!(sections.iter().all(|s| s.owner == "team:identity"));
-    assert!(sections.iter().all(|s| s.domains == vec!["authentication"]));
-    assert!(sections.iter().all(|s| s.aliases == vec!["refresh tokens"]));
+    assert!(sections
+        .iter()
+        .all(|s| s.tags == vec!["authentication", "refresh tokens"]));
     assert!(sections.iter().all(|s| s.body_indexed));
     assert!(sections.iter().all(|s| s.document_revision == 3));
 }

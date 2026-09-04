@@ -38,8 +38,7 @@ pub struct GetDocument {
     pub path: String,
     pub content_hash: String,
     pub summary: String,
-    pub authority: String,
-    pub lifecycle: String,
+    pub status: String,
     pub owner: String,
     pub kind: String,
 }
@@ -106,10 +105,10 @@ pub fn get_docs(repo_root: &Path, reference: &str, options: GetOptions) -> Pulse
         .ok_or_else(|| PulseError::NotFound {
             subject: format!("document {doc_id}"),
         })?;
-    if doc.lifecycle != crate::docs::DocumentLifecycle::Current {
+    if doc.status != crate::docs::DocumentStatus::Approved {
         return Err(PulseError::validation(
             "docs_anchor_stale",
-            "document is not current",
+            "document is not approved",
         ));
     }
     let options = apply_registry_defaults(options, &registry.retrieval_config());
@@ -287,8 +286,7 @@ fn doc_info(doc: &DocumentRecord, content_hash: &str) -> GetDocument {
         path: doc.path.clone(),
         content_hash: content_hash.to_string(),
         summary: doc.summary.clone(),
-        authority: serde_variant(&doc.authority),
-        lifecycle: serde_variant(&doc.lifecycle),
+        status: serde_variant(&doc.status),
         owner: doc.owner.clone(),
         kind: serde_variant(&doc.kind),
     }
@@ -322,10 +320,10 @@ fn get_path_range(
     range: SectionRange,
     options: GetOptions,
 ) -> PulseResult<GetReport> {
-    if doc.lifecycle != crate::docs::DocumentLifecycle::Current {
+    if doc.status != crate::docs::DocumentStatus::Approved {
         return Err(PulseError::validation(
             "docs_anchor_stale",
-            "path range document is not current",
+            "path range document is not approved",
         ));
     }
     let (bytes, content_hash, sections) = extract_current(repo_root, doc)?;

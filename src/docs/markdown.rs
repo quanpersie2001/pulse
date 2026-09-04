@@ -504,11 +504,9 @@ pub fn extract_sections(
     let deduped = dedupe_anchors(&base_anchors);
 
     // Shared document-level metadata for every record.
-    let authority = enum_tag(&document.authority);
-    let lifecycle = enum_tag(&document.lifecycle);
+    let status = enum_tag(&document.status);
     let kind = enum_tag(&document.kind);
-    let domains = document.scope.domains.clone();
-    let aliases = document.aliases.clone();
+    let tags = document.tags.clone();
 
     let mut sections = Vec::new();
     for (ordinal, desc) in descs.iter().enumerate() {
@@ -552,12 +550,10 @@ pub fn extract_sections(
                     document_content_hash: content_hash.to_string(),
                     section_content_hash: hash_bytes(parsed.slice_bytes(*cstart, *cend)),
                     summary: document.summary.clone(),
-                    authority: authority.clone(),
-                    lifecycle: lifecycle.clone(),
+                    status: status.clone(),
                     owner: document.owner.clone(),
                     kind: kind.clone(),
-                    domains: domains.clone(),
-                    aliases: aliases.clone(),
+                    tags: tags.clone(),
                     body_indexed,
                     chunk: Some(ChunkRef::new(ordinal_n, total)),
                 });
@@ -581,12 +577,10 @@ pub fn extract_sections(
                     parsed.slice_bytes(desc.start_line, desc.end_line),
                 ),
                 summary: document.summary.clone(),
-                authority: authority.clone(),
-                lifecycle: lifecycle.clone(),
+                status: status.clone(),
                 owner: document.owner.clone(),
                 kind: kind.clone(),
-                domains: domains.clone(),
-                aliases: aliases.clone(),
+                tags: tags.clone(),
                 body_indexed,
                 chunk: None,
             });

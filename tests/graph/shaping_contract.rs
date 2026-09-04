@@ -49,12 +49,12 @@ fn qa(posture: QaImpactPosture) -> QaMetadata {
 
 fn valid_implementation() -> ImplementationContract {
     ImplementationContract {
+        verification_profile: "standard".to_string(),
         mode: ImplementationMode::Guided,
         work_surface: WorkSurface::Code,
         plan_policy: PlanPolicy::None,
         semantic_impact: ImplementationSemanticImpact::BehaviorOrPublicRiskChange,
         effort: EffortMetadata::default(),
-        verification_profile: "service-change".to_string(),
         brief: Some(ContentRef {
             path: "works/TK-001/ticket.md".to_string(),
             content_hash: HASH.to_string(),

@@ -1,8 +1,7 @@
 use chrono::{TimeZone, Utc};
 use pulse::canonical_json::{hash_bytes, to_canonical_bytes};
 use pulse::docs::model::{
-    DocsRegistry, DocumentAuthority, DocumentKind, DocumentLifecycle, DocumentRecord,
-    DocumentScope, RetrievalConfig, ReviewPolicy,
+    DocsRegistry, DocumentKind, DocumentRecord, DocumentScope, DocumentStatus, RetrievalConfig,
 };
 use pulse::evidence::model::{
     ActorKind, ActorRef, ReceiptBindings, ReceiptEnvelope, ReceiptKind, ReceiptPayload,
@@ -85,24 +84,19 @@ fn ctx(sec: i64) -> OperationContext {
 
 fn doc_record(id: &str, revision: u64) -> DocumentRecord {
     DocumentRecord {
+        tags: vec![],
         id: id.to_string(),
         revision,
         path: "docs/domain/auth.md".to_string(),
         kind: DocumentKind::Domain,
-        authority: DocumentAuthority::Approved,
-        lifecycle: DocumentLifecycle::Current,
+        status: DocumentStatus::Approved,
         owner: "team:test".to_string(),
         summary: "Auth domain".to_string(),
-        aliases: Vec::new(),
         scope: DocumentScope {
             paths: vec!["src/auth/**".to_string()],
-            ..DocumentScope::default()
         },
-        review_policy: ReviewPolicy::Standard,
-        verification_profile: "standard".to_string(),
         generated: None,
         superseded_by: None,
-        retrieval: None,
     }
 }
 

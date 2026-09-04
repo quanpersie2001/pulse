@@ -21,9 +21,7 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
-use crate::docs::model::{
-    DocsRegistry, DocumentAuthority, DocumentKind, DocumentRecord, RetrievalConfig, RetrievalScope,
-};
+use crate::docs::model::{DocsRegistry, DocumentKind, DocumentRecord};
 use crate::docs::policy::{eligible_documents, ResolvedRetrieval, RetrievalEligibilityOptions};
 use crate::docs::registry_fingerprint;
 use crate::storage::safe_repo_relative;
@@ -73,13 +71,12 @@ pub struct ProjectionConfig {
 impl ProjectionConfig {
     /// Derive the projection policy from a registry (config + documents).
     pub fn from_registry(registry: &DocsRegistry) -> Self {
-        let config = registry.retrieval_config();
         Self {
-            root: normalized_root(&config.root),
-            materialize_root_index: config.materialize_root_index,
-            include_repository_map: config.include_repository_map,
-            include_repository_policy: config.include_repository_policy,
-            area_index_threshold: config.area_index_threshold,
+            root: "docs".to_string(),
+            materialize_root_index: true,
+            include_repository_map: true,
+            include_repository_policy: true,
+            area_index_threshold: 5,
             materialized_areas: compute_materialized_areas(registry),
         }
     }
@@ -109,9 +106,8 @@ pub struct ProjectionTarget {
 ///
 /// Never generates `_index.md` for every directory blindly.
 pub fn projection_targets(registry: &DocsRegistry) -> Vec<ProjectionTarget> {
-    let config = registry.retrieval_config();
     let cfg = ProjectionConfig::from_registry(registry);
-    let root = normalized_root(&config.root);
+    let root = "docs";
     let mut targets = Vec::new();
     if cfg.materialize_root_index {
         targets.push(ProjectionTarget {
@@ -211,15 +207,14 @@ pub struct ProjectionCheckReport {
 /// Only current eligible documents appear. The registry fingerprint (stable,
 /// no machine path) is embedded in the marker header.
 pub fn render_root_index(registry: &DocsRegistry) -> PulseResult<String> {
-    let config = registry.retrieval_config();
     let fingerprint = registry_fingerprint(registry)?;
-    let root = normalized_root(&config.root);
+    let root = "docs".to_string();
     let eligible = eligible_documents(registry, RetrievalEligibilityOptions::default());
 
     let mut area_groups: BTreeMap<String, Vec<&DocumentRecord>> = BTreeMap::new();
     let mut repository_docs: Vec<&DocumentRecord> = Vec::new();
     for (doc, _) in &eligible {
-        if is_repository_member(doc, &config) {
+        if is_repository_member(doc) {
             repository_docs.push(doc);
         } else if let Some(area) = immediate_area_of(&doc.path, &root) {
             area_groups.entry(area).or_default().push(doc);
@@ -235,7 +230,7 @@ pub fn render_root_index(registry: &DocsRegistry) -> PulseResult<String> {
         sections.push(Section {
             sort_title: area_section_title(area_path),
             area_path: area_path.clone(),
-            summary: scope_summary_for(area_path, &config.scopes),
+            summary: None,
             docs: docs.clone(),
         });
     }
@@ -276,7 +271,6 @@ pub fn render_root_index(registry: &DocsRegistry) -> PulseResult<String> {
 /// Same ordering/eligibility rules as [`render_root_index`], scoped to the
 /// documents under `area_path`.
 pub fn render_area_index(registry: &DocsRegistry, area_path: &str) -> PulseResult<String> {
-    let config = registry.retrieval_config();
     let fingerprint = registry_fingerprint(registry)?;
     let eligible = eligible_documents(registry, RetrievalEligibilityOptions::default());
     let area = area_path.trim_matches('/');
@@ -289,10 +283,6 @@ pub fn render_area_index(registry: &DocsRegistry, area_path: &str) -> PulseResul
     let title = area_section_title(area);
 
     let mut out = header(&format!("{title} Index"), &fingerprint);
-    if let Some(summary) = scope_summary_for(area, &config.scopes) {
-        out.push_str(summary.trim());
-        out.push_str("\n\n");
-    }
     out.push_str(&render_doc_list(&docs, area));
     normalize_trailing_newline(&mut out);
     Ok(out)
@@ -403,15 +393,14 @@ fn render_target(registry: &DocsRegistry, target: &ProjectionTarget) -> PulseRes
 }
 
 fn compute_materialized_areas(registry: &DocsRegistry) -> BTreeSet<String> {
-    let config = registry.retrieval_config();
-    let root = normalized_root(&config.root);
+    let root = "docs".to_string();
     let eligible = eligible_documents(registry, RetrievalEligibilityOptions::default());
 
     // Group eligible (non-repository) documents by immediate area.
     let mut immediate: BTreeMap<String, Vec<(&DocumentRecord, ResolvedRetrieval)>> =
         BTreeMap::new();
     for (doc, resolved) in &eligible {
-        if is_repository_member(doc, &config) {
+        if is_repository_member(doc) {
             continue;
         }
         if let Some(area) = immediate_area_of(&doc.path, &root) {
@@ -421,29 +410,10 @@ fn compute_materialized_areas(registry: &DocsRegistry) -> BTreeSet<String> {
 
     let mut result: BTreeSet<String> = BTreeSet::new();
     for (area, docs) in &immediate {
-        let scope_forces = scope_forces(area, &config.scopes);
-        let count_ok = docs.len() as u32 >= config.area_index_threshold;
+        let count_ok = docs.len() as u32 >= 5;
         let override_ok = docs.iter().any(|(_, resolved)| resolved.materialize_index);
-        if scope_forces || count_ok || override_ok {
+        if count_ok || override_ok {
             result.insert(area.clone());
-        }
-    }
-
-    // Deeper scope-forced areas (not immediate areas) with eligible docs.
-    for scope in &config.scopes {
-        if scope.materialize_index != Some(true) {
-            continue;
-        }
-        let scope_area = scope.path.trim_matches('/').to_string();
-        if scope_area.is_empty() || result.contains(&scope_area) {
-            continue;
-        }
-        let prefix = format!("{scope_area}/");
-        let has_docs = eligible
-            .iter()
-            .any(|(doc, _)| doc.path == scope_area || doc.path.starts_with(&prefix));
-        if has_docs {
-            result.insert(scope_area);
         }
     }
 
@@ -497,7 +467,7 @@ fn render_doc_list(docs: &[&DocumentRecord], index_dir: &str) -> String {
         out.push_str(&format!(
             "  Owner: `{}` · Authority: {}\n",
             doc.owner,
-            authority_label(doc.authority)
+            status_label(doc.status)
         ));
     }
     out
@@ -519,35 +489,22 @@ fn kind_display_order(kind: DocumentKind) -> u32 {
         DocumentKind::Domain => 2,
         DocumentKind::Operations => 3,
         DocumentKind::Reference => 4,
-        DocumentKind::DecisionProjection => 5,
-        DocumentKind::Informational => 6,
-        DocumentKind::Policy => 7,
-        DocumentKind::RepositoryMap => 8,
-        DocumentKind::Generated => 9,
+        DocumentKind::Generated => 5,
+        DocumentKind::Policy => 6,
     }
 }
 
-fn authority_label(authority: DocumentAuthority) -> &'static str {
-    match authority {
-        DocumentAuthority::Approved => "approved",
-        DocumentAuthority::Informational => "informational",
-        DocumentAuthority::Generated => "generated",
-        DocumentAuthority::Draft => "draft",
+fn status_label(status: crate::docs::model::DocumentStatus) -> &'static str {
+    match status {
+        crate::docs::model::DocumentStatus::Approved => "approved",
+        crate::docs::model::DocumentStatus::Draft => "draft",
+        crate::docs::model::DocumentStatus::Stale => "stale",
+        crate::docs::model::DocumentStatus::Retired => "retired",
     }
 }
 
-fn is_repository_member(doc: &DocumentRecord, config: &RetrievalConfig) -> bool {
-    (config.include_repository_map && doc.kind == DocumentKind::RepositoryMap)
-        || (config.include_repository_policy && doc.kind == DocumentKind::Policy)
-}
-
-fn normalized_root(root: &str) -> String {
-    let trimmed = root.trim_matches('/');
-    if trimmed.is_empty() {
-        "docs".to_string()
-    } else {
-        trimmed.to_string()
-    }
+fn is_repository_member(doc: &DocumentRecord) -> bool {
+    doc.kind == DocumentKind::Policy && (doc.path == "AGENTS.md" || doc.path == "PULSE.md")
 }
 
 /// Strip the root prefix from a repository-relative path. Returns the remainder
@@ -569,34 +526,6 @@ fn immediate_area_of(path: &str, root: &str) -> Option<String> {
         return None;
     }
     Some(format!("{root}/{first}"))
-}
-
-/// Whether any scope with `materialize_index == Some(true)` covers `area`
-/// (equal or ancestor).
-fn scope_forces(area: &str, scopes: &[RetrievalScope]) -> bool {
-    let area = area.trim_matches('/');
-    scopes.iter().any(|scope| {
-        scope.materialize_index == Some(true) && {
-            let path = scope.path.trim_matches('/');
-            path == area || area.starts_with(&format!("{path}/"))
-        }
-    })
-}
-
-/// Longest-prefix scope summary for an area, if any.
-fn scope_summary_for(area: &str, scopes: &[RetrievalScope]) -> Option<String> {
-    let area = area.trim_matches('/');
-    let mut best: Option<(usize, &str)> = None;
-    for scope in scopes {
-        let path = scope.path.trim_matches('/');
-        if area == path || area.starts_with(&format!("{path}/")) {
-            let len = path.len();
-            if best.map(|(best_len, _)| len > best_len).unwrap_or(true) {
-                best = Some((len, scope.summary.as_str()));
-            }
-        }
-    }
-    best.map(|(_, summary)| summary.to_string())
 }
 
 fn area_section_title(area_path: &str) -> String {

@@ -12,8 +12,14 @@ pub(crate) enum DocsCommand {
         expected_registry_revision: u64,
         #[arg(long)]
         actor: String,
+        #[arg(long = "tag")]
+        tag: Vec<String>,
         #[arg(long)]
         json: bool,
+    },
+    Tags {
+        #[command(subcommand)]
+        command: DocsTagsCommand,
     },
     Edit {
         document_id: String,
@@ -60,9 +66,7 @@ pub(crate) enum DocsCommand {
         #[arg(long)]
         kind: Option<DocKindArg>,
         #[arg(long)]
-        authority: Option<DocAuthorityArg>,
-        #[arg(long)]
-        lifecycle: Option<DocLifecycleArg>,
+        status: Option<DocumentStatusArg>,
         #[arg(long)]
         json: bool,
     },
@@ -98,9 +102,9 @@ pub(crate) enum DocsCommand {
         #[arg(long)]
         kind: Option<DocKindArg>,
         #[arg(long)]
-        domain: Option<String>,
+        tag: Option<String>,
         #[arg(long)]
-        authority: Option<DocAuthorityArg>,
+        status: Option<DocumentStatusArg>,
         #[arg(long)]
         limit: Option<usize>,
         #[arg(long)]
@@ -198,83 +202,65 @@ impl From<DocumentationPostureArg> for DocumentationImpactPosture {
 #[derive(Clone, ValueEnum)]
 #[value(rename_all = "snake_case")]
 pub(crate) enum DocKindArg {
-    RepositoryMap,
     Policy,
     Product,
     Architecture,
     Domain,
     Operations,
     Reference,
-    DecisionProjection,
     Generated,
-    Informational,
 }
 
 impl From<DocKindArg> for DocumentKind {
     fn from(value: DocKindArg) -> Self {
         match value {
-            DocKindArg::RepositoryMap => DocumentKind::RepositoryMap,
             DocKindArg::Policy => DocumentKind::Policy,
             DocKindArg::Product => DocumentKind::Product,
             DocKindArg::Architecture => DocumentKind::Architecture,
             DocKindArg::Domain => DocumentKind::Domain,
             DocKindArg::Operations => DocumentKind::Operations,
             DocKindArg::Reference => DocumentKind::Reference,
-            DocKindArg::DecisionProjection => DocumentKind::DecisionProjection,
             DocKindArg::Generated => DocumentKind::Generated,
-            DocKindArg::Informational => DocumentKind::Informational,
         }
     }
 }
 
 #[derive(Clone, ValueEnum)]
 #[value(rename_all = "snake_case")]
-pub(crate) enum DocAuthorityArg {
-    Draft,
+pub(crate) enum DocumentStatusArg {
     Approved,
-    Informational,
-    Generated,
-}
-
-impl From<DocAuthorityArg> for DocumentAuthority {
-    fn from(value: DocAuthorityArg) -> Self {
-        match value {
-            DocAuthorityArg::Draft => DocumentAuthority::Draft,
-            DocAuthorityArg::Approved => DocumentAuthority::Approved,
-            DocAuthorityArg::Informational => DocumentAuthority::Informational,
-            DocAuthorityArg::Generated => DocumentAuthority::Generated,
-        }
-    }
-}
-
-#[derive(Clone, ValueEnum)]
-#[value(rename_all = "snake_case")]
-pub(crate) enum DocLifecycleArg {
-    Current,
-    SuspectedStale,
+    Draft,
     Stale,
     Retired,
-    Superseded,
 }
 
-impl From<DocLifecycleArg> for DocumentLifecycle {
-    fn from(value: DocLifecycleArg) -> Self {
+impl From<DocumentStatusArg> for crate::docs::DocumentStatus {
+    fn from(value: DocumentStatusArg) -> Self {
         match value {
-            DocLifecycleArg::Current => DocumentLifecycle::Current,
-            DocLifecycleArg::SuspectedStale => DocumentLifecycle::SuspectedStale,
-            DocLifecycleArg::Stale => DocumentLifecycle::Stale,
-            DocLifecycleArg::Retired => DocumentLifecycle::Retired,
-            DocLifecycleArg::Superseded => DocumentLifecycle::Superseded,
+            DocumentStatusArg::Approved => Self::Approved,
+            DocumentStatusArg::Draft => Self::Draft,
+            DocumentStatusArg::Stale => Self::Stale,
+            DocumentStatusArg::Retired => Self::Retired,
         }
     }
 }
 
+#[derive(Subcommand)]
+pub(crate) enum DocsTagsCommand {
+    Add {
+        tag: String,
+        #[arg(long)]
+        json: bool,
+    },
+    List {
+        #[arg(long)]
+        json: bool,
+    },
+}
 use serde_json::json;
 
 use crate::cli::output::render;
-use crate::docs::model::{
-    DocumentAuthority, DocumentKind, DocumentLifecycle, DocumentPatch, DocumentRecord,
-};
+use crate::docs::model::{DocumentKind, DocumentPatch, DocumentRecord};
 use crate::graph::store::DocumentationImpactUpdate;
 use crate::{JsonGraphStore, PulseError};
 
@@ -284,12 +270,20 @@ pub(crate) fn handle(store: &JsonGraphStore, command: DocsCommand) -> Result<(),
             file,
             expected_registry_revision,
             actor,
+            tag,
             json,
         } => {
             let bytes =
                 std::fs::read(&file).map_err(|error| PulseError::io(file.clone(), error))?;
-            let document: DocumentRecord = serde_json::from_slice(&bytes)
+            let mut document: DocumentRecord = serde_json::from_slice(&bytes)
                 .map_err(|error| PulseError::json(file.clone(), error))?;
+            for value in tag {
+                let value = crate::docs::normalize_tag(&value)?;
+                if !document.tags.contains(&value) {
+                    document.tags.push(value);
+                }
+            }
+            document.tags.sort();
             let out = crate::docs::register(
                 store.repo_root(),
                 expected_registry_revision,
@@ -358,24 +352,29 @@ pub(crate) fn handle(store: &JsonGraphStore, command: DocsCommand) -> Result<(),
             )?;
             render(json, &out, format!("superseded {}", out.value.id))
         }
-        DocsCommand::List {
-            kind,
-            authority,
-            lifecycle,
-            json,
-        } => {
+        DocsCommand::Tags { command } => match command {
+            DocsTagsCommand::Add { tag, json } => {
+                let tags = crate::docs::add_tag(store.repo_root(), &tag)?;
+                render(
+                    json,
+                    &tags,
+                    format!("added tag {}", crate::docs::normalize_tag(&tag)?),
+                )
+            }
+            DocsTagsCommand::List { json } => {
+                let tags = crate::docs::load_tags(store.repo_root())?;
+                render(json, &tags, format!("{} tags", tags.tags.len()))
+            }
+        },
+        DocsCommand::List { kind, status, json } => {
             let mut documents = crate::docs::list(store.repo_root())?;
             if let Some(kind) = kind {
                 let kind: DocumentKind = kind.into();
                 documents.retain(|document| document.kind == kind);
             }
-            if let Some(authority) = authority {
-                let authority: DocumentAuthority = authority.into();
-                documents.retain(|document| document.authority == authority);
-            }
-            if let Some(lifecycle) = lifecycle {
-                let lifecycle: DocumentLifecycle = lifecycle.into();
-                documents.retain(|document| document.lifecycle == lifecycle);
+            if let Some(status) = status {
+                let status: crate::docs::DocumentStatus = status.into();
+                documents.retain(|document| document.status == status);
             }
             documents.sort_by(|left, right| left.id.cmp(&right.id));
             let out = json!({"schema_version": 1, "code": "ok", "documents": documents});
@@ -470,8 +469,8 @@ pub(crate) fn handle(store: &JsonGraphStore, command: DocsCommand) -> Result<(),
         DocsCommand::Search {
             query,
             kind,
-            domain,
-            authority,
+            tag,
+            status,
             limit,
             no_refresh,
             explain,
@@ -508,8 +507,8 @@ pub(crate) fn handle(store: &JsonGraphStore, command: DocsCommand) -> Result<(),
                 &query,
                 crate::docs::SearchOptions {
                     kind: kind.map(Into::into),
-                    domain,
-                    authority: authority.map(Into::into),
+                    tag,
+                    status: status.map(Into::into),
                     limit,
                     no_refresh,
                     explain,

@@ -150,18 +150,14 @@ pub struct SectionRecord {
     pub section_content_hash: String,
     /// Authored document summary (registry metadata, not a title).
     pub summary: String,
-    /// Document authority as a lower-snake string (serde of the enum).
-    pub authority: String,
-    /// Document lifecycle as a lower-snake string.
-    pub lifecycle: String,
+    /// Document status as a lower-snake string.
+    pub status: String,
     /// Document owner.
     pub owner: String,
     /// Document kind as a lower-snake string.
     pub kind: String,
-    /// Scope domains.
-    pub domains: Vec<String>,
-    /// Approved alternate terminology.
-    pub aliases: Vec<String>,
+    /// Registry tags.
+    pub tags: Vec<String>,
     /// Whether the section body is part of the searchable corpus.
     pub body_indexed: bool,
     /// Chunk identity when the base section was split; `None` for a single

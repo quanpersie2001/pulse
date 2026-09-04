@@ -37,6 +37,17 @@ pub(crate) fn bootstrap_unlocked(repo_root: &Path) -> Result<DocsBootstrapOutcom
         created.push(docs.clone());
     }
 
+    let tags_path = docs.join("tags.json");
+    if !tags_path.exists() {
+        let bytes = to_canonical_bytes(&crate::docs::tags::TagsRegistry::default())?;
+        crate::storage::create_new(&tags_path, &bytes)?;
+        created.push(tags_path);
+    } else {
+        preserved.push(tags_path.clone());
+        let tags: crate::docs::tags::TagsRegistry = crate::storage::read_json(&tags_path)?;
+        crate::docs::tags::validate_registry_shape(&tags)?;
+    }
+
     let registry_path = docs.join("registry.json");
     let registry = if registry_path.exists() {
         preserved.push(registry_path.clone());
@@ -118,7 +129,7 @@ pub(crate) fn preflight_bootstrap(repo_root: &Path) -> Result<()> {
     if load_existing(repo_root)?.is_some() {
         return Ok(());
     }
-    ensure_only_known_partial_entries(&root, &["registry.json"])?;
+    ensure_only_known_partial_entries(&root, &["registry.json", "tags.json"])?;
     Ok(())
 }
 

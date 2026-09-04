@@ -84,12 +84,12 @@ fn set_docs_none(
             &node.id,
             node.revision,
             DocumentationImpactUpdate {
+                domains: vec![],
                 posture: DocumentationImpactPosture::None,
                 rationale: Some("No public behavior change.".to_string()),
                 required_documents: vec![],
                 deferred_to: vec![],
                 paths: vec![],
-                domains: vec![],
                 labels: vec![],
             },
             "human:tester".to_string(),
@@ -123,12 +123,12 @@ fn implementation_contract(
     brief_hash: &str,
 ) -> ImplementationContract {
     ImplementationContract {
+        verification_profile: "standard".to_string(),
         mode: ImplementationMode::Guided,
         work_surface: WorkSurface::Code,
         plan_policy: PlanPolicy::None,
         semantic_impact: ImplementationSemanticImpact::NoBehaviorOrPublicRiskChange,
         effort: EffortMetadata::default(),
-        verification_profile: "service-change".to_string(),
         brief: Some(ContentRef {
             path: format!("{}/ticket.md", node.content_dir),
             content_hash: brief_hash.to_string(),

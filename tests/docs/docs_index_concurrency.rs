@@ -1,29 +1,24 @@
 use pulse::canonical_json::to_canonical_bytes;
 use pulse::docs::{
     build_index, open_reader_generation, read_current, DocsRegistry, DocsSearchWriteLock,
-    DocumentAuthority, DocumentKind, DocumentLifecycle, DocumentRecord, DocumentScope,
-    IndexOptions, RetrievalConfig, ReviewPolicy,
+    DocumentKind, DocumentRecord, DocumentScope, DocumentStatus, IndexOptions,
 };
 use std::fs;
 use std::time::Duration;
 
 fn doc(id: &str, path: &str) -> DocumentRecord {
     DocumentRecord {
+        tags: vec![],
         id: id.to_string(),
         revision: 1,
         path: path.to_string(),
         kind: DocumentKind::Domain,
-        authority: DocumentAuthority::Approved,
-        lifecycle: DocumentLifecycle::Current,
+        status: DocumentStatus::Approved,
         owner: "team:docs".to_string(),
         summary: "Concurrency docs".to_string(),
-        aliases: Vec::new(),
         scope: DocumentScope::default(),
-        review_policy: ReviewPolicy::None,
-        verification_profile: "domain-doc".to_string(),
         generated: None,
         superseded_by: None,
-        retrieval: None,
     }
 }
 
@@ -39,7 +34,7 @@ fn setup_repo() -> tempfile::TempDir {
         revision: 1,
         repository_id: manifest.repository_id,
         documents: vec![doc("DOC-A-DOMAIN", "docs/domain/a.md")],
-        retrieval: Some(RetrievalConfig::defaults()),
+        retrieval: None,
     };
     fs::write(
         repo.join(".pulse/docs/registry.json"),

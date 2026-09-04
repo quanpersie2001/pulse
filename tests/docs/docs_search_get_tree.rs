@@ -2,9 +2,8 @@ use chrono::{TimeZone, Utc};
 use pulse::canonical_json::{hash_bytes, to_canonical_bytes};
 use pulse::docs::{
     build_index, docs_tree, get_docs, read_current, search_docs, validate_generation, DocsRegistry,
-    DocumentAuthority, DocumentKind, DocumentLifecycle, DocumentRecord, DocumentScope, GetOptions,
-    RetrievalConfig, RetrievalScope, ReviewPolicy, SearchOptions, TreeOptions,
-    WorkDocumentationContext,
+    DocumentKind, DocumentRecord, DocumentScope, DocumentStatus, GetOptions, SearchOptions,
+    TreeOptions, WorkDocumentationContext,
 };
 use pulse::graph::model::node::DocumentationImpactPosture;
 use pulse::graph::store::{DocumentationImpactUpdate, OperationContext};
@@ -13,37 +12,26 @@ use pulse::JsonGraphStore;
 use std::fs;
 use std::process::Command;
 
-fn doc(id: &str, path: &str, summary: &str, domains: Vec<&str>) -> DocumentRecord {
-    let authority = if id.contains("DRAFT") {
-        DocumentAuthority::Draft
+fn doc(id: &str, path: &str, summary: &str, tags: Vec<&str>) -> DocumentRecord {
+    let status = if id.contains("DRAFT") {
+        DocumentStatus::Draft
+    } else if id.contains("STALE") {
+        DocumentStatus::Stale
     } else {
-        DocumentAuthority::Approved
-    };
-    let lifecycle = if id.contains("STALE") {
-        DocumentLifecycle::Stale
-    } else {
-        DocumentLifecycle::Current
+        DocumentStatus::Approved
     };
     DocumentRecord {
         id: id.to_string(),
         revision: 1,
         path: path.to_string(),
         kind: DocumentKind::Domain,
-        authority,
-        lifecycle,
+        status,
         owner: "team:docs".to_string(),
         summary: summary.to_string(),
-        aliases: vec!["refresh-token".to_string()],
-        scope: DocumentScope {
-            paths: vec![],
-            domains: domains.into_iter().map(str::to_string).collect(),
-            work_labels: vec![],
-        },
-        review_policy: ReviewPolicy::None,
-        verification_profile: "domain-doc".to_string(),
+        scope: DocumentScope::default(),
+        tags: tags.into_iter().map(str::to_string).collect(),
         generated: None,
         superseded_by: None,
-        retrieval: None,
     }
 }
 
@@ -115,7 +103,7 @@ fn setup_repo() -> tempfile::TempDir {
                 vec!["other"],
             ),
             DocumentRecord {
-                kind: DocumentKind::RepositoryMap,
+                kind: DocumentKind::Policy,
                 path: "AGENTS.md".to_string(),
                 summary: "Repository map".to_string(),
                 ..doc(
@@ -143,14 +131,7 @@ fn setup_repo() -> tempfile::TempDir {
                 vec!["stale"],
             ),
         ],
-        retrieval: Some(RetrievalConfig {
-            scopes: vec![RetrievalScope {
-                path: "docs/domain".to_string(),
-                summary: "Domain documentation area".to_string(),
-                materialize_index: None,
-            }],
-            ..RetrievalConfig::defaults()
-        }),
+        retrieval: None,
     };
     fs::write(
         repo.join(".pulse/docs/registry.json"),
@@ -230,7 +211,7 @@ fn search_filters_by_domain_and_no_refresh_errors_when_missing() {
         tmp.path(),
         "TokenExpired",
         SearchOptions {
-            domain: Some("authentication".to_string()),
+            tag: Some("authentication".to_string()),
             ..SearchOptions::default()
         },
     )
@@ -238,39 +219,23 @@ fn search_filters_by_domain_and_no_refresh_errors_when_missing() {
     assert!(report
         .results
         .iter()
-        .all(|hit| hit.domains_contains("authentication")));
-}
-
-trait DomainsContains {
-    fn domains_contains(&self, domain: &str) -> bool;
-}
-impl DomainsContains for pulse::docs::SearchResult {
-    fn domains_contains(&self, domain: &str) -> bool {
-        self.applicability_reasons.iter().any(|r| r == domain)
-            || self.document_id == "DOC-AUTH-DOMAIN"
-    }
+        .all(|hit| hit.document_id == "DOC-AUTH-DOMAIN" || hit.document_id == "DOC-AUTH-GUIDE"));
 }
 
 #[test]
-fn search_auto_refresh_respects_cost_guard_but_explicit_index_does_not() {
+fn search_auto_refreshes_with_current_registry() {
     let tmp = setup_repo();
     let repo = tmp.path();
-    let mut registry: DocsRegistry =
+    let registry: DocsRegistry =
         pulse::storage::read_json(&repo.join(".pulse/docs/registry.json")).unwrap();
-    let mut config = registry.retrieval_config();
-    config.auto_refresh_max_documents = 1;
-    registry.retrieval = Some(config);
     fs::write(
         repo.join(".pulse/docs/registry.json"),
         to_canonical_bytes(&registry).unwrap(),
     )
     .unwrap();
 
-    let err = search_docs(repo, "TokenExpired", SearchOptions::default()).unwrap_err();
-    assert_eq!(err.code(), "docs_index_refresh_required");
-
-    let indexed = build_index(repo, pulse::docs::IndexOptions::default()).unwrap();
-    assert_eq!(indexed.index.state, "current");
+    let report = search_docs(repo, "TokenExpired", SearchOptions::default()).unwrap();
+    assert_eq!(report.index.state, "current");
 }
 
 #[test]
@@ -414,7 +379,8 @@ fn search_include_flags_and_work_reasons_populate_without_fake_required_hits() {
         posture: pulse::docs::DocumentationPosture::Required,
         required_documents: vec!["DOC-AUTH-DOMAIN".to_string()],
         paths: vec![],
-        domains: vec!["authentication".to_string()],
+        tags: vec!["authentication".to_string()],
+        domains: Vec::new(),
         labels: vec![],
     };
     let report = search_docs(
@@ -446,7 +412,8 @@ fn search_include_flags_and_work_reasons_populate_without_fake_required_hits() {
         posture: pulse::docs::DocumentationPosture::Required,
         required_documents: vec!["DOC-OTHER-DOMAIN".to_string()],
         paths: vec![],
-        domains: vec![],
+        tags: Vec::new(),
+        domains: Vec::new(),
         labels: vec![],
     };
     let no_fake = search_docs(
@@ -477,7 +444,8 @@ fn search_work_boosts_without_hard_filtering_lexical_hits() {
         posture: pulse::docs::DocumentationPosture::Required,
         required_documents: vec!["DOC-AUTH-GUIDE".to_string()],
         paths: vec![],
-        domains: vec!["authentication".to_string()],
+        tags: vec!["authentication".to_string()],
+        domains: Vec::new(),
         labels: vec![],
     };
     let report = search_docs(
@@ -513,7 +481,7 @@ fn search_work_boosts_without_hard_filtering_lexical_hits() {
     assert!(scoped
         .applicability_reasons
         .iter()
-        .any(|reason| reason == "domain_scope_match"));
+        .any(|reason| reason == "tag_scope_match"));
 
     let ranks = report
         .results
@@ -835,7 +803,7 @@ fn tree_works_without_cache_from_registry_only() {
         .iter()
         .find(|node| node.path == "docs/domain")
         .unwrap();
-    assert_eq!(domain.summary.as_deref(), Some("Domain documentation area"));
+    assert_eq!(domain.summary, None);
     let repository = tree
         .nodes
         .iter()

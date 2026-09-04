@@ -38,14 +38,11 @@ fn write_document_record(repo: &TempDir, id: &str, path: &str) -> String {
         "revision": 1,
         "path": path,
         "kind": "domain",
-        "authority": "approved",
-        "lifecycle": "current",
+        "status": "approved",
         "owner": "team:docs",
         "summary": format!("Summary for {id}"),
-        "aliases": [],
-        "scope": {"paths": ["src/auth/**"], "domains": ["authentication"], "work_labels": ["auth"]},
-        "review_policy": "none",
-        "verification_profile": "domain-doc",
+        "scope": {"paths": ["src/auth/**"]},
+        "tags": [],
         "generated": null,
         "superseded_by": null
     });

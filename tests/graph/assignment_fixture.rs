@@ -2,9 +2,7 @@ use std::fs;
 
 use chrono::Utc;
 use pulse::canonical_json::to_canonical_bytes;
-use pulse::docs::{
-    DocumentAuthority, DocumentKind, DocumentLifecycle, DocumentRecord, DocumentScope, ReviewPolicy,
-};
+use pulse::docs::{DocumentKind, DocumentRecord, DocumentScope, DocumentStatus};
 use pulse::graph::model::contract::{
     ContentRef, ContractItem, ContractScope, EffortMetadata, ImplementationContract,
     ImplementationMode, ImplementationSemanticImpact, PlanPolicy, PublicCreateClassification,
@@ -103,25 +101,19 @@ pub(super) fn setup_ready_ticket_with_required_docs(
         repo.path(),
         1,
         DocumentRecord {
+            tags: vec![],
             id: "DOC-RESERVATION-CONTRACT".to_string(),
             revision: 1,
             path: path.to_string(),
             kind: DocumentKind::Domain,
-            authority: DocumentAuthority::Approved,
-            lifecycle: DocumentLifecycle::Current,
+            status: DocumentStatus::Approved,
             owner: "team:platform".to_string(),
             summary: "Reservation close contract".to_string(),
-            aliases: vec![],
             scope: DocumentScope {
-                paths: vec!["src/**".to_string()],
-                domains: vec!["development".to_string()],
-                work_labels: vec!["reservation".to_string()],
+                paths: vec!["src/**".to_string(), "development".to_string()],
             },
-            review_policy: ReviewPolicy::None,
-            verification_profile: "domain-doc".to_string(),
             generated: None,
             superseded_by: None,
-            retrieval: None,
         },
         "human:tester",
     )
@@ -136,21 +128,17 @@ pub(super) fn setup_ready_ticket_with_required_docs(
         repo.path(),
         2,
         DocumentRecord {
+            tags: vec![],
             id: "DOC-OPERATIONS-GUIDANCE".to_string(),
             revision: 1,
             path: optional_path.to_string(),
             kind: DocumentKind::Domain,
-            authority: DocumentAuthority::Approved,
-            lifecycle: DocumentLifecycle::Current,
+            status: DocumentStatus::Approved,
             owner: "team:platform".to_string(),
             summary: "Optional operations guidance".to_string(),
-            aliases: vec![],
             scope: DocumentScope::default(),
-            review_policy: ReviewPolicy::None,
-            verification_profile: "domain-doc".to_string(),
             generated: None,
             superseded_by: None,
-            retrieval: None,
         },
         "human:tester",
     )
@@ -218,6 +206,7 @@ fn setup_ready_ticket_with_postures(
             ContractSetRequest {
                 role: TicketRole::Implementation,
                 implementation: Some(ImplementationContract {
+                    verification_profile: "standard".to_string(),
                     mode: ImplementationMode::Guided,
                     work_surface: WorkSurface::Code,
                     plan_policy: PlanPolicy::None,
@@ -227,7 +216,6 @@ fn setup_ready_ticket_with_postures(
                         ImplementationSemanticImpact::NoBehaviorOrPublicRiskChange
                     },
                     effort: EffortMetadata::default(),
-                    verification_profile: "service-change".to_string(),
                     brief: Some(ContentRef {
                         path: brief_relative,
                         content_hash: brief_hash.clone(),
@@ -308,6 +296,7 @@ fn setup_ready_ticket_with_postures(
             &ticket_id,
             current.revision,
             DocumentationImpactUpdate {
+                domains: vec![],
                 posture: match docs_posture {
                     FixtureDocsPosture::None => DocumentationImpactPosture::None,
                     FixtureDocsPosture::Required => DocumentationImpactPosture::Required,
@@ -324,8 +313,7 @@ fn setup_ready_ticket_with_postures(
                     vec![]
                 },
                 deferred_to: vec![],
-                paths: vec![],
-                domains: vec!["development".to_string()],
+                paths: vec!["development".to_string()],
                 labels: vec!["reservation".to_string()],
             },
             "human:tester".to_string(),

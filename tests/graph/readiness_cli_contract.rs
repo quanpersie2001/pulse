@@ -92,12 +92,12 @@ fn ready_ticket(repo: &TempDir, store: &JsonGraphStore) -> String {
     fs::write(&brief_path, b"# Ticket\ncontent").unwrap();
     let brief_hash = hash_bytes(&fs::read(&brief_path).unwrap());
     let contract = ImplementationContract {
+        verification_profile: "standard".to_string(),
         mode: ImplementationMode::Guided,
         work_surface: WorkSurface::Code,
         plan_policy: PlanPolicy::None,
         semantic_impact: ImplementationSemanticImpact::NoBehaviorOrPublicRiskChange,
         effort: EffortMetadata::default(),
-        verification_profile: "service-change".to_string(),
         brief: Some(ContentRef {
             path: format!("{}/ticket.md", node.content_dir),
             content_hash: brief_hash.clone(),
@@ -161,12 +161,12 @@ fn ready_ticket(repo: &TempDir, store: &JsonGraphStore) -> String {
             &node.id,
             node.revision,
             DocumentationImpactUpdate {
+                domains: vec![],
                 posture: DocumentationImpactPosture::None,
                 rationale: Some("None.".to_string()),
                 required_documents: vec![],
                 deferred_to: vec![],
                 paths: vec![],
-                domains: vec![],
                 labels: vec![],
             },
             "human:tester".to_string(),

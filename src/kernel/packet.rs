@@ -18,7 +18,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use crate::docs::applicability::{ApplicableDocsReport, ApplicableDocument};
-use crate::docs::model::{DocumentAuthority, DocumentKind, WorkDocumentationContext};
+use crate::docs::model::{DocumentKind, WorkDocumentationContext};
 use crate::evidence::model::{BranchCriticality, BranchDisposition, ShapeMode};
 use crate::graph::model::contract::{
     ExpectedEvidence, ImplementationMode, PlanPolicy, QaImpactPosture, Risk, TicketRole,
@@ -1284,7 +1284,10 @@ fn packet_doc_ref(document: &ApplicableDocument) -> PacketDocRef {
         id: document.id.clone(),
         path: document.path.clone(),
         kind: document_kind_str(document.kind).to_string(),
-        authority: document_authority_str(document.authority).to_string(),
+        status: serde_json::to_string(&document.status)
+            .unwrap_or_default()
+            .trim_matches('"')
+            .to_string(),
         owner: document.owner.clone(),
         summary: document.summary.clone(),
         revision: document.document_revision,
@@ -2019,25 +2022,13 @@ fn edge_type_str(edge_type: EdgeType) -> String {
 
 fn document_kind_str(kind: DocumentKind) -> &'static str {
     match kind {
-        DocumentKind::RepositoryMap => "repository_map",
         DocumentKind::Policy => "policy",
         DocumentKind::Product => "product",
         DocumentKind::Architecture => "architecture",
         DocumentKind::Domain => "domain",
         DocumentKind::Operations => "operations",
         DocumentKind::Reference => "reference",
-        DocumentKind::DecisionProjection => "decision_projection",
         DocumentKind::Generated => "generated",
-        DocumentKind::Informational => "informational",
-    }
-}
-
-fn document_authority_str(authority: DocumentAuthority) -> &'static str {
-    match authority {
-        DocumentAuthority::Draft => "draft",
-        DocumentAuthority::Approved => "approved",
-        DocumentAuthority::Informational => "informational",
-        DocumentAuthority::Generated => "generated",
     }
 }
 
@@ -2150,12 +2141,9 @@ pub fn build_suggestion_query(
         }
     }
 
-    // 6. Documentation routing domains, then labels (lexical sort).
-    for domain in &docs_work.domains {
-        fragments.push(domain.clone());
-    }
-    for label in &docs_work.labels {
-        fragments.push(label.clone());
+    // 6. Documentation tags (lexical sort).
+    for tag in &docs_work.tags {
+        fragments.push(tag.clone());
     }
 
     // 7. Required Decision titles (sort by Decision ID).
@@ -2313,8 +2301,8 @@ fn search_suggestions(
         &query.text,
         crate::docs::SearchOptions {
             kind: None,
-            domain: None,
-            authority: None,
+            tag: None,
+            status: None,
             limit: Some(work_packet::MAX_SUGGESTED_SECTIONS),
             no_refresh: false,
             explain: true,
@@ -2350,7 +2338,7 @@ fn search_suggestions(
             section_hash: hit.section_content_hash,
             summary: hit.summary,
             snippet: hit.snippet,
-            authority: hit.authority,
+            status: hit.status,
             owner: hit.owner,
             kind: hit.kind,
             matched_fields: hit.matched_fields,
@@ -2638,25 +2626,15 @@ mod tests {
             revision: 1,
             path: path.to_string(),
             kind: crate::docs::model::DocumentKind::Domain,
-            authority: crate::docs::model::DocumentAuthority::Approved,
-            lifecycle: crate::docs::model::DocumentLifecycle::Current,
+            status: crate::docs::model::DocumentStatus::Approved,
             owner: "team:docs-team".to_string(),
             summary: summary.to_string(),
-            aliases: vec!["packet".to_string()],
             scope: crate::docs::model::DocumentScope {
                 paths: vec!["src/kernel/packet.rs".to_string()],
-                domains: vec!["authentication".to_string()],
-                work_labels: vec!["tokens".to_string()],
             },
-            review_policy: crate::docs::model::ReviewPolicy::None,
-            verification_profile: "docs".to_string(),
+            tags: vec![],
             generated: None,
             superseded_by: None,
-            retrieval: Some(crate::docs::model::DocumentRetrieval {
-                index: true,
-                include_body: true,
-                materialize_index: false,
-            }),
         });
         registry.normalize();
         std::fs::write(
@@ -2758,7 +2736,7 @@ mod tests {
             id: id.to_string(),
             path: format!("docs/{id}.md"),
             kind: DocumentKind::Architecture,
-            authority: DocumentAuthority::Approved,
+            status: DocumentStatus::Approved,
             owner: "docs-team".to_string(),
             summary: format!("{id} summary"),
             content_hash: format!("sha256:{id}"),

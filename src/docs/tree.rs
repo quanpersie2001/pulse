@@ -32,9 +32,7 @@ pub struct TreeNode {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub document_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub authority: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub lifecycle: Option<String>,
+    pub status: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub owner: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -56,7 +54,7 @@ pub fn tree_from_registry(
     options: TreeOptions,
 ) -> PulseResult<DocsTreeReport> {
     let config = registry.retrieval_config();
-    let root = normalize_tree_path(&config.root)?;
+    let root = "docs".to_string();
     let base = match path {
         Some(path) => normalize_tree_path(path)?,
         None => root.clone(),
@@ -103,8 +101,7 @@ pub fn tree_from_registry(
                     kind: "document".to_string(),
                     summary: Some(doc.summary.clone()),
                     document_id: Some(doc.id.clone()),
-                    authority: Some(serde_variant(&doc.authority)),
-                    lifecycle: Some(serde_variant(&doc.lifecycle)),
+                    status: Some(serde_variant(&doc.status)),
                     owner: Some(doc.owner.clone()),
                     children: Vec::new(),
                 });
@@ -121,11 +118,10 @@ pub fn tree_from_registry(
             summary: if is_repository_area {
                 Some("Repository map and policy.".to_string())
             } else {
-                scope_summary(&config, &area)
+                None
             },
             document_id: None,
-            authority: None,
-            lifecycle: None,
+            status: None,
             owner: None,
             children,
         });
@@ -171,23 +167,8 @@ fn same_or_descendant(path: &str, base: &str) -> bool {
             .is_some_and(|rest| rest.starts_with('/'))
 }
 
-fn is_repository_member(doc: &DocumentRecord, config: &RetrievalConfig) -> bool {
-    (config.include_repository_map && doc.kind == DocumentKind::RepositoryMap)
-        || (config.include_repository_policy && doc.kind == DocumentKind::Policy)
-}
-
-fn scope_summary(config: &RetrievalConfig, area: &str) -> Option<String> {
-    let mut best: Option<(usize, &str)> = None;
-    for scope in &config.scopes {
-        let path = scope.path.trim_matches('/');
-        if same_or_descendant(area, path) || same_or_descendant(path, area) {
-            let len = path.len();
-            if best.map(|(best_len, _)| len > best_len).unwrap_or(true) {
-                best = Some((len, scope.summary.as_str()));
-            }
-        }
-    }
-    best.map(|(_, summary)| summary.to_string())
+fn is_repository_member(doc: &DocumentRecord, _config: &RetrievalConfig) -> bool {
+    doc.kind == DocumentKind::Policy && (doc.path == "PULSE.md" || doc.path == "AGENTS.md")
 }
 
 fn serde_variant<T: Serialize>(value: &T) -> String {

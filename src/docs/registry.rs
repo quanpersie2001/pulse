@@ -7,7 +7,7 @@ use serde_json::json;
 
 use crate::canonical_json::{hash_bytes, to_canonical_bytes};
 use crate::docs::manifest::{bootstrap_unlocked, load_existing_registry};
-use crate::docs::model::{DocsRegistryEnvelope, DocumentLifecycle, DocumentPatch, DocumentRecord};
+use crate::docs::model::{DocsRegistryEnvelope, DocumentPatch, DocumentRecord, DocumentStatus};
 use crate::docs::validate::validate_registry;
 use crate::event::new_event_id;
 use crate::event::{event_path, EventEnvelope};
@@ -129,6 +129,15 @@ impl DocsRegistryStore {
         let before_registry = registry.clone();
         document.revision = 1;
         document.normalize();
+        for tag in &document.tags {
+            if crate::docs::normalize_tag(tag)? != *tag {
+                return Err(PulseError::validation(
+                    "docs_tag_invalid",
+                    format!("tag must be a lowercase slug: {tag}"),
+                ));
+            }
+        }
+        crate::docs::tags::validate_tags(&self.repo_root, &document.tags)?;
         registry.documents.push(document.clone());
         registry.revision += 1;
         registry.normalize();
@@ -254,7 +263,7 @@ impl DocsRegistryStore {
             id,
             expected_registry_revision,
             expected_document_revision,
-            DocumentLifecycle::Retired,
+            DocumentStatus::Retired,
             None,
             reason,
             "docs.document.retired",
@@ -288,7 +297,7 @@ impl DocsRegistryStore {
             old_id,
             expected_registry_revision,
             expected_document_revision,
-            DocumentLifecycle::Superseded,
+            DocumentStatus::Retired,
             Some(replacement_id.to_string()),
             reason,
             "docs.document.superseded",
@@ -303,7 +312,7 @@ impl DocsRegistryStore {
         id: &str,
         expected_registry_revision: u64,
         expected_document_revision: u64,
-        lifecycle: DocumentLifecycle,
+        status: DocumentStatus,
         superseded_by: Option<String>,
         reason: String,
         event_type: &str,
@@ -321,7 +330,7 @@ impl DocsRegistryStore {
         let index = document_index(&registry, id)?;
         expect_document_revision(&registry.documents[index], expected_document_revision)?;
         let before_registry = registry.clone();
-        registry.documents[index].lifecycle = lifecycle;
+        registry.documents[index].status = status;
         registry.documents[index].superseded_by = superseded_by.clone();
         registry.documents[index].revision += 1;
         registry.revision += 1;
@@ -594,40 +603,22 @@ fn apply_patch(document: &mut DocumentRecord, patch: DocumentPatch) -> Vec<Strin
             changed.insert("summary".to_string());
         }
     }
-    if let Some(value) = patch.aliases {
-        if document.aliases != value {
-            document.aliases = value;
-            changed.insert("aliases".to_string());
-        }
-    }
     if let Some(value) = patch.scope {
         if document.scope != value {
             document.scope = value;
             changed.insert("scope".to_string());
         }
     }
-    if let Some(value) = patch.authority {
-        if document.authority != value {
-            document.authority = value;
-            changed.insert("authority".to_string());
+    if let Some(value) = patch.status {
+        if document.status != value {
+            document.status = value;
+            changed.insert("status".to_string());
         }
     }
-    if let Some(value) = patch.lifecycle {
-        if document.lifecycle != value {
-            document.lifecycle = value;
-            changed.insert("lifecycle".to_string());
-        }
-    }
-    if let Some(value) = patch.review_policy {
-        if document.review_policy != value {
-            document.review_policy = value;
-            changed.insert("review_policy".to_string());
-        }
-    }
-    if let Some(value) = patch.verification_profile {
-        if document.verification_profile != value {
-            document.verification_profile = value;
-            changed.insert("verification_profile".to_string());
+    if let Some(value) = patch.tags {
+        if document.tags != value {
+            document.tags = value;
+            changed.insert("tags".to_string());
         }
     }
     if let Some(value) = patch.generated {
@@ -640,12 +631,6 @@ fn apply_patch(document: &mut DocumentRecord, patch: DocumentPatch) -> Vec<Strin
         if document.superseded_by != value {
             document.superseded_by = value;
             changed.insert("superseded_by".to_string());
-        }
-    }
-    if let Some(value) = patch.retrieval {
-        if document.retrieval != value {
-            document.retrieval = value;
-            changed.insert("retrieval".to_string());
         }
     }
     changed.into_iter().collect()

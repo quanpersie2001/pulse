@@ -112,12 +112,12 @@ fn setup_ready_ticket(repo: &TestRepo) -> String {
     let brief_hash = hash_bytes(&fs::read(&brief_path).unwrap());
 
     let contract = ImplementationContract {
+        verification_profile: "standard".to_string(),
         mode: ImplementationMode::Guided,
         work_surface: WorkSurface::Code,
         plan_policy: PlanPolicy::None,
         semantic_impact: ImplementationSemanticImpact::NoBehaviorOrPublicRiskChange,
         effort: EffortMetadata::default(),
-        verification_profile: "service-change".to_string(),
         brief: Some(ContentRef {
             path: format!("{}/ticket.md", node.content_dir),
             content_hash: brief_hash.clone(),
@@ -183,12 +183,12 @@ fn setup_ready_ticket(repo: &TestRepo) -> String {
             &ticket_id,
             node.revision,
             DocumentationImpactUpdate {
+                domains: vec![],
                 posture: DocumentationImpactPosture::None,
                 rationale: Some("No docs change.".to_string()),
                 required_documents: vec![],
                 deferred_to: vec![],
-                paths: vec![],
-                domains: vec!["authentication".to_string()],
+                paths: vec!["authentication".to_string()],
                 labels: vec!["tokens".to_string()],
             },
             "human:tester".to_string(),

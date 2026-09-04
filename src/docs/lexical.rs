@@ -27,8 +27,7 @@ pub struct LexicalSchema {
     pub heading: Field,
     pub document_title: Field,
     pub heading_path: Field,
-    pub aliases: Field,
-    pub domains: Field,
+    pub tags: Field,
     pub summary: Field,
     pub path: Field,
     pub body: Field,
@@ -42,8 +41,7 @@ pub fn build_schema() -> LexicalSchema {
     let heading = builder.add_text_field("heading", TEXT | STORED);
     let document_title = builder.add_text_field("document_title", TEXT | STORED);
     let heading_path = builder.add_text_field("heading_path", TEXT | STORED);
-    let aliases = builder.add_text_field("aliases", TEXT | STORED);
-    let domains = builder.add_text_field("domains", TEXT | STORED);
+    let tags = builder.add_text_field("tags", TEXT | STORED);
     let summary = builder.add_text_field("summary", TEXT | STORED);
     let path = builder.add_text_field("path", TEXT | STORED);
     let body = builder.add_text_field("body", TEXT | STORED);
@@ -61,8 +59,7 @@ pub fn build_schema() -> LexicalSchema {
         heading,
         document_title,
         heading_path,
-        aliases,
-        domains,
+        tags,
         summary,
         path,
         body,
@@ -124,8 +121,7 @@ pub fn build_index_with_bodies(
             fields.heading => section.heading.clone(),
             fields.document_title => section.document_title.clone(),
             fields.heading_path => section.heading_path.join(" "),
-            fields.aliases => section.aliases.join(" "),
-            fields.domains => section.domains.join(" "),
+            fields.tags => section.tags.join(" "),
             fields.summary => section.summary.clone(),
             fields.path => section.path.clone(),
             fields.body => body_text,
@@ -246,8 +242,7 @@ fn fields_from_schema(schema: Schema) -> PulseResult<LexicalSchema> {
         heading: get("heading")?,
         document_title: get("document_title")?,
         heading_path: get("heading_path")?,
-        aliases: get("aliases")?,
-        domains: get("domains")?,
+        tags: get("tags")?,
         summary: get("summary")?,
         path: get("path")?,
         body: get("body")?,
@@ -353,8 +348,7 @@ fn boosted_fields(fields: &LexicalSchema, term: &str) -> Vec<(Field, f32)> {
         (fields.heading, 5.0),
         (fields.document_title, 4.0),
         (fields.heading_path, 3.0),
-        (fields.aliases, 3.0),
-        (fields.domains, 3.0),
+        (fields.tags, 3.2),
         (fields.summary, 2.5),
         (fields.path, 1.5),
         (fields.body, 1.0),
@@ -380,8 +374,7 @@ fn matched_fields(
         ("heading", fields.heading),
         ("document_title", fields.document_title),
         ("heading_path", fields.heading_path),
-        ("aliases", fields.aliases),
-        ("domains", fields.domains),
+        ("tags", fields.tags),
         ("summary", fields.summary),
         ("path", fields.path),
         ("body", fields.body),

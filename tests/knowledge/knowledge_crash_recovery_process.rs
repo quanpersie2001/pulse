@@ -309,14 +309,11 @@ fn write_document_registry(repo: &TempDir) {
             "revision": 1,
             "path": "docs/knowledge/learning.md",
             "kind": "domain",
-            "authority": "approved",
-            "lifecycle": "current",
+            "status": "approved",
             "owner": "team:docs",
             "summary": "Knowledge doc",
-            "aliases": [],
-            "scope": {"paths": [], "domains": [], "work_labels": []},
-            "review_policy": "none",
-            "verification_profile": "domain-doc",
+            "scope": {"paths": []},
+            "tags": [],
             "generated": null,
             "superseded_by": null
         }]

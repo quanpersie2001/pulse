@@ -1,8 +1,8 @@
 use pulse::canonical_json::to_canonical_bytes;
 use pulse::docs::{
     build_index, check_index, current_generation, index_status, query_lexical_index, read_current,
-    validate_generation, DocsRegistry, DocumentAuthority, DocumentKind, DocumentLifecycle,
-    DocumentRecord, DocumentRetrieval, DocumentScope, IndexOptions, RetrievalConfig, ReviewPolicy,
+    validate_generation, DocsRegistry, DocumentKind, DocumentRecord, DocumentScope, DocumentStatus,
+    IndexOptions,
 };
 use std::fs;
 
@@ -12,21 +12,15 @@ fn doc(id: &str, path: &str, summary: &str) -> DocumentRecord {
         revision: 1,
         path: path.to_string(),
         kind: DocumentKind::Domain,
-        authority: DocumentAuthority::Approved,
-        lifecycle: DocumentLifecycle::Current,
+        status: DocumentStatus::Approved,
         owner: "team:docs".to_string(),
         summary: summary.to_string(),
-        aliases: vec!["refresh-token".to_string()],
         scope: DocumentScope {
             paths: vec!["src/auth/**".to_string()],
-            domains: vec!["authentication".to_string()],
-            work_labels: vec!["auth".to_string()],
         },
-        review_policy: ReviewPolicy::None,
-        verification_profile: "domain-doc".to_string(),
+        tags: vec![],
         generated: None,
         superseded_by: None,
-        retrieval: None,
     }
 }
 
@@ -46,7 +40,7 @@ fn setup_repo() -> tempfile::TempDir {
             "docs/domain/token.md",
             "Token lifecycle and refresh-token expiry",
         )],
-        retrieval: Some(RetrievalConfig::defaults()),
+        retrieval: None,
     };
     fs::write(
         repo.join(".pulse/docs/registry.json"),
@@ -112,31 +106,13 @@ fn changed_document_rebuilds_and_changes_fingerprint() {
 }
 
 #[test]
-fn retrieval_metadata_change_invalidates_but_review_policy_does_not() {
+fn status_metadata_change_invalidates_index() {
     let tmp = setup_repo();
     let repo = tmp.path();
-    let first = build_index(repo, IndexOptions::default()).unwrap();
+    let _first = build_index(repo, IndexOptions::default()).unwrap();
     let mut registry: DocsRegistry =
         pulse::storage::read_json(&repo.join(".pulse/docs/registry.json")).unwrap();
-    registry.documents[0].review_policy = ReviewPolicy::Standard;
-    registry.revision += 1;
-    fs::write(
-        repo.join(".pulse/docs/registry.json"),
-        to_canonical_bytes(&registry).unwrap(),
-    )
-    .unwrap();
-    let status = index_status(repo).unwrap();
-    assert_eq!(
-        status.index.state, "current",
-        "review_policy is not retrieval-relevant"
-    );
-    assert_eq!(status.index.fingerprint, first.index.fingerprint);
-
-    registry.documents[0].retrieval = Some(DocumentRetrieval {
-        index: true,
-        include_body: false,
-        materialize_index: false,
-    });
+    registry.documents[0].status = DocumentStatus::Stale;
     registry.revision += 1;
     fs::write(
         repo.join(".pulse/docs/registry.json"),
@@ -167,18 +143,14 @@ fn corrupt_sections_is_detected_and_rebuild_repairs_cache_without_touching_docs(
 }
 
 #[test]
-fn explicit_index_ignores_auto_refresh_cost_guard() {
+fn explicit_index_indexes_all_eligible_documents() {
     let tmp = setup_repo();
     let repo = tmp.path();
     let mut registry: DocsRegistry =
         pulse::storage::read_json(&repo.join(".pulse/docs/registry.json")).unwrap();
-    let mut cfg = registry.retrieval_config();
-    cfg.auto_refresh_max_documents = 1;
-    registry.retrieval = Some(cfg);
     fs::create_dir_all(repo.join("docs/extra")).unwrap();
     fs::write(repo.join("docs/extra/a.md"), b"# A\n").unwrap();
-    let mut second = doc("DOC-EXTRA-DOMAIN", "docs/extra/a.md", "Extra");
-    second.aliases = Vec::new();
+    let second = doc("DOC-EXTRA-DOMAIN", "docs/extra/a.md", "Extra");
     registry.documents.push(second);
     registry.normalize();
     fs::write(

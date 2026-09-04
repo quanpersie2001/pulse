@@ -164,7 +164,7 @@ fn create_rejects_missing_guidance_applicability_and_provenance() {
 
     let mut broad = draft(&work);
     broad.applicability = Applicability {
-        domains: vec!["backend".to_string()],
+        paths: vec!["backend".to_string()],
         ..Applicability::default()
     };
     assert_eq!(

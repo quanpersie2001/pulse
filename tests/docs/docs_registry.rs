@@ -2,8 +2,8 @@ use std::fs;
 
 use pulse::docs::{
     bootstrap as docs_bootstrap, edit as docs_edit, list as docs_list, register as docs_register,
-    retire as docs_retire, show as docs_show, supersede as docs_supersede, DocumentAuthority,
-    DocumentKind, DocumentLifecycle, DocumentPatch, DocumentRecord, DocumentScope, ReviewPolicy,
+    retire as docs_retire, show as docs_show, supersede as docs_supersede, DocumentKind,
+    DocumentPatch, DocumentRecord, DocumentScope, DocumentStatus,
 };
 use pulse::error::PulseError;
 fn write_doc(repo: &std::path::Path, path: &str) {
@@ -18,21 +18,15 @@ fn record(id: &str, path: &str) -> DocumentRecord {
         revision: 1,
         path: path.to_string(),
         kind: DocumentKind::Domain,
-        authority: DocumentAuthority::Approved,
-        lifecycle: DocumentLifecycle::Current,
+        status: DocumentStatus::Approved,
         owner: "team:docs".to_string(),
         summary: format!("Summary for {id}"),
-        aliases: vec!["alpha".to_string(), "beta".to_string()],
         scope: DocumentScope {
             paths: vec!["src/auth/**".to_string()],
-            domains: vec!["authentication".to_string()],
-            work_labels: vec!["auth".to_string()],
         },
-        review_policy: ReviewPolicy::Standard,
-        verification_profile: "domain-doc".to_string(),
+        tags: vec![],
         generated: None,
         superseded_by: None,
-        retrieval: None,
     }
 }
 
@@ -258,7 +252,7 @@ fn retire_supersede_and_cycle_behavior() {
     .unwrap();
 
     let retired = docs_retire(repo, "DOC-AUTH-THIRD", 4, 1, "obsolete", "human:test").unwrap();
-    assert_eq!(retired.value.lifecycle, DocumentLifecycle::Retired);
+    assert_eq!(retired.value.status, DocumentStatus::Retired);
     assert_eq!(retired.value.revision, 2);
 
     let self_error = docs_supersede(
@@ -283,7 +277,7 @@ fn retire_supersede_and_cycle_behavior() {
         "human:test",
     )
     .unwrap();
-    assert_eq!(superseded.value.lifecycle, DocumentLifecycle::Superseded);
+    assert_eq!(superseded.value.status, DocumentStatus::Retired);
     assert_eq!(
         superseded.value.superseded_by.as_deref(),
         Some("DOC-AUTH-NEW")
@@ -295,7 +289,6 @@ fn retire_supersede_and_cycle_behavior() {
         6,
         1,
         DocumentPatch {
-            lifecycle: Some(DocumentLifecycle::Superseded),
             superseded_by: Some(Some("DOC-AUTH-OLD".to_string())),
             ..DocumentPatch::default()
         },

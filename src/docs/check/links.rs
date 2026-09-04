@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use once_cell::sync::Lazy;
 use regex::Regex;
 
-use crate::docs::model::{DocsRegistry, DocumentLifecycle, DocumentRecord};
+use crate::docs::model::{DocsRegistry, DocumentRecord, DocumentStatus};
 use crate::docs::validate::DocsFinding;
 use crate::storage;
 use crate::{PulseError, PulseResult};
@@ -29,7 +29,7 @@ pub(super) fn validate_internal_links(
     for document in registry
         .documents
         .iter()
-        .filter(|document| document.lifecycle == DocumentLifecycle::Current)
+        .filter(|document| document.status != DocumentStatus::Retired)
         .filter(|document| is_markdown(&document.path))
     {
         let Ok(path) = storage::paths::resolve_repo_relative(repo_root, &document.path) else {

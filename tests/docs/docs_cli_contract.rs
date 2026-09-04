@@ -54,19 +54,9 @@ fn setup_repo() -> TempDir {
         "repository_id": manifest["repository_id"].as_str().unwrap(),
         "retrieval": {
             "schema_version": 1,
-            "root": "docs",
-            "include_repository_map": true,
-            "include_repository_policy": true,
-            "default_index": true,
-            "default_include_body": true,
             "default_search_limit": 8,
             "default_get_max_lines": 120,
-            "default_get_max_bytes": 32768,
-            "auto_refresh_max_documents": 200,
-            "auto_refresh_max_source_bytes": 20971520,
-            "materialize_root_index": true,
-            "area_index_threshold": 5,
-            "scopes": []
+            "default_get_max_bytes": 32768
         },
         "documents": [
             {
@@ -74,14 +64,11 @@ fn setup_repo() -> TempDir {
                 "revision": 1,
                 "path": "docs/domain/auth.md",
                 "kind": "domain",
-                "authority": "approved",
-                "lifecycle": "current",
+                "status": "approved",
                 "owner": "team:docs",
                 "summary": "Auth domain",
-                "aliases": [],
-                "scope": {"paths": [], "domains": ["authentication"], "work_labels": []},
-                "review_policy": "none",
-                "verification_profile": "domain-doc",
+                "scope": {"paths": []},
+                "tags": [],
                 "generated": null,
                 "superseded_by": null
             },
@@ -90,14 +77,11 @@ fn setup_repo() -> TempDir {
                 "revision": 1,
                 "path": "docs/domain/optional.md",
                 "kind": "domain",
-                "authority": "approved",
-                "lifecycle": "current",
+                "status": "approved",
                 "owner": "team:docs",
                 "summary": "Optional auth",
-                "aliases": [],
-                "scope": {"paths": ["src/auth/**"], "domains": [], "work_labels": []},
-                "review_policy": "none",
-                "verification_profile": "domain-doc",
+                "scope": {"paths": ["src/auth/**"]},
+                "tags": [],
                 "generated": null,
                 "superseded_by": null
             }
@@ -122,18 +106,7 @@ fn docs_list_show_validate_json_contracts_are_stable() {
     assert_eq!(list["documents"].as_array().unwrap().len(), 2);
     assert_eq!(list["documents"][0]["id"], "DOC-AUTH-DOMAIN");
 
-    let filtered = run_ok(
-        &repo,
-        &[
-            "docs",
-            "list",
-            "--kind",
-            "domain",
-            "--authority",
-            "approved",
-            "--json",
-        ],
-    );
+    let filtered = run_ok(&repo, &["docs", "list", "--kind", "domain", "--json"]);
     assert_eq!(filtered["documents"].as_array().unwrap().len(), 2);
 
     let shown = run_ok(&repo, &["docs", "show", "DOC-AUTH-DOMAIN", "--json"]);
@@ -254,14 +227,11 @@ fn docs_registry_mutation_cli_contracts_are_stable() {
             "revision": 99,
             "path": path,
             "kind": "domain",
-            "authority": "approved",
-            "lifecycle": "current",
+            "status": "approved",
             "owner": "team:docs",
             "summary": format!("Summary for {id}"),
-            "aliases": [],
-            "scope": {"paths": ["src/auth/**"], "domains": ["authentication"], "work_labels": ["auth"]},
-            "review_policy": "none",
-            "verification_profile": "domain-doc",
+            "scope": {"paths": ["src/auth/**"]},
+            "tags": [],
             "generated": null,
             "superseded_by": null
         })
@@ -391,7 +361,7 @@ fn docs_registry_mutation_cli_contracts_are_stable() {
         ],
     );
     assert_eq!(superseded["code"], "superseded");
-    assert_eq!(superseded["value"]["lifecycle"], "superseded");
+    assert_eq!(superseded["value"]["status"], "retired");
     assert_eq!(superseded["value"]["superseded_by"], "DOC-AUTH-REPLACEMENT");
 
     let retired = run_ok(
@@ -412,5 +382,5 @@ fn docs_registry_mutation_cli_contracts_are_stable() {
         ],
     );
     assert_eq!(retired["code"], "retired");
-    assert_eq!(retired["value"]["lifecycle"], "retired");
+    assert_eq!(retired["value"]["status"], "retired");
 }

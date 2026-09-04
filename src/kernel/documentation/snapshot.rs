@@ -9,7 +9,7 @@ use std::fs;
 use std::path::Path;
 
 use crate::canonical_json::hash_bytes;
-use crate::docs::{DocsRegistry, DocumentLifecycle};
+use crate::docs::{DocsRegistry, DocumentStatus};
 use crate::evidence::model::ContentBinding;
 use crate::{PulseError, PulseResult};
 
@@ -17,7 +17,6 @@ use crate::{PulseError, PulseResult};
 pub(super) struct DocumentSnapshot {
     pub(super) document_id: String,
     pub(super) document_revision: u64,
-    pub(super) verification_profile: String,
     pub(super) path: String,
     pub(super) content_hash: String,
 }
@@ -49,11 +48,9 @@ pub(super) fn snapshot_validation_inputs(
         Path::new(".pulse/docs/registry.json"),
         &mut content,
     )?;
-    for document in registry
-        .documents
-        .iter()
-        .filter(|document| document.lifecycle == DocumentLifecycle::Current)
-    {
+    for document in registry.documents.iter().filter(|document| {
+        document.status != DocumentStatus::Retired && document.superseded_by.is_none()
+    }) {
         let relative = Path::new(&document.path);
         snapshot_path(&repo_root, relative, &mut content).map_err(|error| {
             if error.code() == "io_error" {
@@ -68,7 +65,6 @@ pub(super) fn snapshot_validation_inputs(
         documents.push(DocumentSnapshot {
             document_id: document.id.clone(),
             document_revision: document.revision,
-            verification_profile: document.verification_profile.clone(),
             path: document.path.clone(),
             content_hash: content
                 .hashes
@@ -76,11 +72,6 @@ pub(super) fn snapshot_validation_inputs(
                 .expect("document path was inserted into snapshot")
                 .clone(),
         });
-        if let Some(generated) = &document.generated {
-            for pattern in generated.sources.iter().chain(&generated.outputs) {
-                snapshot_pattern(&repo_root, pattern, &mut content)?;
-            }
-        }
     }
     for target in crate::docs::projection_targets(registry) {
         let relative = Path::new(&target.path);
@@ -97,6 +88,7 @@ pub(super) fn snapshot_validation_inputs(
     Ok(ValidationSnapshot { documents, content })
 }
 
+#[allow(dead_code)]
 fn snapshot_pattern(
     repo_root: &Path,
     pattern: &str,
@@ -138,6 +130,7 @@ fn snapshot_pattern(
     snapshot_matching_tree(repo_root, &resolved, pattern, content)
 }
 
+#[allow(dead_code)]
 fn snapshot_matching_tree(
     repo_root: &Path,
     directory: &Path,
@@ -221,6 +214,7 @@ fn path_string(path: &Path) -> String {
     path.to_string_lossy().replace('\\', "/")
 }
 
+#[allow(dead_code)]
 fn generated_pattern_matches(pattern: &str, path: &str) -> bool {
     if pattern == "**" || pattern == path {
         return true;
@@ -233,6 +227,7 @@ fn generated_pattern_matches(pattern: &str, path: &str) -> bool {
         .is_some_and(|prefix| path.starts_with(prefix))
 }
 
+#[allow(dead_code)]
 fn excluded_snapshot_path(path: &str) -> bool {
     path == ".git"
         || path.starts_with(".git/")

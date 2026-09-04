@@ -8,7 +8,7 @@ use std::collections::BTreeMap;
 use std::path::Path;
 use std::process::{Command, Output};
 
-use crate::docs::model::{DocsRegistry, DocumentLifecycle, DocumentRecord};
+use crate::docs::model::{DocsRegistry, DocumentRecord, DocumentStatus};
 use crate::docs::validate::DocsFinding;
 
 const MAX_COMMAND_OUTPUT_BYTES: usize = 4096;
@@ -21,7 +21,7 @@ pub(super) fn validate_generated_freshness(
     let documents: Vec<_> = registry
         .documents
         .iter()
-        .filter(|document| document.lifecycle == DocumentLifecycle::Current)
+        .filter(|document| document.status != DocumentStatus::Retired)
         .filter_map(|document| {
             document
                 .generated

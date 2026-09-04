@@ -6,10 +6,7 @@
 //! mutate tracked fixtures in place.
 
 use pulse::canonical_json::{hash_bytes, to_canonical_bytes};
-use pulse::docs::{
-    DocsRegistry, DocumentAuthority, DocumentKind, DocumentLifecycle, DocumentRecord,
-    DocumentScope, ReviewPolicy,
-};
+use pulse::docs::{DocsRegistry, DocumentKind, DocumentRecord, DocumentScope, DocumentStatus};
 use pulse::evidence::model::*;
 use pulse::graph::model::contract::{
     ContentRef, ContractItem, ContractScope, EffortMetadata, ImplementationContract,
@@ -122,25 +119,19 @@ fn setup_ready_ticket_with_required_docs(repo: &TestRepo, require_auth_doc: bool
     if require_auth_doc {
         let mut registry = DocsRegistry::empty(docs_manifest.registry.repository_id);
         registry.documents.push(DocumentRecord {
+            tags: vec![],
             id: "DOC-PRODUCT-AUTH".to_string(),
             revision: 1,
             path: "docs/product/authentication.md".to_string(),
             kind: DocumentKind::Product,
-            authority: DocumentAuthority::Approved,
-            lifecycle: DocumentLifecycle::Current,
+            status: DocumentStatus::Approved,
             owner: "team:docs".to_string(),
             summary: "Authentication product behavior.".to_string(),
-            aliases: vec!["auth".to_string()],
             scope: DocumentScope {
-                paths: vec![],
-                domains: vec!["authentication".to_string()],
-                work_labels: vec!["tokens".to_string()],
+                paths: vec!["authentication".to_string()],
             },
-            review_policy: ReviewPolicy::None,
-            verification_profile: "docs-only".to_string(),
             generated: None,
             superseded_by: None,
-            retrieval: None,
         });
         registry.normalize();
         let path = root.join(".pulse/docs/registry.json");
@@ -176,12 +167,12 @@ fn setup_ready_ticket_with_required_docs(repo: &TestRepo, require_auth_doc: bool
     let brief_hash = hash_bytes(&fs::read(&brief_path).unwrap());
 
     let contract = ImplementationContract {
+        verification_profile: "standard".to_string(),
         mode: ImplementationMode::Guided,
         work_surface: WorkSurface::Code,
         plan_policy: PlanPolicy::None,
         semantic_impact: ImplementationSemanticImpact::NoBehaviorOrPublicRiskChange,
         effort: EffortMetadata::default(),
-        verification_profile: "service-change".to_string(),
         brief: Some(ContentRef {
             path: brief_rel.clone(),
             content_hash: brief_hash.clone(),
@@ -247,6 +238,7 @@ fn setup_ready_ticket_with_required_docs(repo: &TestRepo, require_auth_doc: bool
             &ticket_id,
             node.revision,
             DocumentationImpactUpdate {
+                domains: vec![],
                 posture: if require_auth_doc {
                     DocumentationImpactPosture::Required
                 } else {
@@ -259,8 +251,7 @@ fn setup_ready_ticket_with_required_docs(repo: &TestRepo, require_auth_doc: bool
                     vec![]
                 },
                 deferred_to: vec![],
-                paths: vec![],
-                domains: vec!["authentication".to_string()],
+                paths: vec!["authentication".to_string()],
                 labels: vec!["tokens".to_string()],
             },
             "human:tester".to_string(),

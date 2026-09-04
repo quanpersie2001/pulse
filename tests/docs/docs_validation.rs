@@ -32,14 +32,11 @@ fn authored_record() -> Value {
         "revision": 1,
         "path": "docs/product/authentication.md",
         "kind": "product",
-        "authority": "approved",
-        "lifecycle": "current",
+        "status": "approved",
         "owner": "team:product",
         "summary": "Refresh-token failure contract",
-        "aliases": [],
-        "scope": {"paths": ["src/token.mjs"], "domains": ["authentication"], "work_labels": []},
-        "review_policy": "none",
-        "verification_profile": "product-doc",
+        "scope": {"paths": ["src/token.mjs"]},
+        "tags": [],
         "generated": null,
         "superseded_by": null
     })
@@ -51,19 +48,13 @@ fn generated_record(freshness_check: String) -> Value {
         "revision": 1,
         "path": "docs/architecture/overview.md",
         "kind": "generated",
-        "authority": "generated",
-        "lifecycle": "current",
+        "status": "approved",
         "owner": "system:architecture-generator",
         "summary": "Generated architecture overview",
-        "aliases": [],
-        "scope": {"paths": ["src/**"], "domains": [], "work_labels": []},
-        "review_policy": "none",
-        "verification_profile": "generated-doc",
+        "scope": {"paths": ["src/**"]},
+        "tags": [],
         "generated": {
-            "sources": ["src/**"],
             "command": "node scripts/generate-architecture.mjs",
-            "outputs": ["docs/architecture/**"],
-            "editable": false,
             "freshness_check": freshness_check
         },
         "superseded_by": null
@@ -137,8 +128,8 @@ fn docs_validate_checks_declared_freshness_links_and_navigation_on_fixture_copy(
         1
     );
     assert_eq!(
-        recorded["receipt"]["receipt"]["payload"]["documents"][0]["verification_profile"],
-        "generated-doc"
+        recorded["receipt"]["receipt"]["payload"]["documents"][0]["document_id"],
+        "DOC-ARCH-GENERATED"
     );
     assert_eq!(recorded["verification"]["registry"]["status"], "current");
     assert_eq!(
@@ -154,8 +145,8 @@ fn docs_validate_checks_declared_freshness_links_and_navigation_on_fixture_copy(
         .as_array_mut()
         .unwrap()
         .iter_mut()
-        .find(|document| document["id"] == "DOC-AUTH-CONTRACT")
-        .unwrap()["verification_profile"] = json!("product-doc-changed");
+        .find(|document| document["id"] == "DOC-ARCH-GENERATED")
+        .unwrap()["revision"] = json!(2);
     fs::write(
         &registry_path,
         serde_json::to_vec_pretty(&registry).unwrap(),
@@ -175,13 +166,13 @@ fn docs_validate_checks_declared_freshness_links_and_navigation_on_fixture_copy(
     assert!(drifted_report["registry"]["reason_codes"]
         .as_array()
         .unwrap()
-        .contains(&json!("document_receipt_profile_mismatch")));
+        .contains(&json!("document_receipt_revision_stale")));
     registry["documents"]
         .as_array_mut()
         .unwrap()
         .iter_mut()
-        .find(|document| document["id"] == "DOC-AUTH-CONTRACT")
-        .unwrap()["verification_profile"] = json!("product-doc");
+        .find(|document| document["id"] == "DOC-ARCH-GENERATED")
+        .unwrap()["revision"] = json!(1);
     fs::write(
         &registry_path,
         serde_json::to_vec_pretty(&registry).unwrap(),

@@ -15,10 +15,7 @@
 //! eligibility resolver so both consumers share one source of truth without one
 //! ambiguous `eligible()` boolean.
 
-use crate::docs::model::{
-    DocsRegistry, DocumentAuthority, DocumentKind, DocumentLifecycle, DocumentRecord,
-    RetrievalConfig,
-};
+use crate::docs::model::{DocsRegistry, DocumentRecord, DocumentStatus, RetrievalConfig};
 
 /// Search/retrieval eligibility options (mirror applicability flags but scoped
 /// to retrieval policy).
@@ -40,24 +37,8 @@ impl ResolvedRetrieval {
     /// Resolve a document's effective retrieval policy against registry defaults.
     /// Generated output documents are always opt-in regardless of `default_index`.
     pub fn for_document(document: &DocumentRecord, config: &RetrievalConfig) -> Self {
-        let is_generated = document.kind == DocumentKind::Generated
-            || document.authority == DocumentAuthority::Generated;
-        let default_index = if is_generated {
-            false
-        } else {
-            config.default_index
-        };
-        let (index, include_body, materialize_index) = match &document.retrieval {
-            Some(override_) => (
-                // Per-document override wins. Generated docs require explicit
-                // opt-in; the override cannot inherit the default because
-                // `default_index` already excludes generated docs.
-                override_.index,
-                override_.include_body,
-                override_.materialize_index,
-            ),
-            None => (default_index, config.default_include_body, false),
-        };
+        let _ = (document, config);
+        let (index, include_body, materialize_index) = (true, true, false);
         Self {
             index,
             include_body,
@@ -88,31 +69,24 @@ pub fn retrieval_exclusion(
 ) -> RetrievalExclusion {
     let mut reasons = Vec::new();
 
-    match document.lifecycle {
-        DocumentLifecycle::Current => {}
-        DocumentLifecycle::SuspectedStale | DocumentLifecycle::Stale => {
-            if !options.include_stale {
-                reasons.push("document_stale".to_string());
-            }
-        }
-        DocumentLifecycle::Retired => reasons.push("document_retired".to_string()),
-        DocumentLifecycle::Superseded => reasons.push("document_superseded".to_string()),
-    }
-
-    let _is_generated = document.kind == DocumentKind::Generated
-        || document.authority == DocumentAuthority::Generated;
-    match document.authority {
-        DocumentAuthority::Approved | DocumentAuthority::Informational => {}
-        DocumentAuthority::Generated => {
-            // Generated docs are opt-in; resolved below via index flag.
-        }
-        DocumentAuthority::Draft => {
+    match document.status {
+        DocumentStatus::Approved => {}
+        DocumentStatus::Draft => {
             if !options.include_draft {
                 reasons.push("document_draft".to_string());
             }
         }
+        DocumentStatus::Stale => {
+            if !options.include_stale {
+                reasons.push("document_stale".to_string());
+            }
+        }
+        DocumentStatus::Retired => reasons.push("document_retired".to_string()),
     }
 
+    if document.superseded_by.is_some() {
+        reasons.push("document_superseded".to_string());
+    }
     if is_protected_path(&document.path) {
         reasons.push("document_protected".to_string());
     }
@@ -126,22 +100,13 @@ pub fn retrieval_exclusion(
         reasons.push("document_generated_navigation".to_string());
     }
 
-    // A document not under the managed docs root is a retrieval input only when
-    // it is an enabled repository map (`AGENTS.md`, kind=repository_map) or
-    // repository policy (`PULSE.md`, kind=policy). Disabling the include flag
-    // removes it from the index/projection without affecting registry/applicability.
-    if !is_under_managed_root(&document.path, config) {
-        let enabled_special = match document.kind {
-            DocumentKind::RepositoryMap => config.include_repository_map,
-            DocumentKind::Policy => config.include_repository_policy,
-            _ => false,
-        };
-        if !enabled_special {
-            reasons.push("document_outside_retrieval_root".to_string());
-        }
+    if !is_under_managed_root(&document.path, config)
+        && document.path != "AGENTS.md"
+        && document.path != "PULSE.md"
+    {
+        reasons.push("document_outside_retrieval_root".to_string());
     }
 
-    // index=false removes from index/search but not from registry/applicability.
     let resolved = ResolvedRetrieval::for_document(document, config);
     if !resolved.index {
         reasons.push("retrieval_index_disabled".to_string());
@@ -182,26 +147,15 @@ pub fn eligible_documents(
 
 /// Whether a document path is under the managed retrieval root (or is a
 /// registered repository map / policy file). Repository-relative, no IO.
-pub fn is_under_retrieval_root(path: &str, config: &RetrievalConfig) -> bool {
-    let root = config.root.trim_start_matches('/');
-    if path == "AGENTS.md" || path == "PULSE.md" {
-        return true;
-    }
-    path == root
-        || path.starts_with(&format!("{root}/"))
-        || path.starts_with('/')
-            && path
-                .trim_start_matches('/')
-                .starts_with(&format!("{root}/"))
+pub fn is_under_retrieval_root(path: &str, _config: &RetrievalConfig) -> bool {
+    path == "AGENTS.md" || path == "PULSE.md" || path == "docs" || path.starts_with("docs/")
 }
 
 /// Whether a path lives under the managed docs tree only (no special-case for
 /// `AGENTS.md`/`PULSE.md`). Used to decide whether a document needs an enabled
 /// repository map/policy flag to qualify as a retrieval input.
-pub fn is_under_managed_root(path: &str, config: &RetrievalConfig) -> bool {
-    let root = config.root.trim_matches('/');
-    let path = path.trim_start_matches('/');
-    path == root || path.starts_with(&format!("{root}/"))
+pub fn is_under_managed_root(path: &str, _config: &RetrievalConfig) -> bool {
+    path == "docs" || path.starts_with("docs/")
 }
 
 /// Pulse migration backup paths may never be indexed.

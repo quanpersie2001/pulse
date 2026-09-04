@@ -1,8 +1,7 @@
 use chrono::{TimeZone, Utc};
 use pulse::canonical_json::to_canonical_bytes;
 use pulse::docs::{
-    DocsRegistry, DocumentAuthority, DocumentKind, DocumentLifecycle, DocumentRecord,
-    DocumentScope, RetrievalConfig, ReviewPolicy,
+    DocsRegistry, DocumentKind, DocumentRecord, DocumentScope, DocumentStatus, RetrievalConfig,
 };
 use pulse::evidence::manifest;
 use pulse::graph::store::OperationContext as WorkCtx;
@@ -278,21 +277,17 @@ fn validates_disputed_and_promoted_structural_invariants() {
         revision: 1,
         repository_id,
         documents: vec![DocumentRecord {
+            tags: vec![],
             id: doc_id.to_string(),
             revision: 1,
             path: "docs/test.md".to_string(),
             kind: DocumentKind::Domain,
-            authority: DocumentAuthority::Approved,
-            lifecycle: DocumentLifecycle::Current,
+            status: DocumentStatus::Approved,
             owner: "team:docs".to_string(),
             summary: "Test doc".to_string(),
-            aliases: Vec::new(),
             scope: DocumentScope::default(),
-            review_policy: ReviewPolicy::None,
-            verification_profile: "domain-doc".to_string(),
             generated: None,
             superseded_by: None,
-            retrieval: None,
         }],
         retrieval: Some(RetrievalConfig::defaults()),
     };

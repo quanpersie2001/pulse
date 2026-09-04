@@ -138,7 +138,6 @@ fn build_receipt(
         .map(|document| DocumentationValidationDocument {
             document_id: Some(document.document_id),
             document_revision: Some(document.document_revision),
-            verification_profile: Some(document.verification_profile),
             path: document.path,
             content_hash: document.content_hash,
             result: ReceiptResult::Passed,

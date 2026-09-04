@@ -1,7 +1,7 @@
 use chrono::{TimeZone, Utc};
 use pulse::docs::{
-    DocsRegistryStore, DocumentAuthority, DocumentKind, DocumentLifecycle, DocumentRecord,
-    DocumentScope, OperationContext as DocsOperationContext, ReviewPolicy,
+    DocsRegistryStore, DocumentKind, DocumentRecord, DocumentScope, DocumentStatus,
+    OperationContext as DocsOperationContext,
 };
 use pulse::graph::model::node::DocumentationImpactPosture;
 use pulse::graph::store::{
@@ -23,21 +23,15 @@ fn document(id: &str, path: &str) -> DocumentRecord {
         revision: 1,
         path: path.to_string(),
         kind: DocumentKind::Domain,
-        authority: DocumentAuthority::Approved,
-        lifecycle: DocumentLifecycle::Current,
+        status: DocumentStatus::Approved,
         owner: "team:docs".to_string(),
         summary: format!("Summary for {id}"),
-        aliases: Vec::new(),
         scope: DocumentScope {
             paths: vec!["src/auth/**".to_string()],
-            domains: vec!["authentication".to_string()],
-            work_labels: vec!["auth".to_string()],
         },
-        review_policy: ReviewPolicy::None,
-        verification_profile: "domain-doc".to_string(),
+        tags: vec![],
         generated: None,
         superseded_by: None,
-        retrieval: None,
     }
 }
 

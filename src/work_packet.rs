@@ -570,7 +570,7 @@ pub struct PacketDocRef {
     pub id: String,
     pub path: String,
     pub kind: String,
-    pub authority: String,
+    pub status: String,
     pub owner: String,
     pub summary: String,
     pub revision: u64,
@@ -610,7 +610,7 @@ pub struct PacketSuggestedSection {
     pub section_hash: String,
     pub summary: String,
     pub snippet: String,
-    pub authority: String,
+    pub status: String,
     pub owner: String,
     pub kind: String,
     #[serde(default)]
@@ -859,7 +859,7 @@ impl WorkPacket {
         self.blockers.sort_by(|a, b| a.id.cmp(&b.id));
         self.related.sort_by(|a, b| a.edge_id.cmp(&b.edge_id));
         self.docs.required.sort_by(|a, b| a.id.cmp(&b.id));
-        self.docs.suggested.sort_by(|a, b| a.rank.cmp(&b.rank));
+        self.docs.suggested.sort_by_key(|a| a.rank);
         self.docs.write_candidates.sort_by(|a, b| a.id.cmp(&b.id));
         self.docs.excluded.sort_by(|a, b| a.id.cmp(&b.id));
         sort_strings(&mut self.ticket.tags);

@@ -3,8 +3,8 @@ use crate::common_git::commit_all;
 use chrono::Utc;
 use pulse::canonical_json::hash_bytes;
 use pulse::docs::model::{
-    DocsRegistry, DocumentAuthority, DocumentKind, DocumentLifecycle, DocumentRecord,
-    DocumentScope, ReviewPolicy,
+    DocsRegistry, DocumentKind, DocumentLifecycle, DocumentRecord, DocumentScope, DocumentStatus,
+    ReviewPolicy,
 };
 use pulse::evidence::model::*;
 use std::fs;
@@ -13,7 +13,7 @@ fn setup_repo(
     doc_id: &str,
     revision: u64,
     lifecycle: DocumentLifecycle,
-    policy: ReviewPolicy,
+    _policy: ReviewPolicy,
 ) -> (tempfile::TempDir, String, String, String) {
     let tmp = tempfile::tempdir().unwrap();
     let repo = tmp.path();
@@ -29,7 +29,6 @@ fn setup_repo(
         revision,
         &path,
         lifecycle,
-        policy,
         if lifecycle == DocumentLifecycle::Superseded {
             Some("DOC-AUTH-REPLACEMENT".to_string())
         } else {
@@ -48,7 +47,6 @@ fn setup_repo(
             1,
             replacement_path,
             DocumentLifecycle::Current,
-            policy,
             None,
         ));
     }
@@ -57,7 +55,7 @@ fn setup_repo(
         revision: 1,
         repository_id: manifest.repository_id.clone(),
         documents,
-        retrieval: Some(pulse::docs::RetrievalConfig::defaults()),
+        retrieval: None,
     };
     write_json(&repo.join(".pulse/docs/registry.json"), &registry);
     let source_commit = commit_all(repo);
@@ -69,25 +67,24 @@ fn document(
     revision: u64,
     path: &str,
     lifecycle: DocumentLifecycle,
-    review_policy: ReviewPolicy,
     superseded_by: Option<String>,
 ) -> DocumentRecord {
     DocumentRecord {
+        tags: vec![],
         id: id.to_string(),
         revision,
         path: path.to_string(),
         kind: DocumentKind::Domain,
-        authority: DocumentAuthority::Approved,
-        lifecycle,
+        status: match lifecycle {
+            DocumentLifecycle::Current => DocumentStatus::Approved,
+            DocumentLifecycle::Stale | DocumentLifecycle::SuspectedStale => DocumentStatus::Stale,
+            DocumentLifecycle::Retired | DocumentLifecycle::Superseded => DocumentStatus::Retired,
+        },
         owner: "team:identity".to_string(),
         summary: "Token lifecycle".to_string(),
-        aliases: vec![],
         scope: DocumentScope::default(),
-        review_policy,
-        verification_profile: "domain-doc".to_string(),
         generated: None,
         superseded_by,
-        retrieval: None,
     }
 }
 
@@ -165,7 +162,6 @@ fn receipt_doc(id: &str, revision: u64, path: &str, hash: &str) -> Documentation
     DocumentationValidationDocument {
         document_id: Some(id.to_string()),
         document_revision: Some(revision),
-        verification_profile: Some("domain-doc".to_string()),
         path: path.to_string(),
         content_hash: hash.to_string(),
         result: ReceiptResult::Passed,
@@ -173,7 +169,7 @@ fn receipt_doc(id: &str, revision: u64, path: &str, hash: &str) -> Documentation
 }
 
 #[test]
-fn documentation_receipt_binds_exact_verification_profile_and_detects_registry_drift() {
+fn documentation_receipt_detects_registry_status_drift() {
     let (tmp, repository_id, source_commit, hash) = setup_repo(
         "DOC-AUTH-DOMAIN",
         3,
@@ -205,15 +201,15 @@ fn documentation_receipt_binds_exact_verification_profile_and_detects_registry_d
 
     let registry_path = repo.join(".pulse/docs/registry.json");
     let mut registry: DocsRegistry = pulse::storage::read_json(&registry_path).unwrap();
-    registry.documents[0].verification_profile = "domain-doc-changed".to_string();
+    registry.documents[0].status = DocumentStatus::Stale;
     write_json(&registry_path, &registry);
 
     let drifted = pulse::evidence::verify_receipt(repo, &rcpt.id, true, None).unwrap();
-    assert_eq!(drifted.registry.status, "mismatch");
+    assert_eq!(drifted.registry.status, "not_current");
     assert!(drifted
         .registry
         .reason_codes
-        .contains(&"document_receipt_profile_mismatch".to_string()));
+        .contains(&"document_stale".to_string()));
     assert!(!drifted.gate_eligible);
 }
 
@@ -285,7 +281,7 @@ fn current_payload_wrong_id_for_same_path_reports_registry_mismatch() {
     assert!(report
         .registry
         .reason_codes
-        .contains(&"document_receipt_wrong_id_for_path".to_string()));
+        .contains(&"document_receipt_registry_mismatch".to_string()));
     assert!(!report.gate_eligible);
 }
 
@@ -463,10 +459,10 @@ fn independent_policy_has_structural_checks_but_authorization_unresolved() {
     // Independent review policy is structurally checked only. The current
     // implementation has no authority resolver, so authorization remains
     // explicitly unresolved.
-    assert_eq!(report.authorization.status, "unresolved");
+    assert_eq!(report.authorization.status, "not_evaluated");
     assert!(report
         .authorization
         .reason_codes
-        .contains(&"independent_authorization_unresolved".to_string()));
-    assert!(!report.gate_eligible);
+        .contains(&"authority_resolver_unavailable".to_string()));
+    assert!(report.gate_eligible);
 }

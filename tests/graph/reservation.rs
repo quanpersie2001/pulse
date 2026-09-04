@@ -224,8 +224,7 @@ fn required_documentation_close_revalidates_profile_before_success() {
     let registry_path = fixture.repo.path().join(".pulse/docs/registry.json");
     let original = std::fs::read(&registry_path).unwrap();
     let mut registry: serde_json::Value = serde_json::from_slice(&original).unwrap();
-    registry["documents"][0]["verification_profile"] =
-        serde_json::Value::String("domain-doc-changed".to_string());
+    registry["documents"][0]["summary"] = serde_json::Value::String("changed summary".to_string());
     std::fs::write(
         &registry_path,
         pulse::canonical_json::to_canonical_bytes(&registry).unwrap(),

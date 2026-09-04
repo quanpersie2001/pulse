@@ -149,6 +149,7 @@ fn ready_ticket(repo: &TempDir, store: &JsonGraphStore) -> String {
     fs::write(&brief_path, b"# Ticket\nImplement atomic rotation.").unwrap();
     let brief_hash = hash_bytes(&fs::read(&brief_path).unwrap());
     let contract = ImplementationContract {
+        verification_profile: "standard".to_string(),
         mode: ImplementationMode::Guided,
         work_surface: WorkSurface::Code,
         plan_policy: PlanPolicy::None,
@@ -158,7 +159,6 @@ fn ready_ticket(repo: &TempDir, store: &JsonGraphStore) -> String {
             multiple_dependent_decisions: false,
             resume_or_audit_continuity: false,
         },
-        verification_profile: "service-change".to_string(),
         brief: Some(ContentRef {
             path: format!("{}/ticket.md", node.content_dir),
             content_hash: brief_hash.clone(),
@@ -222,12 +222,12 @@ fn ready_ticket(repo: &TempDir, store: &JsonGraphStore) -> String {
             &node.id,
             node.revision,
             DocumentationImpactUpdate {
+                domains: vec![],
                 posture: DocumentationImpactPosture::None,
                 rationale: Some("No docs change.".to_string()),
                 required_documents: vec![],
                 deferred_to: vec![],
                 paths: vec![],
-                domains: vec![],
                 labels: vec![],
             },
             "human:tester".to_string(),

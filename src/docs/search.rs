@@ -10,7 +10,7 @@ use crate::docs::index::{
     build_search_cache, cache_state_error_code, current_generation, index_status, IndexOptions,
 };
 use crate::docs::lexical::{query as query_lexical, tokenize_query_text, SNIPPET_MAX_BYTES};
-use crate::docs::model::{DocumentAuthority, DocumentKind, WorkDocumentationContext};
+use crate::docs::model::{DocumentKind, DocumentStatus, WorkDocumentationContext};
 use crate::docs::registry::load_registry;
 use crate::docs::section::{SectionRange, SectionRecord};
 use crate::{PulseError, PulseResult};
@@ -18,8 +18,8 @@ use crate::{PulseError, PulseResult};
 #[derive(Debug, Clone, Default)]
 pub struct SearchOptions {
     pub kind: Option<DocumentKind>,
-    pub domain: Option<String>,
-    pub authority: Option<DocumentAuthority>,
+    pub tag: Option<String>,
+    pub status: Option<DocumentStatus>,
     pub limit: Option<usize>,
     pub no_refresh: bool,
     pub explain: bool,
@@ -81,8 +81,7 @@ pub struct SearchResult {
     pub section_content_hash: String,
     pub summary: String,
     pub snippet: String,
-    pub authority: String,
-    pub lifecycle: String,
+    pub status: String,
     pub owner: String,
     pub kind: String,
     pub matched_fields: Vec<String>,
@@ -233,8 +232,7 @@ pub fn search_docs(
             section_content_hash: candidate.section.section_content_hash,
             summary: candidate.section.summary,
             snippet,
-            authority: candidate.section.authority,
-            lifecycle: candidate.section.lifecycle,
+            status: candidate.section.status,
             owner: candidate.section.owner,
             kind: candidate.section.kind,
             matched_fields: if options.explain {
@@ -334,8 +332,7 @@ fn adjusted_score(lexical_score: f64, reasons: &[String], apply_work_boost: bool
             "explicit_required_document_replacement" => 0.16,
             "supersession_replacement" => 0.12,
             "path_scope_match" => 0.12,
-            "domain_scope_match" => 0.10,
-            "label_scope_match" => 0.08,
+            "tag_scope_match" => 0.10,
             _ => 0.0,
         })
         .sum::<f64>()
@@ -344,12 +341,10 @@ fn adjusted_score(lexical_score: f64, reasons: &[String], apply_work_boost: bool
 }
 
 fn matches_filters(section: &SectionRecord, options: &SearchOptions) -> bool {
-    if !options.include_draft && section.authority == "draft" {
+    if !options.include_draft && section.status == "draft" {
         return false;
     }
-    if !options.include_stale
-        && (section.lifecycle == "stale" || section.lifecycle == "suspected_stale")
-    {
+    if !options.include_stale && section.status == "stale" {
         return false;
     }
     if let Some(kind) = options.kind {
@@ -357,13 +352,13 @@ fn matches_filters(section: &SectionRecord, options: &SearchOptions) -> bool {
             return false;
         }
     }
-    if let Some(authority) = options.authority {
-        if section.authority != serde_variant(&authority) {
+    if let Some(status) = options.status {
+        if section.status != serde_variant(&status) {
             return false;
         }
     }
-    if let Some(domain) = &options.domain {
-        if !section.domains.iter().any(|d| d == domain) {
+    if let Some(tag) = &options.tag {
+        if !section.tags.iter().any(|candidate| candidate == tag) {
             return false;
         }
     }
@@ -393,8 +388,7 @@ fn indexed_snippet(section: &SectionRecord, terms: &[String]) -> PulseResult<Str
     let text = [
         section.heading_path.join(" "),
         section.summary.clone(),
-        section.aliases.join(" "),
-        section.domains.join(" "),
+        section.tags.join(" "),
     ]
     .into_iter()
     .filter(|part| !part.trim().is_empty())

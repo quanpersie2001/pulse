@@ -1,4 +1,4 @@
-//! S7-I3 contract/QA/shaping mutation API tests: CAS, authority, idempotency,
+//! S7-I3 contract/QA/shaping mutation API tests: CAS, status: DocumentStatus::Approved, idempotency,
 //! contract_revision semantics, transaction recovery and read-only behavior.
 //!
 //! These tests exercise the harness against temporary target repositories only.
@@ -63,12 +63,12 @@ fn create_ticket(
 fn make_implementation_contract(node: &pulse::graph::model::node::Node) -> ImplementationContract {
     let brief_path = format!("{}/ticket.md", node.content_dir);
     ImplementationContract {
+        verification_profile: "standard".to_string(),
         mode: ImplementationMode::Guided,
         work_surface: WorkSurface::Code,
         plan_policy: PlanPolicy::None,
         semantic_impact: ImplementationSemanticImpact::NoBehaviorOrPublicRiskChange,
         effort: EffortMetadata::default(),
-        verification_profile: "service-change".to_string(),
         brief: Some(ContentRef {
             path: brief_path,
             content_hash: "sha256:".to_string() + &"a".repeat(64),

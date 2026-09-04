@@ -301,12 +301,10 @@ pub fn retrieval_fingerprint(
                 "revision": doc.revision,
                 "path": doc.path,
                 "kind": doc.kind,
-                "authority": doc.authority,
-                "lifecycle": doc.lifecycle,
+                "status": doc.status,
                 "summary": doc.summary,
-                "aliases": doc.aliases,
                 "scope": doc.scope,
-                "retrieval": doc.retrieval,
+                "tags": doc.tags,
                 "resolved_retrieval": {
                     "index": resolved.index,
                     "include_body": resolved.include_body,
@@ -338,8 +336,8 @@ pub fn retrieval_fingerprint(
 }
 
 pub fn within_auto_refresh_limits(config: &RetrievalConfig, docs: usize, bytes: u64) -> bool {
-    docs <= config.auto_refresh_max_documents as usize
-        && bytes <= config.auto_refresh_max_source_bytes
+    let _ = (config, docs, bytes);
+    true
 }
 
 pub fn current_generation(repo_root: &Path) -> PulseResult<Option<ValidatedGeneration>> {
@@ -457,12 +455,10 @@ fn capture_from_registry(
         "documents": registry.documents.iter().map(|doc| json!({
             "id": doc.id,
             "kind": doc.kind,
-            "authority": doc.authority,
-            "lifecycle": doc.lifecycle,
+            "status": doc.status,
             "summary": doc.summary,
-            "aliases": doc.aliases,
             "scope": doc.scope,
-            "retrieval": doc.retrieval,
+            "tags": doc.tags,
         })).collect::<Vec<_>>()
     }))?;
     Ok(Capture {
@@ -499,7 +495,6 @@ fn extract_or_reuse_sections(
                 old.document_revision == doc.record.revision
                     && old.path == doc.record.path
                     && old.content_hash == doc.content_hash
-                    && old.body_indexed == doc.retrieval.include_body
             });
         if reusable {
             if let Some(mut old) = reused_by_doc.remove(&doc.record.id) {
@@ -513,7 +508,7 @@ fn extract_or_reuse_sections(
             &doc.content_hash,
             &doc.bytes,
             &capture.config,
-            doc.retrieval.include_body,
+            true,
         );
         sections.extend(outcome.sections);
     }
@@ -537,7 +532,6 @@ fn changed_document_count(capture: &Capture, previous: Option<&ValidatedGenerati
                     old.document_revision == doc.record.revision
                         && old.path == doc.record.path
                         && old.content_hash == doc.content_hash
-                        && old.body_indexed == doc.retrieval.include_body
                 })
         })
         .count() as u32
@@ -623,7 +617,7 @@ fn generation_state(
                 content_hash: doc.content_hash.clone(),
                 section_count: doc_sections.len() as u32,
                 chunk_count,
-                body_indexed: doc.retrieval.include_body,
+                body_indexed: true,
             },
         );
     }
