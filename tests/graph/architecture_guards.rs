@@ -59,117 +59,22 @@ fn graph_store_facade_sources() -> String {
 }
 
 #[test]
-fn daemon_is_the_only_runtime_lifecycle_authority() {
-    let application_root = repo_root().join("src/daemon/application");
-    let mut actual_application_children = fs::read_dir(&application_root)
-        .unwrap_or_else(|error| {
-            panic!(
-                "failed to read daemon application directory {}: {error}",
-                application_root.display()
-            )
-        })
-        .map(|entry| {
-            let entry = entry.expect("daemon application directory entry should be readable");
-            entry.file_name().to_string_lossy().into_owned()
-        })
-        .collect::<Vec<_>>();
-    actual_application_children.sort();
-    let expected_application_children = [
-        "assignment.rs",
-        "communication.rs",
-        "dispatch.rs",
-        "effects.rs",
-        "mod.rs",
-        "project.rs",
-        "qa.rs",
-        "recovery.rs",
-        "session.rs",
-        "timeline.rs",
-        "turn.rs",
-        "workspace.rs",
-    ]
-    .into_iter()
-    .map(str::to_owned)
-    .collect::<Vec<_>>();
-    assert_eq!(
-        actual_application_children, expected_application_children,
-        "daemon application immediate entries must be exactly the explicit flat file inventory"
-    );
-    for child in &expected_application_children {
-        let path = application_root.join(child);
-        assert!(
-            path.is_file(),
-            "daemon application inventory entry {} must be a regular file, not a directory or other entry",
-            path.display()
-        );
-    }
-    let application_mod = source("src/daemon/application/mod.rs");
-    let mut actual_external_module_declarations = application_mod
-        .lines()
-        .map(str::trim)
-        .filter(|line| line.starts_with("mod ") && line.ends_with(';'))
-        .map(str::to_owned)
-        .collect::<Vec<_>>();
-    actual_external_module_declarations.sort();
-    let expected_external_module_declarations = expected_application_children
-        .iter()
-        .filter_map(|path| path.strip_suffix(".rs"))
-        .filter(|name| *name != "mod")
-        .map(|name| format!("mod {name};"))
-        .collect::<Vec<_>>();
-    assert_eq!(
-        actual_external_module_declarations,
-        expected_external_module_declarations,
-        "daemon application root external module declarations must exactly match the private flat child set"
-    );
-    let inline_module_declarations = application_mod
-        .lines()
-        .map(str::trim)
-        .filter(|line| line.starts_with("mod ") && line.ends_with('{'))
-        .collect::<Vec<_>>();
-    assert_eq!(
-        inline_module_declarations,
-        vec!["mod tests {"],
-        "daemon application root must contain only the allowed inline `mod tests {{` declaration"
-    );
-    let same_line_visibility_modules = application_mod
-        .lines()
-        .map(str::trim)
-        .filter(|line| line.starts_with("pub") && line.contains(" mod "))
-        .collect::<Vec<_>>();
+fn daemon_runtime_tree_is_absent() {
     assert!(
-        same_line_visibility_modules.is_empty(),
-        "daemon application root must not contain same-line visibility-qualified module declarations: {same_line_visibility_modules:?}"
+        !repo_root().join("src/daemon").exists(),
+        "src/daemon must no longer exist in the source tree"
     );
-    for path in [
-        "src/daemon/application/mod.rs",
-        "src/daemon/application/assignment.rs",
-        "src/daemon/application/communication.rs",
-        "src/daemon/application/dispatch.rs",
-        "src/daemon/application/effects.rs",
-        "src/daemon/application/project.rs",
-        "src/daemon/application/recovery.rs",
-        "src/daemon/application/session.rs",
-        "src/daemon/application/timeline.rs",
-        "src/daemon/application/turn.rs",
-        "src/daemon/application/workspace.rs",
-        "src/daemon/assignment/mod.rs",
-        "src/daemon/permissions/mod.rs",
-        "src/daemon/persistence/mod.rs",
-        "src/daemon/process/mod.rs",
-        "src/daemon/process/native.rs",
-        "src/daemon/project/mod.rs",
-        "src/daemon/protocol/mod.rs",
-        "src/daemon/provider/codex.rs",
-        "src/daemon/session/mod.rs",
-        "src/daemon/timeline/mod.rs",
-        "src/daemon/transport/local.rs",
-        "src/daemon/transport/mcp.rs",
-        "src/daemon/workspace/mod.rs",
+    let library = source("src/lib.rs");
+    for obsolete in [
+        "pub mod daemon;",
+        "pub mod run;",
+        "pub mod process;",
+        "pub mod workspace;",
+        "pub mod assignment;",
     ] {
         assert!(
-            repo_root().join(path).is_file(),
-            "missing daemon owner {path}"
+            !library.contains(obsolete),
+            "obsolete public runtime contract remains: {obsolete}"
         );
     }
     for obsolete in [
@@ -178,6 +83,7 @@ fn daemon_is_the_only_runtime_lifecycle_authority() {
         "src/workspace.rs",
         "src/assignment.rs",
         "src/cli/process.rs",
+        "src/cli/daemon.rs",
         "src/cli/run.rs",
         "src/kernel/assignment.rs",
         "src/kernel/assignment_store.rs",
@@ -190,18 +96,6 @@ fn daemon_is_the_only_runtime_lifecycle_authority() {
         assert!(
             !repo_root().join(obsolete).exists(),
             "obsolete runtime authority still exists at {obsolete}"
-        );
-    }
-    let library = source("src/lib.rs");
-    for obsolete in [
-        "pub mod run;",
-        "pub mod process;",
-        "pub mod workspace;",
-        "pub mod assignment;",
-    ] {
-        assert!(
-            !library.contains(obsolete),
-            "obsolete public runtime contract remains: {obsolete}"
         );
     }
 }
@@ -305,12 +199,7 @@ fn core_domains_do_not_depend_on_daemon_runtime() {
 }
 
 #[test]
-fn provider_launch_is_owned_by_daemon_process_owner() {
-    let provider = combined_sources(&["src/daemon/provider"]);
-    assert!(
-        !provider.contains("Command::new") && !provider.contains(".spawn()"),
-        "providers must describe launch requests rather than spawn processes"
-    );
+fn cli_has_no_direct_runtime_launch_path() {
     let cli = combined_sources(&["src/cli"]);
     for forbidden in [
         "PULSE_CODEX_EXECUTABLE",
@@ -324,10 +213,6 @@ fn provider_launch_is_owned_by_daemon_process_owner() {
             "CLI must not contain a direct provider/runtime path: {forbidden}"
         );
     }
-    assert!(
-        source("src/daemon/process/mod.rs").contains("Command::new(request.executable)"),
-        "ProcessOwner must remain the provider/helper launch boundary"
-    );
 }
 
 #[test]

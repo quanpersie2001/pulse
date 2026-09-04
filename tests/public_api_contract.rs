@@ -34,22 +34,6 @@ use pulse::work_packet::{
 use pulse::{JsonGraphStore, PulseError, PulseResult, Result};
 
 #[test]
-fn daemon_application_public_paths_compile() {
-    let _application_path: fn(
-        pulse::daemon::persistence::StateStore,
-        &str,
-    ) -> pulse::Result<pulse::daemon::application::DaemonApplication> =
-        |store, endpoint| pulse::daemon::application::DaemonApplication::new(store, endpoint);
-    let _reexported_path: fn(
-        pulse::daemon::persistence::StateStore,
-        &str,
-    ) -> pulse::Result<pulse::daemon::DaemonApplication> =
-        |store, endpoint| pulse::daemon::DaemonApplication::new(store, endpoint);
-    let _state_store_reexport: fn(&std::path::Path) -> pulse::daemon::StateStore =
-        |path| pulse::daemon::StateStore::new(path);
-}
-
-#[test]
 fn docs_evidence_knowledge_storage_and_identity_public_paths_compile() {
     let repo = tempfile::tempdir().unwrap();
     storage_bootstrap(repo.path()).unwrap();

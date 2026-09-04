@@ -38,10 +38,7 @@ Do not add features until the golden path in `PRODUCT.md` §7 runs for real.
 2. Prefer small, evidence-backed changes. Do not mark work complete unless
    tests or focused verification prove the affected behavior.
 3. Keep generated, cache and runtime outputs out of durable source.
-4. Do not extend `src/daemon/`, the browser/environment parts of
-   `src/qa/executor.rs`, story qualification or flaky-waiver logic. They are
-   scheduled for removal; see `PRODUCT.md` §9.
-5. When handing off, record branch, changes, tests run, blockers and next
+4. When handing off, record branch, changes, tests run, blockers and next
    action.
 
 ## Rust standards
@@ -82,7 +79,6 @@ Layers sit bottom-up; never reach up the ladder. Guarded by
 - `src/identity/`, `src/policy/`, `src/event.rs`, `src/source.rs`,
   `src/storage/`: actor vocabulary, default-deny authority, append-only event
   log, git source identity, atomic/lock/transaction primitives.
-- `src/daemon/`: frozen, scheduled for removal.
 
 ## Validation commands
 

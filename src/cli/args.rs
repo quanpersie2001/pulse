@@ -9,9 +9,9 @@ use clap::{Parser, Subcommand, ValueEnum};
 pub struct Cli {
     #[arg(long, global = true)]
     pub(crate) repo_root: Option<PathBuf>,
-    /// Stable idempotency key for mutating daemon-backed commands.
-    /// Runtime reads ignore this option. Offline Core commands keep their own
-    /// command-specific idempotency contracts.
+    /// Stable idempotency key for mutating offline Core commands (work
+    /// handoff/verify/close-style proofs). Runtime reads ignore this option;
+    /// offline Core commands keep their own command-specific contracts.
     #[arg(long, global = true, default_value = None)]
     pub(crate) idempotency_key: Option<String>,
     #[cfg(any(test, debug_assertions))]
@@ -53,22 +53,6 @@ pub(crate) enum Command {
     Qa {
         #[command(subcommand)]
         command: super::qa::QaCommand,
-    },
-    Daemon {
-        #[command(subcommand)]
-        command: super::daemon::DaemonCommand,
-    },
-    Project {
-        #[command(subcommand)]
-        command: super::daemon::ProjectCommand,
-    },
-    Workspace {
-        #[command(subcommand)]
-        command: super::daemon::WorkspaceCommand,
-    },
-    Session {
-        #[command(subcommand)]
-        command: super::daemon::SessionCommand,
     },
 }
 

@@ -22,7 +22,6 @@ agents. See [`PRODUCT.md`](PRODUCT.md) for scope and target design, and
   `knowledge`) do not import each other's stores except through documented
   narrow seams.
 - `graph/` layers bottom-up: model → validation → read → store.
-- `src/daemon/` is frozen and scheduled for removal; do not extend it.
 
 Preserve stable public paths deliberately. Keep new surfaces private by
 default and update architecture/public-path tests when a contract changes on

@@ -1198,11 +1198,9 @@ dependencies = [
  "fs2",
  "hex",
  "jsonschema",
- "libc",
  "once_cell",
  "rand 0.8.7",
  "regex",
- "regex-syntax",
  "serde",
  "serde_json",
  "sha2",
@@ -1210,8 +1208,6 @@ dependencies = [
  "tempfile",
  "thiserror",
  "ulid",
- "uuid",
- "windows-sys 0.52.0",
 ]
 
 [[package]]

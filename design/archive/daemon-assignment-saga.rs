@@ -1,14 +1,7 @@
+//! Archived 2026-09, reference for runner lease/crash semantics, not compiled.
+//!
 //! Assignment provisioning, delivery acknowledgement, and recovery saga mechanics.
 //!
-//! This module touches the daemon's assignment sagas, reservations, workspaces,
-//! sessions, delivery ledger, and timeline. It calls host-local workspace/session
-//! operations and Core reservation/handoff/verification APIs while preserving the
-//! existing reservation, durable-intent, provider-I/O, acknowledgement, and proof
-//! ordering. Failures remain fail-closed: uncertain delivery retains the lease
-//! and is never blindly resent. Dependencies are limited to the parent daemon
-//! application, its private use-case callees, daemon persistence/value types, and
-//! Core APIs; this module owns no second facade, store, or generic saga engine.
-
 use serde_json::{json, Value};
 use std::path::Path;
 

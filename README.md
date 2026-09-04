@@ -35,10 +35,9 @@ The full product definition, target design and golden path are in
 Pre-release. The Rust core (work graph, packet, docs registry and search,
 evidence receipts, close gates) is implemented and covered by an integration
 suite. The runner, ratchet commands and event-log communication described in
-`PRODUCT.md` are not implemented yet. A daemon runtime exists in the tree but
-is scheduled for removal under
-[Decision 0008](docs/decisions/0008-narrow-scope-to-truth-layer.md); do not
-build on it.
+`PRODUCT.md` are not implemented yet; the daemon runtime that previously
+backed them was removed under
+[Decision 0008](docs/decisions/0008-narrow-scope-to-truth-layer.md).
 
 Nothing has yet run end to end on a real repository. The next milestone is the
 seven-step golden path in `PRODUCT.md` §7 against `examples/todolist/`.

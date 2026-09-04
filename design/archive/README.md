@@ -12,3 +12,7 @@ to implement anything. The current product definition is
 - The `pulse-reboot/` design set and `PULSE_REBOOT.md` were deleted on
   2026-09-05 after their content was absorbed into `PRODUCT.md`. Recover them
   from Git history before that commit if needed.
+- `daemon-assignment-saga.rs`: the daemon's reservation-to-delivery
+  acknowledgement and typed Core activation saga, archived 2026-09 when
+  `src/daemon/` was removed. Kept uncompiled as a reference for the runner's
+  lease, crash and recovery semantics in a later step.
