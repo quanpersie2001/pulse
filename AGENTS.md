@@ -9,8 +9,9 @@ repository: work graph, packet, runner, docs, evidence gate, ratchet,
 event-log communication. It does not run agents, does not run tests, and has
 no daemon.
 
-Product definition and target design: [`PRODUCT.md`](PRODUCT.md). Scope
-decision: [Decision 0008](docs/decisions/0008-narrow-scope-to-truth-layer.md).
+Product definition and target design: [`PRODUCT.md`](PRODUCT.md). Current
+code architecture: [`ARCHITECTURE.md`](ARCHITECTURE.md). Scope decision:
+[Decision 0008](docs/decisions/0008-narrow-scope-to-truth-layer.md).
 When this file, README or archived material disagrees with `PRODUCT.md`,
 `PRODUCT.md` wins.
 
@@ -62,8 +63,9 @@ Layers sit bottom-up; never reach up the ladder. Guarded by
 - `src/bin/pulse.rs`: parse, run, render error; delegates to `pulse::cli`.
 - `src/cli/`: thin transport/renderer per command domain. Owns no domain
   semantics.
-- `src/kernel/`: concrete cross-domain composition (readiness, packet,
-  reservation, completion, story completion, init). No trait abstractions.
+- `src/kernel/`: concrete cross-domain composition (readiness, shaping,
+  lifecycle, packet, reservation, completion, story completion, documentation,
+  init). No trait abstractions.
 - `src/graph/`: `model/` (pure values) → `validation/` → `read/` (pure
   snapshot evaluators, no I/O) → `store/` (persistence, CAS, supersession,
   bootstrap). Only layered paths exist; do not re-add one-line re-export
@@ -98,8 +100,9 @@ cargo test --all-targets
 One Cargo integration crate per domain: `tests/<domain>.rs` is the crate root
 and wires `tests/<domain>/*.rs` with `#[path]`. Shared helpers live in
 `tests/common/` and are included per crate with `#[path]`. Current crates:
-`daemon`, `docs`, `evidence`, `graph`, `knowledge`, `process`, `storage`,
-`target_repo`. Timing-sensitive subprocess suites stay in `process`.
+`docs`, `evidence`, `graph`, `knowledge`, `process`, `storage`,
+`target_repo`, plus `tests/public_api_contract.rs` as its own crate.
+Timing-sensitive subprocess suites stay in `process`.
 
 Focused runs:
 

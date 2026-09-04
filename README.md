@@ -78,7 +78,8 @@ cargo test --all-targets
 ```
 
 Operating rules for agents and contributors are in [`AGENTS.md`](AGENTS.md).
-Contribution workflow is in [`CONTRIBUTING.md`](CONTRIBUTING.md). Decisions
+Contribution workflow is in [`CONTRIBUTING.md`](CONTRIBUTING.md). Current
+code architecture is in [`ARCHITECTURE.md`](ARCHITECTURE.md). Decisions
 are under [`docs/decisions/`](docs/decisions/). Retired design material is
 under [`design/archive/`](design/archive/).
 
