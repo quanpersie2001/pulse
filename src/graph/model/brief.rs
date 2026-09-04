@@ -403,7 +403,10 @@ fn parse_qa(sections: &BTreeMap<String, String>) -> Option<QaImpactBrief> {
         })
         .unwrap_or_default();
     Some(QaImpactBrief {
-        owner: values.get("owner").cloned(),
+        owner: values
+            .get("owner")
+            .cloned()
+            .filter(|value| !value.trim().is_empty()),
         posture: values
             .get("posture")
             .cloned()
