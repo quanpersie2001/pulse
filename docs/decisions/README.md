@@ -11,6 +11,7 @@ Current decisions:
 - [0005 — Rust daemon runtime control plane](0005-rust-daemon-runtime-control-plane.md)
 - [0006 — Peer Worker, Reviewer, and QA task topology](0006-peer-agent-assurance-topology.md)
 - [0007 — Remove the legacy agent skill surface](0007-remove-legacy-agent-skill-surface.md)
+- [0008 — Narrow Pulse to a vendor-neutral truth layer](0008-narrow-scope-to-truth-layer.md)
 
 Add or update a decision when:
 

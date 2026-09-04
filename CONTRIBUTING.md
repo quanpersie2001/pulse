@@ -1,67 +1,52 @@
 # Contributing
 
-Pulse is developed as one Rust executable with an offline Core and a
-host-local daemon. The repository does not package an agent workflow router,
-plugin, or standalone agent skills.
+Pulse is one Rust executable: a local truth layer for developers using coding
+agents. See [`PRODUCT.md`](PRODUCT.md) for scope and target design, and
+[`AGENTS.md`](AGENTS.md) for operating rules.
 
 ## Repository truth
 
-The current implementation and its contracts live in:
-
-- `src/bin/pulse.rs`: minimal executable adapter;
-- `src/cli/`: command parsing and output rendering;
-- `src/kernel/`: cross-domain Core composition;
-- `src/graph/`, `src/docs/`, `src/evidence/`, and `src/knowledge/`: offline domain owners;
-- `src/daemon/`: the sole host-local runtime lifecycle authority;
-- `tests/`: architecture, contract, integration, recovery, and reliability coverage;
-- `PULSE_REBOOT.md` and `pulse-reboot/`: product direction and detailed design owners;
-- `AGENTS.md`, `README.md`, and this file: repository operating contracts.
-
-Historical proposals explain accepted slices but do not override current
-source, tests, or owning reboot documents.
+- `PRODUCT.md`: product definition, target design, golden path, code triage.
+- `docs/decisions/`: accepted decisions. 0008 is the current scope decision.
+- `src/` and `tests/`: current implementation and its contracts.
+- `AGENTS.md`, `README.md`, this file: repository operating contracts. They
+  describe only what has code and tests.
+- `design/archive/`: historical proposals and retired design. Not a contract.
+- `examples/todolist/`: dogfood target repository; Pulse runs there for real.
 
 ## Ownership and dependency direction
 
 - The binary delegates to the `pulse::cli` facade.
-- CLI owns transport and rendering, not domain or provider semantics.
-- Core commands operate without the daemon.
-- Daemon owns Project, Workspace, Session, Provider, process, timeline, effect,
-  assignment, and recovery runtime state.
-- Core never imports daemon.
-- Future Orchestration may compose Core and Runtime but may not replace either
-  authority.
+- CLI owns transport and rendering, not domain semantics.
+- `kernel/` composes domains; domains (`graph`, `docs`, `evidence`, `qa`,
+  `knowledge`) do not import each other's stores except through documented
+  narrow seams.
+- `graph/` layers bottom-up: model → validation → read → store.
+- `src/daemon/` is frozen and scheduled for removal; do not extend it.
 
 Preserve stable public paths deliberately. Keep new surfaces private by
-default, and update architecture/public-path tests whenever an intentional
-contract change requires it.
+default and update architecture/public-path tests when a contract changes on
+purpose.
 
 ## Target-repository boundary
 
-This repository develops Pulse but is not enrolled as a Pulse-managed target.
-Do not bootstrap or mutate Pulse workgraph, evidence, docs-registry, or
-lifecycle state with `--repo-root .`.
-
-Integration tests must copy a tracked target fixture through
-`tests/common/fixture_repo.rs::TestRepo::from_fixture` and run Pulse against the
-temporary copy. Manual smoke tests follow the same pattern.
+Never run Pulse mutations with `--repo-root .` at this repository's root.
+Run Pulse for real only against `examples/todolist/`. Integration tests copy a
+tracked fixture through `tests/common/fixture_repo.rs::TestRepo::from_fixture`
+and run Pulse against the temporary copy.
 
 ## Change workflow
 
-1. Read the owning source, tests, and design document.
-2. Keep changes scoped to the owning module and preserve recovery/order
-   invariants at effect boundaries.
+1. Read `PRODUCT.md` for the feature's intended shape, then the owning source
+   and tests.
+2. Keep changes scoped to the owning module. Preserve lock ordering, atomic
+   write and recovery invariants at storage boundaries.
 3. Add focused coverage in the existing domain integration crate.
-4. Update contract documentation when public behavior or ownership changes.
-5. Run narrow tests first, then the repository reliability gates.
-
-For daemon changes, retain authorization ordering, idempotency checks,
-failpoint placement, durable intent before external I/O, and fail-closed
-uncertainty handling. Do not introduce a second application facade or state
-store.
+4. Update `README.md` or `AGENTS.md` when public behavior or ownership
+   changes. Update `PRODUCT.md` only through a decision.
+5. Run narrow tests first, then the repository gates.
 
 ## Validation
-
-Before handoff, run:
 
 ```bash
 cargo fmt --check
@@ -69,15 +54,13 @@ cargo clippy --all-targets --quiet -- -D warnings
 cargo test --all-targets
 ```
 
-`cargo test --all-targets` must pass with default threading. Do not lower test
-threading to conceal races or global-state collisions.
-
-Useful focused commands are listed in `AGENTS.md`.
+`cargo test --all-targets` must pass with default threading.
 
 ## Documentation rules
 
-- Use repository-relative links for repository files.
-- Keep current product/architecture truth in its owning document.
-- Treat source, tests, public docs, and design drift as a defect.
-- Never commit absolute machine paths, generated caches, runtime state, or
-  target-repository mutations.
+- Repository-relative links only.
+- Current truth lives in its owning document; do not duplicate it.
+- Do not describe unimplemented features as existing. Target design belongs
+  in `PRODUCT.md`.
+- Never commit absolute machine paths, caches, runtime state or mutations of
+  a test fixture.

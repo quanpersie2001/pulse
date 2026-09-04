@@ -35,7 +35,8 @@ explicit support commitment for external durable state. That change requires a
 separate accepted Decision defining compatibility scope, migration or explicit
 no-support behavior, recovery, rollback, tests, and operator impact.
 
-The accepted owner documents under `pulse-reboot/` define intended contracts.
+The accepted owner documents (formerly under `pulse-reboot/`, now absorbed
+into `PRODUCT.md` per Decision 0008) define intended contracts.
 Proposals describe implementation strategy; source and tests prove current
 implementation. None of them may silently turn an internal Slice into a
 compatibility boundary.
