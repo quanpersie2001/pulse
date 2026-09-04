@@ -306,7 +306,17 @@ impl JsonGraphStore {
             return Ok(());
         }
         let current = fs::read(&path).map_err(|error| PulseError::io(&path, error))?;
-        if current == NODE_SCHEMA.as_bytes() {
+        let matches_current = serde_json::from_slice::<serde_json::Value>(&current)
+            .ok()
+            .and_then(|value| to_canonical_bytes(&value).ok())
+            .zip(serde_json::from_str::<serde_json::Value>(NODE_SCHEMA).ok())
+            .and_then(|(current, expected)| {
+                to_canonical_bytes(&expected)
+                    .ok()
+                    .map(|expected| current == expected)
+            })
+            .unwrap_or(false);
+        if matches_current {
             return Ok(());
         }
         let current_hash = hash_bytes(&current);
@@ -578,7 +588,7 @@ fn inspect_workgraph_bootstrap_state(wg: &Path) -> PulseResult<WorkgraphBootstra
     let node_schema_bytes = read_optional_bytes(&node_schema_path)?;
     let node_schema_matches = node_schema_bytes
         .as_deref()
-        .map(|current| current == NODE_SCHEMA.as_bytes());
+        .map(|current| schema_bytes_match(current, NODE_SCHEMA.as_bytes()));
     let node_schema_hash = node_schema_bytes
         .as_deref()
         .filter(|current| *current != NODE_SCHEMA.as_bytes())
@@ -605,6 +615,17 @@ fn inspect_workgraph_bootstrap_state(wg: &Path) -> PulseResult<WorkgraphBootstra
         edge_schema_matches: current_marker_matches(&edge_schema_path, EDGE_SCHEMA.as_bytes())?,
         node_schema_hash,
     })
+}
+
+fn schema_bytes_match(current: &[u8], expected: &[u8]) -> bool {
+    let current = serde_json::from_slice::<serde_json::Value>(current).ok();
+    let expected = serde_json::from_slice::<serde_json::Value>(expected).ok();
+    match (current, expected) {
+        (Some(current), Some(expected)) => {
+            to_canonical_bytes(&current).ok() == to_canonical_bytes(&expected).ok()
+        }
+        _ => false,
+    }
 }
 
 fn current_marker_matches(path: &Path, expected: &[u8]) -> PulseResult<bool> {

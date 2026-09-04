@@ -23,6 +23,12 @@ pub struct Node {
     pub status_reason: Option<StatusReason>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub documentation: Option<DocumentationMetadata>,
+    /// Hash of the canonical `ticket.md` contract. The prose file is the
+    /// source of semantic Ticket fields; this is only its graph binding.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub brief_hash: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tags: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub role: Option<TicketRole>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -281,6 +287,8 @@ impl Node {
             status: NodeStatus::Draft,
             status_reason: None,
             documentation: None,
+            brief_hash: None,
+            tags: vec![],
             role: ticket_defaults.then_some(TicketRole::Implementation),
             risk: ticket_defaults.then_some(Risk::Unassessed),
             materialization: ticket_defaults.then_some(Materialization::Unassessed),

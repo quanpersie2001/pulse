@@ -154,6 +154,17 @@ impl Risk {
     pub fn is_assessed(self) -> bool {
         self != Self::Unassessed
     }
+
+    /// Default materialization for a newly-created Ticket.
+    pub fn default_materialization(self) -> Materialization {
+        match self {
+            Self::Low => Materialization::R0,
+            Self::Medium => Materialization::R1,
+            Self::High => Materialization::R2,
+            Self::Critical => Materialization::R3,
+            Self::Unassessed => Materialization::Unassessed,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]

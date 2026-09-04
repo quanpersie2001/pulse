@@ -170,7 +170,7 @@ fn setup_ready_ticket_with_required_docs(repo: &TestRepo, require_auth_doc: bool
     fs::create_dir_all(brief_path.parent().unwrap()).unwrap();
     fs::write(
         &brief_path,
-        b"# Ticket\nImplement atomic refresh token rotation.",
+        b"# Ticket\n\n## Objective\nRotate refresh tokens atomically.\n\n## Current behavior\nTokens are long-lived.\n\n## Target behavior\nTokens rotate on each use.\n\n## Code anchors\n- src/token.mjs\n\n## Required changes\n- Add rotation logic.\n\n## Invariants\n- Concurrent rotation serialized.\n\n## Acceptance\n- AC-1: Tokens rotate without race.\n\n## Verify\n- cargo test\n",
     )
     .unwrap();
     let brief_hash = hash_bytes(&fs::read(&brief_path).unwrap());

@@ -848,6 +848,18 @@
     }
   ],
   "properties": {
+    "brief_hash": {
+      "anyOf": [
+        { "$ref": "#/$defs/content_hash" },
+        { "type": "null" }
+      ]
+    },
+    "tags": {
+      "items": { "type": "string" },
+      "maxItems": 64,
+      "type": "array",
+      "uniqueItems": true
+    },
     "content_dir": {
       "type": "string"
     },

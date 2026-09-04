@@ -300,14 +300,27 @@ impl JsonGraphStore {
         decision_proofs: &[DecisionProofSnapshot],
     ) -> PulseResult<Vec<ContentHashBinding>> {
         let mut bindings = Vec::new();
+        if let Some(brief_hash) = &node.brief_hash {
+            bindings.push(ContentHashBinding {
+                label: "brief".to_string(),
+                path: format!("{}/ticket.md", node.content_dir),
+                bound_hash: brief_hash.clone(),
+                current_hash: content_hash_option(
+                    &self.repo_root,
+                    &format!("{}/ticket.md", node.content_dir),
+                ),
+            });
+        }
         if let Some(contract) = &node.implementation {
-            if let Some(brief) = &contract.brief {
-                bindings.push(ContentHashBinding {
-                    label: "brief".to_string(),
-                    path: brief.path.clone(),
-                    bound_hash: brief.content_hash.clone(),
-                    current_hash: content_hash_option(&self.repo_root, &brief.path),
-                });
+            if node.brief_hash.is_none() {
+                if let Some(brief) = &contract.brief {
+                    bindings.push(ContentHashBinding {
+                        label: "brief".to_string(),
+                        path: brief.path.clone(),
+                        bound_hash: brief.content_hash.clone(),
+                        current_hash: content_hash_option(&self.repo_root, &brief.path),
+                    });
+                }
             }
             for approach in &contract.shared_approach_refs {
                 bindings.push(ContentHashBinding {

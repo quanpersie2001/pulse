@@ -19,6 +19,10 @@ pub(crate) enum WorkCommand {
         #[arg(long)]
         materialization: Option<MaterializationArg>,
         #[arg(long)]
+        parent: Option<String>,
+        #[arg(long = "tag")]
+        tags: Vec<String>,
+        #[arg(long)]
         json: bool,
     },
     Show {
@@ -38,6 +42,16 @@ pub(crate) enum WorkCommand {
         expected_revision: u64,
         #[arg(long)]
         title: String,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Synchronize the graph contract binding from works/<id>/ticket.md.
+    Sync {
+        id: String,
+        #[arg(long)]
+        expected_revision: u64,
+        #[arg(long, default_value = "human:unknown")]
+        actor: String,
         #[arg(long)]
         json: bool,
     },
@@ -411,6 +425,8 @@ pub(crate) fn handle(
             role,
             risk,
             materialization,
+            parent,
+            tags,
             json,
         } => {
             let classification = PublicCreateClassification {
@@ -418,20 +434,43 @@ pub(crate) fn handle(
                 risk: risk.map(Into::into),
                 materialization: materialization.map(Into::into),
             };
-            let out = store.create_node_public_with_context(
+            let out = store.create_node_public_with_context_and_tags(
                 kind.into(),
                 title,
                 classification,
+                tags,
                 crate::graph::store::OperationContext::default(),
             )?;
+            if let Some(parent) = parent {
+                store.add_edge(
+                    crate::graph::model::edge::EdgeType::Parent,
+                    out.value.id.clone(),
+                    parent,
+                    "human:unknown".to_string(),
+                )?;
+            }
             render(json, &out, format!("created {}", out.value.id))
+        }
+        WorkCommand::Sync {
+            id,
+            expected_revision,
+            actor,
+            json,
+        } => {
+            let out = store.sync_ticket(&id, expected_revision, actor)?;
+            render(json, &out, format!("synchronized {}", out.value.id))
         }
         WorkCommand::Show { id, json } => {
             let node = store.show_node(&id)?;
             let human = node.title.clone();
+            let brief = if node.kind == WorkKind::Ticket {
+                Some(store.read_ticket_brief(&id)?)
+            } else {
+                None
+            };
             render(
                 json,
-                &json!({"schema_version": 1, "code": "ok", "node": node}),
+                &json!({"schema_version": 1, "code": "ok", "node": node, "brief": brief}),
                 human,
             )
         }

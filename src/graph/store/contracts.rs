@@ -71,12 +71,18 @@ impl JsonGraphStore {
         node.normalize_contract_fields();
         match request.role {
             TicketRole::Implementation => {
+                node.brief_hash = request.implementation.as_ref().and_then(|contract| {
+                    contract
+                        .brief
+                        .as_ref()
+                        .map(|brief| brief.content_hash.clone())
+                });
                 node.implementation = request.implementation;
                 node.decision_work = None;
             }
             TicketRole::DecisionWork => {
-                node.decision_work = request.decision_work;
                 node.implementation = None;
+                node.decision_work = request.decision_work;
             }
         }
         node.normalize_contract_fields();

@@ -66,16 +66,28 @@ pub fn validate_public_create_classification(
         return Ok(());
     }
 
-    match (classification.role, classification.risk, classification.materialization) {
-        (Some(_), Some(risk), Some(materialization))
-            if risk.is_assessed() && materialization.is_assessed() => Ok(()),
-        (Some(_), Some(_), Some(_)) => Err(PulseError::validation(
+    match (
+        classification.role,
+        classification.risk,
+        classification.materialization,
+    ) {
+        (role, Some(risk), materialization) if risk.is_assessed() => {
+            if materialization.is_some_and(|value| !value.is_assessed()) {
+                return Err(PulseError::validation(
+                    "risk_materialization_unassessed",
+                    "public Ticket creation requires assessed materialization",
+                ));
+            }
+            let _ = role;
+            Ok(())
+        }
+        (_, Some(_), _) => Err(PulseError::validation(
             "risk_materialization_unassessed",
-            "public Ticket creation requires assessed risk and materialization; unassessed is only valid for canonical draft storage",
+            "public Ticket creation requires assessed risk",
         )),
         _ => Err(PulseError::validation(
             "work_classification_missing",
-            "public Ticket creation requires explicit --role, --risk, and --materialization",
+            "public Ticket creation requires --risk; role defaults to implementation",
         )),
     }
 }

@@ -2314,6 +2314,8 @@ mod tests {
             title: title.to_string(),
             status: NodeStatus::Ready,
             status_reason: None,
+            brief_hash: None,
+            tags: vec![],
             documentation: Some(node::DocumentationMetadata {
                 impact: node::DocumentationImpact {
                     posture: DocumentationImpactPosture::None,
@@ -3088,6 +3090,8 @@ mod tests {
             title: String::new(),
             status: NodeStatus::Ready,
             status_reason: None,
+            brief_hash: None,
+            tags: vec![],
             documentation: None,
             role: Some(TicketRole::Implementation),
             risk: Some(Risk::Low),
