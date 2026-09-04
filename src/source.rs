@@ -257,6 +257,7 @@ pub fn workspace_snapshot(
         );
     }
 
+    let prefix = git_path_prefix(repo_root, "source_binding_stale")?;
     let mut reason_codes = Vec::new();
     let head = head_commit(repo_root)?;
     if let Some(reason) = validate_snapshot_base_relationship(repo_root, options, &head)? {
@@ -267,16 +268,16 @@ pub fn workspace_snapshot(
         reason_codes.push(format!("git_operation_{}", operation_state.as_str()));
     }
 
-    let tracked = tracked_diff_identity(repo_root, options)?;
+    let tracked = tracked_diff_identity(repo_root, options, &prefix)?;
     extend_reason(&mut reason_codes, "tracked_diff", &tracked.status);
 
-    let status = status_identity(repo_root, options)?;
+    let status = status_identity(repo_root, options, &prefix)?;
     extend_reason(&mut reason_codes, "status", &status.status);
 
-    let untracked = untracked_manifest_identity(repo_root, options)?;
+    let untracked = untracked_manifest_identity(repo_root, options, &prefix)?;
     extend_reason(&mut reason_codes, "untracked_manifest", &untracked.status);
 
-    if has_ignored_source_paths(repo_root, options)? {
+    if has_ignored_source_paths(repo_root, options, &prefix)? {
         reason_codes.push("ignored_source_paths_unsupported".to_string());
     }
 
@@ -389,10 +390,17 @@ pub fn current_status(
     commit: &str,
     scoped_paths: &[String],
 ) -> SourceBindingStatus {
+    let prefix = match git_path_prefix(repo_root, "source_binding_stale") {
+        Ok(prefix) => prefix,
+        Err(_) => return SourceBindingStatus::Stale,
+    };
     if resolve_full_commit(repo_root, commit).is_err() {
         return SourceBindingStatus::Stale;
     }
-    if scoped_paths.iter().any(|path| path_dirty(repo_root, path)) {
+    if scoped_paths
+        .iter()
+        .any(|path| path_dirty(repo_root, &prefix, path))
+    {
         return SourceBindingStatus::DirtyUnsupported;
     }
     let head = match git(repo_root, ["rev-parse", "HEAD"]) {
@@ -403,13 +411,19 @@ pub fn current_status(
         return SourceBindingStatus::Current;
     }
     let range = format!("{commit}..HEAD");
-    let changed = match git(repo_root, ["diff", "--name-only", &range]) {
+    let changed = match git_with_pathspec(
+        repo_root,
+        &["diff", "--name-only", &range],
+        &prefix,
+        &[],
+        "source_binding_stale",
+    ) {
         Ok(value) => value,
         Err(_) => return SourceBindingStatus::Stale,
     };
     if changed
         .lines()
-        .filter(|line| !line.trim().is_empty())
+        .filter_map(|line| prefix.normalize(line.trim()))
         .all(is_evidence_only_path)
     {
         SourceBindingStatus::Current
@@ -430,11 +444,26 @@ fn packet_head_commit(repo_root: &Path) -> Result<String> {
     )
 }
 
-fn path_dirty(repo_root: &Path, path: &str) -> bool {
-    match git(repo_root, ["status", "--porcelain", "--", path]) {
-        Ok(value) => !value.trim().is_empty(),
+fn path_dirty(repo_root: &Path, prefix: &GitPathPrefix, path: &str) -> bool {
+    match git_with_pathspec(
+        repo_root,
+        &["status", "--porcelain"],
+        prefix,
+        &[path],
+        "source_binding_stale",
+    ) {
+        Ok(value) => value.lines().filter_map(status_line_path).any(|changed| {
+            prefix
+                .normalize(changed)
+                .is_some_and(|normalized| path_matches_scope(normalized, path))
+        }),
         Err(_) => true,
     }
+}
+
+fn path_matches_scope(path: &str, scope: &str) -> bool {
+    let scope = scope.trim_end_matches('/');
+    scope.is_empty() || scope == "." || path == scope || path.starts_with(&format!("{scope}/"))
 }
 
 fn is_evidence_only_path(path: &str) -> bool {
@@ -458,6 +487,71 @@ fn git_with_code<const N: usize>(
 ) -> Result<String> {
     let output = Command::new("git")
         .args(args)
+        .current_dir(repo_root)
+        .output()
+        .map_err(|error| PulseError::io(repo_root.join(".git"), error))?;
+    if !output.status.success() {
+        return Err(PulseError::validation(
+            error_code,
+            String::from_utf8_lossy(&output.stderr).trim().to_string(),
+        ));
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).to_string())
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct GitPathPrefix(String);
+
+impl GitPathPrefix {
+    fn normalize<'a>(&self, path: &'a str) -> Option<&'a str> {
+        if self.0.is_empty() {
+            return Some(path);
+        }
+        path.strip_prefix(&self.0).filter(|path| !path.is_empty())
+    }
+
+    fn pathspec(&self, path: &str) -> String {
+        if self.0.is_empty() {
+            path.to_string()
+        } else {
+            format!(":(top){}{path}", self.0)
+        }
+    }
+
+    fn root_pathspec(&self) -> Option<String> {
+        (!self.0.is_empty()).then(|| format!(":(top){}", self.0))
+    }
+}
+
+fn git_path_prefix(repo_root: &Path, error_code: &'static str) -> Result<GitPathPrefix> {
+    let output = git_with_code(repo_root, ["rev-parse", "--show-prefix"], error_code)?;
+    let prefix = output.trim().trim_matches('/').to_string();
+    Ok(GitPathPrefix(if prefix.is_empty() {
+        String::new()
+    } else {
+        format!("{prefix}/")
+    }))
+}
+
+fn git_with_pathspec(
+    repo_root: &Path,
+    args: &[&str],
+    prefix: &GitPathPrefix,
+    included_paths: &[&str],
+    error_code: &'static str,
+) -> Result<String> {
+    let mut command = Command::new("git");
+    command.args(args).arg("--");
+    if included_paths.is_empty() {
+        if let Some(pathspec) = prefix.root_pathspec() {
+            command.arg(pathspec);
+        }
+    } else {
+        for path in included_paths {
+            command.arg(prefix.pathspec(path));
+        }
+    }
+    let output = command
         .current_dir(repo_root)
         .output()
         .map_err(|error| PulseError::io(repo_root.join(".git"), error))?;
@@ -570,13 +664,18 @@ pub fn revalidate_packet_base(repo_root: &Path, expected: &PacketSourceSnapshot)
 /// paths are still required to be ignored separately by
 /// `validate_packet_operational_paths`.
 pub fn check_cleanliness(repo_root: &Path) -> Result<SourceCleanliness> {
-    let output = packet_git(
+    let prefix = git_path_prefix(repo_root, "work_packet_source_unavailable")?;
+    let output = git_with_pathspec(
         repo_root,
-        ["status", "--porcelain=v1", "--untracked-files=all"],
+        &["status", "--porcelain=v1", "--untracked-files=all"],
+        &prefix,
+        &[],
+        "work_packet_source_unavailable",
     )?;
     let has_source_dirty = output
         .lines()
         .filter_map(status_line_path)
+        .filter_map(|path| prefix.normalize(path))
         .any(|path| !is_pulse_metadata_path(path));
     if has_source_dirty {
         Ok(SourceCleanliness::Dirty)
@@ -612,6 +711,7 @@ enum ComponentStatus {
 fn tracked_diff_identity(
     repo_root: &Path,
     options: &WorkspaceSnapshotOptions,
+    prefix: &GitPathPrefix,
 ) -> Result<SnapshotComponent> {
     let mut args = vec![
         "diff",
@@ -624,10 +724,18 @@ fn tracked_diff_identity(
         &options.diff_base_commit,
         "--",
     ];
-    for path in &options.included_paths {
-        validate_snapshot_scope_path(path)?;
-        args.push(path);
+    let mut pathspecs = Vec::new();
+    if options.included_paths.is_empty() {
+        if let Some(pathspec) = prefix.root_pathspec() {
+            pathspecs.push(pathspec);
+        }
+    } else {
+        for path in &options.included_paths {
+            validate_snapshot_scope_path(path)?;
+            pathspecs.push(prefix.pathspec(path));
+        }
     }
+    args.extend(pathspecs.iter().map(String::as_str));
     let bytes = match git_bytes_bounded(repo_root, &args, options.max_tracked_diff_bytes) {
         Ok(bytes) => bytes,
         Err(SnapshotReadError::BoundedOut(bytes)) => {
@@ -665,6 +773,7 @@ fn tracked_diff_identity(
 fn status_identity(
     repo_root: &Path,
     options: &WorkspaceSnapshotOptions,
+    prefix: &GitPathPrefix,
 ) -> Result<SnapshotComponent> {
     let mut args = vec![
         "status",
@@ -673,11 +782,23 @@ fn status_identity(
         "--untracked-files=all",
         "--",
     ];
-    for path in &options.included_paths {
-        validate_snapshot_scope_path(path)?;
-        args.push(path);
+    let mut pathspecs = Vec::new();
+    if options.included_paths.is_empty() {
+        if let Some(pathspec) = prefix.root_pathspec() {
+            pathspecs.push(pathspec);
+        }
+    } else {
+        for path in &options.included_paths {
+            validate_snapshot_scope_path(path)?;
+            pathspecs.push(prefix.pathspec(path));
+        }
     }
-    args.extend(PULSE_RUNTIME_EXCLUDE_PATHS);
+    pathspecs.extend(
+        PULSE_RUNTIME_EXCLUDE_PATHS
+            .iter()
+            .map(|path| (*path).to_string()),
+    );
+    args.extend(pathspecs.iter().map(String::as_str));
     let bytes = match git_bytes_bounded(repo_root, &args, options.max_status_bytes) {
         Ok(bytes) => bytes,
         Err(SnapshotReadError::BoundedOut(bytes)) => {
@@ -698,7 +819,7 @@ fn status_identity(
             return Err(PulseError::io(repo_root.join(".git"), error))
         }
     };
-    let retained = filter_git_records(&bytes)?;
+    let retained = filter_git_records(&bytes, prefix)?;
     Ok(SnapshotComponent {
         dirty: !retained.is_empty(),
         identity: hash_bytes(&retained),
@@ -706,7 +827,7 @@ fn status_identity(
     })
 }
 
-fn filter_git_records(bytes: &[u8]) -> Result<Vec<u8>> {
+fn filter_git_records(bytes: &[u8], prefix: &GitPathPrefix) -> Result<Vec<u8>> {
     let mut retained = Vec::new();
     for entry in bytes
         .split(|byte| *byte == 0)
@@ -718,10 +839,23 @@ fn filter_git_records(bytes: &[u8]) -> Result<Vec<u8>> {
                 "git path is not valid UTF-8",
             )
         })?;
-        let path = status_or_diff_path(text);
+        let is_status_record = text.len() >= 3 && text.as_bytes()[2] == b' ';
+        let path = if is_status_record {
+            status_or_diff_path(text)
+        } else {
+            text.trim_matches('"')
+        };
+        let Some(path) = prefix.normalize(path) else {
+            continue;
+        };
         validate_managed_relative_path(path)?;
         if !is_pulse_runtime_generated_path(path) {
-            retained.extend_from_slice(entry);
+            if is_status_record {
+                retained.extend_from_slice(&entry[..3]);
+                retained.extend_from_slice(path.as_bytes());
+            } else {
+                retained.extend_from_slice(path.as_bytes());
+            }
             retained.push(0);
         }
     }
@@ -731,13 +865,26 @@ fn filter_git_records(bytes: &[u8]) -> Result<Vec<u8>> {
 fn untracked_manifest_identity(
     repo_root: &Path,
     options: &WorkspaceSnapshotOptions,
+    prefix: &GitPathPrefix,
 ) -> Result<SnapshotComponent> {
     let mut args = vec!["ls-files", "--others", "-z", "--"];
-    for path in &options.included_paths {
-        validate_snapshot_scope_path(path)?;
-        args.push(path);
+    let mut pathspecs = Vec::new();
+    if options.included_paths.is_empty() {
+        if let Some(pathspec) = prefix.root_pathspec() {
+            pathspecs.push(pathspec);
+        }
+    } else {
+        for path in &options.included_paths {
+            validate_snapshot_scope_path(path)?;
+            pathspecs.push(prefix.pathspec(path));
+        }
     }
-    args.extend(PULSE_RUNTIME_EXCLUDE_PATHS);
+    pathspecs.extend(
+        PULSE_RUNTIME_EXCLUDE_PATHS
+            .iter()
+            .map(|path| (*path).to_string()),
+    );
+    args.extend(pathspecs.iter().map(String::as_str));
     let output = match git_nul_records_bounded(
         repo_root,
         &args,
@@ -786,6 +933,9 @@ fn untracked_manifest_identity(
                 "untracked path is not valid UTF-8",
             )
         })?;
+        let Some(relative) = prefix.normalize(relative) else {
+            continue;
+        };
         validate_managed_relative_path(relative)?;
         if is_pulse_runtime_generated_path(relative) {
             continue;
@@ -1056,7 +1206,11 @@ fn is_pulse_runtime_generated_path(path: &str) -> bool {
         || path.starts_with(".pulse/cache/")
 }
 
-fn has_ignored_source_paths(repo_root: &Path, options: &WorkspaceSnapshotOptions) -> Result<bool> {
+fn has_ignored_source_paths(
+    repo_root: &Path,
+    options: &WorkspaceSnapshotOptions,
+    prefix: &GitPathPrefix,
+) -> Result<bool> {
     let mut args = vec![
         "ls-files",
         "--others",
@@ -1065,11 +1219,23 @@ fn has_ignored_source_paths(repo_root: &Path, options: &WorkspaceSnapshotOptions
         "-z",
         "--",
     ];
-    for path in &options.included_paths {
-        validate_snapshot_scope_path(path)?;
-        args.push(path);
+    let mut pathspecs = Vec::new();
+    if options.included_paths.is_empty() {
+        if let Some(pathspec) = prefix.root_pathspec() {
+            pathspecs.push(pathspec);
+        }
+    } else {
+        for path in &options.included_paths {
+            validate_snapshot_scope_path(path)?;
+            pathspecs.push(prefix.pathspec(path));
+        }
     }
-    args.extend(PULSE_RUNTIME_EXCLUDE_PATHS);
+    pathspecs.extend(
+        PULSE_RUNTIME_EXCLUDE_PATHS
+            .iter()
+            .map(|path| (*path).to_string()),
+    );
+    args.extend(pathspecs.iter().map(String::as_str));
     let output = match git_nul_records_bounded(
         repo_root,
         &args,
@@ -1094,6 +1260,9 @@ fn has_ignored_source_paths(repo_root: &Path, options: &WorkspaceSnapshotOptions
                 "ignored path is not valid UTF-8",
             )
         })?;
+        let Some(relative) = prefix.normalize(relative) else {
+            continue;
+        };
         validate_managed_relative_path(relative)?;
         if !is_pulse_runtime_generated_path(relative) {
             return Ok(true);

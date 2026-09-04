@@ -15,6 +15,91 @@ fn options(base: &str) -> WorkspaceSnapshotOptions {
     WorkspaceSnapshotOptions::feasibility_defaults("repo", "wt", "in_place", base)
 }
 
+fn nested_repo() -> (tempfile::TempDir, std::path::PathBuf, String) {
+    let tmp = tempfile::tempdir().unwrap();
+    fs::create_dir_all(tmp.path().join("sub/src")).unwrap();
+    fs::write(tmp.path().join("sub/src/app.js"), b"baseline\n").unwrap();
+    fs::write(tmp.path().join("outside.txt"), b"baseline\n").unwrap();
+    let base = git::commit_all(tmp.path());
+    let sub = tmp.path().join("sub");
+    (tmp, sub, base)
+}
+
+#[test]
+fn nested_repo_snapshot_ignores_outside_changes_and_manifests() {
+    let (tmp, sub, base) = nested_repo();
+    let baseline = workspace_snapshot(&sub, &options(&base)).unwrap();
+    fs::write(tmp.path().join("outside.txt"), b"outside dirty\n").unwrap();
+    fs::write(
+        tmp.path().join("outside-untracked.txt"),
+        b"outside untracked\n",
+    )
+    .unwrap();
+
+    let snapshot = workspace_snapshot(&sub, &options(&base)).unwrap();
+    assert_eq!(snapshot.cleanliness, WorkspaceCleanliness::Clean);
+    assert_eq!(
+        pulse::source::check_cleanliness(&sub).unwrap(),
+        pulse::source::SourceCleanliness::Clean
+    );
+    assert_eq!(
+        snapshot.tracked_diff_identity,
+        baseline.tracked_diff_identity
+    );
+    assert_eq!(
+        snapshot.untracked_manifest_identity,
+        baseline.untracked_manifest_identity
+    );
+    assert_eq!(snapshot.status_identity, baseline.status_identity);
+}
+
+#[test]
+fn nested_repo_snapshot_detects_inside_changes_and_current_status_scopes_paths() {
+    let (tmp, sub, base) = nested_repo();
+    fs::write(sub.join("src/app.js"), b"inside dirty\n").unwrap();
+    fs::write(tmp.path().join("outside.txt"), b"outside dirty too\n").unwrap();
+    fs::write(sub.join("inside-untracked.txt"), b"inside untracked\n").unwrap();
+
+    let snapshot = workspace_snapshot(&sub, &options(&base)).unwrap();
+    assert_eq!(snapshot.cleanliness, WorkspaceCleanliness::Dirty);
+    assert_eq!(
+        pulse::source::check_cleanliness(&sub).unwrap(),
+        pulse::source::SourceCleanliness::Dirty
+    );
+    assert_ne!(
+        snapshot.tracked_diff_identity,
+        pulse::canonical_json::hash_bytes(&[])
+    );
+    assert_ne!(
+        snapshot.untracked_manifest_identity,
+        pulse::canonical_json::hash_bytes(&[])
+    );
+    assert_ne!(
+        snapshot.status_identity,
+        pulse::canonical_json::hash_bytes(&[])
+    );
+
+    assert_eq!(
+        pulse::source::current_status(&sub, &base, &["src/app.js".to_string()]),
+        pulse::source::SourceBindingStatus::DirtyUnsupported
+    );
+    fs::remove_file(sub.join("inside-untracked.txt")).unwrap();
+    fs::write(sub.join("src/app.js"), b"baseline\n").unwrap();
+    git::git(tmp.path(), &["add", "outside.txt"]);
+    git::git(tmp.path(), &["commit", "-m", "outside-only change"]);
+    assert_eq!(
+        pulse::source::current_status(&sub, &base, &[]),
+        pulse::source::SourceBindingStatus::Current
+    );
+    fs::write(sub.join("src/app.js"), b"inside committed change\n").unwrap();
+    git::git(tmp.path(), &["add", "sub/src/app.js"]);
+    git::git(tmp.path(), &["commit", "-m", "inside change"]);
+    assert_eq!(
+        pulse::source::current_status(&sub, &base, &[]),
+        pulse::source::SourceBindingStatus::Stale
+    );
+}
+
 #[test]
 fn snapshot_is_deterministic_and_captured_at_excluded_from_identity() {
     let tmp = tempfile::tempdir().unwrap();
