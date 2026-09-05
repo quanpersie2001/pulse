@@ -26,9 +26,8 @@ use pulse::source::head_commit;
 use pulse::storage::transaction::{recover_prepared_transactions, TransactionFailpoint};
 use pulse::storage::{bootstrap as storage_bootstrap, safe_repo_relative, MANIFEST_JSON};
 use pulse::work_packet::{
-    PacketBudget, PacketCapabilities, PacketDispatch, PacketKnowledge, PacketSource,
-    PacketWorkspace, WorkPacket, BUDGET_PROFILE, MAX_CANONICAL_JSON_BYTES, PACKET_PROFILE,
-    WORK_PACKET_SCHEMA,
+    PacketKnowledgeItem, PacketReadBudget, PacketSource, WorkPacket, MAX_CANONICAL_JSON_BYTES,
+    MAX_INITIAL_LINES, MAX_SNIPPET_BYTES_EACH, RECOMMENDED_INITIAL_SECTIONS, WORK_PACKET_SCHEMA,
 };
 use pulse::{JsonGraphStore, PulseError, PulseResult, Result};
 
@@ -232,54 +231,39 @@ fn work_packet_public_paths_compile() {
     // from integration tests (external crate consumers).
 
     // Constants.
-    assert_eq!(PACKET_PROFILE, "work_packet_preview");
-    assert_eq!(BUDGET_PROFILE, "work_packet_preview_budget");
     assert_eq!(MAX_CANONICAL_JSON_BYTES, 131_072);
 
     // Schema & defaults.
     assert!(WORK_PACKET_SCHEMA.contains("WorkPacket"));
+    assert!(WORK_PACKET_SCHEMA.contains("work_packet"));
 
-    let budget = PacketBudget::default();
-    assert_eq!(budget.profile, BUDGET_PROFILE);
-
-    let caps = PacketCapabilities {
-        evaluation_status: "not_evaluated".to_string(),
-        required: vec!["source.read".to_string()],
-        optional: vec![],
-        missing: vec![],
-        inventory_identity: None,
+    let budget = PacketReadBudget {
+        required_sections: 1,
+        recommended_initial_sections: RECOMMENDED_INITIAL_SECTIONS as u64,
+        max_initial_lines: MAX_INITIAL_LINES as u64,
+        suggestion_limit: 8,
+        snippet_max_bytes_each: MAX_SNIPPET_BYTES_EACH as u64,
     };
-    assert!(caps.required.contains(&"source.read".to_string()));
+    assert_eq!(budget.required_sections, 1);
 
-    let knowledge = PacketKnowledge {
-        status: "not_installed".to_string(),
-        owner_phase: 4,
-        knowledge_fingerprint: None,
-        required: vec![],
-        recommended: vec![],
-        suggested: vec![],
-        excluded: vec![],
+    let knowledge = PacketKnowledgeItem {
+        summary: "Rotate tokens atomically".to_string(),
+        why_applicable: "Concurrency hazard".to_string(),
+        required_checks: vec!["Exercise concurrent refresh".to_string()],
+        detail_ref: None,
     };
-    assert_eq!(knowledge.owner_phase, 4);
+    assert!(knowledge
+        .required_checks
+        .contains(&"Exercise concurrent refresh".to_string()));
 
-    let workspace = PacketWorkspace {
-        binding_status: "not_allocated".to_string(),
-        workspace_id: None,
-        required_strategy: "isolated_worktree_required".to_string(),
-        base_repository_id: "repo".to_string(),
-        base_commit: "0000000000000000000000000000000000000000".to_string(),
-        requirements: vec![],
+    let source = PacketSource {
+        repository_id: "repo".to_string(),
+        commit: "0000000000000000000000000000000000000000".to_string(),
+        dirty: false,
     };
     // Verify typed access.
-    let _s: &str = &workspace.required_strategy;
+    let _s: &str = &source.repository_id;
 
-    // Verify that all major public DTO paths compile.
+    // Verify that the major public DTO path compiles.
     fn _accepts_packet(_: WorkPacket) {}
-    fn _accepts_dispatch(_: PacketDispatch) {}
-    fn _accepts_source(_: PacketSource) {}
-    _accepts_dispatch(PacketDispatch::default());
-    let dispatch = PacketDispatch::default();
-    assert!(dispatch.reservation_candidate);
-    assert!(!dispatch.dispatch_authorized);
-    assert_eq!(dispatch.authorization_status, "not_reserved");
 }

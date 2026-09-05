@@ -3,9 +3,7 @@
 //! These helpers classify whether a receipt's bindings are still current against
 //! the live repository state (workgraph node revisions, content file hashes,
 //! source/git commit status, artifact existence). They are reusable across all
-//! receipt kinds and intentionally exclude kind-specific policy interpretation,
-//! which keeps the generic envelope proof reusable for both revision-bound
-//! receipts and contract-revision-bound shaping receipts.
+//! receipt kinds and intentionally exclude kind-specific policy interpretation.
 
 use crate::canonical_json::hash_bytes;
 use crate::evidence::manifest;
@@ -49,10 +47,9 @@ fn work_binding_codes(repo_root: &Path, bindings: &ReceiptBindings) -> Result<Ve
 
 /// Check content and source binding currentness for a receipt.
 ///
-/// Work normal-revision bindings are intentionally excluded: shaping receipts
-/// are current by `contract_revision`, which the graph layer verifies
-/// separately. This keeps the generic envelope proof reusable for both
-/// revision-bound receipts and contract-revision-bound shaping receipts.
+/// Work normal-revision bindings are intentionally excluded here: lifecycle
+/// staleness is verified by the graph layer against the bound revisions. This
+/// keeps the generic envelope proof focused on content and source identity.
 pub fn content_source_binding_codes(
     repo_root: &Path,
     bindings: &ReceiptBindings,

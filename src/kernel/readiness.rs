@@ -7,11 +7,10 @@ use crate::graph::model::contract::Materialization;
 use crate::graph::model::node::{Node, NodeStatus};
 use crate::graph::read::executability::{structural_executability, StructuralExecutabilityReport};
 use crate::graph::read::readiness::{
-    evaluate as evaluate_readiness, ContentHashBinding, DecisionProofSnapshot, EvalProfile,
-    QaCaseResolutionSnapshot, ReadinessInputs, ReadinessReport, ShapingReceiptSnapshot,
+    evaluate as evaluate_readiness, ContentHashBinding, EvalProfile, QaCaseResolutionSnapshot,
+    ReadinessInputs, ReadinessReport,
 };
 use crate::graph::store::JsonGraphStore;
-use crate::kernel::shaping::verify_map_current;
 use crate::storage::transaction::recover_prepared_transactions;
 use crate::storage::WriteGuard;
 use crate::{PulseError, PulseResult};
@@ -60,20 +59,16 @@ impl JsonGraphStore {
                 Err(err)
             }
         })?;
-        let shaping = self.build_shaping_snapshot(node)?;
         let (ticket_brief, ticket_brief_error) = self.build_ticket_brief_snapshot(node);
-        let decision_proofs = self.build_decision_proofs(node)?;
         let docs = self.build_docs_applicability(node)?;
         let qa_resolution = self.build_qa_resolution(node);
         let authority = crate::policy::load_authority_policy(&self.repo_root)?;
-        let content_bindings = self.build_content_bindings(node, &shaping, &decision_proofs)?;
+        let content_bindings = self.build_content_bindings(node);
         Ok(ReadinessSnapshot {
             graph_fingerprint: projection.graph_fingerprint.clone(),
             structural,
-            shaping,
             ticket_brief,
             ticket_brief_error,
-            decision_proofs,
             docs,
             qa_resolution,
             authority,
@@ -172,139 +167,6 @@ impl JsonGraphStore {
         }
     }
 
-    pub(crate) fn build_shaping_snapshot(
-        &self,
-        node: &Node,
-    ) -> PulseResult<Option<ShapingReceiptSnapshot>> {
-        let Some(pointer) = &node.shaping else {
-            return Ok(None);
-        };
-        let snapshot =
-            match crate::evidence::receipt::load_receipt(&self.repo_root, &pointer.receipt.id) {
-                Ok((receipt, hash)) => {
-                    let payload = match &receipt.payload {
-                        crate::evidence::model::ReceiptPayload::ShapingValidation(payload) => {
-                            Some(payload.clone())
-                        }
-                        _ => None,
-                    };
-                    let integrity_valid = hash == pointer.receipt.hash
-                        && receipt.kind == crate::evidence::model::ReceiptKind::ShapingValidation
-                        && receipt.result == crate::evidence::model::ReceiptResult::Passed
-                        && payload.as_ref().is_some_and(|p| p.payload_version == 1);
-                    let payload = payload.unwrap_or_else(default_shaping_payload);
-                    let binding_codes = crate::evidence::receipt::content_source_binding_codes(
-                        &self.repo_root,
-                        &receipt.bindings,
-                        None,
-                    )
-                    .unwrap_or_default();
-                    let map_current = payload
-                        .map
-                        .as_ref()
-                        .map(|map| verify_map_current(&self.repo_root, map).is_ok())
-                        .unwrap_or(true);
-                    ShapingReceiptSnapshot {
-                        receipt_id: pointer.receipt.id.clone(),
-                        receipt_hash: hash,
-                        payload,
-                        integrity_valid,
-                        binding_codes,
-                        map_current,
-                    }
-                }
-                Err(_) => ShapingReceiptSnapshot {
-                    receipt_id: pointer.receipt.id.clone(),
-                    receipt_hash: pointer.receipt.hash.clone(),
-                    payload: default_shaping_payload(),
-                    integrity_valid: false,
-                    binding_codes: vec!["shaping_receipt_missing".to_string()],
-                    map_current: true,
-                },
-            };
-        Ok(Some(snapshot))
-    }
-
-    pub(crate) fn build_decision_proofs(
-        &self,
-        node: &Node,
-    ) -> PulseResult<Vec<DecisionProofSnapshot>> {
-        let Some(contract) = &node.implementation else {
-            return Ok(Vec::new());
-        };
-        if contract.required_decisions.is_empty() {
-            return Ok(Vec::new());
-        }
-        let nodes = self.load_nodes()?;
-        let mut proofs = Vec::new();
-        for decision in &contract.required_decisions {
-            let snapshot = match crate::evidence::receipt::load_receipt(
-                &self.repo_root,
-                &decision.acceptance_receipt.id,
-            ) {
-                Ok((receipt, hash)) => {
-                    let payload = match &receipt.payload {
-                        crate::evidence::model::ReceiptPayload::DecisionAcceptance(p) => {
-                            Some(p.clone())
-                        }
-                        _ => None,
-                    };
-                    let integrity_valid = hash == decision.acceptance_receipt.hash
-                        && receipt.kind == crate::evidence::model::ReceiptKind::DecisionAcceptance
-                        && payload.is_some();
-                    let payload = payload.unwrap_or_else(default_decision_payload);
-                    let content_current =
-                        content_hash_option(&self.repo_root, &payload.decision.content.path)
-                            .map(|h| h == payload.decision.content.content_hash)
-                            .unwrap_or(false);
-                    let decision_node = nodes.get(&decision.id);
-                    DecisionProofSnapshot {
-                        decision_id: decision.id.clone(),
-                        required_contract_revision: decision.contract_revision,
-                        receipt_id: decision.acceptance_receipt.id.clone(),
-                        receipt_hash: hash,
-                        payload,
-                        integrity_valid,
-                        decision_node_present: decision_node.is_some(),
-                        decision_terminal: decision_node
-                            .map(|n| {
-                                matches!(n.status, NodeStatus::Cancelled | NodeStatus::Superseded)
-                            })
-                            .unwrap_or(false),
-                        decision_contract_revision: decision_node
-                            .map(|n| n.contract_revision)
-                            .unwrap_or(0),
-                        content_current,
-                    }
-                }
-                Err(error) if error.code() == "receipt_not_found" => {
-                    // The acceptance proof does not exist yet. Per the proposal,
-                    // work depending on a not-yet-accepted Decision is
-                    // `unavailable` (decision_acceptance_missing), not stale. We
-                    // omit the proof so the readiness gate sees `None`.
-                    continue;
-                }
-                Err(_) => DecisionProofSnapshot {
-                    decision_id: decision.id.clone(),
-                    required_contract_revision: decision.contract_revision,
-                    receipt_id: decision.acceptance_receipt.id.clone(),
-                    receipt_hash: decision.acceptance_receipt.hash.clone(),
-                    payload: default_decision_payload(),
-                    integrity_valid: false,
-                    decision_node_present: nodes.contains_key(&decision.id),
-                    decision_terminal: false,
-                    decision_contract_revision: nodes
-                        .get(&decision.id)
-                        .map(|n| n.contract_revision)
-                        .unwrap_or(0),
-                    content_current: false,
-                },
-            };
-            proofs.push(snapshot);
-        }
-        Ok(proofs)
-    }
-
     pub(crate) fn build_docs_applicability(
         &self,
         node: &Node,
@@ -337,12 +199,7 @@ impl JsonGraphStore {
         )
     }
 
-    pub(crate) fn build_content_bindings(
-        &self,
-        node: &Node,
-        shaping: &Option<ShapingReceiptSnapshot>,
-        decision_proofs: &[DecisionProofSnapshot],
-    ) -> PulseResult<Vec<ContentHashBinding>> {
+    pub(crate) fn build_content_bindings(&self, node: &Node) -> Vec<ContentHashBinding> {
         let mut bindings = Vec::new();
         if let Some(brief_hash) = &node.brief_hash {
             bindings.push(ContentHashBinding {
@@ -355,58 +212,15 @@ impl JsonGraphStore {
                 ),
             });
         }
-        if let Some(contract) = &node.implementation {
-            if node.brief_hash.is_none() {
-                if let Some(brief) = &contract.brief {
-                    bindings.push(ContentHashBinding {
-                        label: "brief".to_string(),
-                        path: brief.path.clone(),
-                        bound_hash: brief.content_hash.clone(),
-                        current_hash: content_hash_option(&self.repo_root, &brief.path),
-                    });
-                }
-            }
-            for approach in &contract.shared_approach_refs {
-                bindings.push(ContentHashBinding {
-                    label: format!("shared_approach:{}", approach.path),
-                    path: approach.path.clone(),
-                    bound_hash: approach.content_hash.clone(),
-                    current_hash: content_hash_option(&self.repo_root, &approach.path),
-                });
-            }
-        }
-        if let Some(shaping) = shaping {
-            if let Some(map) = &shaping.payload.map {
-                bindings.push(ContentHashBinding {
-                    label: "map".to_string(),
-                    path: map.path.clone(),
-                    bound_hash: map.content_hash.clone(),
-                    current_hash: content_hash_option(&self.repo_root, &map.path),
-                });
-            }
-        }
-        for proof in decision_proofs {
-            bindings.push(ContentHashBinding {
-                label: format!("decision:{}", proof.decision_id),
-                path: proof.payload.decision.content.path.clone(),
-                bound_hash: proof.payload.decision.content.content_hash.clone(),
-                current_hash: content_hash_option(
-                    &self.repo_root,
-                    &proof.payload.decision.content.path,
-                ),
-            });
-        }
-        Ok(bindings)
+        bindings
     }
 }
 
 pub(crate) struct ReadinessSnapshot {
     pub(crate) graph_fingerprint: String,
     pub(crate) structural: StructuralExecutabilityReport,
-    pub(crate) shaping: Option<ShapingReceiptSnapshot>,
     pub(crate) ticket_brief: Option<TicketBrief>,
     pub(crate) ticket_brief_error: Option<String>,
-    pub(crate) decision_proofs: Vec<DecisionProofSnapshot>,
     pub(crate) docs: crate::docs::applicability::ApplicableDocsReport,
     pub(crate) qa_resolution: Option<QaCaseResolutionSnapshot>,
     pub(crate) authority: crate::policy::AuthorityPolicyReport,
@@ -419,12 +233,10 @@ impl ReadinessSnapshot {
             subject: node,
             graph_valid: true,
             structural: &self.structural,
-            shaping: self.shaping.as_ref(),
             ticket_brief: self.ticket_brief.as_ref(),
             ticket_brief_error: self.ticket_brief_error.as_deref(),
-            decision_proofs: self.decision_proofs.clone(),
-            docs: &self.docs,
             qa_resolution: self.qa_resolution.as_ref(),
+            docs: &self.docs,
             authority: &self.authority,
             content_bindings: self.content_bindings.clone(),
             graph_fingerprint: self.graph_fingerprint.clone(),
@@ -438,69 +250,4 @@ fn content_hash_option(repo_root: &Path, path: &str) -> Option<String> {
     let rel = crate::storage::safe_repo_relative(path).ok()?;
     let bytes = fs::read(repo_root.join(rel)).ok()?;
     Some(hash_bytes(&bytes))
-}
-
-/// Placeholder shaping payload used when a current shaping receipt cannot be
-/// loaded as a valid current passed payload. The evaluator flags the family via
-/// `integrity_valid=false`; payload contents are irrelevant in that case.
-fn default_shaping_payload() -> crate::evidence::model::ShapingValidationPayload {
-    use crate::evidence::model::{
-        ShapeMode, ShapingApproval, ShapingValidationPayload, ShapingWorkBinding, SourcePosture,
-    };
-    use crate::identity::actor::{ActorKind, ActorRef};
-    ShapingValidationPayload {
-        payload_version: 1,
-        owning_work: ShapingWorkBinding {
-            id: String::new(),
-            revision_observed: 0,
-            contract_revision: 0,
-        },
-        materialization: "R0".to_string(),
-        shape_mode: ShapeMode::ConciseSelfCheck,
-        source_posture: SourcePosture::NotRequiredContentBound,
-        destination: None,
-        map: None,
-        affected_work: vec![],
-        branches: vec![],
-        fog: vec![],
-        out_of_scope: vec![],
-        resolution_pointers: vec![],
-        approval: ShapingApproval {
-            approved_by: ActorRef {
-                kind: ActorKind::System,
-                id: String::new(),
-            },
-            reference: String::new(),
-        },
-        reconciliation: None,
-        remaining_uncertainty: vec![],
-    }
-}
-
-/// Placeholder Decision acceptance payload used when the referenced receipt
-/// cannot be loaded as a valid Decision acceptance proof.
-fn default_decision_payload() -> crate::evidence::model::DecisionAcceptancePayload {
-    use crate::evidence::model::{
-        DecisionAcceptanceDecision, DecisionAcceptancePayload, DecisionContentSnapshot,
-        SourcePosture,
-    };
-    use crate::identity::actor::{ActorKind, ActorRef};
-    DecisionAcceptancePayload {
-        payload_version: 1,
-        decision: DecisionAcceptanceDecision {
-            id: String::new(),
-            revision_observed: 0,
-            contract_revision: 0,
-            content: DecisionContentSnapshot {
-                path: String::new(),
-                content_hash: String::new(),
-            },
-        },
-        accepted_outcome: String::new(),
-        approver: ActorRef {
-            kind: ActorKind::System,
-            id: String::new(),
-        },
-        source_posture: SourcePosture::NotRequiredContentBound,
-    }
 }

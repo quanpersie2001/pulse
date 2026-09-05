@@ -5,18 +5,10 @@
 //! repository or tracked fixture in place.
 
 use chrono::Utc;
-use pulse::canonical_json::hash_bytes;
 use pulse::canonical_json::to_canonical_bytes;
-use pulse::evidence::model::*;
-use pulse::graph::model::contract::{
-    ContentRef, ContractItem, ContractScope, EffortMetadata, ImplementationContract,
-    ImplementationMode, ImplementationSemanticImpact, PlanPolicy, QaImpactPosture, SurfaceRef,
-    TicketRole, WorkSurface,
-};
-use pulse::graph::model::node::DocumentationImpactPosture;
-use pulse::graph::store::{
-    ContractSetRequest, DocumentationImpactUpdate, OperationContext, QaImpactUpdate,
-};
+use pulse::graph::model::node::NodeStatus;
+use pulse::graph::store::OperationContext;
+use pulse::identity::actor::ActorKind;
 use pulse::policy::{AuthorityPolicy, AuthorityPrincipal};
 use pulse::JsonGraphStore;
 use serde_json::Value;
@@ -50,23 +42,78 @@ fn write_policy(root: &std::path::Path, grants: &[&str]) {
     fs::write(&policy_path, to_canonical_bytes(&policy).unwrap()).unwrap();
 }
 
-/// Set up a ready implementation Ticket using the library API directly,
-/// returning the ticket ID.  The CLI is used only for the `work packet`
-/// command itself per the I6 scope boundary.
+/// Commit all pending changes so the worktree is clean for the packet
+/// command's source check.
+fn commit_all(root: &std::path::Path, message: &str) {
+    let add = Command::new("git")
+        .current_dir(root)
+        .args(["add", "."])
+        .output()
+        .expect("git add");
+    assert!(add.status.success(), "git add failed");
+    let commit = Command::new("git")
+        .current_dir(root)
+        .env("GIT_AUTHOR_DATE", "2026-01-01T00:00:00Z")
+        .env("GIT_COMMITTER_DATE", "2026-01-01T00:00:00Z")
+        .args([
+            "-c",
+            "user.name=Pulse Test",
+            "-c",
+            "user.email=pulse@example.test",
+            "commit",
+            "-q",
+            "--allow-empty",
+            "-m",
+            message,
+        ])
+        .output()
+        .expect("git commit");
+    assert!(
+        commit.status.success(),
+        "git commit failed: {}",
+        String::from_utf8_lossy(&commit.stderr)
+    );
+}
+
+/// The Ticket contract bound by the packet: `works/<id>/ticket.md`.
+/// Sections mirror the assignment fixture so the markdown ambiguity gate
+/// passes for an R1 implementation Ticket.
+fn ticket_markdown(ticket_id: &str) -> String {
+    format!(
+        "# {ticket_id} Implement refresh token rotation\n\
+         \n\
+         ## Objective\nRotate refresh tokens atomically.\n\
+         \n\
+         ## Current behavior\nTokens are long-lived.\n\
+         \n\
+         ## Target behavior\nTokens rotate on each use.\n\
+         \n\
+         ## Code anchors\n- src/token.mjs\n\
+         \n\
+         ## Required changes\n- Add rotation logic.\n\
+         \n\
+         ## Invariants\n- Concurrent rotation serialized.\n\
+         \n\
+         ## Implementation freedom\nguided: agent chooses internal structure within this contract.\n\
+         \n\
+         ## Acceptance\n- AC-1: Tokens rotate without race.\n\
+         \n\
+         ## Verify\n- node scripts/verify.mjs\n\
+         \n\
+         ## Documentation impact\n- Posture: none\n- Rationale: No durable docs impact.\n- Documents:\n\
+         \n\
+         ## QA impact\n- Owner:\n- Posture: none\n- Cases:\n- Reason: No product QA impact.\n"
+    )
+}
+
+/// Set up a ready implementation Ticket, returning the ticket ID.  The CLI is
+/// used for create/bootstrap; the Ticket contract itself is the
+/// `works/<id>/ticket.md` markdown bound by `sync`.
 fn setup_ready_ticket(repo: &TestRepo) -> String {
     let root = repo.path();
     let store = JsonGraphStore::new(root);
 
-    write_policy(
-        root,
-        &[
-            "shape.apply",
-            "shape.approve.R1",
-            "qa.none.approve",
-            "work.transition.shaped",
-            "work.transition.ready",
-        ],
-    );
+    write_policy(root, &["work.transition.shaped", "work.transition.ready"]);
 
     // Bootstrap graph via CLI
     let bootstrap = repo.pulse_ok(&["graph", "bootstrap", "--json"]);
@@ -94,247 +141,31 @@ fn setup_ready_ticket(repo: &TestRepo) -> String {
         "--json",
     ]);
     let ticket_id = created["value"]["id"].as_str().unwrap().to_string();
-
-    // The rest of the setup is done via the library because the CLI does not
-    // expose shaping receipt recording as a single command.
     let node = store
         .show_node(&ticket_id)
         .expect("ticket should exist after CLI create");
 
-    let brief_rel = format!("{}/ticket.md", node.content_dir);
-    let brief_path = root.join(&brief_rel);
+    // Write the markdown contract and bind it with `sync`: `sync` parses the
+    // brief, bumps the contract revision on hash change, and derives docs/QA
+    // metadata.
+    let brief_path = root.join(&node.content_dir).join("ticket.md");
     fs::create_dir_all(brief_path.parent().unwrap()).unwrap();
-    fs::write(
-        &brief_path,
-        b"# Ticket\nImplement atomic refresh token rotation.",
-    )
-    .unwrap();
-    let brief_hash = hash_bytes(&fs::read(&brief_path).unwrap());
+    fs::write(&brief_path, ticket_markdown(&ticket_id)).unwrap();
 
-    let contract = ImplementationContract {
-        verification_profile: "standard".to_string(),
-        mode: ImplementationMode::Guided,
-        work_surface: WorkSurface::Code,
-        plan_policy: PlanPolicy::None,
-        semantic_impact: ImplementationSemanticImpact::NoBehaviorOrPublicRiskChange,
-        effort: EffortMetadata::default(),
-        brief: Some(ContentRef {
-            path: format!("{}/ticket.md", node.content_dir),
-            content_hash: brief_hash.clone(),
-        }),
-        objective: "Rotate refresh tokens atomically.".to_string(),
-        current_behavior: "Tokens are long-lived.".to_string(),
-        target_behavior: "Tokens rotate on each use.".to_string(),
-        code_anchors: vec![SurfaceRef::path("src/token.mjs")],
-        documentation_anchors: vec![],
-        configuration_anchors: vec![],
-        data_anchors: vec![],
-        research_refs: vec![],
-        required_changes: vec![ContractItem {
-            id: "CHG-1".to_string(),
-            summary: "Add rotation logic.".to_string(),
-        }],
-        invariants: vec![ContractItem {
-            id: "INV-1".to_string(),
-            summary: "Concurrent rotation serialized.".to_string(),
-        }],
-        acceptance: vec![ContractItem {
-            id: "AC-1".to_string(),
-            summary: "Tokens rotate without race.".to_string(),
-        }],
-        scope: ContractScope::default(),
-        implementation_freedom: vec![],
-        required_decisions: vec![],
-        shared_approach_refs: vec![],
-        expected_evidence: vec![],
-        expected_handoff: vec![],
-    };
     store
-        .set_contract_with_context(
-            &ticket_id,
-            node.revision,
-            ContractSetRequest {
-                role: TicketRole::Implementation,
-                implementation: Some(contract),
-                decision_work: None,
-            },
-            ctx(),
-        )
+        .sync_ticket_with_context(&ticket_id, node.revision, ctx())
         .unwrap();
 
-    let node = store.show_node(&ticket_id).unwrap();
-    store
-        .set_qa_impact_with_context(
-            &ticket_id,
-            node.revision,
-            QaImpactUpdate {
-                posture: QaImpactPosture::None,
-                rationale: Some("No behavior change.".to_string()),
-                behavioral_owner: None,
-                affected_case_ids: vec![],
-            },
-            ctx(),
-        )
-        .unwrap();
-
-    let node = store.show_node(&ticket_id).unwrap();
-    store
-        .update_documentation_impact(
-            &ticket_id,
-            node.revision,
-            DocumentationImpactUpdate {
-                domains: vec![],
-                posture: DocumentationImpactPosture::None,
-                rationale: Some("No docs change.".to_string()),
-                required_documents: vec![],
-                deferred_to: vec![],
-                paths: vec!["authentication".to_string()],
-                labels: vec!["tokens".to_string()],
-            },
-            "human:tester".to_string(),
-        )
-        .unwrap();
-
-    let node = store.show_node(&ticket_id).unwrap();
-    let receipt = ReceiptEnvelope {
-        schema_version: 1,
-        receipt_version: 1,
-        id: format!("rcpt_{:0<26}", &ticket_id[3..]),
-        kind: ReceiptKind::ShapingValidation,
-        result: ReceiptResult::Passed,
-        actor: ActorRef {
-            kind: ActorKind::Human,
-            id: "tester".to_string(),
-        },
-        recorded_at: Utc::now(),
-        subject: SubjectRef {
-            kind: "work".to_string(),
-            id: ticket_id.clone(),
-        },
-        bindings: ReceiptBindings {
-            work: vec![WorkBinding {
-                id: ticket_id.clone(),
-                revision: node.revision,
-            }],
-            source: None,
-            content: vec![ContentBinding {
-                path: brief_rel.clone(),
-                sha256: brief_hash.clone(),
-            }],
-            artifacts: vec![],
-            graph_fingerprint_observed: None,
-        },
-        payload: ReceiptPayload::ShapingValidation(ShapingValidationPayload {
-            payload_version: 1,
-            owning_work: ShapingWorkBinding {
-                id: ticket_id.clone(),
-                revision_observed: node.revision,
-                contract_revision: node.contract_revision,
-            },
-            materialization: "R1".to_string(),
-            shape_mode: ShapeMode::FocusedBranches,
-            source_posture: SourcePosture::NotRequiredContentBound,
-            destination: Some(ShapingDestination {
-                summary: "Deliver reliable rotation".to_string(),
-                scope_boundary: vec!["No session redesign".to_string()],
-                exit_conditions: vec!["Concurrent passes".to_string()],
-            }),
-            map: None,
-            affected_work: vec![],
-            branches: vec![ShapingBranch {
-                id: "BR-AUTH-1".to_string(),
-                question: "How is concurrent rotation serialized?".to_string(),
-                gap_kind: "tradeoff_gap".to_string(),
-                criticality: BranchCriticality::Critical,
-                affected_work: vec![ticket_id.clone()],
-                disposition: BranchDisposition::Resolved {
-                    resolution: ShapingResolutionPointer {
-                        kind: "decision".to_string(),
-                        id: format!("DEC-{}", &ticket_id[..3]),
-                        revision: 1,
-                        gist: "Single-use atomic rotation".to_string(),
-                    },
-                },
-            }],
-            fog: vec![],
-            out_of_scope: vec![],
-            resolution_pointers: vec![ShapingResolutionPointer {
-                kind: "decision".to_string(),
-                id: format!("DEC-{}", &ticket_id[..3]),
-                revision: 1,
-                gist: "Single-use atomic rotation".to_string(),
-            }],
-            approval: ShapingApproval {
-                approved_by: ActorRef {
-                    kind: ActorKind::Human,
-                    id: "tester".to_string(),
-                },
-                reference: "PULSE.md".to_string(),
-            },
-            reconciliation: None,
-            remaining_uncertainty: vec![],
-        }),
-    };
-    let receipt_file = root.join("shaping.json");
-    fs::write(&receipt_file, to_canonical_bytes(&receipt).unwrap()).unwrap();
-    pulse::evidence::record_receipt(root, None, &receipt_file).unwrap();
-
-    let node = store.show_node(&ticket_id).unwrap();
-    store
-        .apply_shaping_with_context(&ticket_id, node.revision, &receipt.id, None, ctx())
-        .unwrap();
-
-    let node = store.show_node(&ticket_id).unwrap();
-    store
-        .transition_node_with_context(
-            &ticket_id,
-            pulse::graph::model::node::NodeStatus::Shaped,
-            node.revision,
-            None,
-            ctx(),
-        )
-        .unwrap();
-
-    let node = store.show_node(&ticket_id).unwrap();
-    store
-        .transition_node_with_context(
-            &ticket_id,
-            pulse::graph::model::node::NodeStatus::Ready,
-            node.revision,
-            None,
-            ctx(),
-        )
-        .unwrap();
+    // Markdown ambiguity gate: transition through Shaped to Ready.
+    for status in [NodeStatus::Shaped, NodeStatus::Ready] {
+        let revision = store.show_node(&ticket_id).unwrap().revision;
+        store
+            .transition_node_with_context(&ticket_id, status, revision, None, ctx())
+            .unwrap();
+    }
 
     // Commit so the worktree is clean for the packet source check.
-    let add = std::process::Command::new("git")
-        .current_dir(root)
-        .args(["add", "."])
-        .output()
-        .expect("git add");
-    assert!(add.status.success(), "git add failed");
-    let commit = std::process::Command::new("git")
-        .current_dir(root)
-        .env("GIT_AUTHOR_DATE", "2026-01-01T00:00:00Z")
-        .env("GIT_COMMITTER_DATE", "2026-01-01T00:00:00Z")
-        .args([
-            "-c",
-            "user.name=Pulse Test",
-            "-c",
-            "user.email=pulse@example.test",
-            "commit",
-            "-q",
-            "--allow-empty",
-            "-m",
-            "setup ready ticket",
-        ])
-        .output()
-        .expect("git commit");
-    assert!(
-        commit.status.success(),
-        "git commit failed: {}",
-        String::from_utf8_lossy(&commit.stderr)
-    );
+    commit_all(root, "setup ready ticket");
 
     ticket_id
 }
@@ -354,10 +185,11 @@ fn target_repo_happy_path_work_packet() {
     assert_eq!(packet_value["profile"], "work_packet");
     assert_eq!(packet_value["code"], "ready_ticket");
 
-    // Ticket node and raw contract bind exact revision and status.
+    // Ticket node and raw contract bind exact revision and status. The ready
+    // flow consumes at least create + sync + shaped + ready revisions.
     assert_eq!(packet_value["ticket"]["node"]["id"], ticket_id);
     assert_eq!(packet_value["ticket"]["node"]["status"], "ready");
-    assert!(packet_value["ticket"]["node"]["revision"].as_u64().unwrap() >= 5);
+    assert!(packet_value["ticket"]["node"]["revision"].as_u64().unwrap() >= 4);
     assert!(packet_value["ticket"]["ticket_md"]["content"].is_string());
 
     // Source binds exact clean HEAD; operational state is not packet content.
@@ -490,34 +322,7 @@ fn full_enroll(repo: &TestRepo) {
     pulse::docs::manifest::bootstrap(repo.path()).unwrap();
 
     // Commit the .pulse/ infrastructure so the worktree is clean.
-    let add = std::process::Command::new("git")
-        .current_dir(repo.path())
-        .args(["add", "."])
-        .output()
-        .expect("git add");
-    assert!(add.status.success(), "git add failed");
-    let commit = std::process::Command::new("git")
-        .current_dir(repo.path())
-        .env("GIT_AUTHOR_DATE", "2026-01-01T00:00:00Z")
-        .env("GIT_COMMITTER_DATE", "2026-01-01T00:00:00Z")
-        .args([
-            "-c",
-            "user.name=Pulse Test",
-            "-c",
-            "user.email=pulse@example.test",
-            "commit",
-            "-q",
-            "--allow-empty",
-            "-m",
-            "enroll target repo",
-        ])
-        .output()
-        .expect("git commit");
-    assert!(
-        commit.status.success(),
-        "git commit failed: {}",
-        String::from_utf8_lossy(&commit.stderr)
-    );
+    commit_all(repo.path(), "enroll target repo");
 }
 
 #[test]

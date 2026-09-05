@@ -6,7 +6,7 @@
 //! explainable per-family statuses, stable reason codes and a *narrow*
 //! readiness fingerprint.
 //!
-//! Boundary rules (see `proposals/phase1-slice7-shaping-readiness-frontier.md`):
+//! Boundary rules:
 //!
 //! * readiness never reads raw JSON or performs filesystem I/O — the store owns
 //!   coherent snapshot capture;
@@ -14,31 +14,25 @@
 //! * the structural executability module must not import readiness (one-way
 //!   dependency: readiness consumes the structural report, never the reverse);
 //! * only implementation Tickets can become `ready` under
-//!   `contract_readiness`.
+//!   `contract_readiness`;
+//! * the Ticket contract itself is `works/<id>/ticket.md`; readiness consumes
+//!   its parse via `ticket_brief` and never a stored JSON contract.
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use crate::canonical_json::{hash_bytes, to_canonical_bytes};
 use crate::docs::applicability::ApplicableDocsReport;
-use crate::evidence::model::{
-    BranchCriticality, BranchDisposition, DecisionAcceptancePayload, ReceiptKind, ReceiptResult,
-    ShapeMode, ShapingValidationPayload,
-};
 use crate::graph::model::brief::TicketBrief;
-use crate::graph::model::contract::{
-    ContractValidationMode, ImplementationMode, QaImpactPosture, TicketRole,
-};
+use crate::graph::model::contract::{QaImpactPosture, TicketRole};
 use crate::graph::model::node::{Node, NodeStatus};
-use crate::graph::read::executability::{StructuralExecutabilityReport, StructuralState};
-use crate::graph::validation::contract::validate_node_contract;
+use crate::graph::read::executability::StructuralExecutabilityReport;
 use crate::id::WorkKind;
 use crate::policy::AuthorityPolicyReport;
 use crate::PulseResult;
 
 /// Current readiness profile identifier. Only implementation Tickets can be
-/// ready under this profile; decision-work Tickets use decision-frontier
-/// eligibility instead.
+/// ready under this profile.
 pub const READINESS_PROFILE: &str = "contract_readiness";
 
 /// Profile identifier recorded on `work.node.transitioned` events that pass the
@@ -47,7 +41,7 @@ pub const SHAPED_GATE_PROFILE: &str = "shaped";
 
 pub const READINESS_SCHEMA_VERSION: u32 = 1;
 
-/// Future gate families that Slice 7 intentionally does not evaluate. They are
+/// Future gate families that are intentionally not evaluated yet. They are
 /// reported as `not_evaluated` so consumers cannot mistake absence for passage.
 pub const FUTURE_GATE_FAMILIES: &[(&str, u32)] = &[
     ("qa_baseline_and_cases", 3),
@@ -97,14 +91,6 @@ pub struct ReadinessSubject {
     pub status: NodeStatus,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct ReadinessDestination {
-    pub owner: String,
-    pub receipt: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub map_revision: Option<u64>,
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReadinessReport {
     pub schema_version: u32,
@@ -117,9 +103,6 @@ pub struct ReadinessReport {
     pub readiness_fingerprint: String,
     pub graph_fingerprint_observed: String,
     pub gate_families: Vec<GateFamilyReport>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub destination: Option<ReadinessDestination>,
-    pub remaining_non_blocking_uncertainty: Vec<String>,
     pub future_gate_families: Vec<FutureGateFamily>,
     pub reason_codes: Vec<String>,
 }
@@ -133,36 +116,6 @@ pub enum EvalProfile {
     Ready,
 }
 
-/// Immutable snapshot of a current shaping receipt used by readiness.
-#[derive(Debug, Clone)]
-pub struct ShapingReceiptSnapshot {
-    pub receipt_id: String,
-    pub receipt_hash: String,
-    pub payload: ShapingValidationPayload,
-    /// Integrity/result/version checks pass for a current pointer.
-    pub integrity_valid: bool,
-    /// Content/source binding staleness codes from the evidence plane.
-    pub binding_codes: Vec<String>,
-    /// Map snapshot content still matches the bound hash.
-    pub map_current: bool,
-}
-
-/// Immutable snapshot of a Decision acceptance proof referenced by an
-/// implementation contract.
-#[derive(Debug, Clone)]
-pub struct DecisionProofSnapshot {
-    pub decision_id: String,
-    pub required_contract_revision: u64,
-    pub receipt_id: String,
-    pub receipt_hash: String,
-    pub payload: DecisionAcceptancePayload,
-    pub integrity_valid: bool,
-    pub decision_node_present: bool,
-    pub decision_terminal: bool,
-    pub decision_contract_revision: u64,
-    pub content_current: bool,
-}
-
 /// Current Story QA baseline resolution for a required Ticket checkpoint.
 #[derive(Debug, Clone)]
 pub struct QaCaseResolutionSnapshot {
@@ -173,8 +126,8 @@ pub struct QaCaseResolutionSnapshot {
     pub error_code: Option<String>,
 }
 
-/// A single content binding (brief/map/shared approach/Decision prose) and its
-/// current on-disk hash, used for content-reference currentness.
+/// A single content binding (the ticket brief) and its current on-disk hash,
+/// used for content-reference currentness.
 #[derive(Debug, Clone)]
 pub struct ContentHashBinding {
     pub label: String,
@@ -190,13 +143,11 @@ pub struct ReadinessInputs<'a> {
     pub subject: &'a Node,
     pub graph_valid: bool,
     pub structural: &'a StructuralExecutabilityReport,
-    pub shaping: Option<&'a ShapingReceiptSnapshot>,
     /// The current ticket.md parse and materialization validation result.
-    /// Shaping uses this ambiguity gate; the full ready gate continues to use
-    /// the synchronized typed contract and other gate families.
+    /// Shaping (the ambiguity gate) and the full ready gate both evaluate
+    /// against this markdown contract.
     pub ticket_brief: Option<&'a TicketBrief>,
     pub ticket_brief_error: Option<&'a str>,
-    pub decision_proofs: Vec<DecisionProofSnapshot>,
     pub qa_resolution: Option<&'a QaCaseResolutionSnapshot>,
     pub docs: &'a ApplicableDocsReport,
     pub authority: &'a AuthorityPolicyReport,
@@ -216,7 +167,7 @@ pub fn evaluate(inputs: &ReadinessInputs, profile: EvalProfile) -> PulseResult<R
     let mut families = Vec::new();
 
     let active = active_families(profile);
-    let mut evaluator = FamilyEvaluator::new(inputs, profile);
+    let mut evaluator = FamilyEvaluator::new(inputs);
 
     for (family, active_for_profile) in ALL_FAMILIES {
         let status = if *active_for_profile {
@@ -224,7 +175,7 @@ pub fn evaluate(inputs: &ReadinessInputs, profile: EvalProfile) -> PulseResult<R
         } else {
             GateStatus::NotEvaluated
         };
-        let reason_codes = evaluator.take_codes(family);
+        let reason_codes = evaluator.take_codes();
         families.push(GateFamilyReport {
             family: family.to_string(),
             status,
@@ -268,8 +219,6 @@ pub fn evaluate(inputs: &ReadinessInputs, profile: EvalProfile) -> PulseResult<R
     reason_codes.sort();
     reason_codes.dedup();
 
-    let destination = destination_projection(inputs);
-    let remaining_non_blocking_uncertainty = remaining_uncertainty(inputs);
     let readiness_fingerprint = fingerprint(inputs, profile)?;
     let future_gate_families = FUTURE_GATE_FAMILIES
         .iter()
@@ -304,8 +253,6 @@ pub fn evaluate(inputs: &ReadinessInputs, profile: EvalProfile) -> PulseResult<R
         readiness_fingerprint,
         graph_fingerprint_observed: inputs.graph_fingerprint.clone(),
         gate_families: families,
-        destination,
-        remaining_non_blocking_uncertainty,
         future_gate_families,
         reason_codes,
     })
@@ -349,16 +296,7 @@ const ALL_FAMILIES: &[(&str, bool)] = &[
     ("work_kind_and_role", true),
     ("lifecycle_eligibility", true),
     ("structural_executability", true),
-    ("implementation_contract", true),
-    ("required_decisions", true),
     ("ticket_ambiguity", true),
-    // Kept as read-only projections for old receipts and packet consumers;
-    // they are not part of either lifecycle gate anymore.
-    ("shaping_receipt_integrity", true),
-    ("shaping_bindings", true),
-    ("branch_dispositions", true),
-    ("destination_and_map", true),
-    ("bounded_fog", true),
     ("authority", true),
     ("documentation_impact", true),
     ("applicable_documents", true),
@@ -372,7 +310,7 @@ struct FamilyEvaluator<'a> {
 }
 
 impl<'a> FamilyEvaluator<'a> {
-    fn new(inputs: &'a ReadinessInputs<'a>, _profile: EvalProfile) -> Self {
+    fn new(inputs: &'a ReadinessInputs<'a>) -> Self {
         Self {
             inputs,
             codes: Vec::new(),
@@ -385,14 +323,7 @@ impl<'a> FamilyEvaluator<'a> {
             "work_kind_and_role" => self.work_kind_and_role(),
             "lifecycle_eligibility" => self.lifecycle_eligibility(),
             "structural_executability" => self.structural_executability(),
-            "implementation_contract" => self.implementation_contract()?,
-            "required_decisions" => self.required_decisions(),
             "ticket_ambiguity" => self.ticket_ambiguity(),
-            "shaping_receipt_integrity" => self.shaping_receipt_integrity(),
-            "shaping_bindings" => self.shaping_bindings(),
-            "branch_dispositions" => self.branch_dispositions(),
-            "destination_and_map" => self.destination_and_map(),
-            "bounded_fog" => self.bounded_fog(),
             "authority" => self.authority(),
             "documentation_impact" => self.documentation_impact(),
             "applicable_documents" => self.applicable_documents(),
@@ -403,7 +334,7 @@ impl<'a> FamilyEvaluator<'a> {
         Ok(status)
     }
 
-    fn take_codes(&mut self, _family: &str) -> Vec<String> {
+    fn take_codes(&mut self) -> Vec<String> {
         std::mem::take(&mut self.codes)
     }
 
@@ -462,8 +393,8 @@ impl FamilyEvaluator<'_> {
     fn structural_executability(&mut self) -> GateStatus {
         let report = self.inputs.structural;
         match report.structural_state {
-            StructuralState::Candidate => GateStatus::Passed,
-            StructuralState::Blocked => {
+            crate::graph::read::executability::StructuralState::Candidate => GateStatus::Passed,
+            crate::graph::read::executability::StructuralState::Blocked => {
                 if report.hard_blockers.iter().any(|b| {
                     b.resolution != crate::graph::read::executability::BlockerResolution::Satisfied
                 }) {
@@ -471,106 +402,23 @@ impl FamilyEvaluator<'_> {
                 }
                 GateStatus::Failed
             }
-            StructuralState::Paused => {
+            crate::graph::read::executability::StructuralState::Paused => {
                 self.note("structural_paused");
                 GateStatus::Failed
             }
-            StructuralState::Terminal => {
-                self.note("structural_terminal");
-                GateStatus::Failed
-            }
-            StructuralState::NotExecutableKind => {
+            crate::graph::read::executability::StructuralState::NotExecutableKind => {
                 self.note("not_executable_kind");
                 GateStatus::NotApplicable
             }
-            StructuralState::Invalid => {
+            crate::graph::read::executability::StructuralState::Terminal => {
+                self.note("structural_terminal");
+                GateStatus::Failed
+            }
+            crate::graph::read::executability::StructuralState::Invalid => {
                 self.note("structural_invalid");
                 GateStatus::Failed
             }
         }
-    }
-
-    fn implementation_contract(&mut self) -> PulseResult<GateStatus> {
-        let node = self.inputs.subject;
-        if node.role != Some(TicketRole::Implementation) {
-            return Ok(GateStatus::NotApplicable);
-        }
-        let contract = match &node.implementation {
-            Some(contract) => contract,
-            None => {
-                self.note("implementation_contract_missing");
-                return Ok(GateStatus::Failed);
-            }
-        };
-        // Structural canonical validation catches missing brief/anchors/
-        // invariants/acceptance and hash shape problems.
-        let report = validate_node_contract(node, ContractValidationMode::CanonicalStorage);
-        if !report.valid {
-            for finding in &report.errors {
-                self.note(finding.code.as_str());
-            }
-            return Ok(GateStatus::Failed);
-        }
-        // Completeness: locked work must have a Decision/approach proof that the
-        // required_decisions family will resolve; surface it here only when the
-        // contract literally has none and mode demands it.
-        if contract.mode == ImplementationMode::Locked
-            && contract.required_decisions.is_empty()
-            && contract.shared_approach_refs.is_empty()
-        {
-            self.note("required_decision_missing");
-            return Ok(GateStatus::Failed);
-        }
-        Ok(GateStatus::Passed)
-    }
-
-    fn required_decisions(&mut self) -> GateStatus {
-        let node = self.inputs.subject;
-        let contract = match &node.implementation {
-            Some(contract) => contract,
-            None => return GateStatus::NotApplicable,
-        };
-        if contract.required_decisions.is_empty() {
-            return GateStatus::Passed;
-        }
-        let mut worst = GateStatus::Passed;
-        for decision in &contract.required_decisions {
-            let proof = self
-                .inputs
-                .decision_proofs
-                .iter()
-                .find(|proof| proof.decision_id == decision.id);
-            let Some(proof) = proof else {
-                self.note("decision_acceptance_missing");
-                worst = worst.or_unavailable();
-                continue;
-            };
-            if !proof.integrity_valid {
-                self.note("decision_acceptance_stale");
-                worst = worst.or_stale();
-                continue;
-            }
-            if !proof.decision_node_present {
-                self.note("required_decision_missing");
-                worst = worst.or_failed();
-                continue;
-            }
-            if proof.decision_terminal {
-                self.note("required_decision_superseded");
-                worst = worst.or_failed();
-                continue;
-            }
-            if proof.decision_contract_revision != decision.contract_revision {
-                self.note("required_decision_revision_stale");
-                worst = worst.or_stale();
-                continue;
-            }
-            if !proof.content_current {
-                self.note("decision_acceptance_stale");
-                worst = worst.or_stale();
-            }
-        }
-        worst
     }
 
     fn ticket_ambiguity(&mut self) -> GateStatus {
@@ -578,193 +426,12 @@ impl FamilyEvaluator<'_> {
             return GateStatus::NotApplicable;
         }
         if let Some(code) = self.inputs.ticket_brief_error {
-            // A legacy shaping pointer is tolerated for read compatibility, but
-            // a normal draft -> shaped transition has no receipt escape hatch.
-            if self.inputs.shaping.is_none() {
-                self.note(code);
-                return GateStatus::Failed;
-            }
-            return GateStatus::Passed;
+            self.note(code);
+            return GateStatus::Failed;
         }
         if self.inputs.ticket_brief.is_none() {
             self.note("ticket_brief_missing");
             return GateStatus::Failed;
-        }
-        GateStatus::Passed
-    }
-
-    fn shaping_receipt_integrity(&mut self) -> GateStatus {
-        let Some(shaping) = self.inputs.shaping else {
-            // Shaping is now represented by ticket.md and is not a mandatory
-            // evidence family for either transition.
-            return GateStatus::NotApplicable;
-        };
-        let payload = &shaping.payload;
-        if payload.payload_version != 1 {
-            self.note("shaping_receipt_version_ineligible");
-            return GateStatus::Failed;
-        }
-        if !shaping.integrity_valid {
-            self.note("shaping_receipt_hash_mismatch");
-            return GateStatus::Stale;
-        }
-        // Materialization/shape-mode policy: persisted_map requires destination
-        // and map; focused/concise may omit them.
-        if payload.shape_mode == ShapeMode::PersistedMap {
-            if payload.destination.is_none() {
-                self.note("shaping_destination_missing");
-                return GateStatus::Failed;
-            }
-            if payload.map.is_none() {
-                self.note("shaping_map_required");
-                return GateStatus::Failed;
-            }
-        }
-        GateStatus::Passed
-    }
-
-    fn shaping_bindings(&mut self) -> GateStatus {
-        let Some(shaping) = self.inputs.shaping else {
-            return GateStatus::NotApplicable;
-        };
-        let payload = &shaping.payload;
-        // Shaping currentness is by contract_revision: the receipt must bind the
-        // subject's current contract revision.
-        if payload.owning_work.contract_revision != self.inputs.subject.contract_revision {
-            self.note("shaping_receipt_stale");
-            return GateStatus::Stale;
-        }
-        if !shaping.binding_codes.is_empty() {
-            for code in &shaping.binding_codes {
-                self.note(crate::evidence::receipt::code_to_static(code));
-            }
-            return GateStatus::Stale;
-        }
-        if let Some(map) = &payload.map {
-            if !shaping.map_current {
-                self.note("shaping_map_content_stale");
-                return GateStatus::Stale;
-            }
-            let _ = map;
-        }
-        GateStatus::Passed
-    }
-
-    fn branch_dispositions(&mut self) -> GateStatus {
-        let Some(shaping) = self.inputs.shaping else {
-            return GateStatus::NotApplicable;
-        };
-        let payload = &shaping.payload;
-        let subject = &self.inputs.subject.id;
-        let implementation = self.inputs.subject.implementation.as_ref();
-        let mut worst = GateStatus::Passed;
-        for branch in &payload.branches {
-            if !branch.affected_work.iter().any(|w| w == subject) {
-                continue;
-            }
-            if branch.criticality == BranchCriticality::Critical {
-                match &branch.disposition {
-                    BranchDisposition::Blocking { .. } => {
-                        self.note("shaping_blocking_branch_open");
-                        worst = worst.or_failed();
-                    }
-                    BranchDisposition::Delegated { freedom_id, .. } => {
-                        let valid = implementation
-                            .map(|c| c.implementation_freedom.iter().any(|f| &f.id == freedom_id))
-                            .unwrap_or(false);
-                        if !valid {
-                            self.note("shaping_delegation_exceeds_freedom");
-                            worst = worst.or_failed();
-                        }
-                        if matches!(
-                            implementation.map(|c| c.mode),
-                            Some(ImplementationMode::Locked)
-                        ) {
-                            self.note("shaping_delegation_exceeds_freedom");
-                            worst = worst.or_failed();
-                        }
-                    }
-                    BranchDisposition::Deferred {
-                        reason,
-                        owner,
-                        target_work,
-                        trigger,
-                        non_blocking_for,
-                    } => {
-                        if reason.trim().is_empty() {
-                            self.note("shaping_defer_reason_missing");
-                            worst = worst.or_failed();
-                        }
-                        if owner.trim().is_empty() {
-                            self.note("shaping_defer_owner_missing");
-                            worst = worst.or_failed();
-                        }
-                        if target_work.trim().is_empty() {
-                            self.note("shaping_defer_target_missing");
-                            worst = worst.or_failed();
-                        }
-                        if trigger.trim().is_empty() {
-                            self.note("shaping_defer_trigger_missing");
-                            worst = worst.or_failed();
-                        }
-                        if !non_blocking_for.iter().any(|w| w == subject) {
-                            self.note("shaping_defer_not_non_blocking");
-                            worst = worst.or_failed();
-                        }
-                    }
-                    BranchDisposition::Resolved { resolution } => {
-                        if resolution.gist.trim().is_empty() {
-                            self.note("shaping_resolution_missing");
-                            worst = worst.or_failed();
-                        }
-                    }
-                    BranchDisposition::Rejected { reason, .. } => {
-                        if reason.trim().is_empty() {
-                            self.note("shaping_rejection_reason_missing");
-                            worst = worst.or_failed();
-                        }
-                    }
-                }
-            }
-        }
-        worst
-    }
-
-    fn destination_and_map(&mut self) -> GateStatus {
-        let Some(shaping) = self.inputs.shaping else {
-            return GateStatus::NotApplicable;
-        };
-        let payload = &shaping.payload;
-        if let Some(destination) = &payload.destination {
-            if destination.summary.trim().is_empty() {
-                self.note("shaping_destination_missing");
-                return GateStatus::Failed;
-            }
-            if destination
-                .exit_conditions
-                .iter()
-                .all(|c| c.trim().is_empty())
-            {
-                self.note("shaping_exit_condition_missing");
-                return GateStatus::Failed;
-            }
-        }
-        GateStatus::Passed
-    }
-
-    fn bounded_fog(&mut self) -> GateStatus {
-        let Some(shaping) = self.inputs.shaping else {
-            return GateStatus::NotApplicable;
-        };
-        for fog in &shaping.payload.fog {
-            if fog.bounds.iter().all(|b| b.trim().is_empty()) {
-                self.note("shaping_fog_unbounded");
-                return GateStatus::Failed;
-            }
-            if fog.trigger.trim().is_empty() {
-                self.note("shaping_fog_trigger_missing");
-                return GateStatus::Failed;
-            }
         }
         GateStatus::Passed
     }
@@ -778,27 +445,6 @@ impl FamilyEvaluator<'_> {
         if !report.valid {
             self.note("readiness_policy_invalid");
             return GateStatus::Unavailable;
-        }
-        // Staleness: the shaping approver must still hold the kernel-derived
-        // materialization grant. This catches a policy revocation after apply.
-        if let Some(shaping) = self.inputs.shaping {
-            let materialization = &shaping.payload.materialization;
-            match crate::graph::read::shaping::materialization_approve_grant(materialization) {
-                Ok(grant) => {
-                    if !report.principals.iter().any(|principal| {
-                        principal.kind == shaping.payload.approval.approved_by.kind
-                            && principal.id == shaping.payload.approval.approved_by.id
-                            && principal.grants.iter().any(|g| g == &grant)
-                    }) {
-                        self.note("readiness_authority_denied");
-                        return GateStatus::Failed;
-                    }
-                }
-                Err(_) => {
-                    self.note("shaping_receipt_version_ineligible");
-                    return GateStatus::Failed;
-                }
-            }
         }
         GateStatus::Passed
     }
@@ -898,9 +544,6 @@ impl FamilyEvaluator<'_> {
 fn content_stale_code(label: &str) -> &'static str {
     match label {
         "brief" => "implementation_brief_hash_stale",
-        "map" => "shaping_map_content_stale",
-        s if s.starts_with("decision:") => "decision_acceptance_stale",
-        s if s.starts_with("shared_approach") => "implementation_brief_hash_stale",
         _ => "content_reference_stale",
     }
 }
@@ -908,8 +551,6 @@ fn content_stale_code(label: &str) -> &'static str {
 fn content_missing_code(label: &str) -> &'static str {
     match label {
         "brief" => "implementation_brief_missing",
-        "map" => "shaping_map_missing",
-        s if s.starts_with("decision:") => "decision_acceptance_missing",
         _ => "content_reference_missing",
     }
 }
@@ -938,44 +579,21 @@ impl GateStatus {
         }
     }
 
-    fn or_failed(self) -> GateStatus {
-        self.combine_worst(GateStatus::Failed)
-    }
-
     fn or_stale(self) -> GateStatus {
         self.combine_worst(GateStatus::Stale)
     }
 
-    fn or_unavailable(self) -> GateStatus {
-        self.combine_worst(GateStatus::Unavailable)
+    fn or_failed(self) -> GateStatus {
+        self.combine_worst(GateStatus::Failed)
     }
-}
-
-fn destination_projection(inputs: &ReadinessInputs) -> Option<ReadinessDestination> {
-    let shaping = inputs.shaping?;
-    Some(ReadinessDestination {
-        owner: inputs.subject.id.clone(),
-        receipt: shaping.receipt_id.clone(),
-        map_revision: shaping.payload.map.as_ref().map(|m| m.revision),
-    })
-}
-
-fn remaining_uncertainty(inputs: &ReadinessInputs) -> Vec<String> {
-    let Some(shaping) = inputs.shaping else {
-        return Vec::new();
-    };
-    let mut ids: Vec<String> = shaping.payload.fog.iter().map(|f| f.id.clone()).collect();
-    ids.sort();
-    ids.dedup();
-    ids
 }
 
 /// Compute the narrow readiness fingerprint from explicit gate projections.
 ///
 /// Excluded by design: subject normal revision, lifecycle status, status
-/// reason, timestamps, shaping applied_at/by, unrelated graph nodes/edges,
-/// events, cache/runtime state and the global graph fingerprint (which is
-/// reported separately for audit only).
+/// reason, timestamps, unrelated graph nodes/edges, events, cache/runtime
+/// state and the global graph fingerprint (which is reported separately for
+/// audit only).
 fn fingerprint(inputs: &ReadinessInputs, profile: EvalProfile) -> PulseResult<String> {
     let node = inputs.subject;
     let mut value = serde_json::Map::new();
@@ -1009,18 +627,6 @@ fn fingerprint(inputs: &ReadinessInputs, profile: EvalProfile) -> PulseResult<St
             }),
         );
     }
-    if let Some(contract) = &node.implementation {
-        value.insert(
-            "implementation".to_string(),
-            implementation_projection(contract),
-        );
-    }
-    if let Some(contract) = &node.decision_work {
-        value.insert(
-            "decision_work".to_string(),
-            decision_work_projection(contract),
-        );
-    }
 
     // Structural: relevant hard blocker edges + supersession replacement only.
     value.insert(
@@ -1028,31 +634,7 @@ fn fingerprint(inputs: &ReadinessInputs, profile: EvalProfile) -> PulseResult<St
         structural_projection(inputs.structural),
     );
 
-    // Shaping receipt + branches/fog/map.
-    if let Some(shaping) = inputs.shaping {
-        value.insert("shaping".to_string(), shaping_projection(shaping));
-    }
-
-    // Required Decision acceptance proofs.
-    let proofs: Vec<Value> = inputs
-        .decision_proofs
-        .iter()
-        .map(|proof| {
-            json!({
-                "decision_id": proof.decision_id,
-                "required_contract_revision": proof.required_contract_revision,
-                "receipt_id": proof.receipt_id,
-                "receipt_hash": proof.receipt_hash,
-                "content_hash": proof.payload.decision.content.content_hash,
-                "content_current": proof.content_current,
-            })
-        })
-        .collect();
-    if !proofs.is_empty() {
-        value.insert("decision_proofs".to_string(), Value::Array(proofs));
-    }
-
-    // Content bindings (brief/map/shared approach/decision prose).
+    // The ticket.md contract binding (the only contract content binding).
     let bindings: Vec<Value> = inputs
         .content_bindings
         .iter()
@@ -1108,82 +690,6 @@ fn qa_projection(qa: &crate::graph::model::contract::QaMetadata) -> Value {
     })
 }
 
-fn implementation_projection(
-    contract: &crate::graph::model::contract::ImplementationContract,
-) -> Value {
-    let acceptance: Vec<Value> = contract
-        .acceptance
-        .iter()
-        .map(|item| json!({"id": item.id, "summary": item.summary}))
-        .collect();
-    let invariants: Vec<Value> = contract
-        .invariants
-        .iter()
-        .map(|item| json!({"id": item.id}))
-        .collect();
-    let freedom: Vec<Value> = contract
-        .implementation_freedom
-        .iter()
-        .map(|item| json!({"id": item.id}))
-        .collect();
-    let required_decisions: Vec<Value> = contract
-        .required_decisions
-        .iter()
-        .map(|decision| {
-            json!({
-                "id": decision.id,
-                "contract_revision": decision.contract_revision,
-                "acceptance_receipt": decision.acceptance_receipt,
-            })
-        })
-        .collect();
-    let shared: Vec<Value> = contract
-        .shared_approach_refs
-        .iter()
-        .map(|approach| {
-            json!({
-                "owner": approach.owner,
-                "path": approach.path,
-                "content_hash": approach.content_hash,
-            })
-        })
-        .collect();
-    let anchors: Vec<Value> = contract
-        .code_anchors
-        .iter()
-        .map(|anchor| json!({"path": anchor.path, "symbol": anchor.symbol}))
-        .collect();
-    json!({
-        "mode": contract.mode,
-        "work_surface": contract.work_surface,
-        "plan_policy": contract.plan_policy,
-        "semantic_impact": contract.semantic_impact,
-        "verification_profile": contract.verification_profile,
-        "objective": contract.objective,
-        "brief": contract.brief,
-        "acceptance": acceptance,
-        "invariants": invariants,
-        "implementation_freedom": freedom,
-        "required_decisions": required_decisions,
-        "shared_approach_refs": shared,
-        "code_anchors": anchors,
-    })
-}
-
-fn decision_work_projection(
-    contract: &crate::graph::model::contract::DecisionWorkContract,
-) -> Value {
-    json!({
-        "destination_owner": contract.destination_owner,
-        "branch_id": contract.branch_id,
-        "gap_kind": contract.gap_kind,
-        "question": contract.question,
-        "resolution_target": contract.resolution_target,
-        "provenance_shaping_receipt": contract.provenance.shaping_receipt,
-        "provenance_fog_id": contract.provenance.fog_id,
-    })
-}
-
 fn structural_projection(report: &StructuralExecutabilityReport) -> Value {
     let blockers: Vec<Value> = report
         .hard_blockers
@@ -1205,47 +711,6 @@ fn structural_projection(report: &StructuralExecutabilityReport) -> Value {
     })
 }
 
-fn shaping_projection(shaping: &ShapingReceiptSnapshot) -> Value {
-    let payload = &shaping.payload;
-    let branches: Vec<Value> = payload
-        .branches
-        .iter()
-        .map(|branch| {
-            let disposition_kind = match &branch.disposition {
-                BranchDisposition::Resolved { .. } => "resolved",
-                BranchDisposition::Rejected { .. } => "rejected",
-                BranchDisposition::Delegated { freedom_id, .. } => {
-                    return json!({
-                        "id": branch.id,
-                        "criticality": branch.criticality,
-                        "disposition": "delegated",
-                        "freedom_id": freedom_id,
-                    });
-                }
-                BranchDisposition::Deferred { .. } => "deferred",
-                BranchDisposition::Blocking { .. } => "blocking",
-            };
-            json!({
-                "id": branch.id,
-                "criticality": branch.criticality,
-                "disposition": disposition_kind,
-            })
-        })
-        .collect();
-    let fog: Vec<Value> = payload.fog.iter().map(|f| json!({"id": f.id})).collect();
-    json!({
-        "receipt_id": shaping.receipt_id,
-        "receipt_hash": shaping.receipt_hash,
-        "materialization": payload.materialization,
-        "shape_mode": payload.shape_mode,
-        "source_posture": payload.source_posture,
-        "destination": payload.destination.is_some(),
-        "map": payload.map,
-        "branches": branches,
-        "fog": fog,
-    })
-}
-
 fn docs_projection(docs: &ApplicableDocsReport) -> Value {
     let required: Vec<Value> = docs
         .required
@@ -1264,30 +729,6 @@ fn docs_projection(docs: &ApplicableDocsReport) -> Value {
         "posture": docs.work.documentation_posture,
         "required": required,
     })
-}
-
-/// Decide whether a shaping receipt is readiness-eligible as a *current* pointer
-/// source: kind, result, payload version and subject must match. Used by the
-/// store when assembling the readiness snapshot so the pure evaluator stays
-/// free of receipt integrity concerns.
-pub fn shaping_receipt_eligible(
-    receipt: &crate::evidence::model::ReceiptEnvelope,
-    subject_id: &str,
-) -> bool {
-    if receipt.kind != ReceiptKind::ShapingValidation {
-        return false;
-    }
-    if receipt.result != ReceiptResult::Passed {
-        return false;
-    }
-    if receipt.subject.id != subject_id {
-        return false;
-    }
-    matches!(
-        &receipt.payload,
-        crate::evidence::model::ReceiptPayload::ShapingValidation(payload)
-            if payload.payload_version == 1
-    )
 }
 
 impl ReadinessReport {

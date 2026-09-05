@@ -4,9 +4,9 @@ use pulse::docs::model::{
     DocsRegistry, DocumentKind, DocumentRecord, DocumentScope, DocumentStatus, RetrievalConfig,
 };
 use pulse::evidence::model::{
-    ActorKind, ActorRef, ReceiptBindings, ReceiptEnvelope, ReceiptKind, ReceiptPayload,
-    ReceiptResult, ShapeMode, ShapingApproval, ShapingValidationPayload, ShapingWorkBinding,
-    SourceBinding, SourcePosture, SubjectRef, WorkBinding,
+    ActorKind, ActorRef, DecisionAcceptanceDecision, DecisionAcceptancePayload,
+    DecisionContentSnapshot, ReceiptBindings, ReceiptEnvelope, ReceiptKind, ReceiptPayload,
+    ReceiptResult, SourceBinding, SourcePosture, SubjectRef, WorkBinding,
 };
 use pulse::graph::store::OperationContext as WorkCtx;
 use pulse::id::WorkKind;
@@ -106,11 +106,13 @@ fn make_receipt(
     manifest: &pulse::evidence::manifest::EvidenceManifest,
     source_commit: String,
 ) -> ReceiptEnvelope {
+    let content_rel = format!("works/{}/decision.md", node.id);
+    let content_hash = hash_bytes(format!("content {}", node.id).as_bytes());
     ReceiptEnvelope {
         schema_version: 1,
         receipt_version: 1,
         id: id.to_string(),
-        kind: ReceiptKind::ShapingValidation,
+        kind: ReceiptKind::DecisionAcceptance,
         result: ReceiptResult::Passed,
         actor: ActorRef {
             kind: ActorKind::Human,
@@ -132,38 +134,29 @@ fn make_receipt(
                 repository_id: manifest.repository_id.clone(),
             }),
             content: vec![pulse::evidence::model::ContentBinding {
-                path: format!("works/{}/ticket.md", node.id),
-                sha256: hash_bytes(format!("content {}", node.id).as_bytes()),
+                path: content_rel.clone(),
+                sha256: content_hash.clone(),
             }],
             artifacts: vec![],
             graph_fingerprint_observed: None,
         },
-        payload: ReceiptPayload::ShapingValidation(ShapingValidationPayload {
+        payload: ReceiptPayload::DecisionAcceptance(DecisionAcceptancePayload {
             payload_version: 1,
-            owning_work: ShapingWorkBinding {
+            decision: DecisionAcceptanceDecision {
                 id: node.id.clone(),
                 revision_observed: node.revision,
                 contract_revision: node.contract_revision,
-            },
-            materialization: "R1".to_string(),
-            shape_mode: ShapeMode::FocusedBranches,
-            source_posture: SourcePosture::CleanGitCommit,
-            destination: None,
-            map: None,
-            affected_work: vec![],
-            branches: vec![],
-            fog: vec![],
-            out_of_scope: vec![],
-            resolution_pointers: vec![],
-            approval: ShapingApproval {
-                approved_by: ActorRef {
-                    kind: ActorKind::Human,
-                    id: "tester".to_string(),
+                content: DecisionContentSnapshot {
+                    path: content_rel,
+                    content_hash,
                 },
-                reference: "PULSE.md#human-judgment-boundaries".to_string(),
             },
-            reconciliation: None,
-            remaining_uncertainty: vec![],
+            accepted_outcome: "Token rotation must use an atomic state transition.".to_string(),
+            approver: ActorRef {
+                kind: ActorKind::Human,
+                id: "tester".to_string(),
+            },
+            source_posture: SourcePosture::CleanGitCommit,
         }),
     }
 }
@@ -349,15 +342,27 @@ fn relation_endpoint_revision_and_hash_bindings_are_checked() {
         "knowledge_relation_endpoint_revision_mismatch"
     );
 
-    fs::create_dir_all(repo.path().join(format!("works/{work}"))).unwrap();
+    let decision = graph
+        .create_node_with_context(
+            WorkKind::Decision,
+            "Rotation decision".to_string(),
+            WorkCtx {
+                actor: "test".to_string(),
+                now: Utc.timestamp_opt(15, 0).unwrap(),
+            },
+        )
+        .unwrap()
+        .value;
+    fs::create_dir_all(repo.path().join(format!("works/{}", decision.id))).unwrap();
     fs::write(
-        repo.path().join(format!("works/{work}/ticket.md")),
-        format!("content {work}"),
+        repo.path()
+            .join(format!("works/{}/decision.md", decision.id)),
+        format!("content {}", decision.id),
     )
     .unwrap();
     let source_commit = init_git(repo.path());
     let evidence_manifest = pulse::evidence::bootstrap(repo.path()).unwrap().manifest;
-    let current_node = graph.show_node(&work).unwrap();
+    let current_node = graph.show_node(&decision.id).unwrap();
     let receipt = make_receipt(
         "rcpt_01J00000000000000000000998",
         &current_node,

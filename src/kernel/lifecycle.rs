@@ -119,9 +119,6 @@ impl JsonGraphStore {
             payload["gate_profile"] = json!(gate.profile);
             payload["input_fingerprint"] = json!(gate.fingerprint);
             payload["gate_status"] = json!(gate.status);
-            if let Some(shaping) = &gate.shaping_receipt {
-                payload["shaping_receipt"] = json!(shaping);
-            }
         }
         self.commit_mutation(
             "work.node.transitioned",
@@ -243,15 +240,10 @@ impl JsonGraphStore {
             }
         }
 
-        let shaping_receipt = snapshot.shaping.as_ref().map(
-            |shaping| serde_json::json!({"id": shaping.receipt_id, "hash": shaping.receipt_hash}),
-        );
-
         Ok(Some(GateEvaluationOutcome {
             profile: profile_kind.as_str().to_string(),
             fingerprint: report.readiness_fingerprint.clone(),
             status: report.status_as_word().to_string(),
-            shaping_receipt,
         }))
     }
 }
@@ -260,7 +252,6 @@ struct GateEvaluationOutcome {
     profile: String,
     fingerprint: String,
     status: String,
-    shaping_receipt: Option<serde_json::Value>,
 }
 
 /// Stable `gate_coverage` list recorded on transition events. Installed gates

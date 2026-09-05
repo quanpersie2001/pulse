@@ -1,6 +1,5 @@
 use crate::graph::model::contract::{
-    DecisionWorkContract, ImplementationContract, Materialization, QaMetadata, Risk,
-    ShapingPointer, TicketRole, NODE_SCHEMA_VERSION,
+    Materialization, QaMetadata, Risk, TicketRole, NODE_SCHEMA_VERSION,
 };
 use std::path::{Component, Path, PathBuf};
 
@@ -37,12 +36,6 @@ pub struct Node {
     pub materialization: Option<Materialization>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub qa: Option<QaMetadata>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub implementation: Option<ImplementationContract>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub decision_work: Option<DecisionWorkContract>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub shaping: Option<ShapingPointer>,
     pub content_dir: String,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
@@ -293,21 +286,12 @@ impl Node {
             risk: ticket_defaults.then_some(Risk::Unassessed),
             materialization: ticket_defaults.then_some(Materialization::Unassessed),
             qa: ticket_defaults.then_some(QaMetadata::default()),
-            implementation: None,
-            decision_work: None,
-            shaping: None,
             created_at: now,
             updated_at: now,
         })
     }
 
     pub fn normalize_contract_fields(&mut self) {
-        if let Some(contract) = &mut self.implementation {
-            contract.normalize();
-        }
-        if let Some(contract) = &mut self.decision_work {
-            contract.normalize();
-        }
         if let Some(qa) = &mut self.qa {
             qa.impact.affected_case_ids.sort();
             qa.impact.affected_case_ids.dedup();

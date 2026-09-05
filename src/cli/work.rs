@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use crate::graph::model::contract::{Materialization, QaImpactPosture, Risk, TicketRole};
+use crate::graph::model::contract::{Materialization, Risk, TicketRole};
 use crate::graph::model::node::NodeStatus;
 use crate::id::WorkKind;
 use clap::{Subcommand, ValueEnum};
@@ -136,8 +136,6 @@ pub(crate) enum WorkCommand {
         json: bool,
     },
     Frontier {
-        #[arg(long, value_enum)]
-        kind: FrontierKindArg,
         #[arg(long)]
         for_: Option<String>,
         #[arg(long)]
@@ -146,22 +144,6 @@ pub(crate) enum WorkCommand {
         include_excluded: bool,
         #[arg(long)]
         json: bool,
-    },
-    ReadinessPolicy {
-        #[command(subcommand)]
-        command: ReadinessPolicyCommand,
-    },
-    Contract {
-        #[command(subcommand)]
-        command: ContractCommand,
-    },
-    QaImpact {
-        #[command(subcommand)]
-        command: QaImpactCommand,
-    },
-    Shaping {
-        #[command(subcommand)]
-        command: ShapingCommand,
     },
     /// Build a preview work packet for a ready implementation Ticket.
     ///
@@ -179,117 +161,6 @@ pub(crate) enum WorkCommand {
     },
 }
 
-#[derive(Subcommand)]
-pub(crate) enum ContractCommand {
-    Set {
-        ticket_id: String,
-        #[arg(long)]
-        file: PathBuf,
-        #[arg(long)]
-        expected_revision: u64,
-        #[arg(long)]
-        actor: String,
-        #[arg(long)]
-        json: bool,
-    },
-    Show {
-        ticket_id: String,
-        #[arg(long)]
-        json: bool,
-    },
-}
-
-#[derive(Subcommand)]
-pub(crate) enum QaImpactCommand {
-    Set {
-        ticket_id: String,
-        #[arg(long)]
-        posture: QaImpactPostureArg,
-        #[arg(long)]
-        rationale: Option<String>,
-        #[arg(long)]
-        behavioral_owner: Option<String>,
-        #[arg(long = "case")]
-        cases: Vec<String>,
-        #[arg(long)]
-        expected_revision: u64,
-        #[arg(long)]
-        actor: String,
-        #[arg(long)]
-        json: bool,
-    },
-    Show {
-        ticket_id: String,
-        #[arg(long)]
-        json: bool,
-    },
-}
-
-#[derive(Subcommand)]
-pub(crate) enum ShapingCommand {
-    Apply {
-        owner_id: String,
-        #[arg(long)]
-        receipt: String,
-        #[arg(long)]
-        expected_revision: u64,
-        #[arg(long)]
-        expected_current_receipt: Option<String>,
-        #[arg(long)]
-        actor: String,
-        #[arg(long)]
-        json: bool,
-    },
-    Show {
-        owner_id: String,
-        #[arg(long)]
-        json: bool,
-    },
-    Invalidate {
-        owner_id: String,
-        #[arg(long)]
-        expected_revision: u64,
-        #[arg(long)]
-        reason: String,
-        #[arg(long)]
-        actor: String,
-        #[arg(long)]
-        json: bool,
-    },
-}
-
-#[derive(Subcommand)]
-pub(crate) enum ReadinessPolicyCommand {
-    Show {
-        #[arg(long)]
-        json: bool,
-    },
-    Validate {
-        #[arg(long)]
-        json: bool,
-    },
-}
-
-#[derive(Clone, ValueEnum)]
-#[value(rename_all = "snake_case")]
-pub(crate) enum QaImpactPostureArg {
-    Unknown,
-    Required,
-    CoveredByStoryClose,
-    None,
-}
-
-impl From<QaImpactPostureArg> for QaImpactPosture {
-    fn from(value: QaImpactPostureArg) -> Self {
-        match value {
-            QaImpactPostureArg::Unknown => QaImpactPosture::Unknown,
-            QaImpactPostureArg::Required => QaImpactPosture::Required,
-            QaImpactPostureArg::CoveredByStoryClose => QaImpactPosture::CoveredByStoryClose,
-            QaImpactPostureArg::None => QaImpactPosture::None,
-        }
-    }
-}
-
 #[derive(Clone, ValueEnum)]
 pub(crate) enum KindArg {
     Epic,
@@ -303,22 +174,6 @@ pub(crate) enum KindArg {
 pub(crate) enum TicketRoleArg {
     Implementation,
     DecisionWork,
-}
-
-#[derive(Clone, Copy, ValueEnum)]
-#[value(rename_all = "snake_case")]
-pub(crate) enum FrontierKindArg {
-    Decision,
-    Execution,
-}
-
-impl From<FrontierKindArg> for crate::graph::read::frontier::FrontierKind {
-    fn from(value: FrontierKindArg) -> Self {
-        match value {
-            FrontierKindArg::Decision => crate::graph::read::frontier::FrontierKind::Decision,
-            FrontierKindArg::Execution => crate::graph::read::frontier::FrontierKind::Execution,
-        }
-    }
 }
 
 #[derive(Clone, Copy, ValueEnum)]
@@ -422,8 +277,8 @@ use serde_json::json;
 use crate::cli::output::render;
 use crate::graph::model::contract::PublicCreateClassification;
 use crate::graph::model::lifecycle::TransitionReason;
-use crate::graph::store::{ContractSetRequest, QaImpactUpdate, SupersessionTarget};
-use crate::{policy, JsonGraphStore, PulseError};
+use crate::graph::store::SupersessionTarget;
+use crate::{JsonGraphStore, PulseError};
 
 pub(crate) fn handle(
     store: &JsonGraphStore,
@@ -670,140 +525,22 @@ pub(crate) fn handle(
             render(json, &out, format!("closed Story {}", out.story_id))
         }
         WorkCommand::Frontier {
-            kind,
             for_,
             profile,
             include_excluded,
             json,
         } => {
-            let out = store.frontier(
-                kind.into(),
-                for_.as_deref(),
-                profile.as_deref(),
-                include_excluded,
-            )?;
-            match out {
-                crate::graph::read::frontier::FrontierReport::Decision(report) => {
-                    let human = format!(
-                        "decision frontier: {} item(s){}",
-                        report.items.len(),
-                        report
-                            .for_
-                            .as_ref()
-                            .map(|owner| format!(" for {owner}"))
-                            .unwrap_or_default()
-                    );
-                    render(json, &report, human)
-                }
-                crate::graph::read::frontier::FrontierReport::Execution(report) => {
-                    let human = format!(
-                        "execution frontier: {} item(s){}",
-                        report.items.len(),
-                        report
-                            .for_
-                            .as_ref()
-                            .map(|owner| format!(" for {owner}"))
-                            .unwrap_or_default()
-                    );
-                    render(json, &report, human)
-                }
-            }
+            let out = store.frontier(for_.as_deref(), profile.as_deref(), include_excluded)?;
+            let human = format!(
+                "execution frontier: {} item(s){}",
+                out.items.len(),
+                out.for_
+                    .as_ref()
+                    .map(|owner| format!(" for {owner}"))
+                    .unwrap_or_default()
+            );
+            render(json, &out, human)
         }
-        WorkCommand::ReadinessPolicy { command } => match command {
-            ReadinessPolicyCommand::Show { json } => {
-                let out = policy::load_authority_policy(store.repo_root())?;
-                render(json, &out, readiness_policy_human(&out))
-            }
-            ReadinessPolicyCommand::Validate { json } => {
-                let out = policy::validate_authority_policy_file(store.repo_root())?;
-                if out.valid {
-                    render(json, &out, "readiness policy valid".to_string())
-                } else {
-                    Err(PulseError::validation(
-                        "readiness_policy_invalid",
-                        serde_json::to_string(&out.reason_codes)?,
-                    ))
-                }
-            }
-        },
-        WorkCommand::Contract { command } => match command {
-            ContractCommand::Set {
-                ticket_id,
-                file,
-                expected_revision,
-                actor,
-                json,
-            } => {
-                let bytes =
-                    std::fs::read(&file).map_err(|error| PulseError::io(file.clone(), error))?;
-                let request: ContractSetRequest = serde_json::from_slice(&bytes)
-                    .map_err(|error| PulseError::json(file.clone(), error))?;
-                let out = store.set_contract(&ticket_id, expected_revision, request, actor)?;
-                render(json, &out, format!("updated {}", out.value.id))
-            }
-            ContractCommand::Show { ticket_id, json } => {
-                let out = store.show_contract(&ticket_id)?;
-                render(json, &out, format!("contract {}", ticket_id))
-            }
-        },
-        WorkCommand::QaImpact { command } => match command {
-            QaImpactCommand::Set {
-                ticket_id,
-                posture,
-                rationale,
-                behavioral_owner,
-                cases,
-                expected_revision,
-                actor,
-                json,
-            } => {
-                let update = QaImpactUpdate {
-                    posture: posture.into(),
-                    rationale,
-                    behavioral_owner,
-                    affected_case_ids: cases,
-                };
-                let out = store.set_qa_impact(&ticket_id, expected_revision, update, actor)?;
-                render(json, &out, format!("updated {}", out.value.id))
-            }
-            QaImpactCommand::Show { ticket_id, json } => {
-                let out = store.show_qa_impact(&ticket_id)?;
-                render(json, &out, format!("qa-impact {}", ticket_id))
-            }
-        },
-        WorkCommand::Shaping { command } => match command {
-            ShapingCommand::Apply {
-                owner_id,
-                receipt,
-                expected_revision,
-                expected_current_receipt,
-                actor,
-                json,
-            } => {
-                let out = store.apply_shaping(
-                    &owner_id,
-                    expected_revision,
-                    &receipt,
-                    expected_current_receipt.as_deref(),
-                    actor,
-                )?;
-                render(json, &out, format!("{} {}", out.code, owner_id))
-            }
-            ShapingCommand::Show { owner_id, json } => {
-                let out = store.show_shaping(&owner_id)?;
-                render(json, &out, format!("shaping {}", owner_id))
-            }
-            ShapingCommand::Invalidate {
-                owner_id,
-                expected_revision,
-                reason,
-                actor,
-                json,
-            } => {
-                let out = store.invalidate_shaping(&owner_id, expected_revision, reason, actor)?;
-                render(json, &out, format!("{} {}", out.code, owner_id))
-            }
-        },
         WorkCommand::Packet { id, lease, json } => {
             let packet = match lease {
                 Some(lease_id) => store.work_packet_for_lease(&id, &lease_id)?,
@@ -828,23 +565,6 @@ fn packet_human(packet: &crate::work_packet::WorkPacket) -> String {
         packet.blockers.len(),
         packet.packet_fingerprint,
     )
-}
-
-fn readiness_policy_human(report: &policy::AuthorityPolicyReport) -> String {
-    if !report.available {
-        return "readiness policy unavailable (default deny)".to_string();
-    }
-    if report.valid {
-        format!(
-            "readiness policy valid revision {}",
-            report.policy_revision.unwrap_or_default()
-        )
-    } else {
-        format!(
-            "readiness policy invalid: {}",
-            report.reason_codes.join(",")
-        )
-    }
 }
 
 #[cfg(test)]

@@ -249,7 +249,6 @@ fn graph_internal_tree_exposes_layered_modules_without_shims() {
         "src/graph/store/mod.rs",
         "src/kernel/mod.rs",
         "src/kernel/readiness.rs",
-        "src/kernel/shaping.rs",
         "src/kernel/lifecycle.rs",
         "src/kernel/frontier.rs",
     ] {
@@ -273,6 +272,9 @@ fn graph_internal_tree_exposes_layered_modules_without_shims() {
         "src/graph/frontier.rs",
         "src/graph/executability.rs",
         "src/graph/rollup.rs",
+        "src/graph/read/shaping.rs",
+        "src/graph/store/contracts.rs",
+        "src/kernel/shaping.rs",
     ] {
         assert!(
             !repo_root().join(shim).exists(),
@@ -359,10 +361,6 @@ fn graph_store_cross_domain_imports_are_limited_to_compatibility_or_mutation_bou
                 "graph store should not import docs services directly: {display}"
             );
         }
-        if display.ends_with("contracts.rs") {
-            // QA-impact writes still authority-gate local contract mutations.
-            continue;
-        }
         if display.ends_with("supersession.rs") || display.ends_with("mod.rs") {
             // Supersession remains graph lifecycle mutation backed by evidence
             // receipts; `mod.rs` exposes the public ReceiptReference type.
@@ -389,15 +387,11 @@ fn cross_domain_orchestration_lives_in_kernel_not_graph_store() {
 
     for forbidden in [
         "build_readiness_snapshot",
-        "build_shaping_snapshot",
-        "build_decision_proofs",
         "build_docs_applicability",
         "build_content_bindings",
         "evaluate_transition_gate",
-        "apply_shaping_with_context",
         "transition_node_gated_with_context",
         "build_execution_readiness_reports",
-        "build_decision_branch_contexts",
     ] {
         assert!(
             !store.contains(forbidden),
@@ -417,7 +411,7 @@ fn cross_domain_orchestration_lives_in_kernel_not_graph_store() {
         kernel.contains("crate::docs::")
             && kernel.contains("crate::evidence::")
             && kernel.contains("crate::policy::"),
-        "kernel should compose docs, evidence and policy for readiness/shaping/lifecycle"
+        "kernel should compose docs, evidence and policy for readiness/lifecycle"
     );
 }
 
@@ -448,7 +442,6 @@ fn read_only_domain_entrypoints_remain_store_methods_backed_by_pure_modules() {
         "neighborhood(&projection, id, depth)",
         "affected_by(&projection, id, relation_filter)",
         "evaluate_readiness(",
-        "frontier::project_decision_frontier(",
         "frontier::project_execution_frontier(",
     ] {
         assert!(

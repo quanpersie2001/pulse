@@ -8,13 +8,17 @@
 //! in `src/kernel/packet.rs`'s in-module tests.
 
 use pulse::canonical_json::to_canonical_bytes;
+use pulse::graph::model::node::NodeStatus;
 use pulse::graph::store::OperationContext;
+use pulse::identity::ActorKind;
+use pulse::policy::{AuthorityPolicy, AuthorityPrincipal};
 use pulse::storage::transaction::{
     persist_multi_target_intent, FileState, MultiTargetTransactionIntent, TransactionTarget,
 };
 use pulse::JsonGraphStore;
 use serde_json::json;
 use std::fs;
+use std::path::Path;
 
 use crate::common::fixture_repo::TestRepo;
 
@@ -38,7 +42,7 @@ fn public_work_packet_builds_after_refactoring() -> TestResult {
     let repo = TestRepo::from_fixture("minimal-service");
 
     // Run a full CLI setup via the existing test pattern: bootstrap, create
-    // ticket, set contract, set qa, set docs impact, transition to ready.
+    // ticket, write ticket.md, sync, transition to ready.
     let ticket_id = test_setup_ready_ticket(&repo)?;
 
     let store = JsonGraphStore::new(repo.path());
@@ -128,25 +132,41 @@ fn packet_identity_observation_does_not_recover_until_packet_fence() -> TestResu
 // Test setup helper (minimal ready ticket for packet tests)
 // -----------------------------------------------------------------------
 
-use pulse::canonical_json::hash_bytes;
-use pulse::evidence::model::*;
-use pulse::evidence::record_receipt;
-use pulse::graph::model::contract::{
-    ContentRef, ContractItem, ContractScope, EffortMetadata, ImplementationContract,
-    ImplementationMode, ImplementationSemanticImpact, PlanPolicy, QaImpactPosture, SurfaceRef,
-    TicketRole, WorkSurface,
-};
-use pulse::graph::model::node::DocumentationImpactPosture;
-use pulse::graph::model::node::NodeStatus;
-use pulse::graph::store::{ContractSetRequest, DocumentationImpactUpdate, QaImpactUpdate};
-use pulse::identity::ActorKind;
-use pulse::policy::{AuthorityPolicy, AuthorityPrincipal};
-use std::path::Path;
-
 type TestResult<T = ()> = Result<T, Box<dyn std::error::Error>>;
 
 fn test_error(message: impl Into<String>) -> std::io::Error {
     std::io::Error::other(message.into())
+}
+
+/// The Ticket contract bound by the packet: `works/<id>/ticket.md`.
+/// Sections mirror the assignment fixture so the markdown ambiguity gate
+/// passes for an R1 implementation Ticket.
+fn ticket_markdown(ticket_id: &str) -> String {
+    format!(
+        "# {ticket_id} Implement fence-aware packet revalidation\n\
+         \n\
+         ## Objective\nExtract and validate the fence-aware packet builder.\n\
+         \n\
+         ## Current behavior\nThe packet builder phases are not fence-aware.\n\
+         \n\
+         ## Target behavior\nThe packet builder revalidates under the fence.\n\
+         \n\
+         ## Code anchors\n- src/kernel/packet.rs\n\
+         \n\
+         ## Required changes\n- Extract the fence-aware phase builder.\n\
+         \n\
+         ## Invariants\n- Public packet bytes remain unchanged.\n\
+         \n\
+         ## Implementation freedom\nguided: agent chooses internal structure within this contract.\n\
+         \n\
+         ## Acceptance\n- AC-1: Fence-aware packet builder works.\n\
+         \n\
+         ## Verify\n- cargo test\n\
+         \n\
+         ## Documentation impact\n- Posture: none\n- Rationale: No durable docs impact.\n- Documents:\n\
+         \n\
+         ## QA impact\n- Owner:\n- Posture: none\n- Cases:\n- Reason: No product QA impact.\n"
+    )
 }
 
 fn test_setup_ready_ticket(repo: &TestRepo) -> TestResult<String> {
@@ -154,17 +174,7 @@ fn test_setup_ready_ticket(repo: &TestRepo) -> TestResult<String> {
     let store = JsonGraphStore::new(root);
 
     // Policy grants
-    write_policy(
-        root,
-        &[
-            "shape.apply",
-            "shape.approve.R1",
-            "qa.none.approve",
-            "work.transition.shaped",
-            "work.transition.ready",
-            "work.node.create",
-        ],
-    )?;
+    write_policy(root, &["work.transition.shaped", "work.transition.ready"])?;
 
     // Bootstrap graph
     let bootstrap = repo.pulse_ok(&["graph", "bootstrap", "--json"]);
@@ -197,188 +207,24 @@ fn test_setup_ready_ticket(repo: &TestRepo) -> TestResult<String> {
 
     let node = store.show_node(&ticket_id)?;
 
-    let brief_rel = format!("{}/ticket.md", node.content_dir);
-    let brief_path = root.join(&brief_rel);
+    // The Ticket contract is `works/<id>/ticket.md` bound by `brief_hash`:
+    // write the markdown, then let `sync` parse it, bump the contract
+    // revision, and derive docs/QA metadata.
+    let brief_path = root.join(&node.content_dir).join("ticket.md");
     fs::create_dir_all(
         brief_path
             .parent()
             .ok_or_else(|| test_error("brief path has no parent"))?,
     )?;
-    fs::write(
-        &brief_path,
-        b"# Ticket\nImplement fence-aware packet builder.",
-    )?;
-    let brief_hash = hash_bytes(&fs::read(&brief_path)?);
+    fs::write(&brief_path, ticket_markdown(&ticket_id))?;
 
-    // Set implementation contract
-    let contract = ImplementationContract {
-        verification_profile: "standard".to_string(),
-        mode: ImplementationMode::Guided,
-        work_surface: WorkSurface::Code,
-        plan_policy: PlanPolicy::None,
-        semantic_impact: ImplementationSemanticImpact::NoBehaviorOrPublicRiskChange,
-        effort: EffortMetadata::default(),
-        brief: Some(ContentRef {
-            path: brief_rel,
-            content_hash: brief_hash.clone(),
-        }),
-        objective: "Extract fence-aware packet builder.".to_string(),
-        current_behavior: "No fence-aware builder.".to_string(),
-        target_behavior: "Extracted builder available.".to_string(),
-        code_anchors: vec![SurfaceRef::path("src/kernel/packet.rs")],
-        documentation_anchors: vec![],
-        configuration_anchors: vec![],
-        data_anchors: vec![],
-        research_refs: vec![],
-        required_changes: vec![ContractItem {
-            id: "CHG-1".to_string(),
-            summary: "Extract phase builder.".to_string(),
-        }],
-        invariants: vec![ContractItem {
-            id: "INV-1".to_string(),
-            summary: "Public bytes unchanged.".to_string(),
-        }],
-        acceptance: vec![ContractItem {
-            id: "AC-1".to_string(),
-            summary: "Fence-aware builder works.".to_string(),
-        }],
-        scope: ContractScope::default(),
-        implementation_freedom: vec![],
-        required_decisions: vec![],
-        shared_approach_refs: vec![],
-        expected_evidence: vec![],
-        expected_handoff: vec![],
-    };
-    store.set_contract_with_context(
-        &ticket_id,
-        node.revision,
-        ContractSetRequest {
-            role: TicketRole::Implementation,
-            implementation: Some(contract),
-            decision_work: None,
-        },
-        ctx(),
-    )?;
+    store.sync_ticket_with_context(&ticket_id, node.revision, ctx())?;
 
-    // Set QA impact
-    let node = store.show_node(&ticket_id)?;
-    store.set_qa_impact_with_context(
-        &ticket_id,
-        node.revision,
-        QaImpactUpdate {
-            posture: QaImpactPosture::None,
-            rationale: Some("No behavior change.".to_string()),
-            behavioral_owner: None,
-            affected_case_ids: vec![],
-        },
-        ctx(),
-    )?;
-
-    // Set docs impact
-    let node = store.show_node(&ticket_id)?;
-    store.update_documentation_impact(
-        &ticket_id,
-        node.revision,
-        DocumentationImpactUpdate {
-            domains: vec![],
-            posture: DocumentationImpactPosture::None,
-            rationale: Some("No docs change.".to_string()),
-            required_documents: vec![],
-            deferred_to: vec![],
-            paths: vec!["development".to_string()],
-            labels: vec!["packet".to_string()],
-        },
-        "human:tester".to_string(),
-    )?;
-
-    // Record shaping receipt
-    let node = store.show_node(&ticket_id)?;
-    let receipt = ReceiptEnvelope {
-        schema_version: 1,
-        receipt_version: 1,
-        id: format!("rcpt_{:0<26}", &ticket_id[3..]),
-        kind: ReceiptKind::ShapingValidation,
-        result: ReceiptResult::Passed,
-        actor: ActorRef {
-            kind: ActorKind::Human,
-            id: "tester".to_string(),
-        },
-        recorded_at: chrono::Utc::now(),
-        subject: SubjectRef {
-            kind: "work".to_string(),
-            id: ticket_id.clone(),
-        },
-        bindings: ReceiptBindings {
-            work: vec![WorkBinding {
-                id: ticket_id.clone(),
-                revision: node.revision,
-            }],
-            source: None,
-            content: vec![ContentBinding {
-                path: format!("{}/ticket.md", node.content_dir),
-                sha256: brief_hash.clone(),
-            }],
-            artifacts: vec![],
-            graph_fingerprint_observed: None,
-        },
-        payload: ReceiptPayload::ShapingValidation(ShapingValidationPayload {
-            payload_version: 1,
-            owning_work: ShapingWorkBinding {
-                id: ticket_id.clone(),
-                revision_observed: node.revision,
-                contract_revision: node.contract_revision,
-            },
-            materialization: "R1".to_string(),
-            shape_mode: ShapeMode::FocusedBranches,
-            source_posture: SourcePosture::NotRequiredContentBound,
-            destination: Some(ShapingDestination {
-                summary: "Deliver fence-aware packet".to_string(),
-                scope_boundary: vec!["No dispatch".to_string()],
-                exit_conditions: vec!["Packet coherent".to_string()],
-            }),
-            map: None,
-            affected_work: vec![],
-            branches: vec![],
-            fog: vec![],
-            out_of_scope: vec![],
-            resolution_pointers: vec![],
-            approval: ShapingApproval {
-                approved_by: ActorRef {
-                    kind: ActorKind::Human,
-                    id: "tester".to_string(),
-                },
-                reference: "test".to_string(),
-            },
-            reconciliation: None,
-            remaining_uncertainty: vec![],
-        }),
-    };
-    let receipt_file = root.join("shaping.json");
-    fs::write(&receipt_file, to_canonical_bytes(&receipt)?)?;
-    record_receipt(root, None, &receipt_file)?;
-
-    // Apply shaping and transition to Shaped
-    let node = store.show_node(&ticket_id)?;
-    store.apply_shaping_with_context(&ticket_id, node.revision, &receipt.id, None, ctx())?;
-
-    let node = store.show_node(&ticket_id)?;
-    store.transition_node_with_context(
-        &ticket_id,
-        NodeStatus::Shaped,
-        node.revision,
-        None,
-        ctx(),
-    )?;
-
-    // Transition to Ready
-    let node = store.show_node(&ticket_id)?;
-    store.transition_node_with_context(
-        &ticket_id,
-        NodeStatus::Ready,
-        node.revision,
-        None,
-        ctx(),
-    )?;
+    // Markdown ambiguity gate: transition through Shaped to Ready.
+    for status in [NodeStatus::Shaped, NodeStatus::Ready] {
+        let revision = store.show_node(&ticket_id)?.revision;
+        store.transition_node_with_context(&ticket_id, status, revision, None, ctx())?;
+    }
 
     // Commit so the worktree is clean for the packet source check.
     let add = std::process::Command::new("git")

@@ -14,7 +14,7 @@ const MAX_GRANTS: usize = 128;
 /// This is deliberately an explicit, sorted list. Grants are capabilities,
 /// not roles, so initialization must never use a wildcard or infer authority
 /// from an actor kind. Keep this list in sync with every grant passed to
-/// [`authorize`] (including the materialization-specific shaping grants).
+/// [`authorize`].
 pub const CORE_GRANTS: &[&str] = &[
     "decision.accept",
     "decision.propose",
@@ -23,15 +23,6 @@ pub const CORE_GRANTS: &[&str] = &[
     "evidence.record",
     "knowledge.capture",
     "note",
-    "qa.defer_to_story_close",
-    "qa.none.approve",
-    "shape.apply",
-    "shape.approve.R0",
-    "shape.approve.R1",
-    "shape.approve.R2",
-    "shape.approve.R3",
-    "shape.destination.redraw",
-    "shape.invalidate",
     "work.assignment.close",
     "work.assignment.handoff",
     "work.assignment.prepare",

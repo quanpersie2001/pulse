@@ -82,7 +82,6 @@ pub(crate) enum ReceiptCommand {
 #[value(rename_all = "snake_case")]
 pub(crate) enum ReceiptKindArg {
     SupersessionReconciliation,
-    ShapingValidation,
     DecisionAcceptance,
     DocumentationValidation,
     QaCheckpoint,
@@ -92,7 +91,6 @@ impl From<ReceiptKindArg> for ReceiptKind {
     fn from(value: ReceiptKindArg) -> Self {
         match value {
             ReceiptKindArg::SupersessionReconciliation => ReceiptKind::SupersessionReconciliation,
-            ReceiptKindArg::ShapingValidation => ReceiptKind::ShapingValidation,
             ReceiptKindArg::DecisionAcceptance => ReceiptKind::DecisionAcceptance,
             ReceiptKindArg::DocumentationValidation => ReceiptKind::DocumentationValidation,
             ReceiptKindArg::QaCheckpoint => ReceiptKind::QaCheckpoint,

@@ -33,8 +33,9 @@ Modules sit bottom-up and never reach up the ladder. Guards:
     ambiguity is evaluated from the parsed brief; shaping is not a receipt
     projection.
   - `graph::store` — persistence: sharded JSON node/edge files, manifest,
-    bootstrap, repository state classification, contract/QA/docs-impact
-    mutation seams, supersession. `JsonGraphStore` is the public facade.
+    bootstrap, repository state classification, docs-impact mutation seam,
+    ticket sync from `works/<id>/ticket.md`, supersession. `JsonGraphStore`
+    is the public facade.
   There are no one-line re-export shims under `src/graph/`; use the layered
   paths (`graph::model::node` …).
 - `src/kernel/` composes graph with other domains into the concrete
@@ -139,7 +140,7 @@ module pretends otherwise.
 | Events tail / notes | §5.7 | append-only log exists; `events tail` and `note` CLI do not. |
 | MCP server | §5.8 | stub removed with the daemon; CLI path comes first. |
 | Ticket close for all risks | §5.5 | Implemented; medium/high/critical use the same proof gates, with a human actor for high/critical. |
-| ticket.md as the contract source | §5.1 | Implemented through `graph::model::brief`, `work sync`, ambiguity gating and packet raw content; legacy JSON contract mutation remains for existing callers. |
+| ticket.md as the contract source | §5.1 | Implemented through `graph::model::brief`, `work sync`, ambiguity gating and packet raw content; the legacy JSON contract API was removed. |
 | Docs metadata reduction | §5.4 | Implemented: eight-field records, controlled tags and path/tag applicability. |
 
 ## 6. Conventions

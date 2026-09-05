@@ -23,32 +23,6 @@ pub(super) fn validate_non_empty(
     }
 }
 
-pub(super) fn validate_unique_by<'a>(
-    code: &'static str,
-    values: impl Iterator<Item = &'a str>,
-) -> Result<()> {
-    let mut seen = std::collections::BTreeSet::new();
-    for value in values {
-        validate_non_empty(value, code, "identifier required")?;
-        if !seen.insert(value) {
-            return Err(PulseError::validation(code, "duplicate identifier"));
-        }
-    }
-    Ok(())
-}
-
-pub(super) fn validate_id_prefix(id: &str, prefix: &str, code: &'static str) -> Result<()> {
-    validate_non_empty(id, code, "identifier required")?;
-    if !id.starts_with(prefix)
-        || !id
-            .chars()
-            .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '-')
-    {
-        return Err(PulseError::validation(code, "invalid identifier"));
-    }
-    Ok(())
-}
-
 pub(super) fn validate_work_id_kind(id: &str, prefix: &str, code: &'static str) -> Result<()> {
     if !prefix.is_empty() && !id.starts_with(prefix) {
         return Err(PulseError::validation(code, "unexpected work id kind"));

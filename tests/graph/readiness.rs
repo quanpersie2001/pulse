@@ -1,32 +1,31 @@
-//! S7-I4 readiness composition, narrow fingerprint, stale-ready semantics and
+//! Readiness composition, narrow fingerprint, stale-ready semantics and
 //! lifecycle gate tests.
 //!
-//! These tests exercise the harness against temporary target repositories only.
-//! They never point Pulse at this development repository.
+//! The Ticket contract is `works/<id>/ticket.md`, bound by `brief_hash` and
+//! synced via `sync_ticket`; QA and documentation postures are derived from its
+//! markdown sections. There is no separate implementation/decision contract and
+//! no shaping receipt ceremony. These tests exercise the harness against
+//! temporary target repositories only; they never point Pulse at this
+//! development repository.
 
 use chrono::Utc;
-use pulse::canonical_json::hash_bytes;
-use pulse::evidence::model::*;
 use pulse::graph::model::contract::{
-    ContentRef, ContractItem, ContractScope, EffortMetadata, ImplementationContract,
-    ImplementationMode, ImplementationSemanticImpact, Materialization, PlanPolicy, QaImpactPosture,
-    Risk, SurfaceRef, TicketRole, WorkSurface,
+    Materialization, PublicCreateClassification, Risk, TicketRole,
 };
-use pulse::graph::model::lifecycle::{installed_gate, GateProfile};
-use pulse::graph::model::node::{DocumentationImpactPosture, NodeStatus};
+use pulse::graph::model::lifecycle::{installed_gate, GateProfile, TransitionReason};
+use pulse::graph::model::node::NodeStatus;
 use pulse::graph::read::readiness::{
     self, GateFamilyReport, GateStatus, ReadinessReport, ReadinessStatus, READINESS_PROFILE,
 };
-use pulse::graph::store::{
-    ContractSetRequest, DocumentationImpactUpdate, OperationContext, QaImpactUpdate,
-};
+use pulse::graph::store::OperationContext;
 use pulse::id::WorkKind;
 use pulse::policy::{AuthorityPolicy, AuthorityPrincipal};
 use pulse::storage::transaction::TransactionFailpoint;
-use pulse::{JsonGraphStore, PulseError};
+use pulse::JsonGraphStore;
 use std::fs;
 
 use crate::common_canon::write_json;
+use pulse::docs::{DocumentKind, DocumentRecord, DocumentScope, DocumentStatus};
 
 fn write_policy(repo: &std::path::Path, grants: &[&str]) {
     let mut sorted_grants = grants.iter().map(|g| g.to_string()).collect::<Vec<_>>();
@@ -36,7 +35,7 @@ fn write_policy(repo: &std::path::Path, grants: &[&str]) {
         schema_version: 1,
         revision: 1,
         principals: vec![AuthorityPrincipal {
-            kind: ActorKind::Human,
+            kind: pulse::identity::actor::ActorKind::Human,
             id: "tester".to_string(),
             grants: sorted_grants,
         }],
@@ -47,13 +46,7 @@ fn write_policy(repo: &std::path::Path, grants: &[&str]) {
 }
 
 fn full_grants() -> &'static [&'static str] {
-    &[
-        "shape.apply",
-        "shape.approve.R1",
-        "qa.none.approve",
-        "work.transition.shaped",
-        "work.transition.ready",
-    ]
+    &["work.transition.shaped", "work.transition.ready"]
 }
 
 fn ctx() -> OperationContext {
@@ -63,8 +56,16 @@ fn ctx() -> OperationContext {
     }
 }
 
+fn reason(code: &str, summary: &str) -> Option<TransitionReason> {
+    Some(TransitionReason {
+        code: code.to_string(),
+        summary: summary.to_string(),
+        reference: None,
+    })
+}
+
 fn create_ticket(store: &JsonGraphStore) -> pulse::graph::model::node::Node {
-    let classification = pulse::graph::model::contract::PublicCreateClassification {
+    let classification = PublicCreateClassification {
         role: Some(TicketRole::Implementation),
         risk: Some(Risk::Low),
         materialization: Some(Materialization::R1),
@@ -80,12 +81,101 @@ fn create_ticket(store: &JsonGraphStore) -> pulse::graph::model::node::Node {
         .value
 }
 
-fn write_brief(repo: &std::path::Path, node: &pulse::graph::model::node::Node) -> String {
-    let rel = format!("{}/ticket.md", node.content_dir);
-    let path = repo.join(&rel);
+const DOCS_NONE_SECTION: &str = "## Documentation impact\n- Posture: none\n- Rationale: No durable docs impact.\n- Documents:\n";
+const QA_NONE_SECTION: &str =
+    "## QA impact\n- Owner:\n- Posture: none\n- Cases:\n- Reason: No product QA impact.\n";
+
+/// Render the full `ticket.md` contract. Omitted sections are left out entirely
+/// (so `## Documentation impact` / `## QA impact` absence leaves the derived
+/// posture at its default `unknown`).
+fn ticket_md(
+    id: &str,
+    docs_section: Option<&str>,
+    qa_section: Option<&str>,
+    open_questions_body: Option<&str>,
+) -> String {
+    let docs = docs_section
+        .map(|section| format!("{section}\n"))
+        .unwrap_or_default();
+    let qa = qa_section
+        .map(|section| format!("{section}\n"))
+        .unwrap_or_default();
+    let questions = open_questions_body
+        .map(|body| format!("## Open questions\n{body}\n"))
+        .unwrap_or_default();
+    format!(
+        "# {id} Test ticket\n\n\
+         ## Objective\nDistinguish expired and invalid tokens.\n\n\
+         ## Current behavior\nBoth map to InvalidToken.\n\n\
+         ## Target behavior\nExpired maps to TokenExpired.\n\n\
+         ## Code anchors\n- src/auth.rs\n\n\
+         ## Required changes\n- Introduce the expired-token error.\n\n\
+         ## Invariants\n- Do not leak secrets.\n\n\
+         ## Implementation freedom\nguided: agent chooses internal structure within this contract.\n\n\
+         ## Acceptance\n- AC-1: Expired token is classified.\n\n\
+         ## Verify\n- cargo test\n\n\
+         {docs}\
+         {qa}\
+         {questions}"
+    )
+}
+
+/// Write `ticket.md` and bind it with `sync_ticket` so `brief_hash` and the
+/// derived docs/QA metadata match the markdown. Returns the updated node.
+fn bind_brief(
+    repo: &std::path::Path,
+    store: &JsonGraphStore,
+    node: &pulse::graph::model::node::Node,
+    docs_section: Option<&str>,
+    qa_section: Option<&str>,
+    open_questions_body: Option<&str>,
+) -> pulse::graph::model::node::Node {
+    let path = repo.join(format!("{}/ticket.md", node.content_dir));
     fs::create_dir_all(path.parent().unwrap()).unwrap();
-    fs::write(&path, b"# Ticket\nimplementation contract content").unwrap();
-    hash_bytes(&fs::read(&path).unwrap())
+    fs::write(
+        &path,
+        ticket_md(&node.id, docs_section, qa_section, open_questions_body),
+    )
+    .unwrap();
+    let revision = store.show_node(&node.id).unwrap().revision;
+    store
+        .sync_ticket_with_context(&node.id, revision, ctx())
+        .unwrap()
+        .value
+}
+
+/// A Draft ticket whose `ticket.md` is bound (brief_hash current) with docs/QA
+/// posture `none`.
+fn bound_ticket(repo: &std::path::Path, store: &JsonGraphStore) -> pulse::graph::model::node::Node {
+    let node = create_ticket(store);
+    bind_brief(
+        repo,
+        store,
+        &node,
+        Some(DOCS_NONE_SECTION),
+        Some(QA_NONE_SECTION),
+        None,
+    )
+}
+
+fn transition(
+    store: &JsonGraphStore,
+    id: &str,
+    to: NodeStatus,
+    reason: Option<TransitionReason>,
+) -> pulse::graph::model::node::Node {
+    let revision = store.show_node(id).unwrap().revision;
+    store
+        .transition_node_with_context(id, to, revision, reason, ctx())
+        .unwrap()
+        .value
+}
+
+fn ready_ticket(repo: &std::path::Path, store: &JsonGraphStore) -> pulse::graph::model::node::Node {
+    write_policy(repo, full_grants());
+    let node = bound_ticket(repo, store);
+    let shaped = transition(store, &node.id, NodeStatus::Shaped, None);
+    transition(store, &shaped.id, NodeStatus::Ready, None)
 }
 
 fn write_qa_baseline(repo: &std::path::Path, story_id: &str, case_id: &str) {
@@ -121,234 +211,6 @@ fn write_qa_baseline(repo: &std::path::Path, story_id: &str, case_id: &str) {
         ),
     )
     .unwrap();
-}
-
-fn implementation_contract(
-    node: &pulse::graph::model::node::Node,
-    brief_hash: &str,
-) -> ImplementationContract {
-    ImplementationContract {
-        verification_profile: "standard".to_string(),
-        mode: ImplementationMode::Guided,
-        work_surface: WorkSurface::Code,
-        plan_policy: PlanPolicy::None,
-        semantic_impact: ImplementationSemanticImpact::NoBehaviorOrPublicRiskChange,
-        effort: EffortMetadata::default(),
-        brief: Some(ContentRef {
-            path: format!("{}/ticket.md", node.content_dir),
-            content_hash: brief_hash.to_string(),
-        }),
-        objective: "Distinguish expired and invalid tokens.".to_string(),
-        current_behavior: "Both map to InvalidToken.".to_string(),
-        target_behavior: "Expired maps to TokenExpired.".to_string(),
-        code_anchors: vec![SurfaceRef::path("src/auth.rs")],
-        documentation_anchors: vec![],
-        configuration_anchors: vec![],
-        data_anchors: vec![],
-        research_refs: vec![],
-        required_changes: vec![ContractItem {
-            id: "CHG-1".to_string(),
-            summary: "Introduce expired-token error.".to_string(),
-        }],
-        invariants: vec![ContractItem {
-            id: "INV-1".to_string(),
-            summary: "Do not leak secrets.".to_string(),
-        }],
-        acceptance: vec![ContractItem {
-            id: "AC-1".to_string(),
-            summary: "Expired token is classified.".to_string(),
-        }],
-        scope: ContractScope::default(),
-        implementation_freedom: vec![ContractItem {
-            id: "FREE-1".to_string(),
-            summary: "Helper structure is free.".to_string(),
-        }],
-        required_decisions: vec![],
-        shared_approach_refs: vec![],
-        expected_evidence: vec![],
-        expected_handoff: vec![],
-    }
-}
-
-fn set_contract(
-    store: &JsonGraphStore,
-    node: &pulse::graph::model::node::Node,
-    contract: ImplementationContract,
-) -> pulse::graph::model::node::Node {
-    store
-        .set_contract_with_context(
-            &node.id,
-            node.revision,
-            ContractSetRequest {
-                role: TicketRole::Implementation,
-                implementation: Some(contract),
-                decision_work: None,
-            },
-            ctx(),
-        )
-        .unwrap()
-        .value
-}
-
-fn set_qa(
-    store: &JsonGraphStore,
-    node: &pulse::graph::model::node::Node,
-    posture: QaImpactPosture,
-) -> pulse::graph::model::node::Node {
-    store
-        .set_qa_impact_with_context(
-            &node.id,
-            node.revision,
-            QaImpactUpdate {
-                posture,
-                rationale: Some("Internal refactor; behavior unchanged.".to_string()),
-                behavioral_owner: None,
-                affected_case_ids: vec![],
-            },
-            ctx(),
-        )
-        .unwrap()
-        .value
-}
-
-fn set_docs_none(
-    store: &JsonGraphStore,
-    node: &pulse::graph::model::node::Node,
-) -> pulse::graph::model::node::Node {
-    store
-        .update_documentation_impact(
-            &node.id,
-            node.revision,
-            DocumentationImpactUpdate {
-                domains: vec![],
-                posture: DocumentationImpactPosture::None,
-                rationale: Some("No public behavior change.".to_string()),
-                required_documents: vec![],
-                deferred_to: vec![],
-                paths: vec![],
-                labels: vec![],
-            },
-            "human:tester".to_string(),
-        )
-        .unwrap()
-        .value
-}
-
-fn record_shaping(
-    repo: &std::path::Path,
-    node: &pulse::graph::model::node::Node,
-    receipt_id: &str,
-    brief_hash: &str,
-) {
-    let manifest = pulse::evidence::bootstrap(repo).unwrap().manifest;
-    let rel = format!("{}/ticket.md", node.content_dir);
-    let receipt = ReceiptEnvelope {
-        schema_version: 1,
-        receipt_version: 1,
-        id: receipt_id.to_string(),
-        kind: ReceiptKind::ShapingValidation,
-        result: ReceiptResult::Passed,
-        actor: ActorRef {
-            kind: ActorKind::Human,
-            id: "tester".to_string(),
-        },
-        recorded_at: Utc::now(),
-        subject: SubjectRef {
-            kind: "work".to_string(),
-            id: node.id.clone(),
-        },
-        bindings: ReceiptBindings {
-            work: vec![WorkBinding {
-                id: node.id.clone(),
-                revision: node.revision,
-            }],
-            source: None,
-            content: vec![ContentBinding {
-                path: rel,
-                sha256: brief_hash.to_string(),
-            }],
-            artifacts: vec![],
-            graph_fingerprint_observed: None,
-        },
-        payload: ReceiptPayload::ShapingValidation(ShapingValidationPayload {
-            payload_version: 1,
-            owning_work: ShapingWorkBinding {
-                id: node.id.clone(),
-                revision_observed: node.revision,
-                contract_revision: node.contract_revision,
-            },
-            materialization: "R1".to_string(),
-            shape_mode: ShapeMode::FocusedBranches,
-            source_posture: SourcePosture::NotRequiredContentBound,
-            destination: None,
-            map: None,
-            affected_work: vec![],
-            branches: vec![],
-            fog: vec![],
-            out_of_scope: vec![],
-            resolution_pointers: vec![],
-            approval: ShapingApproval {
-                approved_by: ActorRef {
-                    kind: ActorKind::Human,
-                    id: "tester".to_string(),
-                },
-                reference: "PULSE.md#human-judgment-boundaries".to_string(),
-            },
-            reconciliation: None,
-            remaining_uncertainty: vec![],
-        }),
-    };
-    let _ = manifest;
-    let file = repo.join(format!("{receipt_id}.json"));
-    write_json(&file, &receipt);
-    pulse::evidence::record_receipt(repo, None, &file).unwrap();
-}
-
-fn apply_shaping(
-    store: &JsonGraphStore,
-    node: &pulse::graph::model::node::Node,
-    receipt_id: &str,
-) -> pulse::graph::model::node::Node {
-    store
-        .apply_shaping_with_context(&node.id, node.revision, receipt_id, None, ctx())
-        .unwrap()
-        .value
-}
-
-/// Apply all contract-revision-bumping mutations, then record + apply a shaping
-/// receipt binding the final contract revision. Returns a node with the shaping
-/// pointer set (still in its original lifecycle status).
-fn prepare_with_shaping(
-    repo: &std::path::Path,
-    store: &JsonGraphStore,
-    receipt_id: &str,
-    with_qa_none: bool,
-    with_docs_none: bool,
-) -> pulse::graph::model::node::Node {
-    let mut node = create_ticket(store);
-    let brief_hash = write_brief(repo, &node);
-    node = set_contract(store, &node, implementation_contract(&node, &brief_hash));
-    if with_qa_none {
-        node = set_qa(store, &node, QaImpactPosture::None);
-    }
-    if with_docs_none {
-        node = set_docs_none(store, &node);
-    }
-    record_shaping(repo, &node, receipt_id, &brief_hash);
-    apply_shaping(store, &node, receipt_id)
-}
-
-fn ready_ticket(repo: &std::path::Path, store: &JsonGraphStore) -> pulse::graph::model::node::Node {
-    write_policy(repo, full_grants());
-    let node = prepare_with_shaping(repo, store, "rcpt_01J00000000000000000000001", true, true);
-    let shaped = store
-        .transition_node_with_context(&node.id, NodeStatus::Shaped, node.revision, None, ctx())
-        .unwrap()
-        .value;
-    store
-        .transition_node_with_context(&shaped.id, NodeStatus::Ready, shaped.revision, None, ctx())
-        .unwrap()
-        .value
 }
 
 fn family<'a>(report: &'a ReadinessReport, name: &str) -> &'a GateFamilyReport {
@@ -392,21 +254,43 @@ fn ready_ticket_reports_ready_with_full_gate_families() {
     assert!(report.transition_eligible);
     assert!(!report.dispatch_authorized);
     assert!(report.readiness_fingerprint.starts_with("sha256:"));
+    // The gate families appear in the fixed evaluation order, with no legacy
+    // implementation-contract/shaping families present.
+    let expected_order = [
+        "graph_validity",
+        "work_kind_and_role",
+        "lifecycle_eligibility",
+        "structural_executability",
+        "ticket_ambiguity",
+        "authority",
+        "documentation_impact",
+        "applicable_documents",
+        "qa_impact",
+        "content_reference_integrity",
+    ];
+    assert_eq!(report.gate_families.len(), expected_order.len());
+    for (expected, actual) in expected_order.iter().zip(&report.gate_families) {
+        assert_eq!(&actual.family, expected);
+    }
     assert_eq!(
         family(&report, "structural_executability").status,
         GateStatus::Passed
     );
     assert_eq!(
-        family(&report, "implementation_contract").status,
-        GateStatus::Passed
-    );
-    assert_eq!(
-        family(&report, "shaping_receipt_integrity").status,
+        family(&report, "ticket_ambiguity").status,
         GateStatus::Passed
     );
     assert_eq!(family(&report, "qa_impact").status, GateStatus::Passed);
     assert_eq!(
         family(&report, "documentation_impact").status,
+        GateStatus::Passed
+    );
+    assert_eq!(
+        family(&report, "applicable_documents").status,
+        GateStatus::NotApplicable
+    );
+    assert_eq!(
+        family(&report, "content_reference_integrity").status,
         GateStatus::Passed
     );
     assert_eq!(family(&report, "authority").status, GateStatus::Passed);
@@ -436,11 +320,7 @@ fn fingerprint_stable_across_unrelated_mutation_and_status_transition() {
             &node.id,
             NodeStatus::Shaped,
             node.revision,
-            Some(pulse::graph::model::lifecycle::TransitionReason {
-                code: "rework_needed".to_string(),
-                summary: "back to shaped".to_string(),
-                reference: None,
-            }),
+            reason("rework_needed", "back to shaped"),
             ctx(),
         )
         .unwrap()
@@ -457,173 +337,28 @@ fn fingerprint_changes_on_content_and_policy_inputs() {
     let node = ready_ticket(repo, &store);
     let baseline = store.readiness(&node.id).unwrap().readiness_fingerprint;
 
-    // Brief content byte change stales readiness.
+    // Mutating ticket.md bytes without re-syncing makes the bound brief hash
+    // stale, staling readiness and changing the fingerprint.
     let brief_path = repo.join(format!("{}/ticket.md", node.content_dir));
+    let original = fs::read(&brief_path).unwrap();
     fs::write(&brief_path, b"# Ticket\nchanged content").unwrap();
     let changed = store.readiness(&node.id).unwrap();
     assert_eq!(changed.status, ReadinessStatus::Stale);
+    assert!(family(&changed, "content_reference_integrity")
+        .reason_codes
+        .contains(&"implementation_brief_hash_stale".to_string()));
     assert_ne!(changed.readiness_fingerprint, baseline);
 
     // Restore content -> fingerprint returns to baseline.
-    fs::write(&brief_path, b"# Ticket\nimplementation contract content").unwrap();
+    fs::write(&brief_path, original).unwrap();
     let restored = store.readiness(&node.id).unwrap();
+    assert_eq!(restored.status, ReadinessStatus::Ready);
     assert_eq!(restored.readiness_fingerprint, baseline);
 
     // Policy change participates in the fingerprint.
-    write_policy(
-        repo,
-        &[
-            "shape.apply",
-            "shape.approve.R1",
-            "qa.none.approve",
-            "work.transition.shaped",
-        ],
-    );
+    write_policy(repo, &["work.transition.shaped"]);
     let policy_changed = store.readiness(&node.id).unwrap();
     assert_ne!(policy_changed.readiness_fingerprint, baseline);
-}
-
-#[test]
-fn required_decisions_gate_consumes_decision_acceptance_proof() {
-    // S7-57: a required Decision reference must resolve to a current accepted
-    // Decision acceptance proof. Without the proof the required_decisions gate
-    // is `unavailable` (not passed); with a current proof it passes; stale
-    // Decision prose makes it stale.
-    let tmp = tempfile::tempdir().unwrap();
-    let repo = tmp.path();
-    write_policy(repo, full_grants());
-    let store = JsonGraphStore::new(repo);
-
-    // Decision node + content + acceptance receipt.
-    let decision = store
-        .create_node(WorkKind::Decision, "Token compatibility".to_string())
-        .unwrap()
-        .value;
-    let decision_rel = format!("works/{}/decision.md", decision.id);
-    let decision_path = repo.join(&decision_rel);
-    fs::create_dir_all(decision_path.parent().unwrap()).unwrap();
-    fs::write(&decision_path, b"# Decision\nPreserve compatibility.").unwrap();
-    let decision_hash = hash_bytes(&fs::read(&decision_path).unwrap());
-    let manifest = pulse::evidence::bootstrap(repo).unwrap().manifest;
-    let acceptance_id = "rcpt_01J00000000000000000000077";
-    let acceptance_receipt = ReceiptEnvelope {
-        schema_version: 1,
-        receipt_version: 1,
-        id: acceptance_id.to_string(),
-        kind: ReceiptKind::DecisionAcceptance,
-        result: ReceiptResult::Passed,
-        actor: ActorRef {
-            kind: ActorKind::Human,
-            id: "tester".to_string(),
-        },
-        recorded_at: Utc::now(),
-        subject: SubjectRef {
-            kind: "work".to_string(),
-            id: decision.id.clone(),
-        },
-        bindings: ReceiptBindings {
-            work: vec![WorkBinding {
-                id: decision.id.clone(),
-                revision: decision.revision,
-            }],
-            source: None,
-            content: vec![ContentBinding {
-                path: decision_rel.clone(),
-                sha256: decision_hash.clone(),
-            }],
-            artifacts: vec![],
-            graph_fingerprint_observed: None,
-        },
-        payload: ReceiptPayload::DecisionAcceptance(DecisionAcceptancePayload {
-            payload_version: 1,
-            decision: DecisionAcceptanceDecision {
-                id: decision.id.clone(),
-                revision_observed: decision.revision,
-                contract_revision: decision.contract_revision,
-                content: DecisionContentSnapshot {
-                    path: decision_rel,
-                    content_hash: decision_hash,
-                },
-            },
-            accepted_outcome: "Accept compatibility direction.".to_string(),
-            approver: ActorRef {
-                kind: ActorKind::Human,
-                id: "tester".to_string(),
-            },
-            source_posture: SourcePosture::NotRequiredContentBound,
-        }),
-    };
-    let _ = manifest;
-
-    // Locked ticket referencing the decision, but the acceptance receipt is
-    // not recorded yet. The contract is structurally valid (receipt ref is a
-    // well-formed id+hash placeholder); readiness resolves the proof.
-    let ticket = create_ticket(&store);
-    let brief_hash = write_brief(repo, &ticket);
-    let mut contract = implementation_contract(&ticket, &brief_hash);
-    contract.mode = ImplementationMode::Locked;
-    contract.required_decisions = vec![pulse::graph::model::contract::RequiredDecisionRef {
-        id: decision.id.clone(),
-        contract_revision: decision.contract_revision,
-        acceptance_receipt: pulse::graph::model::contract::ReceiptRef {
-            id: acceptance_id.to_string(),
-            hash: "sha256:0000000000000000000000000000000000000000000000000000000000000000"
-                .to_string(),
-        },
-    }];
-    let ticket = set_contract(&store, &ticket, contract);
-    let ticket = set_qa(&store, &ticket, QaImpactPosture::None);
-    let ticket = set_docs_none(&store, &ticket);
-    record_shaping(
-        repo,
-        &ticket,
-        "rcpt_01J00000000000000000000078",
-        &brief_hash,
-    );
-    let ticket = apply_shaping(&store, &ticket, "rcpt_01J00000000000000000000078");
-
-    let report = store.readiness(&ticket.id).unwrap();
-    let gate = family(&report, "required_decisions");
-    assert_eq!(gate.status, GateStatus::Unavailable);
-    assert!(gate
-        .reason_codes
-        .contains(&"decision_acceptance_missing".to_string()));
-
-    // Record the acceptance proof and re-bind the contract to its real hash.
-    let file = repo.join("acceptance.json");
-    write_json(&file, &acceptance_receipt);
-    let outcome = pulse::evidence::record_receipt(repo, None, &file).unwrap();
-    let real_hash = outcome.receipt_hash;
-
-    let mut contract = store
-        .show_contract(&ticket.id)
-        .unwrap()
-        .implementation
-        .unwrap();
-    contract.required_decisions[0].acceptance_receipt.hash = real_hash;
-    // Bump contract revision via a fresh set; re-record shaping for the new
-    // contract revision so the shaping pointer stays current.
-    let ticket = set_contract(&store, &ticket, contract);
-    record_shaping(
-        repo,
-        &ticket,
-        "rcpt_01J00000000000000000000079",
-        &brief_hash,
-    );
-    let ticket = apply_shaping(&store, &ticket, "rcpt_01J00000000000000000000079");
-
-    let report = store.readiness(&ticket.id).unwrap();
-    let gate = family(&report, "required_decisions");
-    assert_eq!(gate.status, GateStatus::Passed);
-
-    // Stale Decision prose makes the proof stale.
-    fs::write(&decision_path, b"# Decision\nChanged direction.").unwrap();
-    let report = store.readiness(&ticket.id).unwrap();
-    let gate = family(&report, "required_decisions");
-    assert_eq!(gate.status, GateStatus::Stale);
-    assert!(gate
-        .reason_codes
-        .contains(&"decision_acceptance_stale".to_string()));
 }
 
 #[test]
@@ -653,18 +388,10 @@ fn qa_unknown_blocks_ready_and_required_resolves_current_story_cases() {
     let tmp = tempfile::tempdir().unwrap();
     let repo = tmp.path();
     let store = JsonGraphStore::new(repo);
-    write_policy(
-        repo,
-        &[
-            "shape.apply",
-            "shape.approve.R1",
-            "qa.none.approve",
-            "work.transition.shaped",
-            "work.transition.ready",
-        ],
-    );
-    // QA left at default unknown.
-    let node = prepare_with_shaping(repo, &store, "rcpt_01J00000000000000000000002", false, true);
+    // QA left at default unknown: the brief has no `## QA impact` section, so
+    // sync derives nothing and the node keeps its unknown default.
+    let node = create_ticket(&store);
+    let node = bind_brief(repo, &store, &node, Some(DOCS_NONE_SECTION), None, None);
     let report = store.readiness(&node.id).unwrap();
     assert_eq!(family(&report, "qa_impact").status, GateStatus::Failed);
     assert!(family(&report, "qa_impact")
@@ -677,20 +404,17 @@ fn qa_unknown_blocks_ready_and_required_resolves_current_story_cases() {
         .create_node(WorkKind::Story, "Behavioral owner".to_string())
         .unwrap()
         .value;
-    let node = store
-        .set_qa_impact_with_context(
-            &node.id,
-            node.revision,
-            QaImpactUpdate {
-                posture: QaImpactPosture::Required,
-                rationale: Some("Behavioral change needs baseline.".to_string()),
-                behavioral_owner: Some(story.id.clone()),
-                affected_case_ids: vec!["CASE-LOGIN-001".to_string()],
-            },
-            ctx(),
-        )
-        .unwrap()
-        .value;
+    let node = bind_brief(
+        repo,
+        &store,
+        &node,
+        Some(DOCS_NONE_SECTION),
+        Some(&format!(
+            "## QA impact\n- Owner: {}\n- Posture: required\n- Cases: CASE-LOGIN-001\n- Reason: Behavioral checkpoint required.\n",
+            story.id
+        )),
+        None,
+    );
     let report = store.readiness(&node.id).unwrap();
     let qa = family(&report, "qa_impact");
     assert_eq!(qa.status, GateStatus::Failed);
@@ -701,20 +425,17 @@ fn qa_unknown_blocks_ready_and_required_resolves_current_story_cases() {
     assert_eq!(family(&report, "qa_impact").status, GateStatus::Passed);
 
     // A stale/nonexistent case ID cannot silently pass against the same owner.
-    let node = store
-        .set_qa_impact_with_context(
-            &node.id,
-            node.revision,
-            QaImpactUpdate {
-                posture: QaImpactPosture::Required,
-                rationale: Some("Changed case selection.".to_string()),
-                behavioral_owner: Some(story.id),
-                affected_case_ids: vec!["CASE-MISSING".to_string()],
-            },
-            ctx(),
-        )
-        .unwrap()
-        .value;
+    let node = bind_brief(
+        repo,
+        &store,
+        &node,
+        Some(DOCS_NONE_SECTION),
+        Some(&format!(
+            "## QA impact\n- Owner: {}\n- Posture: required\n- Cases: CASE-MISSING\n- Reason: Changed case selection.\n",
+            story.id
+        )),
+        None,
+    );
     let report = store.readiness(&node.id).unwrap();
     assert_eq!(family(&report, "qa_impact").status, GateStatus::Failed);
     assert!(family(&report, "qa_impact")
@@ -727,12 +448,7 @@ fn missing_authority_policy_makes_authority_gate_unavailable() {
     let tmp = tempfile::tempdir().unwrap();
     let repo = tmp.path();
     let store = JsonGraphStore::new(repo);
-    // Apply shaping needs policy, so grant apply/approve but NOT transition grants.
-    write_policy(
-        repo,
-        &["shape.apply", "shape.approve.R1", "qa.none.approve"],
-    );
-    let node = prepare_with_shaping(repo, &store, "rcpt_01J00000000000000000000003", true, true);
+    let node = ready_ticket(repo, &store);
     // Now remove the policy entirely.
     let policy_path = repo.join(".pulse/policy/authority.json");
     fs::remove_file(&policy_path).unwrap();
@@ -750,12 +466,9 @@ fn documentation_impact_unknown_fails_none_passes() {
     let tmp = tempfile::tempdir().unwrap();
     let repo = tmp.path();
     let store = JsonGraphStore::new(repo);
-    write_policy(
-        repo,
-        &["shape.apply", "shape.approve.R1", "qa.none.approve"],
-    );
-    // Docs left unknown.
-    let node = prepare_with_shaping(repo, &store, "rcpt_01J00000000000000000000004", true, false);
+    // No `## Documentation impact` section -> derived posture stays unknown.
+    let node = create_ticket(&store);
+    let node = bind_brief(repo, &store, &node, None, Some(QA_NONE_SECTION), None);
     let report = store.readiness(&node.id).unwrap();
     assert_eq!(
         family(&report, "documentation_impact").status,
@@ -763,8 +476,15 @@ fn documentation_impact_unknown_fails_none_passes() {
     );
     assert_ne!(report.status, ReadinessStatus::Ready);
 
-    // Setting docs to none passes the family.
-    let node = set_docs_none(&store, &node);
+    // Deriving the none posture from the brief passes the family.
+    let node = bind_brief(
+        repo,
+        &store,
+        &node,
+        Some(DOCS_NONE_SECTION),
+        Some(QA_NONE_SECTION),
+        None,
+    );
     let report = store.readiness(&node.id).unwrap();
     assert_eq!(
         family(&report, "documentation_impact").status,
@@ -777,28 +497,85 @@ fn documentation_impact_unknown_fails_none_passes() {
 }
 
 #[test]
+fn applicable_documents_gate_requires_registered_current_documents() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path();
+    let store = JsonGraphStore::new(repo);
+    write_policy(repo, full_grants());
+    let node = create_ticket(&store);
+    let node = bind_brief(
+        repo,
+        &store,
+        &node,
+        Some(
+            "## Documentation impact\n- Posture: required\n- Rationale: Reservation contract must remain validated.\n- Documents: DOC-RESERVATION-CONTRACT\n",
+        ),
+        Some(QA_NONE_SECTION),
+        None,
+    );
+
+    // The required document is not registered yet -> gate fails closed.
+    let report = store.readiness(&node.id).unwrap();
+    let applicable = family(&report, "applicable_documents");
+    assert_eq!(applicable.status, GateStatus::Failed);
+    assert!(applicable
+        .reason_codes
+        .contains(&"required_document_missing".to_string()));
+    assert_ne!(report.status, ReadinessStatus::Ready);
+
+    // Registering the approved document with present content passes the gate.
+    let doc_path = repo.join("docs/domain/reservation.md");
+    fs::create_dir_all(doc_path.parent().unwrap()).unwrap();
+    fs::write(
+        &doc_path,
+        b"# Reservation contract\n\nThe reservation remains stable.\n",
+    )
+    .unwrap();
+    pulse::evidence::bootstrap(repo).unwrap();
+    pulse::docs::manifest::bootstrap(repo).unwrap();
+    pulse::docs::register(
+        repo,
+        1,
+        DocumentRecord {
+            id: "DOC-RESERVATION-CONTRACT".to_string(),
+            revision: 1,
+            path: "docs/domain/reservation.md".to_string(),
+            summary: "Reservation close contract".to_string(),
+            owner: "team:platform".to_string(),
+            kind: DocumentKind::Domain,
+            status: DocumentStatus::Approved,
+            scope: DocumentScope {
+                paths: vec!["src/**".to_string()],
+            },
+            tags: vec![],
+            generated: None,
+            superseded_by: None,
+        },
+        "human:tester",
+    )
+    .unwrap();
+    let report = store.readiness(&node.id).unwrap();
+    assert_eq!(
+        family(&report, "applicable_documents").status,
+        GateStatus::Passed
+    );
+}
+
+#[test]
 fn draft_to_shaped_transition_records_shaped_gate_profile() {
     let tmp = tempfile::tempdir().unwrap();
     let repo = tmp.path();
     let store = JsonGraphStore::new(repo);
-    write_policy(
-        repo,
-        &[
-            "shape.apply",
-            "shape.approve.R1",
-            "qa.none.approve",
-            "work.transition.shaped",
-        ],
-    );
-    let node = prepare_with_shaping(repo, &store, "rcpt_01J00000000000000000000005", true, true);
-    let shaped = store
-        .transition_node_with_context(&node.id, NodeStatus::Shaped, node.revision, None, ctx())
-        .unwrap()
-        .value;
+    write_policy(repo, &["work.transition.shaped"]);
+    let node = bound_ticket(repo, &store);
+    let shaped = transition(&store, &node.id, NodeStatus::Shaped, None);
     assert_eq!(shaped.status, NodeStatus::Shaped);
     let events = collect_events(repo, "work.node.transitioned");
     let last = events.last().unwrap();
-    assert_eq!(last["payload"]["gate_profile"], "shaped");
+    assert_eq!(
+        last["payload"]["gate_profile"].as_str(),
+        Some(readiness::SHAPED_GATE_PROFILE)
+    );
     assert!(last["payload"]["input_fingerprint"]
         .as_str()
         .unwrap()
@@ -811,20 +588,9 @@ fn shaped_to_ready_requires_authority_and_passing_gate() {
     let repo = tmp.path();
     let store = JsonGraphStore::new(repo);
     // Grants without work.transition.ready.
-    write_policy(
-        repo,
-        &[
-            "shape.apply",
-            "shape.approve.R1",
-            "qa.none.approve",
-            "work.transition.shaped",
-        ],
-    );
-    let node = prepare_with_shaping(repo, &store, "rcpt_01J00000000000000000000006", true, true);
-    let shaped = store
-        .transition_node_with_context(&node.id, NodeStatus::Shaped, node.revision, None, ctx())
-        .unwrap()
-        .value;
+    write_policy(repo, &["work.transition.shaped"]);
+    let node = bound_ticket(repo, &store);
+    let shaped = transition(&store, &node.id, NodeStatus::Shaped, None);
 
     // Missing transition-ready grant -> denied before gate evaluation.
     let err = store
@@ -834,10 +600,7 @@ fn shaped_to_ready_requires_authority_and_passing_gate() {
 
     // Grant it -> succeeds.
     write_policy(repo, full_grants());
-    let ready = store
-        .transition_node_with_context(&shaped.id, NodeStatus::Ready, shaped.revision, None, ctx())
-        .unwrap()
-        .value;
+    let ready = transition(&store, &shaped.id, NodeStatus::Ready, None);
     assert_eq!(ready.status, NodeStatus::Ready);
     let events = collect_events(repo, "work.node.transitioned");
     let ready_events: Vec<_> = events
@@ -846,8 +609,8 @@ fn shaped_to_ready_requires_authority_and_passing_gate() {
         .collect();
     assert_eq!(ready_events.len(), 1);
     assert_eq!(
-        ready_events[0]["payload"]["gate_profile"],
-        "contract_readiness"
+        ready_events[0]["payload"]["gate_profile"].as_str(),
+        Some(READINESS_PROFILE)
     );
     assert!(ready_events[0]["payload"]["input_fingerprint"]
         .as_str()
@@ -861,11 +624,8 @@ fn expected_readiness_fingerprint_mismatch_rejected() {
     let repo = tmp.path();
     let store = JsonGraphStore::new(repo);
     write_policy(repo, full_grants());
-    let node = prepare_with_shaping(repo, &store, "rcpt_01J00000000000000000000007", true, true);
-    let shaped = store
-        .transition_node_with_context(&node.id, NodeStatus::Shaped, node.revision, None, ctx())
-        .unwrap()
-        .value;
+    let node = bound_ticket(repo, &store);
+    let shaped = transition(&store, &node.id, NodeStatus::Shaped, None);
 
     let err = store
         .transition_node_gated_with_context(
@@ -898,7 +658,7 @@ fn decision_work_ticket_is_not_ready_under_implementation_profile() {
     let tmp = tempfile::tempdir().unwrap();
     let repo = tmp.path();
     let store = JsonGraphStore::new(repo);
-    let classification = pulse::graph::model::contract::PublicCreateClassification {
+    let classification = PublicCreateClassification {
         role: Some(TicketRole::DecisionWork),
         risk: Some(Risk::Low),
         materialization: Some(Materialization::R0),
@@ -926,49 +686,58 @@ fn shaped_gate_requires_only_a_parseable_unambiguous_ticket_brief() {
     let repo = tmp.path();
     let store = JsonGraphStore::new(repo);
     write_policy(repo, &["work.transition.shaped"]);
-    let node = create_ticket(&store);
-    let shaped = store
-        .transition_node_with_context(&node.id, NodeStatus::Shaped, node.revision, None, ctx())
-        .unwrap()
-        .value;
-    assert_eq!(shaped.status, NodeStatus::Shaped);
-    assert!(shaped.shaping.is_none());
 
+    // A parseable brief with only resolved dispositions is enough: the
+    // draft -> shaped gate is the markdown ambiguity gate and needs no
+    // receipts.
+    let node = create_ticket(&store);
+    let node = bind_brief(
+        repo,
+        &store,
+        &node,
+        Some(DOCS_NONE_SECTION),
+        Some(QA_NONE_SECTION),
+        Some("- (delegated) Internal naming is safe to delegate.\n"),
+    );
+    let shaped = transition(&store, &node.id, NodeStatus::Shaped, None);
+    assert_eq!(shaped.status, NodeStatus::Shaped);
+
+    // A blocking disposition fails the ambiguity gate.
     let node = create_ticket(&store);
     let path = repo.join(format!("{}/ticket.md", node.content_dir));
-    fs::write(&path, "# Ticket\\n\\n## Objective\\nDo it.\\n\\n## Code anchors\\n- src/lib.rs\\n\\n## Acceptance\\n- AC-1: It works.\\n\\n## Verify\\n- cargo test\\n\\n## Open questions\\n- Which API?").unwrap();
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    fs::write(
+        &path,
+        ticket_md(
+            &node.id,
+            Some(DOCS_NONE_SECTION),
+            Some(QA_NONE_SECTION),
+            Some("- (blocking) Which API?\n"),
+        ),
+    )
+    .unwrap();
     let error = store
         .transition_node_with_context(&node.id, NodeStatus::Shaped, node.revision, None, ctx())
         .unwrap_err();
     assert_eq!(error.code(), "readiness_not_ready");
+    let report = store.readiness(&node.id).unwrap();
+    let ambiguity = family(&report, "ticket_ambiguity");
+    assert_eq!(ambiguity.status, GateStatus::Failed);
+    assert!(ambiguity
+        .reason_codes
+        .contains(&"ticket_brief_open_question_blocking".to_string()));
 }
 
 #[test]
-fn shaped_to_ready_does_not_require_a_shaping_receipt() {
+fn shaped_to_ready_requires_no_evidence_receipts() {
     let tmp = tempfile::tempdir().unwrap();
     let repo = tmp.path();
     let store = JsonGraphStore::new(repo);
-    write_policy(repo, &["work.transition.shaped", "work.transition.ready"]);
-    let node = create_ticket(&store);
-    let brief_path = repo.join(format!("{}/ticket.md", node.content_dir));
-    let brief = fs::read_to_string(&brief_path)
-        .unwrap()
-        .replace("- Owner: ST-000\n", "");
-    fs::write(&brief_path, brief).unwrap();
-    let synced = store
-        .sync_ticket_with_context(&node.id, node.revision, ctx())
-        .unwrap()
-        .value;
-    let shaped = store
-        .transition_node_with_context(&synced.id, NodeStatus::Shaped, synced.revision, None, ctx())
-        .unwrap()
-        .value;
-    let ready = store
-        .transition_node_with_context(&shaped.id, NodeStatus::Ready, shaped.revision, None, ctx())
-        .unwrap()
-        .value;
+    write_policy(repo, full_grants());
+    let node = bound_ticket(repo, &store);
+    let shaped = transition(&store, &node.id, NodeStatus::Shaped, None);
+    let ready = transition(&store, &shaped.id, NodeStatus::Ready, None);
     assert_eq!(ready.status, NodeStatus::Ready);
-    assert!(ready.shaping.is_none());
 }
 
 #[test]
@@ -991,11 +760,8 @@ fn ready_transition_crash_recovers_coherent_event() {
     let repo = tmp.path();
     write_policy(repo, full_grants());
     let prep = JsonGraphStore::new(repo);
-    let node = prepare_with_shaping(repo, &prep, "rcpt_01J00000000000000000000008", true, true);
-    let shaped = prep
-        .transition_node_with_context(&node.id, NodeStatus::Shaped, node.revision, None, ctx())
-        .unwrap()
-        .value;
+    let node = bound_ticket(repo, &prep);
+    let shaped = transition(&prep, &node.id, NodeStatus::Shaped, None);
 
     let crashing = JsonGraphStore::with_failpoint(repo, TransactionFailpoint::AfterCanonical);
     let _ = crashing
@@ -1012,8 +778,8 @@ fn ready_transition_crash_recovers_coherent_event() {
         .collect();
     assert_eq!(ready_events.len(), 1);
     assert_eq!(
-        ready_events[0]["payload"]["gate_profile"],
-        "contract_readiness"
+        ready_events[0]["payload"]["gate_profile"].as_str(),
+        Some(READINESS_PROFILE)
     );
 }
 
@@ -1064,14 +830,7 @@ fn readiness_query_does_not_bootstrap_docs_or_evidence_plane() {
     );
 
     // The frontier projection must observe the same invariant.
-    let _ = store
-        .frontier(
-            pulse::graph::read::frontier::FrontierKind::Execution,
-            None,
-            None,
-            false,
-        )
-        .unwrap();
+    let _ = store.frontier(None, None, false).unwrap();
     assert!(
         !docs_registry.exists(),
         "read-only execution frontier bootstrapped the docs registry"
@@ -1089,22 +848,24 @@ fn blocked_resume_goes_via_shaped_not_direct_ready() {
     let store = JsonGraphStore::new(repo);
     let ready = ready_ticket(repo, &store);
 
-    // ready -> blocked (supported, reason required).
-    let blocked = store
-        .transition_node_with_context(
-            &ready.id,
-            NodeStatus::Blocked,
-            ready.revision,
-            Some(pulse::graph::model::lifecycle::TransitionReason {
-                code: "dependency_unavailable".to_string(),
-                summary: "blocked".to_string(),
-                reference: None,
-            }),
-            ctx(),
-        )
-        .unwrap()
-        .value;
+    // ready -> blocked (supported, reason required). Lifecycle eligibility
+    // fails while blocked.
+    let blocked = transition(
+        &store,
+        &ready.id,
+        NodeStatus::Blocked,
+        reason("dependency_unavailable", "blocked"),
+    );
     assert_eq!(blocked.status, NodeStatus::Blocked);
+    let report = store.readiness(&blocked.id).unwrap();
+    assert_eq!(
+        family(&report, "lifecycle_eligibility").status,
+        GateStatus::Failed
+    );
+    assert!(family(&report, "lifecycle_eligibility")
+        .reason_codes
+        .contains(&"lifecycle_blocked".to_string()));
+    assert_eq!(report.status, ReadinessStatus::NotReady);
 
     // Direct blocked -> ready is intentionally NOT installed.
     let err = store
@@ -1119,24 +880,13 @@ fn blocked_resume_goes_via_shaped_not_direct_ready() {
     assert_eq!(err.code(), "transition_gate_unavailable");
 
     // Blocked -> shaped (supported resume, reason required) then shaped -> ready.
-    let reshaped = store
-        .transition_node_with_context(
-            &blocked.id,
-            NodeStatus::Shaped,
-            blocked.revision,
-            Some(pulse::graph::model::lifecycle::TransitionReason {
-                code: "dependency_restored".to_string(),
-                summary: "resume".to_string(),
-                reference: None,
-            }),
-            ctx(),
-        )
-        .unwrap()
-        .value;
+    let reshaped = transition(
+        &store,
+        &blocked.id,
+        NodeStatus::Shaped,
+        reason("dependency_restored", "resume"),
+    );
     assert_eq!(reshaped.status, NodeStatus::Shaped);
-    let _ = PulseError::Validation {
-        code: "ready",
-        message: String::new(),
-    }; // keep import used
-    let _ = readiness::SHAPED_GATE_PROFILE;
+    let resumed = transition(&store, &reshaped.id, NodeStatus::Ready, None);
+    assert_eq!(resumed.status, NodeStatus::Ready);
 }

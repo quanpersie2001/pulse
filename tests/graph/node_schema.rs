@@ -1,23 +1,11 @@
 use chrono::{TimeZone, Utc};
-use pulse::graph::model::contract::{
-    ContentRef, ContractItem, ExpectedEvidence, ExpectedHandoff, ImplementationContract,
-    ImplementationMode, ImplementationSemanticImpact, Materialization, PlanPolicy, QaImpact,
-    QaImpactPosture, QaMetadata, Risk, SurfaceRef, WorkSurface,
-};
+use pulse::graph::model::contract::{Materialization, QaImpact, QaImpactPosture, QaMetadata, Risk};
 use pulse::graph::model::node::Node;
 use pulse::graph::validation::graph::validate_node_schema_semantics;
 use pulse::id::WorkKind;
 use serde_json::{json, Value};
 
-const HASH: &str = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
-const TICKET_ONLY_FIELDS: &[&str] = &[
-    "role",
-    "risk",
-    "materialization",
-    "qa",
-    "implementation",
-    "decision_work",
-];
+const TICKET_ONLY_FIELDS: &[&str] = &["role", "risk", "materialization", "qa"];
 
 fn schema() -> Value {
     serde_json::from_str(include_str!("../../src/schema/node.schema.json")).unwrap()
@@ -34,38 +22,6 @@ fn valid_ticket_value() -> Value {
     .unwrap();
     node.risk = Some(Risk::Low);
     node.materialization = Some(Materialization::R0);
-    node.implementation = Some(ImplementationContract {
-        verification_profile: "standard".to_string(),
-        mode: ImplementationMode::Open,
-        work_surface: WorkSurface::Code,
-        plan_policy: PlanPolicy::None,
-        semantic_impact: ImplementationSemanticImpact::BehaviorOrPublicRiskChange,
-        effort: Default::default(),
-        brief: Some(ContentRef {
-            path: "works/TK-001/ticket.md".to_string(),
-            content_hash: HASH.to_string(),
-        }),
-        objective: "Objective".to_string(),
-        current_behavior: "Current".to_string(),
-        target_behavior: "Target".to_string(),
-        code_anchors: vec![SurfaceRef::path("src/lib.rs")],
-        documentation_anchors: vec![],
-        configuration_anchors: vec![],
-        data_anchors: vec![],
-        research_refs: vec![],
-        required_changes: vec![],
-        invariants: vec![],
-        acceptance: vec![ContractItem {
-            id: "AC-OK".to_string(),
-            summary: "Acceptance".to_string(),
-        }],
-        scope: Default::default(),
-        implementation_freedom: vec![],
-        required_decisions: vec![],
-        shared_approach_refs: vec![],
-        expected_evidence: vec![ExpectedEvidence::FocusedTestOutput],
-        expected_handoff: vec![ExpectedHandoff::AcceptanceToEvidence],
-    });
     node.qa = Some(QaMetadata {
         impact: QaImpact {
             posture: QaImpactPosture::Required,
@@ -103,54 +59,12 @@ fn decision_value() -> Value {
     .unwrap()
 }
 
-fn valid_decision_work_value() -> Value {
-    json!({
-        "destination_owner": {
-            "id": "ST-001",
-            "contract_revision": 1
-        },
-        "branch_id": "BR-TOKEN-COMPAT",
-        "gap_kind": "tradeoff_gap",
-        "question": "Which token compatibility branch should apply?",
-        "expected_output": "A recorded decision.",
-        "expected_evidence": ["client_contract_inventory"],
-        "resolution_target": {
-            "kind": "decision",
-            "id": "DEC-006"
-        },
-        "provenance": {
-            "shaping_receipt": "rcpt_01JTEST"
-        }
-    })
-}
-
-fn decision_work_ticket_value() -> Value {
-    let mut value = serde_json::to_value(
-        Node::new(
-            "TK-002".to_string(),
-            WorkKind::Ticket,
-            "Decision work".to_string(),
-            Utc.timestamp_opt(1, 0).unwrap(),
-        )
-        .unwrap(),
-    )
-    .unwrap();
-    value["role"] = json!("decision_work");
-    value["risk"] = json!("medium");
-    value["materialization"] = json!("R2");
-    value["qa"] = json!({"impact": {"posture": "unknown"}});
-    value["decision_work"] = valid_decision_work_value();
-    value
-}
-
 fn non_null_value_for(field: &str) -> Value {
     match field {
         "role" => json!("implementation"),
         "risk" => json!("low"),
         "materialization" => json!("R0"),
         "qa" => json!({"impact": {"posture": "unknown"}}),
-        "implementation" => valid_ticket_value()["implementation"].clone(),
-        "decision_work" => valid_decision_work_value(),
         _ => panic!("unexpected field {field}"),
     }
 }
@@ -161,10 +75,6 @@ fn schema_contract_constraints_accept(schema: &Value, instance: &Value) -> bool 
         .unwrap()
         .iter()
         .all(|rule| eval_schema_fragment(rule, instance))
-}
-
-fn schema_fragment_rejects(schema: &Value, instance: &Value) -> bool {
-    !eval_schema_fragment(schema, instance)
 }
 
 fn eval_schema_fragment(schema: &Value, instance: &Value) -> bool {
@@ -277,23 +187,25 @@ fn matches_test_pattern(pattern: &str, value: &str) -> bool {
                     .last()
                     .is_some_and(|c| c.is_ascii_uppercase() || c.is_ascii_digit())
         }
-        "^BR-[A-Z0-9](?:[A-Z0-9-]{0,59}[A-Z0-9])?$" => {
-            value.strip_prefix("BR-").is_some_and(|suffix| {
-                !suffix.is_empty()
-                    && value.len() <= 64
-                    && suffix
-                        .chars()
-                        .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '-')
-                    && suffix
-                        .chars()
-                        .next()
-                        .is_some_and(|c| c.is_ascii_uppercase() || c.is_ascii_digit())
-                    && suffix
-                        .chars()
-                        .last()
-                        .is_some_and(|c| c.is_ascii_uppercase() || c.is_ascii_digit())
-            })
+        "^(EP|ST|TK|DEC)-[0-9]{3,}$" => {
+            let mut parts = value.splitn(2, '-');
+            let prefix = parts.next().unwrap_or("");
+            let suffix = parts.next().unwrap_or("");
+            matches!(prefix, "EP" | "ST" | "TK" | "DEC")
+                && suffix.len() >= 3
+                && suffix.chars().all(|c| c.is_ascii_digit())
         }
+        "^ST-[0-9]{3,}$" => value
+            .strip_prefix("ST-")
+            .is_some_and(|suffix| suffix.len() >= 3 && suffix.chars().all(|c| c.is_ascii_digit())),
+        "^DOC-[A-Z0-9][A-Z0-9-]{2,63}$" => value.strip_prefix("DOC-").is_some_and(|suffix| {
+            (3..=64).contains(&suffix.len())
+                && suffix
+                    .chars()
+                    .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '-')
+                && !suffix.starts_with('-')
+                && !suffix.ends_with('-')
+        }),
         other => panic!("unsupported test schema pattern {other}"),
     }
 }
@@ -344,7 +256,7 @@ fn node_schema_exposes_every_serialized_node_field() {
 }
 
 #[test]
-fn node_schema_declares_ticket_only_fields_and_contract_exclusivity() {
+fn node_schema_declares_ticket_only_fields() {
     let schema = schema();
     let all_of = schema["allOf"].as_array().unwrap();
     let ticket_rule = &all_of[0];
@@ -352,11 +264,10 @@ fn node_schema_declares_ticket_only_fields_and_contract_exclusivity() {
     assert!(serialized.contains("role"));
     assert!(serialized.contains("risk"));
     assert!(serialized.contains("materialization"));
-    assert!(serialized.contains("implementation"));
-    assert!(serialized.contains("decision_work"));
+    assert!(serialized.contains("qa"));
     assert!(
         serialized.contains("not"),
-        "schema must reject mismatched/both contract shapes"
+        "schema must reject Ticket-only fields on non-Ticket nodes"
     );
     assert!(
         serde_json::to_string(&schema["properties"]["risk"])
@@ -371,6 +282,15 @@ fn node_schema_declares_ticket_only_fields_and_contract_exclusivity() {
         serialized.contains("\"type\":\"null\""),
         "schema constraints must distinguish explicit null from non-null presence"
     );
+    for legacy_field in ["implementation", "decision_work", "shaping"] {
+        assert!(
+            !schema["properties"]
+                .as_object()
+                .unwrap()
+                .contains_key(legacy_field),
+            "legacy contract field {legacy_field} must be removed from node.schema.json"
+        );
+    }
 }
 
 #[test]
@@ -397,17 +317,11 @@ fn node_schema_marks_serde_options_nullable_without_requiring_canonical_nulls() 
     for pointer in [
         "/properties/status_reason",
         "/properties/documentation",
+        "/properties/brief_hash",
         "/properties/role",
         "/properties/risk",
         "/properties/materialization",
         "/properties/qa",
-        "/properties/implementation",
-        "/properties/decision_work",
-        "/properties/shaping",
-        "/$defs/implementation_contract/properties/brief",
-        "/$defs/decision_work_contract/properties/resolution_target",
-        "/$defs/decision_work_contract/properties/provenance/properties/fog_id",
-        "/$defs/shaping_pointer/properties/map",
     ] {
         let value = schema
             .pointer(pointer)
@@ -431,41 +345,25 @@ fn node_schema_marks_serde_options_nullable_without_requiring_canonical_nulls() 
 fn node_schema_bounds_rust_max_collection_arrays() {
     let schema = schema();
     for pointer in [
-        "/$defs/decision_work_contract/properties/expected_evidence",
-        "/$defs/implementation_contract/properties/acceptance",
-        "/$defs/implementation_contract/properties/code_anchors",
-        "/$defs/implementation_contract/properties/configuration_anchors",
-        "/$defs/implementation_contract/properties/data_anchors",
-        "/$defs/implementation_contract/properties/documentation_anchors",
-        "/$defs/implementation_contract/properties/expected_evidence",
-        "/$defs/implementation_contract/properties/expected_handoff",
-        "/$defs/implementation_contract/properties/implementation_freedom",
-        "/$defs/implementation_contract/properties/invariants",
-        "/$defs/implementation_contract/properties/required_changes",
-        "/$defs/implementation_contract/properties/required_decisions",
-        "/$defs/implementation_contract/properties/research_refs",
-        "/$defs/implementation_contract/properties/shared_approach_refs",
-        "/$defs/implementation_contract/properties/scope/properties/included",
-        "/$defs/implementation_contract/properties/scope/properties/excluded",
         "/$defs/qa_impact/properties/affected_case_ids",
         "/properties/documentation/properties/impact/properties/deferred_to",
         "/properties/documentation/properties/impact/properties/required_documents",
         "/properties/documentation/properties/routing/properties/domains",
         "/properties/documentation/properties/routing/properties/labels",
         "/properties/documentation/properties/routing/properties/paths",
+        "/properties/tags",
     ] {
         assert_ref_array_max_items(&schema, pointer);
     }
 }
 
 #[test]
-fn node_schema_keeps_assessed_missing_contract_canonical_but_completeness_owned() {
+fn node_schema_keeps_assessed_missing_brief_canonical_but_completeness_owned() {
     let schema = schema();
     let all_of = serde_json::to_string(schema["allOf"].as_array().unwrap()).unwrap();
     assert!(
-        !all_of.contains("then\":{\"required\":[\"implementation\"]")
-            && !all_of.contains("then\":{\"required\":[\"decision_work\"]"),
-        "schema must not make missing role contracts canonical corruption"
+        !all_of.contains("brief_hash"),
+        "schema must not make a missing brief binding canonical corruption"
     );
 
     let mut node = Node::new(
@@ -480,76 +378,8 @@ fn node_schema_keeps_assessed_missing_contract_canonical_but_completeness_owned(
     let value = serde_json::to_value(&node).unwrap();
     assert_eq!(value["risk"], "low");
     assert_eq!(value["materialization"], "R0");
-    assert!(value.get("implementation").is_none());
-}
-
-#[test]
-fn node_schema_requires_decision_work_shaping_receipt_but_not_fog() {
-    let schema = schema();
-    let provenance = schema
-        .pointer("/$defs/decision_work_contract/properties/provenance")
-        .unwrap();
-    assert_eq!(
-        provenance["required"],
-        serde_json::json!(["shaping_receipt"])
-    );
-    assert_ne!(
-        provenance["required"],
-        serde_json::json!(["shaping_receipt", "fog_id"])
-    );
-}
-
-#[test]
-fn node_schema_decision_work_branch_id_profile_matches_rust_bounds() {
-    let schema = schema();
-    let branch_id = schema
-        .pointer("/$defs/decision_work_contract/properties/branch_id")
-        .unwrap();
-    assert_eq!(branch_id["maxLength"], 64);
-    assert_eq!(
-        branch_id["pattern"],
-        "^BR-[A-Z0-9](?:[A-Z0-9-]{0,59}[A-Z0-9])?$"
-    );
-
-    let mut valid_minimal = decision_work_ticket_value();
-    valid_minimal["decision_work"]["branch_id"] = json!("BR-A");
-    assert!(!schema_fragment_rejects(
-        branch_id,
-        &valid_minimal["decision_work"]["branch_id"]
-    ));
-    assert_deserializes_and_contract_validates(valid_minimal);
-
-    let mut leading_suffix_hyphen = decision_work_ticket_value();
-    leading_suffix_hyphen["decision_work"]["branch_id"] = json!("BR--BAD");
-    assert!(schema_fragment_rejects(
-        branch_id,
-        &leading_suffix_hyphen["decision_work"]["branch_id"]
-    ));
-    assert_deserializes_and_contract_rejects(leading_suffix_hyphen, "decision_work_branch_missing");
-
-    let mut trailing_hyphen = decision_work_ticket_value();
-    trailing_hyphen["decision_work"]["branch_id"] = json!("BR-BAD-");
-    assert!(schema_fragment_rejects(
-        branch_id,
-        &trailing_hyphen["decision_work"]["branch_id"]
-    ));
-    assert_deserializes_and_contract_rejects(trailing_hyphen, "decision_work_branch_missing");
-
-    let mut max_length = decision_work_ticket_value();
-    max_length["decision_work"]["branch_id"] = json!(format!("BR-{}", "A".repeat(61)));
-    assert!(!schema_fragment_rejects(
-        branch_id,
-        &max_length["decision_work"]["branch_id"]
-    ));
-    assert_deserializes_and_contract_validates(max_length);
-
-    let mut too_long = decision_work_ticket_value();
-    too_long["decision_work"]["branch_id"] = json!(format!("BR-{}", "A".repeat(62)));
-    assert!(schema_fragment_rejects(
-        branch_id,
-        &too_long["decision_work"]["branch_id"]
-    ));
-    assert_deserializes_and_contract_rejects(too_long, "decision_work_branch_missing");
+    assert!(value.get("brief_hash").is_none());
+    assert_deserializes_and_contract_validates(value);
 }
 
 #[test]
@@ -557,20 +387,21 @@ fn node_json_deserialization_accepts_null_for_option_fields_and_omits_on_seriali
     let mut value = valid_ticket_value();
     value["status_reason"] = serde_json::Value::Null;
     value["documentation"] = serde_json::Value::Null;
-    value["implementation"]["brief"] = serde_json::Value::Null;
-    value["implementation"]["code_anchors"][0]["symbol"] = serde_json::Value::Null;
-    value["implementation"]["code_anchors"][0]["content_hash"] = serde_json::Value::Null;
+    value["brief_hash"] = serde_json::Value::Null;
     value["qa"]["impact"]["rationale"] = serde_json::Value::Null;
+    value["qa"]["impact"]["behavioral_owner"] = serde_json::Value::Null;
 
     let node: Node = serde_json::from_value(value).unwrap();
     assert!(node.status_reason.is_none());
     assert!(node.documentation.is_none());
-    assert!(node.implementation.as_ref().unwrap().brief.is_none());
+    assert!(node.brief_hash.is_none());
+    assert!(node.qa.as_ref().unwrap().impact.rationale.is_none());
 
     let serialized = serde_json::to_value(&node).unwrap();
     assert!(serialized.get("status_reason").is_none());
     assert!(serialized.get("documentation").is_none());
-    assert!(serialized["implementation"].get("brief").is_none());
+    assert!(serialized.get("brief_hash").is_none());
+    assert!(serialized["qa"]["impact"].get("rationale").is_none());
 }
 
 #[test]
@@ -585,6 +416,14 @@ fn node_schema_ticket_only_allof_allows_null_but_rejects_non_null_on_non_tickets
         );
         assert_deserializes_and_contract_validates(null_story);
 
+        let mut null_decision = decision_value();
+        null_decision[*field] = Value::Null;
+        assert!(
+            schema_contract_constraints_accept(&schema, &null_decision),
+            "{field}: null should be equivalent to omitted for Ticket-only schema constraints"
+        );
+        assert_deserializes_and_contract_validates(null_decision);
+
         let mut non_null_story = story_value();
         non_null_story[*field] = non_null_value_for(field);
         assert!(
@@ -593,85 +432,6 @@ fn node_schema_ticket_only_allof_allows_null_but_rejects_non_null_on_non_tickets
         );
         assert_deserializes_and_contract_rejects(non_null_story, "work_role_invalid");
     }
-}
-
-#[test]
-fn node_schema_role_contract_allof_allows_null_but_rejects_non_null_wrong_contract() {
-    let schema = schema();
-
-    let mut implementation_with_null_decision_work = valid_ticket_value();
-    implementation_with_null_decision_work["decision_work"] = Value::Null;
-    assert!(schema_contract_constraints_accept(
-        &schema,
-        &implementation_with_null_decision_work
-    ));
-    assert_deserializes_and_contract_validates(implementation_with_null_decision_work);
-
-    let mut implementation_with_non_null_decision_work = valid_ticket_value();
-    implementation_with_non_null_decision_work["decision_work"] = valid_decision_work_value();
-    assert!(!schema_contract_constraints_accept(
-        &schema,
-        &implementation_with_non_null_decision_work
-    ));
-    assert_deserializes_and_contract_rejects(
-        implementation_with_non_null_decision_work,
-        "work_role_invalid",
-    );
-
-    let mut decision_work_with_null_implementation = decision_work_ticket_value();
-    decision_work_with_null_implementation["implementation"] = Value::Null;
-    assert!(schema_contract_constraints_accept(
-        &schema,
-        &decision_work_with_null_implementation
-    ));
-    assert_deserializes_and_contract_validates(decision_work_with_null_implementation);
-
-    let mut decision_work_with_non_null_implementation = decision_work_ticket_value();
-    decision_work_with_non_null_implementation["implementation"] =
-        valid_ticket_value()["implementation"].clone();
-    assert!(!schema_contract_constraints_accept(
-        &schema,
-        &decision_work_with_non_null_implementation
-    ));
-    assert_deserializes_and_contract_rejects(
-        decision_work_with_non_null_implementation,
-        "work_role_invalid",
-    );
-
-    let mut implementation_with_both_null = valid_ticket_value();
-    implementation_with_both_null["implementation"] = Value::Null;
-    implementation_with_both_null["decision_work"] = Value::Null;
-    assert!(schema_contract_constraints_accept(
-        &schema,
-        &implementation_with_both_null
-    ));
-    let node: Node = serde_json::from_value(implementation_with_both_null).unwrap();
-    assert!(node.implementation.is_none());
-    assert!(node.decision_work.is_none());
-}
-
-#[test]
-fn node_schema_decision_shaping_constraint_allows_null_but_rejects_non_null() {
-    let schema = schema();
-    let mut null_shaping = decision_value();
-    null_shaping["shaping"] = Value::Null;
-    assert!(schema_contract_constraints_accept(&schema, &null_shaping));
-    assert_deserializes_and_contract_validates(null_shaping);
-
-    let mut non_null_shaping = decision_value();
-    non_null_shaping["shaping"] = json!({
-        "receipt": {
-            "id": "rcpt_01JTEST",
-            "hash": HASH
-        },
-        "applied_at": "1970-01-01T00:00:01Z",
-        "applied_by": "human:test"
-    });
-    assert!(!schema_contract_constraints_accept(
-        &schema,
-        &non_null_shaping
-    ));
-    assert_deserializes_and_contract_rejects(non_null_shaping, "work_role_invalid");
 }
 
 #[test]

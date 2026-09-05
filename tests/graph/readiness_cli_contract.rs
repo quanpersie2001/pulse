@@ -4,17 +4,12 @@
 //! gate exit for not-ready work.
 
 use chrono::Utc;
-use pulse::canonical_json::{hash_bytes, to_canonical_bytes};
-use pulse::evidence::model::*;
+use pulse::canonical_json::to_canonical_bytes;
 use pulse::graph::model::contract::{
-    ContentRef, ContractItem, ContractScope, EffortMetadata, ImplementationContract,
-    ImplementationMode, ImplementationSemanticImpact, Materialization, PlanPolicy, QaImpactPosture,
-    Risk, SurfaceRef, TicketRole, WorkSurface,
+    Materialization, PublicCreateClassification, Risk, TicketRole,
 };
-use pulse::graph::model::node::DocumentationImpactPosture;
-use pulse::graph::store::{
-    ContractSetRequest, DocumentationImpactUpdate, OperationContext, QaImpactUpdate,
-};
+use pulse::graph::model::node::NodeStatus;
+use pulse::graph::store::OperationContext;
 use pulse::id::WorkKind;
 use pulse::policy::{AuthorityPolicy, AuthorityPrincipal};
 use pulse::JsonGraphStore;
@@ -49,7 +44,7 @@ fn write_policy(repo: &TempDir, grants: &[&str]) {
         schema_version: 1,
         revision: 1,
         principals: vec![AuthorityPrincipal {
-            kind: ActorKind::Human,
+            kind: pulse::identity::actor::ActorKind::Human,
             id: "tester".to_string(),
             grants: sorted,
         }],
@@ -60,24 +55,16 @@ fn write_policy(repo: &TempDir, grants: &[&str]) {
 }
 
 /// Build a fully-ready ticket through the library so the CLI test focuses on the
-/// `work ready` command surface. Contract-revision bumps precede the shaping
-/// receipt so the receipt binds the final contract revision.
+/// `work ready` command surface. The ticket.md contract is bound via
+/// `sync_ticket`, then the markdown-gated draft -> shaped -> ready transitions
+/// run; no evidence receipts are involved.
 fn ready_ticket(repo: &TempDir, store: &JsonGraphStore) -> String {
-    write_policy(
-        repo,
-        &[
-            "shape.apply",
-            "shape.approve.R1",
-            "qa.none.approve",
-            "work.transition.shaped",
-            "work.transition.ready",
-        ],
-    );
+    write_policy(repo, &["work.transition.shaped", "work.transition.ready"]);
     let node = store
         .create_node_public_with_context(
             WorkKind::Ticket,
             "Ready ticket".to_string(),
-            pulse::graph::model::contract::PublicCreateClassification {
+            PublicCreateClassification {
                 role: Some(TicketRole::Implementation),
                 risk: Some(Risk::Low),
                 materialization: Some(Materialization::R1),
@@ -86,175 +73,37 @@ fn ready_ticket(repo: &TempDir, store: &JsonGraphStore) -> String {
         )
         .unwrap()
         .value;
-    let brief_rel = format!("{}/ticket.md", node.content_dir);
-    let brief_path = repo.path().join(&brief_rel);
+    let brief_path = repo.path().join(format!("{}/ticket.md", node.content_dir));
     fs::create_dir_all(brief_path.parent().unwrap()).unwrap();
-    fs::write(&brief_path, b"# Ticket\ncontent").unwrap();
-    let brief_hash = hash_bytes(&fs::read(&brief_path).unwrap());
-    let contract = ImplementationContract {
-        verification_profile: "standard".to_string(),
-        mode: ImplementationMode::Guided,
-        work_surface: WorkSurface::Code,
-        plan_policy: PlanPolicy::None,
-        semantic_impact: ImplementationSemanticImpact::NoBehaviorOrPublicRiskChange,
-        effort: EffortMetadata::default(),
-        brief: Some(ContentRef {
-            path: format!("{}/ticket.md", node.content_dir),
-            content_hash: brief_hash.clone(),
-        }),
-        objective: "Objective.".to_string(),
-        current_behavior: "Current.".to_string(),
-        target_behavior: "Target.".to_string(),
-        code_anchors: vec![SurfaceRef::path("src/auth.rs")],
-        documentation_anchors: vec![],
-        configuration_anchors: vec![],
-        data_anchors: vec![],
-        research_refs: vec![],
-        required_changes: vec![ContractItem {
-            id: "CHG-1".to_string(),
-            summary: "chg".to_string(),
-        }],
-        invariants: vec![ContractItem {
-            id: "INV-1".to_string(),
-            summary: "inv".to_string(),
-        }],
-        acceptance: vec![ContractItem {
-            id: "AC-1".to_string(),
-            summary: "ac".to_string(),
-        }],
-        scope: ContractScope::default(),
-        implementation_freedom: vec![],
-        required_decisions: vec![],
-        shared_approach_refs: vec![],
-        expected_evidence: vec![],
-        expected_handoff: vec![],
-    };
+    fs::write(
+        &brief_path,
+        format!(
+            "# {} Ready ticket\n\n\
+             ## Objective\nShip the change.\n\n\
+             ## Current behavior\nBehavior is missing.\n\n\
+             ## Target behavior\nBehavior is present.\n\n\
+             ## Code anchors\n- src/auth.rs\n\n\
+             ## Required changes\n- Implement the behavior.\n\n\
+             ## Invariants\n- Do not leak secrets.\n\n\
+             ## Implementation freedom\nguided: agent chooses internal structure within this contract.\n\n\
+             ## Acceptance\n- AC-1: Behavior is observable.\n\n\
+             ## Verify\n- cargo test\n\n\
+             ## Documentation impact\n- Posture: none\n- Rationale: No durable docs impact.\n- Documents:\n\n\
+             ## QA impact\n- Owner:\n- Posture: none\n- Cases:\n- Reason: No product QA impact.\n",
+            node.id
+        ),
+    )
+    .unwrap();
     let node = store
-        .set_contract_with_context(
-            &node.id,
-            node.revision,
-            ContractSetRequest {
-                role: TicketRole::Implementation,
-                implementation: Some(contract),
-                decision_work: None,
-            },
-            ctx(),
-        )
+        .sync_ticket_with_context(&node.id, node.revision, ctx())
         .unwrap()
         .value;
     let node = store
-        .set_qa_impact_with_context(
-            &node.id,
-            node.revision,
-            QaImpactUpdate {
-                posture: QaImpactPosture::None,
-                rationale: Some("Internal.".to_string()),
-                behavioral_owner: None,
-                affected_case_ids: vec![],
-            },
-            ctx(),
-        )
-        .unwrap()
-        .value;
-    let node = store
-        .update_documentation_impact(
-            &node.id,
-            node.revision,
-            DocumentationImpactUpdate {
-                domains: vec![],
-                posture: DocumentationImpactPosture::None,
-                rationale: Some("None.".to_string()),
-                required_documents: vec![],
-                deferred_to: vec![],
-                paths: vec![],
-                labels: vec![],
-            },
-            "human:tester".to_string(),
-        )
-        .unwrap()
-        .value;
-    // Record + apply a shaping receipt binding the final contract revision.
-    let receipt = ReceiptEnvelope {
-        schema_version: 1,
-        receipt_version: 1,
-        id: "rcpt_01J00000000000000000000010".to_string(),
-        kind: ReceiptKind::ShapingValidation,
-        result: ReceiptResult::Passed,
-        actor: ActorRef {
-            kind: ActorKind::Human,
-            id: "tester".to_string(),
-        },
-        recorded_at: Utc::now(),
-        subject: SubjectRef {
-            kind: "work".to_string(),
-            id: node.id.clone(),
-        },
-        bindings: ReceiptBindings {
-            work: vec![WorkBinding {
-                id: node.id.clone(),
-                revision: node.revision,
-            }],
-            source: None,
-            content: vec![ContentBinding {
-                path: brief_rel,
-                sha256: brief_hash,
-            }],
-            artifacts: vec![],
-            graph_fingerprint_observed: None,
-        },
-        payload: ReceiptPayload::ShapingValidation(ShapingValidationPayload {
-            payload_version: 1,
-            owning_work: ShapingWorkBinding {
-                id: node.id.clone(),
-                revision_observed: node.revision,
-                contract_revision: node.contract_revision,
-            },
-            materialization: "R1".to_string(),
-            shape_mode: ShapeMode::FocusedBranches,
-            source_posture: SourcePosture::NotRequiredContentBound,
-            destination: None,
-            map: None,
-            affected_work: vec![],
-            branches: vec![],
-            fog: vec![],
-            out_of_scope: vec![],
-            resolution_pointers: vec![],
-            approval: ShapingApproval {
-                approved_by: ActorRef {
-                    kind: ActorKind::Human,
-                    id: "tester".to_string(),
-                },
-                reference: "PULSE.md".to_string(),
-            },
-            reconciliation: None,
-            remaining_uncertainty: vec![],
-        }),
-    };
-    let file = repo.path().join("shaping.json");
-    fs::write(&file, to_canonical_bytes(&receipt).unwrap()).unwrap();
-    pulse::evidence::record_receipt(repo.path(), None, &file).unwrap();
-    let node = store
-        .apply_shaping_with_context(&node.id, node.revision, &receipt.id, None, ctx())
-        .unwrap()
-        .value;
-    let node = store
-        .transition_node_with_context(
-            &node.id,
-            pulse::graph::model::node::NodeStatus::Shaped,
-            node.revision,
-            None,
-            ctx(),
-        )
+        .transition_node_with_context(&node.id, NodeStatus::Shaped, node.revision, None, ctx())
         .unwrap()
         .value;
     let ready = store
-        .transition_node_with_context(
-            &node.id,
-            pulse::graph::model::node::NodeStatus::Ready,
-            node.revision,
-            None,
-            ctx(),
-        )
+        .transition_node_with_context(&node.id, NodeStatus::Ready, node.revision, None, ctx())
         .unwrap()
         .value;
     ready.id
@@ -291,12 +140,12 @@ fn work_ready_emits_stable_json_for_ready_ticket() {
 fn work_ready_returns_nonzero_for_not_ready_work() {
     let repo = tempfile::tempdir().unwrap();
     let store = JsonGraphStore::new(repo.path());
-    // A fresh draft ticket is not ready (no contract, no shaping, qa unknown).
+    // A fresh draft ticket is not ready (no bound contract, QA unknown).
     let node = store
         .create_node_public_with_context(
             WorkKind::Ticket,
             "Draft".to_string(),
-            pulse::graph::model::contract::PublicCreateClassification {
+            PublicCreateClassification {
                 role: Some(TicketRole::Implementation),
                 risk: Some(Risk::Low),
                 materialization: Some(Materialization::R1),

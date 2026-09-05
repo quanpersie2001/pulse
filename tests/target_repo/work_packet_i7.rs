@@ -5,20 +5,14 @@
 //! repository copies. They never run Pulse against the development repository or
 //! mutate tracked fixtures in place.
 
-use pulse::canonical_json::{hash_bytes, to_canonical_bytes};
+use pulse::canonical_json::to_canonical_bytes;
 use pulse::docs::{DocsRegistry, DocumentKind, DocumentRecord, DocumentScope, DocumentStatus};
-use pulse::evidence::model::*;
-use pulse::graph::model::contract::{
-    ContentRef, ContractItem, ContractScope, EffortMetadata, ImplementationContract,
-    ImplementationMode, ImplementationSemanticImpact, Materialization, PlanPolicy, QaImpactPosture,
-    Risk, SurfaceRef, TicketRole, WorkSurface,
-};
+use pulse::graph::model::contract::{Materialization, Risk, TicketRole};
 use pulse::graph::model::edge::EdgeType;
-use pulse::graph::model::node::DocumentationImpactPosture;
-use pulse::graph::store::{
-    ContractSetRequest, DocumentationImpactUpdate, OperationContext, QaImpactUpdate,
-};
+use pulse::graph::model::node::NodeStatus;
+use pulse::graph::store::OperationContext;
 use pulse::id::WorkKind;
+use pulse::identity::actor::ActorKind;
 use pulse::policy::{AuthorityPolicy, AuthorityPrincipal};
 use pulse::JsonGraphStore;
 use serde_json::Value;
@@ -82,10 +76,6 @@ fn commit_all(repo: &Path, message: &str) -> String {
 
 fn write_policy(root: &Path, revision: u64) {
     let mut grants = vec![
-        "shape.apply".to_string(),
-        "shape.approve.R1".to_string(),
-        "qa.none.approve".to_string(),
-        "docs.impact.required".to_string(),
         "work.transition.shaped".to_string(),
         "work.transition.ready".to_string(),
     ];
@@ -102,6 +92,42 @@ fn write_policy(root: &Path, revision: u64) {
     let path = root.join(".pulse/policy/authority.json");
     fs::create_dir_all(path.parent().unwrap()).unwrap();
     fs::write(path, to_canonical_bytes(&policy).unwrap()).unwrap();
+}
+
+/// The Ticket contract bound by the packet: `works/<id>/ticket.md`.
+/// Sections mirror the assignment fixture so the markdown ambiguity gate
+/// passes for an R1 implementation Ticket.
+fn ticket_markdown(ticket_id: &str, require_auth_doc: bool) -> String {
+    let docs_section = if require_auth_doc {
+        "## Documentation impact\n- Posture: required\n- Rationale: Refresh-token outcomes are public product behavior.\n- Documents: DOC-PRODUCT-AUTH\n"
+    } else {
+        "## Documentation impact\n- Posture: none\n- Rationale: No durable docs impact.\n- Documents:\n"
+    };
+    format!(
+        "# {ticket_id} Implement refresh token rotation\n\
+         \n\
+         ## Objective\nRotate refresh tokens atomically.\n\
+         \n\
+         ## Current behavior\nTokens are long-lived.\n\
+         \n\
+         ## Target behavior\nTokens rotate on each use.\n\
+         \n\
+         ## Code anchors\n- src/token.mjs\n\
+         \n\
+         ## Required changes\n- Add rotation logic.\n\
+         \n\
+         ## Invariants\n- Concurrent rotation serialized.\n\
+         \n\
+         ## Implementation freedom\nguided: agent chooses internal structure within this contract.\n\
+         \n\
+         ## Acceptance\n- AC-1: Tokens rotate without race.\n\
+         \n\
+         ## Verify\n- node scripts/verify.mjs\n\
+         \n\
+         {docs_section}\
+         \n\
+         ## QA impact\n- Owner:\n- Posture: none\n- Cases:\n- Reason: No product QA impact.\n"
+    )
 }
 
 fn setup_ready_ticket(repo: &TestRepo) -> String {
@@ -156,216 +182,24 @@ fn setup_ready_ticket_with_required_docs(repo: &TestRepo, require_auth_doc: bool
     let ticket_id = created["value"]["id"].as_str().unwrap().to_string();
     let node = store.show_node(&ticket_id).unwrap();
 
-    let brief_rel = format!("{}/ticket.md", node.content_dir);
-    let brief_path = root.join(&brief_rel);
+    // The Ticket contract is `works/<id>/ticket.md` bound by `brief_hash`:
+    // write the markdown, then let `sync` parse it, bump the contract
+    // revision, and derive docs/QA metadata.
+    let brief_path = root.join(&node.content_dir).join("ticket.md");
     fs::create_dir_all(brief_path.parent().unwrap()).unwrap();
-    fs::write(
-        &brief_path,
-        b"# Ticket\n\n## Objective\nRotate refresh tokens atomically.\n\n## Current behavior\nTokens are long-lived.\n\n## Target behavior\nTokens rotate on each use.\n\n## Code anchors\n- src/token.mjs\n\n## Required changes\n- Add rotation logic.\n\n## Invariants\n- Concurrent rotation serialized.\n\n## Acceptance\n- AC-1: Tokens rotate without race.\n\n## Verify\n- cargo test\n",
-    )
-    .unwrap();
-    let brief_hash = hash_bytes(&fs::read(&brief_path).unwrap());
+    fs::write(&brief_path, ticket_markdown(&ticket_id, require_auth_doc)).unwrap();
 
-    let contract = ImplementationContract {
-        verification_profile: "standard".to_string(),
-        mode: ImplementationMode::Guided,
-        work_surface: WorkSurface::Code,
-        plan_policy: PlanPolicy::None,
-        semantic_impact: ImplementationSemanticImpact::NoBehaviorOrPublicRiskChange,
-        effort: EffortMetadata::default(),
-        brief: Some(ContentRef {
-            path: brief_rel.clone(),
-            content_hash: brief_hash.clone(),
-        }),
-        objective: "Rotate refresh tokens atomically.".to_string(),
-        current_behavior: "Tokens are long-lived.".to_string(),
-        target_behavior: "Tokens rotate on each use.".to_string(),
-        code_anchors: vec![SurfaceRef::path("src/token.mjs")],
-        documentation_anchors: vec![],
-        configuration_anchors: vec![],
-        data_anchors: vec![],
-        research_refs: vec![],
-        required_changes: vec![ContractItem {
-            id: "CHG-1".to_string(),
-            summary: "Add rotation logic.".to_string(),
-        }],
-        invariants: vec![ContractItem {
-            id: "INV-1".to_string(),
-            summary: "Concurrent rotation serialized.".to_string(),
-        }],
-        acceptance: vec![ContractItem {
-            id: "AC-1".to_string(),
-            summary: "Tokens rotate without race.".to_string(),
-        }],
-        scope: ContractScope::default(),
-        implementation_freedom: vec![],
-        required_decisions: vec![],
-        shared_approach_refs: vec![],
-        expected_evidence: vec![],
-        expected_handoff: vec![],
-    };
     store
-        .set_contract_with_context(
-            &ticket_id,
-            node.revision,
-            ContractSetRequest {
-                role: TicketRole::Implementation,
-                implementation: Some(contract),
-                decision_work: None,
-            },
-            ctx(),
-        )
+        .sync_ticket_with_context(&ticket_id, node.revision, ctx())
         .unwrap();
 
-    let node = store.show_node(&ticket_id).unwrap();
-    store
-        .set_qa_impact_with_context(
-            &ticket_id,
-            node.revision,
-            QaImpactUpdate {
-                posture: QaImpactPosture::None,
-                rationale: Some("No behavior change.".to_string()),
-                behavioral_owner: None,
-                affected_case_ids: vec![],
-            },
-            ctx(),
-        )
-        .unwrap();
-
-    let node = store.show_node(&ticket_id).unwrap();
-    store
-        .update_documentation_impact(
-            &ticket_id,
-            node.revision,
-            DocumentationImpactUpdate {
-                domains: vec![],
-                posture: if require_auth_doc {
-                    DocumentationImpactPosture::Required
-                } else {
-                    DocumentationImpactPosture::None
-                },
-                rationale: Some("No docs change.".to_string()),
-                required_documents: if require_auth_doc {
-                    vec!["DOC-PRODUCT-AUTH".to_string()]
-                } else {
-                    vec![]
-                },
-                deferred_to: vec![],
-                paths: vec!["authentication".to_string()],
-                labels: vec!["tokens".to_string()],
-            },
-            "human:tester".to_string(),
-        )
-        .unwrap();
-
-    let node = store.show_node(&ticket_id).unwrap();
-    let receipt = ReceiptEnvelope {
-        schema_version: 1,
-        receipt_version: 1,
-        id: format!("rcpt_{:0<26}", &ticket_id[3..]),
-        kind: ReceiptKind::ShapingValidation,
-        result: ReceiptResult::Passed,
-        actor: ActorRef {
-            kind: ActorKind::Human,
-            id: "tester".to_string(),
-        },
-        recorded_at: chrono::Utc::now(),
-        subject: SubjectRef {
-            kind: "work".to_string(),
-            id: ticket_id.clone(),
-        },
-        bindings: ReceiptBindings {
-            work: vec![WorkBinding {
-                id: ticket_id.clone(),
-                revision: node.revision,
-            }],
-            source: None,
-            content: vec![ContentBinding {
-                path: brief_rel.clone(),
-                sha256: brief_hash,
-            }],
-            artifacts: vec![],
-            graph_fingerprint_observed: None,
-        },
-        payload: ReceiptPayload::ShapingValidation(ShapingValidationPayload {
-            payload_version: 1,
-            owning_work: ShapingWorkBinding {
-                id: ticket_id.clone(),
-                revision_observed: node.revision,
-                contract_revision: node.contract_revision,
-            },
-            materialization: "R1".to_string(),
-            shape_mode: ShapeMode::FocusedBranches,
-            source_posture: SourcePosture::NotRequiredContentBound,
-            destination: Some(ShapingDestination {
-                summary: "Deliver reliable rotation".to_string(),
-                scope_boundary: vec!["No session redesign".to_string()],
-                exit_conditions: vec!["Concurrent passes".to_string()],
-            }),
-            map: None,
-            affected_work: vec![],
-            branches: vec![ShapingBranch {
-                id: "BR-AUTH-1".to_string(),
-                question: "How is concurrent rotation serialized?".to_string(),
-                gap_kind: "tradeoff_gap".to_string(),
-                criticality: BranchCriticality::Critical,
-                affected_work: vec![ticket_id.clone()],
-                disposition: BranchDisposition::Resolved {
-                    resolution: ShapingResolutionPointer {
-                        kind: "decision".to_string(),
-                        id: "DEC-001".to_string(),
-                        revision: 1,
-                        gist: "Single-use atomic rotation".to_string(),
-                    },
-                },
-            }],
-            fog: vec![],
-            out_of_scope: vec![],
-            resolution_pointers: vec![ShapingResolutionPointer {
-                kind: "decision".to_string(),
-                id: "DEC-001".to_string(),
-                revision: 1,
-                gist: "Single-use atomic rotation".to_string(),
-            }],
-            approval: ShapingApproval {
-                approved_by: ActorRef {
-                    kind: ActorKind::Human,
-                    id: "tester".to_string(),
-                },
-                reference: "PULSE.md".to_string(),
-            },
-            reconciliation: None,
-            remaining_uncertainty: vec![],
-        }),
-    };
-    let receipt_file = root.join("shaping.json");
-    fs::write(&receipt_file, to_canonical_bytes(&receipt).unwrap()).unwrap();
-    pulse::evidence::record_receipt(root, None, &receipt_file).unwrap();
-
-    let node = store.show_node(&ticket_id).unwrap();
-    store
-        .apply_shaping_with_context(&ticket_id, node.revision, &receipt.id, None, ctx())
-        .unwrap();
-    let node = store.show_node(&ticket_id).unwrap();
-    store
-        .transition_node_with_context(
-            &ticket_id,
-            pulse::graph::model::node::NodeStatus::Shaped,
-            node.revision,
-            None,
-            ctx(),
-        )
-        .unwrap();
-    let node = store.show_node(&ticket_id).unwrap();
-    store
-        .transition_node_with_context(
-            &ticket_id,
-            pulse::graph::model::node::NodeStatus::Ready,
-            node.revision,
-            None,
-            ctx(),
-        )
-        .unwrap();
+    // Markdown ambiguity gate: transition through Shaped to Ready.
+    for status in [NodeStatus::Shaped, NodeStatus::Ready] {
+        let revision = store.show_node(&ticket_id).unwrap().revision;
+        store
+            .transition_node_with_context(&ticket_id, status, revision, None, ctx())
+            .unwrap();
+    }
 
     commit_all(root, "setup ready ticket");
     ticket_id

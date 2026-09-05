@@ -1,7 +1,7 @@
 //! Work-graph integration tests.
 //!
 //! This crate covers the deterministic, graph-owned domains: core work graph,
-//! lifecycle, shaping, readiness, frontiers, node schema, authority policy,
+//! lifecycle, readiness, frontiers, node schema, authority policy,
 //! decision acceptance and the CLI/contract surfaces. Each submodule is
 //! explicitly wired from `tests/graph/`.
 //!
@@ -50,12 +50,6 @@ mod readiness;
 mod readiness_cli_contract;
 #[path = "graph/reservation.rs"]
 mod reservation;
-#[path = "graph/shaping_cli_contract.rs"]
-mod shaping_cli_contract;
-#[path = "graph/shaping_contract.rs"]
-mod shaping_contract;
-#[path = "graph/shaping_mutation.rs"]
-mod shaping_mutation;
 #[path = "graph/story_completion.rs"]
 mod story_completion;
 #[path = "graph/work_packet_cli_contract.rs"]

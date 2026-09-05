@@ -22,6 +22,8 @@ use super::assignment_fixture::{
     setup_ready_ticket_with_required_qa, setup_ready_ticket_with_story_qa, write_policy,
 };
 use super::common_fixture_repo::TestRepo;
+use super::common_git::commit_all;
+use std::fs;
 
 fn reserve(
     store: &JsonGraphStore,
@@ -499,12 +501,17 @@ fn story_qualification_opens_covered_ticket_close_on_the_same_source() {
     let repo = TestRepo::from_fixture("minimal-service");
     let store = JsonGraphStore::new(repo.path());
     bootstrap_repo(&repo, &store);
-    write_policy(
-        repo.path(),
-        &["work.assignment.release", "qa.defer_to_story_close"],
-    );
+    write_policy(repo.path(), &["work.assignment.release"]);
     add_reviewer_policy(repo.path());
     let ticket_id = setup_ready_ticket_with_story_qa(repo.path(), &store);
+    let story_id = store
+        .show_node(&ticket_id)
+        .unwrap()
+        .qa
+        .and_then(|qa| qa.impact.behavioral_owner)
+        .unwrap();
+    write_story_qa_baseline(repo.path(), &story_id);
+    commit_all(repo.path());
 
     let reserved = reserve(&store, &ticket_id, "reservation-story-qa");
     let active = store
@@ -1285,6 +1292,41 @@ fn expiry_commit_failpoint_recovers_reservation_and_event_atomically() {
         ),
         1
     );
+}
+
+fn write_story_qa_baseline(root: &std::path::Path, story_id: &str) {
+    let path = root.join(format!("works/{story_id}/qa.md"));
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    fs::write(
+        path,
+        format!(
+            r#"# Reservation behavioral QA
+
+```pulse-qa
+{{
+  "schema_version": 1,
+  "story_id": "{story_id}",
+  "revision": 1,
+  "scope": "Reservation behavior remains observable.",
+  "risks": ["RISK-DUPLICATE"],
+  "cases": [{{
+    "id": "QA-001",
+    "revision": 1,
+    "intent": "Reservation is not duplicated.",
+    "priority": "critical",
+    "risk_refs": ["RISK-DUPLICATE"],
+    "steps": ["reserve twice with one idempotency key"],
+    "expected": ["one stable reservation"],
+    "surface": "api",
+    "applicability": "required"
+  }}],
+  "exit_criteria": ["The required case passes on the candidate source."]
+}}
+```
+"#
+        ),
+    )
+    .unwrap();
 }
 
 fn add_reviewer_policy(root: &std::path::Path) {

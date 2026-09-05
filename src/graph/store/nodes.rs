@@ -1,8 +1,6 @@
 use super::*;
 use crate::graph::model::contract::{
-    ContentRef, ContractItem, ContractScope, EffortMetadata, ImplementationContract,
-    ImplementationMode, ImplementationSemanticImpact, Materialization, PlanPolicy, QaImpact,
-    QaImpactPosture, QaMetadata, Risk, SurfaceRef, TicketRole, WorkSurface,
+    Materialization, QaImpact, QaImpactPosture, QaMetadata, Risk, TicketRole,
 };
 
 impl JsonGraphStore {
@@ -65,10 +63,8 @@ impl JsonGraphStore {
         let brief = crate::graph::model::brief::parse_ticket_brief(markdown)?;
         let materialization = node.materialization.unwrap_or(Materialization::R0);
         brief.validate_for(materialization)?;
-        if node.role == Some(TicketRole::Implementation) {
-            node.implementation =
-                Some(brief_to_legacy_contract(&brief, &node, hash_bytes(&bytes))?);
-        }
+        // The markdown contract is the only contract source; the node binds it
+        // through `brief_hash` and the derived docs/QA metadata below.
         if let Some(docs) = &brief.documentation {
             node.documentation = Some(brief_docs_metadata(docs)?);
         }
@@ -562,91 +558,6 @@ impl JsonGraphStore {
             },
         )
     }
-}
-
-fn brief_to_legacy_contract(
-    brief: &crate::graph::model::brief::TicketBrief,
-    node: &Node,
-    hash: String,
-) -> PulseResult<ImplementationContract> {
-    let item = |text: &String, prefix: &str, index: usize| ContractItem {
-        id: format!("{prefix}-{index}"),
-        summary: text.clone(),
-    };
-    let current = brief
-        .current_behavior
-        .clone()
-        .unwrap_or_else(|| "Not specified; see repository state.".to_string());
-    let target = brief
-        .target_behavior
-        .clone()
-        .unwrap_or_else(|| brief.objective.clone().unwrap_or_default());
-    let invariants = brief
-        .invariants
-        .iter()
-        .enumerate()
-        .map(|(i, value)| item(value, "INV", i + 1))
-        .collect();
-    let semantic_impact = match brief
-        .qa
-        .as_ref()
-        .and_then(|qa| crate::graph::model::brief::qa_posture(&qa.posture))
-    {
-        Some(QaImpactPosture::None) => ImplementationSemanticImpact::NoBehaviorOrPublicRiskChange,
-        _ => ImplementationSemanticImpact::BehaviorOrPublicRiskChange,
-    };
-    Ok(ImplementationContract {
-        mode: match brief.implementation_freedom.mode.as_str() {
-            "locked" => ImplementationMode::Locked,
-            "open" => ImplementationMode::Open,
-            _ => ImplementationMode::Guided,
-        },
-        work_surface: WorkSurface::Code,
-        plan_policy: PlanPolicy::None,
-        semantic_impact,
-        effort: EffortMetadata::default(),
-        verification_profile: "default".to_string(),
-        brief: Some(ContentRef {
-            path: format!("{}/ticket.md", node.content_dir),
-            content_hash: hash,
-        }),
-        objective: brief.objective.clone().unwrap_or_default(),
-        current_behavior: current,
-        target_behavior: target,
-        code_anchors: brief
-            .code_anchors
-            .iter()
-            .map(|path| SurfaceRef::path(path.clone()))
-            .collect(),
-        documentation_anchors: vec![],
-        configuration_anchors: vec![],
-        data_anchors: vec![],
-        research_refs: vec![],
-        required_changes: brief
-            .required_changes
-            .iter()
-            .enumerate()
-            .map(|(i, value)| item(value, "CHG", i + 1))
-            .collect(),
-        invariants,
-        acceptance: brief
-            .acceptance
-            .iter()
-            .map(|value| ContractItem {
-                id: value.id.clone(),
-                summary: value.summary.clone(),
-            })
-            .collect(),
-        scope: ContractScope {
-            included: brief.scope.clone(),
-            excluded: brief.non_scope.clone(),
-        },
-        implementation_freedom: vec![],
-        required_decisions: vec![],
-        shared_approach_refs: vec![],
-        expected_evidence: vec![],
-        expected_handoff: vec![],
-    })
 }
 
 fn brief_docs_metadata(

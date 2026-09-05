@@ -14,7 +14,6 @@
 use super::bindings::{binding_codes_for, code_to_static};
 use super::decision::validate_decision_acceptance_payload;
 use super::documentation::validate_docs_payload;
-use super::shaping::validate_shaping_payload;
 use super::supersession::validate_supersession_payload;
 use crate::evidence::artifact::artifact_exists;
 use crate::evidence::model::{ReceiptBindings, ReceiptEnvelope, ReceiptPayload};
@@ -49,7 +48,6 @@ pub(super) fn validate_envelope(
     validate_bindings(repo_root, &receipt.bindings, record_time)?;
     match &receipt.payload {
         ReceiptPayload::SupersessionReconciliation(p) => validate_supersession_payload(receipt, p),
-        ReceiptPayload::ShapingValidation(p) => validate_shaping_payload(receipt, p),
         ReceiptPayload::DecisionAcceptance(p) => validate_decision_acceptance_payload(receipt, p),
         ReceiptPayload::DocumentationValidation(p) => validate_docs_payload(receipt, p),
         ReceiptPayload::QaCheckpoint(p) => crate::qa::validate_checkpoint_receipt(receipt, p),
@@ -119,7 +117,6 @@ fn validate_bindings(
 fn payload_kind(payload: &ReceiptPayload) -> &'static str {
     match payload {
         ReceiptPayload::SupersessionReconciliation(_) => "supersession_reconciliation",
-        ReceiptPayload::ShapingValidation(_) => "shaping_validation",
         ReceiptPayload::DecisionAcceptance(_) => "decision_acceptance",
         ReceiptPayload::DocumentationValidation(_) => "documentation_validation",
         ReceiptPayload::QaCheckpoint(_) => "qa_checkpoint",

@@ -196,10 +196,7 @@ fn ready_story_fixture(child_done: bool) -> (TestRepo, JsonGraphStore, String, S
     let repo = TestRepo::from_fixture("minimal-service");
     let store = JsonGraphStore::new(repo.path());
     bootstrap_repo(&repo, &store);
-    write_policy(
-        repo.path(),
-        &["qa.defer_to_story_close", "work.story.close"],
-    );
+    write_policy(repo.path(), &["work.story.close"]);
     let ticket_id = setup_ready_ticket_with_story_qa(repo.path(), &store);
     let ticket = store.show_node(&ticket_id).unwrap();
     let story_id = ticket
@@ -208,6 +205,7 @@ fn ready_story_fixture(child_done: bool) -> (TestRepo, JsonGraphStore, String, S
         .and_then(|qa| qa.impact.behavioral_owner.as_ref())
         .unwrap()
         .clone();
+    write_story_qa_baseline(repo.path(), &story_id);
     store
         .add_edge(
             EdgeType::Parent,
@@ -222,6 +220,41 @@ fn ready_story_fixture(child_done: bool) -> (TestRepo, JsonGraphStore, String, S
     }
     let source_commit = commit_all(repo.path());
     (repo, store, story_id, ticket_id, source_commit)
+}
+
+fn write_story_qa_baseline(repo: &std::path::Path, story_id: &str) {
+    let path = repo.join(format!("works/{story_id}/qa.md"));
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(
+        path,
+        format!(
+            r#"# Reservation behavioral QA
+
+```pulse-qa
+{{
+  "schema_version": 1,
+  "story_id": "{story_id}",
+  "revision": 1,
+  "scope": "Reservation behavior remains observable.",
+  "risks": ["RISK-DUPLICATE"],
+  "cases": [{{
+    "id": "QA-001",
+    "revision": 1,
+    "intent": "Reservation is not duplicated.",
+    "priority": "critical",
+    "risk_refs": ["RISK-DUPLICATE"],
+    "steps": ["reserve twice with one idempotency key"],
+    "expected": ["one stable reservation"],
+    "surface": "api",
+    "applicability": "required"
+  }}],
+  "exit_criteria": ["The required case passes on the candidate source."]
+}}
+```
+"#
+        ),
+    )
+    .unwrap();
 }
 
 fn set_status(repo: &std::path::Path, id: &str, status: NodeStatus) {

@@ -7,7 +7,7 @@
 //! - [`envelope`]: generic envelope/manifest validation, normalization and
 //!   kind dispatch.
 //! - [`bindings`]: generic work/content/source/artifact binding currentness.
-//! - [`supersession`], [`shaping`], [`decision`], [`documentation`]:
+//! - [`supersession`], [`decision`], [`documentation`]:
 //!   kind-specific payload validators.
 //! - [`helpers`]: shared generic validation primitives reused across payload
 //!   validators.
@@ -22,7 +22,7 @@ mod decision;
 mod documentation;
 mod envelope;
 mod helpers;
-mod shaping;
+
 mod store;
 mod supersession;
 

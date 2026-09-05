@@ -403,21 +403,15 @@ fn killed_receipt_record_after_file_recovers_event_once() {
             "work",
             "create",
             "--kind",
-            "ticket",
+            "decision",
             "--title",
-            "Receipt",
-            "--role",
-            "implementation",
-            "--risk",
-            "low",
-            "--materialization",
-            "R0",
+            "Receipt decision",
             "--json",
         ],
     );
     let id = created["value"]["id"].as_str().unwrap();
     run_ok(&repo, &["evidence", "bootstrap", "--json"]);
-    let content_rel = format!("works/{id}/ticket.md");
+    let content_rel = format!("works/{id}/decision.md");
     let content_path = repo.path().join(&content_rel);
     fs::create_dir_all(content_path.parent().unwrap()).unwrap();
     fs::write(&content_path, b"receipt process recovery content").unwrap();
@@ -433,7 +427,7 @@ fn killed_receipt_record_after_file_recovers_event_once() {
         "schema_version": 1,
         "receipt_version": 1,
         "id": receipt_id,
-        "kind": "shaping_validation",
+        "kind": "decision_acceptance",
         "result": "passed",
         "actor": {"kind": "human", "id": "tester"},
         "recorded_at": "2026-07-22T00:00:00Z",
@@ -446,20 +440,18 @@ fn killed_receipt_record_after_file_recovers_event_once() {
         },
         "payload": {
             "payload_version": 1,
-            "owning_work": {"id": id, "revision_observed": 1, "contract_revision": 1},
-            "materialization": "R1",
-            "shape_mode": "focused_branches",
-            "source_posture": "clean_git_commit",
-            "destination": null,
-            "map": null,
-            "affected_work": [],
-            "branches": [],
-            "fog": [],
-            "out_of_scope": [],
-            "resolution_pointers": [],
-            "approval": {"approved_by": {"kind": "human", "id": "tester"}, "reference": "PULSE.md#human-judgment-boundaries"},
-            "reconciliation": null,
-            "remaining_uncertainty": []
+            "decision": {
+                "id": id,
+                "revision_observed": 1,
+                "contract_revision": 1,
+                "content": {
+                    "path": content_rel,
+                    "content_hash": hash_bytes(&fs::read(&content_path).unwrap())
+                }
+            },
+            "accepted_outcome": "Preserve compatibility semantics.",
+            "approver": {"kind": "human", "id": "tester"},
+            "source_posture": "clean_git_commit"
         }
     });
     let receipt_file = repo.path().join("receipt.json");

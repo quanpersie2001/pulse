@@ -3,15 +3,9 @@ use std::fs;
 use chrono::Utc;
 use pulse::canonical_json::to_canonical_bytes;
 use pulse::docs::{DocumentKind, DocumentRecord, DocumentScope, DocumentStatus};
-use pulse::graph::model::contract::{
-    ContentRef, ContractItem, ContractScope, EffortMetadata, ImplementationContract,
-    ImplementationMode, ImplementationSemanticImpact, PlanPolicy, PublicCreateClassification,
-    QaImpactPosture, SurfaceRef, TicketRole, WorkSurface,
-};
-use pulse::graph::model::node::{DocumentationImpactPosture, NodeStatus};
-use pulse::graph::store::{
-    ContractSetRequest, DocumentationImpactUpdate, OperationContext, QaImpactUpdate,
-};
+use pulse::graph::model::contract::{PublicCreateClassification, TicketRole};
+use pulse::graph::model::node::NodeStatus;
+use pulse::graph::store::OperationContext;
 use pulse::id::WorkKind;
 use pulse::JsonGraphStore;
 
@@ -29,9 +23,6 @@ pub(super) fn write_policy(root: &std::path::Path, extra_grants: &[&str]) {
     let path = root.join(".pulse/policy/authority.json");
     fs::create_dir_all(path.parent().unwrap()).unwrap();
     let mut grants = vec![
-        "shape.apply".to_string(),
-        "shape.approve.R1".to_string(),
-        "qa.none.approve".to_string(),
         "work.transition.shaped".to_string(),
         "work.transition.ready".to_string(),
         "work.assignment.prepare".to_string(),
@@ -179,7 +170,6 @@ fn setup_ready_ticket_with_postures(
     qa_posture: FixtureQaPosture,
     docs_posture: FixtureDocsPosture,
 ) -> String {
-    let behavioral_qa = qa_posture != FixtureQaPosture::None;
     let node = store
         .create_node_public_with_context(
             WorkKind::Ticket,
@@ -194,162 +184,74 @@ fn setup_ready_ticket_with_postures(
         .unwrap()
         .value;
     let ticket_id = node.id.clone();
-    let brief_relative = format!("{}/ticket.md", node.content_dir);
-    let brief_path = root.join(&brief_relative);
-    fs::create_dir_all(brief_path.parent().unwrap()).unwrap();
-    fs::write(&brief_path, b"# Ticket\nReservation test brief.").unwrap();
-    let brief_hash = pulse::canonical_json::hash_bytes(&fs::read(&brief_path).unwrap());
-    store
-        .set_contract_with_context(
-            &ticket_id,
-            node.revision,
-            ContractSetRequest {
-                role: TicketRole::Implementation,
-                implementation: Some(ImplementationContract {
-                    verification_profile: "standard".to_string(),
-                    mode: ImplementationMode::Guided,
-                    work_surface: WorkSurface::Code,
-                    plan_policy: PlanPolicy::None,
-                    semantic_impact: if behavioral_qa {
-                        ImplementationSemanticImpact::BehaviorOrPublicRiskChange
-                    } else {
-                        ImplementationSemanticImpact::NoBehaviorOrPublicRiskChange
-                    },
-                    effort: EffortMetadata::default(),
-                    brief: Some(ContentRef {
-                        path: brief_relative,
-                        content_hash: brief_hash.clone(),
-                    }),
-                    objective: "Test reservation objective.".to_string(),
-                    current_behavior: "Current behavior.".to_string(),
-                    target_behavior: "Target behavior.".to_string(),
-                    code_anchors: vec![SurfaceRef::path("src/token.mjs")],
-                    documentation_anchors: vec![],
-                    configuration_anchors: vec![],
-                    data_anchors: vec![],
-                    research_refs: vec![],
-                    required_changes: vec![ContractItem {
-                        id: "CHG-1".to_string(),
-                        summary: "Make the ticket reservable.".to_string(),
-                    }],
-                    invariants: vec![ContractItem {
-                        id: "INV-1".to_string(),
-                        summary: "Keep repository semantics Core-owned.".to_string(),
-                    }],
-                    acceptance: vec![ContractItem {
-                        id: "AC-1".to_string(),
-                        summary: "Reservation remains ready until acknowledgement.".to_string(),
-                    }],
-                    scope: ContractScope::default(),
-                    implementation_freedom: vec![],
-                    required_decisions: vec![],
-                    shared_approach_refs: vec![],
-                    expected_evidence: vec![],
-                    expected_handoff: vec![],
-                }),
-                decision_work: None,
-            },
-            context(),
-        )
-        .unwrap();
-    let behavioral_owner = if behavioral_qa {
-        let story = store
-            .create_node(WorkKind::Story, "Reservation behavior".to_string())
-            .unwrap()
-            .value;
-        write_required_qa_baseline(root, &story.id);
-        Some(story.id)
-    } else {
-        None
+
+    // QA owner Story is created first when the posture needs one so the
+    // ticket.md contract can reference it.
+    let behavioral_owner = match qa_posture {
+        FixtureQaPosture::None => None,
+        FixtureQaPosture::Required | FixtureQaPosture::CoveredByStoryClose => {
+            let story = store
+                .create_node(WorkKind::Story, "Reservation behavior".to_string())
+                .unwrap()
+                .value;
+            if qa_posture == FixtureQaPosture::Required {
+                write_required_qa_baseline(root, &story.id);
+            }
+            Some(story.id)
+        }
     };
-    let current = store.show_node(&ticket_id).unwrap();
-    store
-        .set_qa_impact_with_context(
-            &ticket_id,
-            current.revision,
-            QaImpactUpdate {
-                posture: match qa_posture {
-                    FixtureQaPosture::None => QaImpactPosture::None,
-                    FixtureQaPosture::Required => QaImpactPosture::Required,
-                    FixtureQaPosture::CoveredByStoryClose => QaImpactPosture::CoveredByStoryClose,
-                },
-                rationale: Some(match qa_posture {
-                    FixtureQaPosture::None => "No product QA impact.".to_string(),
-                    FixtureQaPosture::Required => "Behavioral checkpoint required.".to_string(),
-                    FixtureQaPosture::CoveredByStoryClose => {
-                        "Integrated Story qualification owns this behavior.".to_string()
-                    }
-                }),
-                behavioral_owner,
-                affected_case_ids: if qa_posture == FixtureQaPosture::Required {
-                    vec!["QA-001".to_string()]
-                } else {
-                    vec![]
-                },
-            },
-            context(),
-        )
-        .unwrap();
-    let current = store.show_node(&ticket_id).unwrap();
-    store
-        .update_documentation_impact(
-            &ticket_id,
-            current.revision,
-            DocumentationImpactUpdate {
-                domains: vec![],
-                posture: match docs_posture {
-                    FixtureDocsPosture::None => DocumentationImpactPosture::None,
-                    FixtureDocsPosture::Required => DocumentationImpactPosture::Required,
-                },
-                rationale: Some(match docs_posture {
-                    FixtureDocsPosture::None => "No durable docs impact.".to_string(),
-                    FixtureDocsPosture::Required => {
-                        "Reservation contract must remain validated.".to_string()
-                    }
-                }),
-                required_documents: if docs_posture == FixtureDocsPosture::Required {
-                    vec!["DOC-RESERVATION-CONTRACT".to_string()]
-                } else {
-                    vec![]
-                },
-                deferred_to: vec![],
-                paths: vec!["development".to_string()],
-                labels: vec!["reservation".to_string()],
-            },
-            "human:tester".to_string(),
-        )
-        .unwrap();
-    let current = store.show_node(&ticket_id).unwrap();
-    let receipt = shaping_receipt(
-        &ticket_id,
-        current.revision,
-        current.contract_revision,
-        &current.content_dir,
-        &brief_hash,
+
+    let qa_section = match qa_posture {
+        FixtureQaPosture::None => "## QA impact\n- Owner:\n- Posture: none\n- Cases:\n- Reason: No product QA impact.\n".to_string(),
+        FixtureQaPosture::Required => format!(
+            "## QA impact\n- Owner: {}\n- Posture: required\n- Cases: QA-001\n- Reason: Behavioral checkpoint required.\n",
+            behavioral_owner.clone().unwrap()
+        ),
+        FixtureQaPosture::CoveredByStoryClose => format!(
+            "## QA impact\n- Owner: {}\n- Posture: covered_by_story_close\n- Cases:\n- Reason: Integrated Story qualification owns this behavior.\n",
+            behavioral_owner.clone().unwrap()
+        ),
+    };
+    let docs_section = match docs_posture {
+        FixtureDocsPosture::None => "## Documentation impact\n- Posture: none\n- Rationale: No durable docs impact.\n- Documents:\n".to_string(),
+        FixtureDocsPosture::Required => "## Documentation impact\n- Posture: required\n- Rationale: Reservation contract must remain validated.\n- Documents: DOC-RESERVATION-CONTRACT\n".to_string(),
+    };
+    let ticket_md = format!(
+        "# {ticket_id} Test reservation ticket\n\n\
+         ## Objective\nTest reservation objective.\n\n\
+         ## Current behavior\nCurrent behavior.\n\n\
+         ## Target behavior\nTarget behavior.\n\n\
+         ## Code anchors\n- src/token.mjs\n\n\
+         ## Required changes\n- Make the ticket reservable.\n\n\
+         ## Invariants\n- Keep repository semantics Core-owned.\n\n\
+         ## Implementation freedom\nguided: agent chooses internal structure within this contract.\n\n\
+         ## Acceptance\n- AC-1: Reservation remains ready until acknowledgement.\n\n\
+         ## Verify\n- node scripts/verify.mjs\n\n\
+         {docs_section}\n\
+         {qa_section}\n"
     );
-    let receipt_file = root.join("shaping_reservation.json");
-    fs::write(&receipt_file, to_canonical_bytes(&receipt).unwrap()).unwrap();
-    pulse::evidence::receipt::record_receipt(root, None, &receipt_file).unwrap();
-    let current = store.show_node(&ticket_id).unwrap();
+    let brief_path = root.join(&node.content_dir).join("ticket.md");
+    fs::create_dir_all(brief_path.parent().unwrap()).unwrap();
+    fs::write(&brief_path, ticket_md).unwrap();
+
     store
-        .apply_shaping_with_context(&ticket_id, current.revision, &receipt.id, None, context())
+        .sync_ticket_with_context(&ticket_id, node.revision, context())
         .unwrap();
-    let current = store.show_node(&ticket_id).unwrap();
+
     store
         .transition_node_with_context(
             &ticket_id,
             NodeStatus::Shaped,
-            current.revision,
+            store.show_node(&ticket_id).unwrap().revision,
             None,
             context(),
         )
         .unwrap();
-    let current = store.show_node(&ticket_id).unwrap();
     store
         .transition_node_with_context(
             &ticket_id,
             NodeStatus::Ready,
-            current.revision,
+            store.show_node(&ticket_id).unwrap().revision,
             None,
             context(),
         )
@@ -391,74 +293,4 @@ fn write_required_qa_baseline(root: &std::path::Path, story_id: &str) {
         ),
     )
     .unwrap();
-}
-
-fn shaping_receipt(
-    id: &str,
-    revision: u64,
-    contract_revision: u64,
-    content_dir: &str,
-    content_hash: &str,
-) -> pulse::evidence::model::ReceiptEnvelope {
-    use pulse::evidence::model::*;
-    ReceiptEnvelope {
-        schema_version: 1,
-        receipt_version: 1,
-        id: format!("rcpt_{:0<26}", &id[3..]),
-        kind: ReceiptKind::ShapingValidation,
-        result: ReceiptResult::Passed,
-        actor: ActorRef {
-            kind: pulse::identity::actor::ActorKind::Human,
-            id: "tester".to_string(),
-        },
-        recorded_at: Utc::now(),
-        subject: SubjectRef {
-            kind: "work".to_string(),
-            id: id.to_string(),
-        },
-        bindings: ReceiptBindings {
-            work: vec![WorkBinding {
-                id: id.to_string(),
-                revision,
-            }],
-            source: None,
-            content: vec![ContentBinding {
-                path: format!("{content_dir}/ticket.md"),
-                sha256: content_hash.to_string(),
-            }],
-            artifacts: vec![],
-            graph_fingerprint_observed: None,
-        },
-        payload: ReceiptPayload::ShapingValidation(ShapingValidationPayload {
-            payload_version: 1,
-            owning_work: ShapingWorkBinding {
-                id: id.to_string(),
-                revision_observed: revision,
-                contract_revision,
-            },
-            materialization: "R1".to_string(),
-            shape_mode: ShapeMode::FocusedBranches,
-            source_posture: SourcePosture::NotRequiredContentBound,
-            destination: Some(ShapingDestination {
-                summary: "Reservation target".to_string(),
-                scope_boundary: vec!["test".to_string()],
-                exit_conditions: vec!["reservation proven".to_string()],
-            }),
-            map: None,
-            affected_work: vec![],
-            branches: vec![],
-            fog: vec![],
-            out_of_scope: vec![],
-            resolution_pointers: vec![],
-            approval: ShapingApproval {
-                approved_by: ActorRef {
-                    kind: pulse::identity::actor::ActorKind::Human,
-                    id: "tester".to_string(),
-                },
-                reference: "test".to_string(),
-            },
-            reconciliation: None,
-            remaining_uncertainty: vec![],
-        }),
-    }
 }

@@ -12,5 +12,4 @@ pub mod lifecycle;
 pub mod packet;
 pub mod readiness;
 pub mod reservation;
-pub mod shaping;
 pub mod story_completion;

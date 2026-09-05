@@ -6,15 +6,15 @@
 
 use chrono::Utc;
 use pulse::graph::model::contract::{
-    ContractValidationMode, ImplementationMode, Materialization, PlanPolicy,
-    PublicCreateClassification, QaImpactPosture, Risk, TicketRole, WorkSurface,
+    ContractValidationMode, Materialization, PublicCreateClassification, QaImpactPosture, Risk,
+    TicketRole,
 };
 use pulse::graph::model::edge::{deterministic_edge_id, Edge, EdgeType};
 use pulse::graph::model::lifecycle::TransitionReason;
 use pulse::graph::model::node::{DocumentationImpactPosture, NodeStatus};
-use pulse::graph::read::frontier::{FrontierKind, FRONTIER_CLAIM_STATE};
+use pulse::graph::read::frontier::{FRONTIER_CLAIM_STATE, FRONTIER_SCHEMA_VERSION};
 use pulse::graph::read::readiness::READINESS_PROFILE;
-use pulse::graph::store::{ContractSetRequest, OperationContext, QaImpactUpdate};
+use pulse::graph::store::OperationContext;
 use pulse::id::{format_id, WorkId, WorkKind};
 use pulse::JsonGraphStore;
 
@@ -49,25 +49,14 @@ fn graph_public_paths_used_by_tests_and_binary_compile() {
         WorkKind::Ticket
     );
 
-    let _request = ContractSetRequest {
-        role: TicketRole::Implementation,
-        implementation: None,
-        decision_work: None,
-    };
-    let _qa_update = QaImpactUpdate {
-        posture: QaImpactPosture::None,
-        rationale: Some("internal refactor only".to_string()),
-        behavioral_owner: None,
-        affected_case_ids: vec![],
-    };
-
     assert_eq!(
-        ContractValidationMode::Completeness,
-        ContractValidationMode::Completeness
+        ContractValidationMode::CanonicalStorage,
+        ContractValidationMode::CanonicalStorage
     );
-    assert_eq!(ImplementationMode::Guided, ImplementationMode::Guided);
-    assert_eq!(WorkSurface::Code, WorkSurface::Code);
-    assert_eq!(PlanPolicy::WorkerOptional, PlanPolicy::WorkerOptional);
+    assert_eq!(
+        ContractValidationMode::PublicCreate,
+        ContractValidationMode::PublicCreate
+    );
     assert_eq!(
         DocumentationImpactPosture::None,
         DocumentationImpactPosture::None
@@ -81,7 +70,7 @@ fn graph_public_paths_used_by_tests_and_binary_compile() {
     assert_eq!(reason.into_status_reason().code, "baseline");
     assert_eq!(READINESS_PROFILE, "contract_readiness");
     assert_eq!(FRONTIER_CLAIM_STATE, "not_evaluated");
-    assert!(matches!(FrontierKind::Execution, FrontierKind::Execution));
+    assert_eq!(FRONTIER_SCHEMA_VERSION, 1);
 }
 
 #[test]

@@ -30,10 +30,7 @@ fn policy_validates_fingerprints_and_queries_exact_grants() {
         principals: vec![pulse::policy::AuthorityPrincipal {
             kind: ActorKind::Human,
             id: "quannv".to_string(),
-            grants: vec![
-                "decision.accept".to_string(),
-                "shape.approve.R0".to_string(),
-            ],
+            grants: vec!["decision.accept".to_string(), "docs.write".to_string()],
         }],
     };
     write_policy(repo.path(), &policy);

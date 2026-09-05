@@ -203,9 +203,10 @@ impl JsonGraphStore {
         }
         normalize_acceptance_proofs(&mut args.acceptance_proofs);
         if args.disposition == VerificationDisposition::Passed {
+            let acceptance_ids = ticket_acceptance_ids(&self.repo_root, &node)?;
             validate_acceptance_proofs(
                 &self.repo_root,
-                &node,
+                &acceptance_ids,
                 &args.checks,
                 &args.acceptance_proofs,
             )?;
@@ -434,24 +435,19 @@ impl JsonGraphStore {
             ));
         }
         validate_close_postures(&node, &args.actor)?;
-        let implementation = node.implementation.as_ref().ok_or_else(|| {
-            PulseError::validation(
-                "close_contract_missing",
-                "proof close requires an implementation contract",
-            )
-        })?;
+        let acceptance_ids = ticket_acceptance_ids(&self.repo_root, &node)?;
         validate_acceptance_proofs(
             &self.repo_root,
-            &node,
+            &acceptance_ids,
             &verification.checks,
             &verification.acceptance_proofs,
         )?;
         validate_documentation_close(&self.repo_root, &node, &verification)?;
         validate_qa_close(&self.repo_root, &node, &handoff, &verification)?;
-        if implementation.acceptance.is_empty() {
+        if acceptance_ids.is_empty() {
             return Err(PulseError::validation(
                 "close_acceptance_missing",
-                "proof close requires at least one contract acceptance item",
+                "proof close requires at least one ticket.md acceptance item",
             ));
         }
 
@@ -666,22 +662,24 @@ fn normalize_acceptance_proofs(proofs: &mut [AcceptanceProof]) {
     proofs.sort_by(|left, right| left.acceptance_id.cmp(&right.acceptance_id));
 }
 
+fn ticket_acceptance_ids(repo_root: &Path, node: &Node) -> Result<Vec<String>> {
+    let brief_path = repo_root.join(&node.content_dir).join("ticket.md");
+    let bytes = fs::read(&brief_path).map_err(|error| PulseError::io(&brief_path, error))?;
+    let markdown = String::from_utf8(bytes)
+        .map_err(|_| PulseError::validation("ticket_brief_invalid", "ticket.md must be UTF-8"))?;
+    let brief = crate::graph::model::brief::parse_ticket_brief(&markdown)?;
+    Ok(brief.acceptance.into_iter().map(|item| item.id).collect())
+}
+
 fn validate_acceptance_proofs(
     repo_root: &Path,
-    node: &Node,
+    expected_acceptance_ids: &[String],
     checks: &[VerificationCheck],
     proofs: &[AcceptanceProof],
 ) -> Result<()> {
-    let implementation = node.implementation.as_ref().ok_or_else(|| {
-        PulseError::validation(
-            "verification_contract_missing",
-            "acceptance proof requires an implementation contract",
-        )
-    })?;
-    let expected = implementation
-        .acceptance
+    let expected = expected_acceptance_ids
         .iter()
-        .map(|item| item.id.as_str())
+        .map(String::as_str)
         .collect::<Vec<_>>();
     let actual = proofs
         .iter()

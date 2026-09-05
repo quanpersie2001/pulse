@@ -89,7 +89,7 @@ fn tree_bytes(root: &std::path::Path) -> Vec<(String, Vec<u8>)> {
     out
 }
 
-fn make_shaping_receipt(
+fn make_decision_receipt(
     id: &str,
     node: &pulse::graph::model::node::Node,
     manifest: &pulse::evidence::manifest::EvidenceManifest,
@@ -101,7 +101,7 @@ fn make_shaping_receipt(
         schema_version: 1,
         receipt_version: 1,
         id: id.to_string(),
-        kind: ReceiptKind::ShapingValidation,
+        kind: ReceiptKind::DecisionAcceptance,
         result: ReceiptResult::Passed,
         actor: ActorRef {
             kind: ActorKind::Human,
@@ -124,37 +124,28 @@ fn make_shaping_receipt(
             }),
             content: vec![ContentBinding {
                 path: content_rel.to_string(),
-                sha256: content_hash,
+                sha256: content_hash.clone(),
             }],
             artifacts: vec![],
             graph_fingerprint_observed: None,
         },
-        payload: ReceiptPayload::ShapingValidation(ShapingValidationPayload {
+        payload: ReceiptPayload::DecisionAcceptance(DecisionAcceptancePayload {
             payload_version: 1,
-            owning_work: ShapingWorkBinding {
+            decision: DecisionAcceptanceDecision {
                 id: node.id.clone(),
                 revision_observed: node.revision,
                 contract_revision: node.contract_revision,
-            },
-            materialization: "R1".to_string(),
-            shape_mode: ShapeMode::FocusedBranches,
-            source_posture: SourcePosture::CleanGitCommit,
-            destination: None,
-            map: None,
-            affected_work: vec![],
-            branches: vec![],
-            fog: vec![],
-            out_of_scope: vec![],
-            resolution_pointers: vec![],
-            approval: ShapingApproval {
-                approved_by: ActorRef {
-                    kind: ActorKind::Human,
-                    id: "tester".to_string(),
+                content: DecisionContentSnapshot {
+                    path: content_rel.to_string(),
+                    content_hash,
                 },
-                reference: "PULSE.md#human-judgment-boundaries".to_string(),
             },
-            reconciliation: None,
-            remaining_uncertainty: vec![],
+            accepted_outcome: "Preserve compatibility semantics.".to_string(),
+            approver: ActorRef {
+                kind: ActorKind::Human,
+                id: "tester".to_string(),
+            },
+            source_posture: SourcePosture::CleanGitCommit,
         }),
     }
 }
@@ -200,21 +191,21 @@ fn evidence_mutations_refuse_malformed_workgraph_without_changing_graph_bytes() 
     let repo = tmp.path();
     let store = JsonGraphStore::new(repo);
     let node = store
-        .create_node(WorkKind::Ticket, "Malformed graph".to_string())
+        .create_node(WorkKind::Decision, "Malformed graph".to_string())
         .unwrap()
         .value;
     let manifest = pulse::evidence::bootstrap(repo).unwrap().manifest;
-    let content_rel = format!("works/{}/ticket.md", node.id);
+    let content_rel = format!("works/{}/decision.md", node.id);
     let content_path = repo.join(&content_rel);
     fs::create_dir_all(content_path.parent().unwrap()).unwrap();
-    fs::write(&content_path, b"acceptance").unwrap();
+    fs::write(&content_path, b"accepted decision").unwrap();
     let source_commit = commit_all(repo);
-    let receipt = make_shaping_receipt(
+    let receipt = make_decision_receipt(
         "rcpt_01J00000000000000000000004",
         &node,
         &manifest,
         &content_rel,
-        hash_bytes(b"acceptance"),
+        hash_bytes(b"accepted decision"),
         source_commit,
     );
     let receipt_file = repo.join("malformed-graph-receipt.json");
@@ -251,18 +242,18 @@ fn receipt_record_verify_and_content_staleness() {
     let repo = tmp.path();
     let store = JsonGraphStore::new(repo);
     let node = store
-        .create_node(WorkKind::Ticket, "Ticket".to_string())
+        .create_node(WorkKind::Decision, "Decision".to_string())
         .unwrap()
         .value;
     let manifest = pulse::evidence::bootstrap(repo).unwrap().manifest;
-    let content_rel = format!("works/{}/ticket.md", node.id);
+    let content_rel = format!("works/{}/decision.md", node.id);
     let content_path = repo.join(&content_rel);
     fs::create_dir_all(content_path.parent().unwrap()).unwrap();
-    fs::write(&content_path, b"acceptance").unwrap();
+    fs::write(&content_path, b"accepted decision").unwrap();
     let content_hash = hash_bytes(&fs::read(&content_path).unwrap());
     let source_commit = commit_all(repo);
 
-    let receipt = make_shaping_receipt(
+    let receipt = make_decision_receipt(
         "rcpt_01J00000000000000000000000",
         &node,
         &manifest,
@@ -398,17 +389,17 @@ fn receipt_record_recovery_completes_missing_event_and_retry_is_unchanged() {
     let repo = tmp.path();
     let store = JsonGraphStore::new(repo);
     let node = store
-        .create_node(WorkKind::Ticket, "Recover".to_string())
+        .create_node(WorkKind::Decision, "Recover".to_string())
         .unwrap()
         .value;
     let manifest = pulse::evidence::bootstrap(repo).unwrap().manifest;
-    let content_rel = format!("works/{}/ticket.md", node.id);
+    let content_rel = format!("works/{}/decision.md", node.id);
     let content_path = repo.join(&content_rel);
     fs::create_dir_all(content_path.parent().unwrap()).unwrap();
-    fs::write(&content_path, b"acceptance").unwrap();
+    fs::write(&content_path, b"accepted decision").unwrap();
     let content_hash = hash_bytes(&fs::read(&content_path).unwrap());
     let source_commit = commit_all(repo);
-    let receipt = make_shaping_receipt(
+    let receipt = make_decision_receipt(
         "rcpt_01J00000000000000000000002",
         &node,
         &manifest,
@@ -436,25 +427,25 @@ fn first_use_receipt_bootstrap_and_failpoint_commit_share_the_fence() {
     let repo = tmp.path();
     let store = JsonGraphStore::new(repo);
     let node = store
-        .create_node(WorkKind::Ticket, "First use".to_string())
+        .create_node(WorkKind::Decision, "First use".to_string())
         .unwrap()
         .value;
     let manifest = pulse::evidence::bootstrap(repo).unwrap().manifest;
-    let content_rel = format!("works/{}/ticket.md", node.id);
+    let content_rel = format!("works/{}/decision.md", node.id);
     let content_path = repo.join(&content_rel);
     fs::create_dir_all(content_path.parent().unwrap()).unwrap();
-    fs::write(&content_path, b"acceptance").unwrap();
+    fs::write(&content_path, b"accepted decision").unwrap();
     let source_commit = commit_all(repo);
-    let mut receipt = make_shaping_receipt(
+    let mut receipt = make_decision_receipt(
         "rcpt_01J00000000000000000000005",
         &node,
         &manifest,
         &content_rel,
-        hash_bytes(b"acceptance"),
+        hash_bytes(b"accepted decision"),
         source_commit,
     );
     receipt.bindings.source = None;
-    if let ReceiptPayload::ShapingValidation(payload) = &mut receipt.payload {
+    if let ReceiptPayload::DecisionAcceptance(payload) = &mut receipt.payload {
         payload.source_posture = SourcePosture::NotRequiredContentBound;
     }
     let receipt_file = repo.join("first-use-receipt.json");
@@ -482,17 +473,17 @@ fn same_receipt_id_different_bytes_conflicts_and_concurrent_same_id_is_determini
     let repo = tmp.path();
     let store = JsonGraphStore::new(repo);
     let node = store
-        .create_node(WorkKind::Ticket, "Conflict".to_string())
+        .create_node(WorkKind::Decision, "Conflict".to_string())
         .unwrap()
         .value;
     let manifest = pulse::evidence::bootstrap(repo).unwrap().manifest;
-    let content_rel = format!("works/{}/ticket.md", node.id);
+    let content_rel = format!("works/{}/decision.md", node.id);
     let content_path = repo.join(&content_rel);
     fs::create_dir_all(content_path.parent().unwrap()).unwrap();
-    fs::write(&content_path, b"acceptance").unwrap();
+    fs::write(&content_path, b"accepted decision").unwrap();
     let content_hash = hash_bytes(&fs::read(&content_path).unwrap());
     let source_commit = commit_all(repo);
-    let mut receipt = make_shaping_receipt(
+    let mut receipt = make_decision_receipt(
         "rcpt_01J00000000000000000000003",
         &node,
         &manifest,
@@ -503,8 +494,8 @@ fn same_receipt_id_different_bytes_conflicts_and_concurrent_same_id_is_determini
     let file = repo.join("receipt-conflict.json");
     write_json(&file, &receipt);
     pulse::evidence::record_receipt(repo, None, &file).unwrap();
-    if let ReceiptPayload::ShapingValidation(payload) = &mut receipt.payload {
-        payload.materialization = "R2".to_string();
+    if let ReceiptPayload::DecisionAcceptance(payload) = &mut receipt.payload {
+        payload.accepted_outcome = "A different accepted outcome.".to_string();
     }
     write_json(&file, &receipt);
     let err = pulse::evidence::record_receipt(repo, None, &file).unwrap_err();
@@ -517,17 +508,17 @@ fn dirty_bound_content_reports_unsupported_source_snapshot() {
     let repo = tmp.path();
     let store = JsonGraphStore::new(repo);
     let node = store
-        .create_node(WorkKind::Ticket, "Dirty".to_string())
+        .create_node(WorkKind::Decision, "Dirty".to_string())
         .unwrap()
         .value;
     let manifest = pulse::evidence::bootstrap(repo).unwrap().manifest;
-    let content_rel = format!("works/{}/ticket.md", node.id);
+    let content_rel = format!("works/{}/decision.md", node.id);
     let content_path = repo.join(&content_rel);
     fs::create_dir_all(content_path.parent().unwrap()).unwrap();
-    fs::write(&content_path, b"acceptance").unwrap();
+    fs::write(&content_path, b"accepted decision").unwrap();
     let content_hash = hash_bytes(&fs::read(&content_path).unwrap());
     let source_commit = commit_all(repo);
-    let receipt = make_shaping_receipt(
+    let receipt = make_decision_receipt(
         "rcpt_01J00000000000000000000004",
         &node,
         &manifest,

@@ -9,10 +9,7 @@ use serde_json::json;
 use crate::canonical_json::{hash_bytes, to_canonical_bytes};
 use crate::event::new_event_id;
 use crate::event::{event_path, EventEnvelope};
-use crate::graph::model::contract::{
-    ContractValidationMode, DecisionWorkContract, ImplementationContract,
-    PublicCreateClassification, QaImpactPosture, QaMetadata, ShapingPointer, TicketRole,
-};
+use crate::graph::model::contract::{ContractValidationMode, PublicCreateClassification};
 use crate::graph::model::edge::{canonical_endpoints, deterministic_edge_id, Edge, EdgeType};
 use crate::graph::model::manifest::{Manifest, EDGE_SCHEMA, NODE_SCHEMA};
 use crate::graph::model::node::{
@@ -44,7 +41,6 @@ use crate::storage::{self, WriteGuard};
 use crate::{PulseError, PulseResult};
 
 mod bootstrap;
-mod contracts;
 mod edges;
 mod nodes;
 mod repository;
@@ -129,77 +125,6 @@ pub struct DocumentationImpactUpdate {
     pub paths: Vec<String>,
     pub domains: Vec<String>,
     pub labels: Vec<String>,
-}
-
-/// Typed whole-replacement request for `work contract set`.
-///
-/// The contract setter is a safe typed replacement rather than an arbitrary
-/// JSON Patch: exactly one role-specific contract may be supplied and it must
-/// match the Ticket's declared role. Contract mutation bumps both the normal
-/// CAS `revision` and the semantic `contract_revision`.
-#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-pub struct ContractSetRequest {
-    pub role: TicketRole,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub implementation: Option<ImplementationContract>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub decision_work: Option<DecisionWorkContract>,
-}
-
-/// Minimal readiness-only QA impact update for `work qa-impact set`.
-///
-/// QA impact is a semantic contract input: mutation bumps both `revision` and
-/// `contract_revision`. The `none` and `covered_by_story_close` postures are
-/// authority-gated; baseline/case resolution remains a future Phase 3 family.
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-pub struct QaImpactUpdate {
-    pub posture: QaImpactPosture,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub rationale: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub behavioral_owner: Option<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub affected_case_ids: Vec<String>,
-}
-
-/// Read-only view returned by `work shaping show`.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct ShapingView {
-    pub schema_version: u32,
-    pub code: String,
-    pub owner_id: String,
-    pub revision: u64,
-    pub contract_revision: u64,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub shaping: Option<ShapingPointer>,
-}
-
-/// Read-only view returned by `work contract show`.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct ContractView {
-    pub schema_version: u32,
-    pub code: String,
-    pub ticket_id: String,
-    pub revision: u64,
-    pub contract_revision: u64,
-    pub role: Option<TicketRole>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub implementation: Option<ImplementationContract>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub decision_work: Option<DecisionWorkContract>,
-}
-
-/// Read-only view returned by `work qa-impact show`.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct QaImpactView {
-    pub schema_version: u32,
-    pub code: String,
-    pub ticket_id: String,
-    pub revision: u64,
-    pub contract_revision: u64,
-    pub qa: Option<QaMetadata>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
