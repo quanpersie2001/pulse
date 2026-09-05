@@ -1,15 +1,13 @@
 //! Isolation-rule integration tests for `pulse run`.
 //!
-//! Covers the PRODUCT §5.3 isolation rule: checkout by default, a Pulse-owned
-//! worktree when another Ticket holds a live lease (auto) or when the
-//! operator forces `--isolation worktree`, refusal when `auto_isolation` is
-//! disabled without the force flag, and worktree reclaim that never touches
-//! worktrees Pulse did not create.
-
-use std::fs;
-use std::path::Path;
+//! Covers the PRODUCT §5.3 isolation rule (Decision 13.2): the checkout is
+//! the default, a run is refused with `run_isolation_required` while another
+//! Ticket holds a live lease, `--isolation worktree` is the only way to get a
+//! Pulse-owned worktree, and worktree reclaim never touches worktrees Pulse
+//! did not create.
 
 use serde_json::Value;
+use std::fs;
 
 use crate::cli_run::{install_worker_script, node_status, run_outcome, setup_ready_ticket, ACTOR};
 use crate::common_fixture_repo::TestRepo;
@@ -19,7 +17,6 @@ use pulse::reservation::{
     ActivateReservationArgs, AssignmentAcknowledgement, ReserveWorkArgs, RuntimeBinding,
 };
 use pulse::JsonGraphStore;
-
 fn install_proving_worker(repo: &TestRepo) {
     // Worker records its working directory, edits the worktree source, then
     // hands off through the CLI against the canonical repo root (passed as
@@ -89,49 +86,78 @@ fn worktree_path(repo: &TestRepo, ticket_id: &str) -> std::path::PathBuf {
     repo.path().join(".pulse/runtime/worktrees").join(ticket_id)
 }
 
+fn run_refused(repo: &TestRepo, ticket_id: &str) -> Value {
+    let output = repo.pulse(&["run", "worker", "--ticket", ticket_id, "--json"]);
+    assert!(!output.status.success());
+    serde_json::from_slice(&output.stderr).unwrap()
+}
+
 #[test]
-fn auto_isolation_creates_worktree_when_another_ticket_is_active() {
+fn run_refused_with_run_isolation_required_when_another_ticket_is_active() {
     let repo = TestRepo::from_fixture("minimal-service");
     let store = JsonGraphStore::new(repo.path());
     let holder = setup_ready_ticket(&repo);
     let worker_ticket = setup_ready_ticket(&repo);
     install_proving_worker(&repo);
 
-    // Another Ticket holds the live lease: the new run must isolate.
+    // Another Ticket holds the live lease: the new run must be refused,
+    // naming the holder and the escape hatch, without creating a worktree.
     let _lease = hold_lease_for(&store, &holder);
-    let outcome = run_outcome(&repo, &worker_ticket);
-    assert_eq!(outcome["status"], "handed_off");
-
-    let tree = worktree_path(&repo, &worker_ticket);
-    assert!(tree.exists(), "worktree must exist for the isolated run");
-    // The worker command executed inside the worktree: the script recorded
-    // its cwd into the artifact dir (which lives under the main repo run
-    // workspace even when the command runs isolated).
-    let cwd = fs::read_to_string(
-        repo.path()
-            .join(".pulse/runtime/run")
-            .join(&worker_ticket)
-            .join("artifacts/cwd.txt"),
-    )
-    .unwrap();
-    let cwd = Path::new(cwd.trim());
-    assert!(cwd.ends_with(tree.strip_prefix(repo.path()).unwrap()));
-    // The runtime binding records the isolated workspace.
-    let record: Value = serde_json::from_slice(
-        &fs::read(
-            repo.path()
-                .join(".pulse/runtime/run")
-                .join(&worker_ticket)
-                .join("worker-outcome.json"),
-        )
-        .unwrap(),
-    )
-    .unwrap();
-    assert_eq!(record["status"], "handed_off");
+    let err = run_refused(&repo, &worker_ticket);
+    assert_eq!(err["code"], "run_isolation_required");
+    let message = err["message"].as_str().unwrap();
+    assert!(message.contains(&holder), "message: {message}");
+    assert!(
+        message.contains("--isolation worktree"),
+        "message: {message}"
+    );
+    assert!(!worktree_path(&repo, &worker_ticket).exists());
+    assert_eq!(node_status(&repo, &worker_ticket), "ready");
 }
 
 #[test]
-fn forced_worktree_isolation_runs_without_other_active_leases() {
+fn worktree_flag_forces_isolation_when_another_ticket_is_active() {
+    let repo = TestRepo::from_fixture("minimal-service");
+    let store = JsonGraphStore::new(repo.path());
+    let holder = setup_ready_ticket(&repo);
+    let worker_ticket = setup_ready_ticket(&repo);
+    install_proving_worker(&repo);
+
+    let _lease = hold_lease_for(&store, &holder);
+    let out = repo.pulse_ok(&[
+        "run",
+        "worker",
+        "--ticket",
+        &worker_ticket,
+        "--isolation",
+        "worktree",
+        "--json",
+    ]);
+    assert_eq!(out["status"], "handed_off");
+    assert!(worktree_path(&repo, &worker_ticket).exists());
+}
+
+#[test]
+fn terminal_holder_ticket_lets_next_run_use_the_checkout() {
+    let repo = TestRepo::from_fixture("minimal-service");
+    let store = JsonGraphStore::new(repo.path());
+    let holder = setup_ready_ticket(&repo);
+    let worker_ticket = setup_ready_ticket(&repo);
+    install_proving_worker(&repo);
+
+    // Hold, then release: with no foreign live lease left, the run proceeds
+    // in the checkout and must not create a worktree.
+    let lease = hold_lease_for(&store, &holder);
+    store
+        .release_reservation(&lease, ACTOR, "test teardown")
+        .unwrap();
+    let outcome = run_outcome(&repo, &worker_ticket);
+    assert_eq!(outcome["status"], "handed_off");
+    assert!(!worktree_path(&repo, &worker_ticket).exists());
+}
+
+#[test]
+fn explicit_worktree_flag_still_runs_without_other_active_leases() {
     let repo = TestRepo::from_fixture("minimal-service");
     let ticket_id = setup_ready_ticket(&repo);
     install_proving_worker(&repo);
@@ -168,65 +194,6 @@ fn forced_worktree_isolation_runs_without_other_active_leases() {
         "outcome: {out}; record: {record}; err: {err_txt}"
     );
     assert!(worktree_path(&repo, &ticket_id).exists());
-}
-
-#[test]
-fn auto_isolation_false_refuses_when_another_ticket_is_active() {
-    let repo = TestRepo::from_fixture("minimal-service");
-    let store = JsonGraphStore::new(repo.path());
-    let holder = setup_ready_ticket(&repo);
-    let worker_ticket = setup_ready_ticket(&repo);
-    install_proving_worker(&repo);
-
-    // Disable auto isolation.
-    let mut config: Value =
-        serde_json::from_slice(&fs::read(repo.path().join(".pulse/config/runners.json")).unwrap())
-            .unwrap();
-    config["auto_isolation"] = Value::Bool(false);
-    fs::write(
-        repo.path().join(".pulse/config/runners.json"),
-        serde_json::to_string_pretty(&config).unwrap(),
-    )
-    .unwrap();
-
-    let _lease = hold_lease_for(&store, &holder);
-    let output = repo.pulse(&["run", "worker", "--ticket", &worker_ticket, "--json"]);
-    assert!(!output.status.success());
-    let err: Value = serde_json::from_slice(&output.stderr).unwrap();
-    assert_eq!(err["code"], "run_isolation_refused");
-    assert!(!worktree_path(&repo, &worker_ticket).exists());
-}
-
-#[test]
-fn explicit_worktree_flag_overrides_auto_isolation_false() {
-    let repo = TestRepo::from_fixture("minimal-service");
-    let store = JsonGraphStore::new(repo.path());
-    let holder = setup_ready_ticket(&repo);
-    let worker_ticket = setup_ready_ticket(&repo);
-    install_proving_worker(&repo);
-
-    let mut config: Value =
-        serde_json::from_slice(&fs::read(repo.path().join(".pulse/config/runners.json")).unwrap())
-            .unwrap();
-    config["auto_isolation"] = Value::Bool(false);
-    fs::write(
-        repo.path().join(".pulse/config/runners.json"),
-        serde_json::to_string_pretty(&config).unwrap(),
-    )
-    .unwrap();
-
-    let _lease = hold_lease_for(&store, &holder);
-    let out = repo.pulse_ok(&[
-        "run",
-        "worker",
-        "--ticket",
-        &worker_ticket,
-        "--isolation",
-        "worktree",
-        "--json",
-    ]);
-    assert_eq!(out["status"], "handed_off");
-    assert!(worktree_path(&repo, &worker_ticket).exists());
 }
 
 #[test]

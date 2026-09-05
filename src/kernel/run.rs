@@ -95,20 +95,11 @@ fn role_grants(class: &str) -> &'static [&'static str] {
     }
 }
 
-/// Parsed `.pulse/config/runners.json`: role commands plus the
-/// `auto_isolation` policy (default true).
+/// Parsed `.pulse/config/runners.json`: role commands by role name.
 #[derive(Debug, Clone, Deserialize)]
 pub struct RunnersConfig {
-    /// When another Ticket holds a live lease, `pulse run` isolates the new
-    /// Ticket in a worktree. `false` refuses the run instead.
-    #[serde(default = "default_true")]
-    pub auto_isolation: bool,
     #[serde(flatten)]
     pub roles: BTreeMap<String, CommandSpec>,
-}
-
-fn default_true() -> bool {
-    true
 }
 
 /// Load and validate `.pulse/config/runners.json`.
@@ -216,9 +207,10 @@ pub struct RunOutcome {
 impl JsonGraphStore {
     /// Execute the configured command for `role` against `ticket_id`.
     ///
-    /// `isolation` is `auto` (checkout by default, worktree when another
-    /// Ticket holds a live lease and `auto_isolation` allows it) or `worktree`
-    /// (forced). Only worker runs take leases and can be isolated.
+    /// Isolation is deliberate: the run is refused while another Ticket holds
+    /// a live lease unless the operator passes `--isolation worktree`, which
+    /// runs this Ticket in a Pulse-created worktree. Only worker runs take
+    /// leases and can be isolated.
     pub fn run_role(
         &self,
         role: &str,
@@ -243,7 +235,7 @@ impl JsonGraphStore {
         // Isolation decision happens before the lease so the runtime binding
         // records the exact workspace the worker will run in.
         let workspace: Option<String> = match class {
-            "worker" => self.decide_workspace(ticket_id, forced_worktree, config.auto_isolation)?,
+            "worker" => self.decide_workspace(ticket_id, forced_worktree)?,
             _ => None,
         };
         let (lease_id, reservation) = match class {
@@ -784,28 +776,26 @@ impl JsonGraphStore {
         }
     }
 
-    /// Decide where this worker run executes: the checkout by default, or a
-    /// Pulse-created worktree when another Ticket holds a live lease (auto)
-    /// or the operator forces worktree isolation.
+    /// Decide where this worker run executes. The checkout is the default;
+    /// any foreign live lease refuses the run (`run_isolation_required`)
+    /// unless the operator explicitly forced `--isolation worktree`. There is
+    /// no auto-worktree: a zombie lease must surface as a refusal naming the
+    /// holder, not silently move the next worker's work into a worktree.
     fn decide_workspace(
         &self,
         ticket_id: &str,
         forced_worktree: bool,
-        auto_isolation: bool,
     ) -> PulseResult<Option<String>> {
         if !forced_worktree {
-            let foreign_live = has_live_foreign_lease(&self.repo_root, ticket_id)?;
-            if !foreign_live {
-                return Ok(None);
-            }
-            if !auto_isolation {
+            if let Some((holder, state)) = live_foreign_lease(&self.repo_root, ticket_id)? {
                 return Err(PulseError::validation(
-                    "run_isolation_refused",
+                    "run_isolation_required",
                     format!(
-                        "another Ticket holds a live lease and auto_isolation is disabled; run {ticket_id} later or pass --isolation worktree"
+                        "Ticket {holder} holds a {state} lease in this repository; refuse to run {ticket_id} in the same checkout. Resolve or release {holder} first, or force an isolated worktree with --isolation worktree"
                     ),
                 ));
             }
+            return Ok(None);
         }
         let relative = ensure_ticket_worktree(&self.repo_root, ticket_id)?;
         Ok(Some(relative))
@@ -857,13 +847,15 @@ pub struct RunRecord {
 /// Root of Pulse-owned per-Ticket worktrees (gitignored).
 pub const WORKTREES_DIR: &str = ".pulse/runtime/worktrees";
 
-/// Whether any Ticket other than `ticket_id` holds a live lease.
-fn has_live_foreign_lease(repo_root: &Path, ticket_id: &str) -> PulseResult<bool> {
+/// The first live lease held by a Ticket other than `ticket_id`, as
+/// `(ticket_id, lease state)`. Deterministic: the lowest ticket id wins.
+fn live_foreign_lease(repo_root: &Path, ticket_id: &str) -> PulseResult<Option<(String, String)>> {
     let directory = repo_root.join(".pulse/runtime/assignment/reservations");
     if !directory.exists() {
-        return Ok(false);
+        return Ok(None);
     }
     let entries = fs::read_dir(&directory).map_err(|error| PulseError::io(&directory, error))?;
+    let mut holders: Vec<(String, String)> = Vec::new();
     for entry in entries {
         let path = entry
             .map_err(|error| PulseError::io(&directory, error))?
@@ -874,18 +866,19 @@ fn has_live_foreign_lease(repo_root: &Path, ticket_id: &str) -> PulseResult<bool
         let bytes = fs::read(&path).map_err(|error| PulseError::io(&path, error))?;
         let reservation: CoreReservation =
             serde_json::from_slice(&bytes).map_err(|error| PulseError::json(&path, error))?;
-        if reservation.subject.ticket_id != ticket_id
-            && matches!(
-                reservation.state,
-                ReservationState::Reserved
-                    | ReservationState::Acknowledged
-                    | ReservationState::Active
-            )
-        {
-            return Ok(true);
+        if reservation.subject.ticket_id == ticket_id {
+            continue;
         }
+        let state = match reservation.state {
+            ReservationState::Reserved
+            | ReservationState::Acknowledged
+            | ReservationState::Active => format!("{:?}", reservation.state).to_lowercase(),
+            _ => continue,
+        };
+        holders.push((reservation.subject.ticket_id, state));
     }
-    Ok(false)
+    holders.sort();
+    Ok(holders.into_iter().next())
 }
 
 /// Relative workspace id for a Ticket's Pulse-owned worktree.
