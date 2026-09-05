@@ -135,7 +135,7 @@ module pretends otherwise.
 
 | Capability | PRODUCT.md | Today |
 |---|---|---|
-| Runner (`pulse run <role>`) | §5.3 | Implemented spine: `kernel::run` composes lease, run workspace, `runner` mechanics and events; worker handoff/verify CLI exists. Isolation, recovery saga and artifact ingest are still ahead. |
+| Runner (`pulse run <role>`) | §5.3 | Implemented spine: `kernel::run` composes lease, run workspace, `runner` mechanics and events; worker handoff/verify/release CLI exists; isolation worktrees and drift-acknowledged resume are in. Artifact ingest and the recovery saga beyond release are still ahead. |
 | Ratchet commands | §5.6 | `knowledge` store/validate only; no capture/validate/promote/applicable, no packet injection. |
 | Events tail / notes | §5.7 | append-only log exists; `events tail` and `note` CLI do not. |
 | MCP server | §5.8 | stub removed with the daemon; CLI path comes first. |

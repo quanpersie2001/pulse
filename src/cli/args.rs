@@ -76,6 +76,10 @@ pub(crate) enum Command {
         /// Ticket holds a live lease; worktree forces it.
         #[arg(long, value_enum, default_value_t = IsolationArg::Auto)]
         isolation: IsolationArg,
+        /// Release the interrupted run's stale lease and start fresh when the
+        /// packet drifted; without this flag drifted resumes are refused.
+        #[arg(long, default_value_t = false)]
+        acknowledge_drift: bool,
         #[arg(long)]
         json: bool,
     },

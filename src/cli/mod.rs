@@ -53,18 +53,22 @@ pub fn run(cli: Cli) -> Result<(), PulseError> {
             ttl_seconds,
             idempotency_key,
             isolation,
+            acknowledge_drift,
             json,
         } => run::handle(
             &store,
-            &role,
-            &ticket,
-            ttl_seconds,
-            &if idempotency_key.is_empty() {
-                explicit_key.unwrap_or_default().to_string()
-            } else {
-                idempotency_key
+            &run::RunOptions {
+                role: &role,
+                ticket: &ticket,
+                ttl_seconds,
+                idempotency_key: &if idempotency_key.is_empty() {
+                    explicit_key.unwrap_or_default().to_string()
+                } else {
+                    idempotency_key
+                },
+                forced_worktree: matches!(isolation, IsolationArg::Worktree),
+                acknowledge_drift,
             },
-            matches!(isolation, IsolationArg::Worktree),
             json,
         ),
     }

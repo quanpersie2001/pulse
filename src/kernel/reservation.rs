@@ -373,12 +373,13 @@ impl JsonGraphStore {
         if before.state == ReservationState::Released {
             return Ok(before);
         }
-        if before.state != ReservationState::Reserved
-            && before.state != ReservationState::Acknowledged
-        {
+        if !matches!(
+            before.state,
+            ReservationState::Reserved | ReservationState::Acknowledged | ReservationState::Active
+        ) {
             return Err(PulseError::validation(
                 "reservation_release_unsafe",
-                "only a not-yet-active reservation can be compensated",
+                "only a live (reserved, acknowledged, or active) reservation can be released",
             ));
         }
         let mut after = before.clone();
@@ -403,6 +404,44 @@ impl JsonGraphStore {
         let _ =
             crate::kernel::run::cleanup_ticket_worktree(&self.repo_root, &before.subject.ticket_id);
         Ok(after)
+    }
+
+    /// Operator release: free whatever live lease a Ticket holds and return an
+    /// `active` Ticket to `ready` so it can be dispatched again. This is the
+    /// recovery path for a stuck, crashed or expired run — never an automatic
+    /// retry.
+    ///
+    /// # Errors
+    ///
+    /// Returns `release_lease_missing` when no live lease exists for the
+    /// Ticket and lifecycle errors when the ticket transition is rejected.
+    pub fn release_live_lease_for_ticket(
+        &self,
+        ticket_id: &str,
+        actor: &str,
+        reason: &str,
+    ) -> Result<CoreReservation> {
+        let Some(lease_id) = find_live_reservation_for_ticket(&self.repo_root, ticket_id)? else {
+            return Err(PulseError::validation(
+                "release_lease_missing",
+                format!("Ticket {ticket_id} holds no live lease"),
+            ));
+        };
+        let released = self.release_reservation(lease_id.as_str(), actor, reason)?;
+        let node = self.show_node(ticket_id)?;
+        if node.status == NodeStatus::Active {
+            self.transition_node_with_context(
+                ticket_id,
+                NodeStatus::Ready,
+                node.revision,
+                None,
+                crate::graph::store::OperationContext {
+                    actor: actor.to_string(),
+                    now: Utc::now(),
+                },
+            )?;
+        }
+        Ok(released)
     }
 
     /// Reconcile pre-run leases whose TTL has elapsed.  This is the Core
@@ -636,7 +675,10 @@ fn load_packet(repo_root: &Path, lease_id: &str) -> Result<crate::work_packet::W
     serde_json::from_slice(&bytes).map_err(|error| PulseError::json(&path, error))
 }
 
-fn find_live_reservation_for_ticket(repo_root: &Path, ticket_id: &str) -> Result<Option<String>> {
+pub(crate) fn find_live_reservation_for_ticket(
+    repo_root: &Path,
+    ticket_id: &str,
+) -> Result<Option<String>> {
     let dir = repo_root.join(RESERVATIONS_DIR);
     if !dir.exists() {
         return Ok(None);

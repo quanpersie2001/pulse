@@ -178,6 +178,17 @@ pub(crate) enum WorkCommand {
         #[arg(long)]
         json: bool,
     },
+    /// Free the live lease a Ticket holds and return an active Ticket to
+    /// ready (recovery for a stuck, crashed or expired run).
+    Release {
+        ticket_id: String,
+        #[arg(long)]
+        actor: String,
+        #[arg(long, default_value = "released by operator")]
+        reason: String,
+        #[arg(long)]
+        json: bool,
+    },
     /// Submit the worker handoff proof for an active assignment.
     Handoff {
         /// Lease ID binding this handoff to its assignment (from the run input).
@@ -603,6 +614,15 @@ pub(crate) fn handle(
                 explicit_key.unwrap_or_default().to_string(),
             )?;
             render(json, &out, format!("closed Ticket {}", out.ticket_id))
+        }
+        WorkCommand::Release {
+            ticket_id,
+            actor,
+            reason,
+            json,
+        } => {
+            let out = store.release_live_lease_for_ticket(&ticket_id, &actor, &reason)?;
+            render(json, &out, format!("released lease {}", out.lease_id))
         }
         WorkCommand::Handoff {
             lease,

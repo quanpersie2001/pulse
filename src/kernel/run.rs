@@ -226,6 +226,7 @@ impl JsonGraphStore {
         ttl_seconds: u64,
         idempotency_key: &str,
         forced_worktree: bool,
+        acknowledge_drift: bool,
     ) -> PulseResult<RunOutcome> {
         let class = role_class(role)?;
         let config = load_runner_config(&self.repo_root)?;
@@ -253,6 +254,7 @@ impl JsonGraphStore {
                     ttl_seconds,
                     idempotency_key,
                     workspace.as_deref(),
+                    acknowledge_drift,
                 )?;
                 (Some(outcome.0), Some(outcome.1))
             }
@@ -416,9 +418,82 @@ impl JsonGraphStore {
         ttl_seconds: u64,
         idempotency_key: &str,
         workspace: Option<&str>,
+        acknowledge_drift: bool,
     ) -> PulseResult<(String, CoreReservation)> {
         let actor = runner_actor(role);
         let node = self.show_node(ticket_id)?;
+        let key = if idempotency_key.trim().is_empty() {
+            format!("run:{ticket_id}:{role}")
+        } else {
+            format!("run:{ticket_id}:{role}:{idempotency_key}")
+        };
+        // Resume-with-verification: an interrupted run leaves its lease (and
+        // its committed packet) behind, with the Ticket still `active`. The
+        // worker's own edits are expected drift, so resume compares the
+        // semantic bindings only — contract revision and source commit. Drift
+        // without an explicit acknowledgment is refused instead of silently
+        // retried. Fresh dispatch below still requires `ready`.
+        if let Some(lease_id) = crate::kernel::reservation::find_live_reservation_for_ticket(
+            &self.repo_root,
+            ticket_id,
+        )? {
+            let existing =
+                crate::kernel::reservation::load_reservation(&self.repo_root, &lease_id)?;
+            if existing.subject.ticket_id == ticket_id {
+                let source_now = crate::source::head_commit(&self.repo_root)?;
+                let contract_drift = existing.subject.contract_revision != node.contract_revision
+                    || existing.source.commit != source_now;
+                if contract_drift && !acknowledge_drift {
+                    return Err(PulseError::validation(
+                        "run_resume_drift",
+                        format!(
+                            "interrupted lease {lease_id} binds contract revision {} at commit {} but the Ticket is now revision {} at commit {}; re-run with --acknowledge-drift to release it and start fresh",
+                            existing.subject.contract_revision,
+                            existing.source.commit,
+                            node.contract_revision,
+                            source_now
+                        ),
+                    ));
+                }
+                if contract_drift {
+                    // The operator's explicit flag releases the stale lease
+                    // and returns an active Ticket to ready so the fresh
+                    // reservation below can proceed.
+                    self.release_live_lease_for_ticket(
+                        ticket_id,
+                        &actor,
+                        "contract drift acknowledged",
+                    )?;
+                    // Fall through to a fresh reservation below.
+                } else {
+                    // Same contract: resume under the existing lease.
+                    if existing.state == ReservationState::Reserved {
+                        let session_id = format!("run:{}", existing.reservation_id);
+                        let acknowledged = self.activate_reservation(ActivateReservationArgs {
+                            lease_id: existing.lease_id.clone(),
+                            actor: actor.clone(),
+                            runtime_binding: RuntimeBinding {
+                                project_id: ticket_id.to_string(),
+                                workspace_id: workspace.unwrap_or("checkout").to_string(),
+                                session_id: session_id.clone(),
+                                provider_id: format!("runner:{role}"),
+                            },
+                            acknowledgement: AssignmentAcknowledgement {
+                                acknowledgement_id: format!("ack:{session_id}"),
+                                delivery_id: format!("delivery:{session_id}"),
+                                session_id,
+                                packet_fingerprint: existing.packet_fingerprint.clone(),
+                                acknowledged_at: Utc::now().to_rfc3339(),
+                            },
+                        })?;
+                        return Ok((existing.lease_id, acknowledged));
+                    }
+                    // Already acknowledged/active: reuse as-is.
+                    let lease = existing.lease_id.clone();
+                    return Ok((lease, existing));
+                }
+            }
+        }
         if node.status != NodeStatus::Ready {
             return Err(PulseError::validation(
                 "run_ticket_not_ready",
@@ -428,11 +503,6 @@ impl JsonGraphStore {
                 ),
             ));
         }
-        let key = if idempotency_key.trim().is_empty() {
-            format!("run:{ticket_id}:{role}")
-        } else {
-            format!("run:{ticket_id}:{role}:{idempotency_key}")
-        };
         let reserved = self.reserve_work(ReserveWorkArgs {
             ticket_id: ticket_id.to_string(),
             actor: actor.clone(),

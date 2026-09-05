@@ -222,6 +222,7 @@ fn supported_targets(from: NodeStatus) -> Vec<NodeStatus> {
             NodeStatus::Blocked,
             NodeStatus::Cancelled,
         ],
+        NodeStatus::Active => vec![NodeStatus::Ready],
         NodeStatus::Rework => vec![NodeStatus::Active],
         NodeStatus::Blocked => vec![NodeStatus::Draft, NodeStatus::Shaped, NodeStatus::Cancelled],
         _ => vec![],
@@ -267,6 +268,7 @@ fn required_gate_families(from: NodeStatus, to: NodeStatus) -> Vec<&'static str>
         (NodeStatus::Ready, NodeStatus::Active) | (NodeStatus::Blocked, NodeStatus::Active) => {
             vec!["lease"]
         }
+
         (NodeStatus::Active, NodeStatus::Blocked) | (NodeStatus::Active, NodeStatus::Cancelled) => {
             vec!["lease", "run_authority"]
         }

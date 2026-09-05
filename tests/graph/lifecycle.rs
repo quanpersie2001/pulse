@@ -51,6 +51,9 @@ fn table_covers_every_from_to_expectation() {
         (Blocked, Shaped),
         (Blocked, Cancelled),
         (Rework, Active),
+        // Release: an active Ticket returns to ready through the reservation
+        // release API (no gate family).
+        (Active, Ready),
     ];
     let gated = [
         (Draft, Shaped),
