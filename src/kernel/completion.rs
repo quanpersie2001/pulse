@@ -918,11 +918,17 @@ fn validate_documentation_close(
     let mut covered = std::collections::BTreeSet::new();
     let mut saw_documentation_receipt = false;
     let mut saw_eligible_receipt = false;
+    let mut seen_receipts = std::collections::BTreeSet::new();
     for receipt_id in verification
         .acceptance_proofs
         .iter()
         .flat_map(|proof| proof.evidence_receipt_ids.iter())
     {
+        // One receipt referenced from several acceptance proofs carries the
+        // same evidence once; only distinct receipts are re-scanned.
+        if !seen_receipts.insert(receipt_id.clone()) {
+            continue;
+        }
         let (receipt, _) = crate::evidence::receipt::load_receipt(repo_root, receipt_id)?;
         let crate::evidence::model::ReceiptPayload::DocumentationValidation(payload) =
             &receipt.payload
@@ -1048,12 +1054,18 @@ fn validate_qa_close(
     let mut covered = std::collections::BTreeSet::new();
     let mut saw_checkpoint = false;
     let author = crate::policy::parse_actor(&handoff.recorded_by);
+    let mut seen_receipts = std::collections::BTreeSet::new();
 
     for receipt_id in verification
         .acceptance_proofs
         .iter()
         .flat_map(|proof| proof.evidence_receipt_ids.iter())
     {
+        // One receipt referenced from several acceptance proofs carries the
+        // same evidence once; only distinct receipts are re-scanned.
+        if !seen_receipts.insert(receipt_id.clone()) {
+            continue;
+        }
         let (receipt, _) = crate::evidence::receipt::load_receipt(repo_root, receipt_id)?;
         let crate::evidence::model::ReceiptPayload::QaCheckpoint(payload) = &receipt.payload else {
             continue;
