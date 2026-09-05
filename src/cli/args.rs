@@ -58,6 +58,23 @@ pub(crate) enum Command {
         #[command(subcommand)]
         command: super::qa::QaCommand,
     },
+    /// Execute a configured runner role against a Ticket.
+    Run {
+        /// Runner role defined in .pulse/config/runners.json.
+        role: String,
+        /// Ticket to run the role against.
+        #[arg(long)]
+        ticket: String,
+        /// Worker lease TTL in seconds.
+        #[arg(long, default_value_t = crate::kernel::DEFAULT_RUN_TTL_SECONDS)]
+        ttl_seconds: u64,
+        /// Optional run idempotency key; defaults to one stable lease per
+        /// ticket and role.
+        #[arg(long, default_value = "")]
+        idempotency_key: String,
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[allow(clippy::enum_variant_names)]

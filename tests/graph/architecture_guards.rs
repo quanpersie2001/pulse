@@ -77,6 +77,9 @@ fn daemon_runtime_tree_is_absent() {
             "obsolete public runtime contract remains: {obsolete}"
         );
     }
+    // `src/cli/run.rs` and `src/runner/` are the current configured-runner
+    // surface (PRODUCT §5.3/§5.8); the paths below are the daemon-era
+    // runtime-authority tree that must stay absent.
     for obsolete in [
         "src/process.rs",
         "src/run.rs",
@@ -84,11 +87,9 @@ fn daemon_runtime_tree_is_absent() {
         "src/assignment.rs",
         "src/cli/process.rs",
         "src/cli/daemon.rs",
-        "src/cli/run.rs",
         "src/kernel/assignment.rs",
         "src/kernel/assignment_store.rs",
         "src/kernel/run_store.rs",
-        "src/kernel/runner.rs",
         "src/schema/run",
         "src/schema/assignment-workspace.schema.json",
         "src/schema/prepared-assignment.schema.json",

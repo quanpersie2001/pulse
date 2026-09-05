@@ -1,0 +1,420 @@
+//! CLI integration tests for `pulse run <role> --ticket <id>` and the
+//! `work handoff` / `work verify` proof surface.
+//!
+//! Every run executes a repo-local fake worker script instead of a real
+//! agent; the script uses the public CLI to record proofs exactly like a
+//! real agent would. Assertions cover lifecycle gating, lease handling,
+//! outcome classification (handed_off / blocked / inconclusive families),
+//! runner-actor provisioning and the runners.json bootstrap.
+
+use std::fs;
+use std::path::Path;
+
+use serde_json::Value;
+
+use crate::common_bin::bin;
+use crate::common_fixture_repo::TestRepo;
+use crate::common_git::commit_all;
+
+const ACTOR: &str = "human:tester";
+
+fn ticket_markdown(ticket_id: &str) -> String {
+    format!(
+        "# {ticket_id} Classify token failures\n\n\
+         ## Objective\nSplit expired and invalid token outcomes.\n\n\
+         ## Current behavior\nBoth outcomes map to InvalidToken.\n\n\
+         ## Target behavior\nExpired maps to TokenExpired; invalid stays InvalidToken.\n\n\
+         ## Code anchors\n- src/token.mjs\n\n\
+         ## Required changes\n- Add the expired branch.\n\n\
+         ## Invariants\n- Public envelope shape is stable.\n\n\
+         ## Implementation freedom\nguided: agent chooses internal structure.\n\n\
+         ## Acceptance\n- AC-1: Expired tokens return TokenExpired.\n\n\
+         ## Verify\n- node scripts/verify.mjs\n\n\
+         ## Documentation impact\n- Posture: none\n- Rationale: No durable docs impact.\n- Documents:\n\n\
+         ## QA impact\n- Owner:\n- Posture: none\n- Cases:\n- Reason: No product QA impact.\n"
+    )
+}
+
+/// Bring a fixture repo to a `ready` implementation Ticket through the
+/// markdown contract, returning the Ticket ID.
+fn setup_ready_ticket(repo: &TestRepo) -> String {
+    repo.pulse_ok(&["init", "--actor", ACTOR, "--json"]);
+    let created = repo.pulse_ok(&[
+        "work",
+        "create",
+        "--kind",
+        "ticket",
+        "--title",
+        "Classify token failures",
+        "--risk",
+        "low",
+        "--materialization",
+        "R1",
+        "--json",
+    ]);
+    let ticket_id = created["value"]["id"].as_str().unwrap().to_string();
+    let revision = created["value"]["revision"].as_u64().unwrap();
+    fs::write(
+        repo.path().join("works").join(&ticket_id).join("ticket.md"),
+        ticket_markdown(&ticket_id),
+    )
+    .unwrap();
+    repo.pulse_ok(&[
+        "work",
+        "sync",
+        &ticket_id,
+        "--expected-revision",
+        &revision.to_string(),
+        "--actor",
+        ACTOR,
+        "--json",
+    ]);
+    let shown = repo.pulse_ok(&["work", "show", &ticket_id, "--json"]);
+    let revision = shown["node"]["revision"].as_u64().unwrap();
+    repo.pulse_ok(&[
+        "work",
+        "transition",
+        &ticket_id,
+        "--to",
+        "shaped",
+        "--expected-revision",
+        &revision.to_string(),
+        "--actor",
+        ACTOR,
+        "--json",
+    ]);
+    let shown = repo.pulse_ok(&["work", "show", &ticket_id, "--json"]);
+    let revision = shown["node"]["revision"].as_u64().unwrap();
+    repo.pulse_ok(&[
+        "work",
+        "transition",
+        &ticket_id,
+        "--to",
+        "ready",
+        "--expected-revision",
+        &revision.to_string(),
+        "--actor",
+        ACTOR,
+        "--json",
+    ]);
+    commit_all(repo.path());
+    ticket_id
+}
+
+fn install_worker_script(repo: &TestRepo, body: &str) {
+    let script = format!(
+        "#!/bin/sh\nset -e\nREPO_ROOT=\"$(pwd)\"\nPULSE=\"{}\"\n{body}\n",
+        bin()
+    );
+    let path = repo.path().join("scripts/fake-worker.sh");
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    fs::write(&path, script).unwrap();
+    commit_all(repo.path());
+}
+
+fn set_worker_command(repo: &TestRepo, command: &str) {
+    let config = serde_json::json!({
+        "worker": {"command": command, "timeout_seconds": 30},
+        "reviewer": {"command": "echo '{\"ok\":true}'", "timeout_seconds": 60},
+        "qa": {"command": "echo '{\"cases\":[]}'", "timeout_seconds": 60},
+    });
+    let pretty = serde_json::to_string_pretty(&config).unwrap();
+    fs::write(repo.path().join(".pulse/config/runners.json"), pretty).unwrap();
+    commit_all(repo.path());
+}
+
+fn error_code(output: &std::process::Output) -> String {
+    assert!(
+        !output.status.success(),
+        "expected failure: stdout={} stderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let err: Value = serde_json::from_slice(&output.stderr).unwrap();
+    err["code"].as_str().unwrap().to_string()
+}
+
+fn run_outcome(repo: &TestRepo, ticket_id: &str) -> Value {
+    repo.pulse_ok(&["run", "worker", "--ticket", ticket_id, "--json"])
+}
+
+fn node_status(repo: &TestRepo, ticket_id: &str) -> String {
+    let shown = repo.pulse_ok(&["work", "show", ticket_id, "--json"]);
+    shown["node"]["status"].as_str().unwrap().to_string()
+}
+
+// ---------------------------------------------------------------------------
+// init bootstrap
+// ---------------------------------------------------------------------------
+
+#[test]
+fn init_bootstraps_runners_json_and_preserves_edits() {
+    let repo = TestRepo::from_fixture("minimal-service");
+    let first = repo.pulse_ok(&["init", "--actor", ACTOR, "--json"]);
+    assert!(first["created"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|entry| entry == ".pulse/config/runners.json"));
+    let config: Value =
+        serde_json::from_slice(&fs::read(repo.path().join(".pulse/config/runners.json")).unwrap())
+            .unwrap();
+    assert!(config["worker"]["command"].is_string());
+    assert!(config["reviewer"]["timeout_seconds"].is_u64());
+    assert!(config["qa"]["max_output_bytes"].is_null());
+
+    // Edits survive re-init.
+    set_worker_command(&repo, "echo worker");
+    repo.pulse_ok(&["init", "--actor", ACTOR, "--json"]);
+    let config: Value =
+        serde_json::from_slice(&fs::read(repo.path().join(".pulse/config/runners.json")).unwrap())
+            .unwrap();
+    assert_eq!(config["worker"]["command"], "echo worker");
+}
+
+// ---------------------------------------------------------------------------
+// worker happy path
+// ---------------------------------------------------------------------------
+
+#[test]
+fn worker_run_hands_off_and_moves_ticket_to_verifying() {
+    let repo = TestRepo::from_fixture("minimal-service");
+    let ticket_id = setup_ready_ticket(&repo);
+    install_worker_script(
+        &repo,
+        r#"
+RUN_DIR="$(dirname "$1")"
+. "$RUN_DIR/worker-env"
+"$PULSE" work handoff --lease "$LEASE_ID" --session "$SESSION_ID" \
+  --source-commit "$SOURCE_COMMIT" --summary "did the work" \
+  --idempotency-key handoff-1 --json
+echo '{"status": "handed_off", "summary": "done"}'
+"#,
+    );
+    set_worker_command(&repo, "sh scripts/fake-worker.sh {input}");
+
+    let outcome = run_outcome(&repo, &ticket_id);
+    assert_eq!(outcome["status"], "handed_off");
+    assert_eq!(outcome["code"], "run_handed_off");
+    let lease_id = outcome["lease_id"].as_str().unwrap();
+    assert!(lease_id.starts_with("lease_"));
+    assert_eq!(node_status(&repo, &ticket_id), "verifying");
+
+    // Handoff proof is bound to the lease.
+    let handoffs = fs::read_dir(repo.path().join(".pulse/evidence/execution/handoffs"))
+        .unwrap()
+        .count();
+    assert_eq!(handoffs, 1);
+
+    // Event recorded with the outcome.
+    let events = walk_events(&repo.path().join(".pulse/events"));
+    assert!(events
+        .iter()
+        .any(|event| event["event_type"] == "run.completed"
+            && event["payload"]["status"] == "handed_off"));
+
+    // Runner actor provisioned with narrow grants.
+    let policy: Value = serde_json::from_slice(
+        &fs::read(repo.path().join(".pulse/policy/authority.json")).unwrap(),
+    )
+    .unwrap();
+    let runner = policy["principals"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|principal| principal["id"] == "runner:worker")
+        .expect("runner:worker principal provisioned");
+    let grants: Vec<&str> = runner["grants"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|grant| grant.as_str().unwrap())
+        .collect();
+    assert!(grants.contains(&"work.assignment.handoff"));
+    assert!(grants.contains(&"work.assignment.prepare"));
+    assert!(!grants.contains(&"work.close"));
+    assert!(!grants.contains(&"work.assignment.verify"));
+}
+
+fn walk_events(dir: &Path) -> Vec<Value> {
+    let mut out = Vec::new();
+    let Ok(entries) = fs::read_dir(dir) else {
+        return out;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            out.extend(walk_events(&path));
+        } else if let Ok(bytes) = fs::read(&path) {
+            if let Ok(value) = serde_json::from_slice::<Value>(&bytes) {
+                out.push(value);
+            }
+        }
+    }
+    out
+}
+
+// ---------------------------------------------------------------------------
+// inconclusive families
+// ---------------------------------------------------------------------------
+
+#[test]
+fn worker_run_with_malformed_output_is_inconclusive_and_keeps_lease() {
+    let repo = TestRepo::from_fixture("minimal-service");
+    let ticket_id = setup_ready_ticket(&repo);
+    install_worker_script(&repo, "echo 'not json'");
+    set_worker_command(&repo, "sh scripts/fake-worker.sh {input}");
+
+    let outcome = run_outcome(&repo, &ticket_id);
+    assert_eq!(outcome["status"], "inconclusive");
+    assert_eq!(outcome["inconclusive_reason"], "malformed_output");
+    assert_eq!(node_status(&repo, &ticket_id), "active");
+}
+
+#[test]
+fn worker_run_with_nonzero_exit_is_inconclusive() {
+    let repo = TestRepo::from_fixture("minimal-service");
+    let ticket_id = setup_ready_ticket(&repo);
+    install_worker_script(&repo, "echo boom >&2\nexit 3");
+    set_worker_command(&repo, "sh scripts/fake-worker.sh {input}");
+
+    let outcome = run_outcome(&repo, &ticket_id);
+    assert_eq!(outcome["status"], "inconclusive");
+    assert_eq!(outcome["inconclusive_reason"], "exit_nonzero");
+    assert_eq!(node_status(&repo, &ticket_id), "active");
+}
+
+#[test]
+fn worker_run_claiming_handoff_without_proof_is_inconclusive() {
+    let repo = TestRepo::from_fixture("minimal-service");
+    let ticket_id = setup_ready_ticket(&repo);
+    install_worker_script(
+        &repo,
+        "echo '{\"status\": \"handed_off\", \"summary\": \"lied\"}'",
+    );
+    set_worker_command(&repo, "sh scripts/fake-worker.sh {input}");
+
+    let outcome = run_outcome(&repo, &ticket_id);
+    assert_eq!(outcome["status"], "inconclusive");
+    assert_eq!(outcome["inconclusive_reason"], "unproven_claim");
+    assert_eq!(node_status(&repo, &ticket_id), "active");
+}
+
+#[test]
+fn worker_run_timeout_is_inconclusive() {
+    let repo = TestRepo::from_fixture("minimal-service");
+    let ticket_id = setup_ready_ticket(&repo);
+    install_worker_script(&repo, "sleep 30");
+    let config = serde_json::json!({
+        "worker": {"command": "sh scripts/fake-worker.sh {input}", "timeout_seconds": 1},
+    });
+    fs::write(
+        repo.path().join(".pulse/config/runners.json"),
+        serde_json::to_string_pretty(&config).unwrap(),
+    )
+    .unwrap();
+
+    let outcome = run_outcome(&repo, &ticket_id);
+    assert_eq!(outcome["status"], "inconclusive");
+    assert_eq!(outcome["inconclusive_reason"], "timeout");
+    assert_eq!(node_status(&repo, &ticket_id), "active");
+}
+
+#[test]
+fn worker_blocked_run_keeps_ticket_active() {
+    let repo = TestRepo::from_fixture("minimal-service");
+    let ticket_id = setup_ready_ticket(&repo);
+    install_worker_script(
+        &repo,
+        "echo '{\"status\": \"blocked\", \"reason\": \"missing decision DEC-1\"}'",
+    );
+    set_worker_command(&repo, "sh scripts/fake-worker.sh {input}");
+
+    let outcome = run_outcome(&repo, &ticket_id);
+    assert_eq!(outcome["status"], "blocked");
+    assert_eq!(outcome["summary"], "missing decision DEC-1");
+    assert_eq!(node_status(&repo, &ticket_id), "active");
+}
+
+// ---------------------------------------------------------------------------
+// lifecycle gating and config errors
+// ---------------------------------------------------------------------------
+
+#[test]
+fn run_rejects_worker_on_non_ready_ticket_and_missing_config() {
+    let repo = TestRepo::from_fixture("minimal-service");
+    repo.pulse_ok(&["init", "--actor", ACTOR, "--json"]);
+    let created = repo.pulse_ok(&[
+        "work",
+        "create",
+        "--kind",
+        "ticket",
+        "--title",
+        "Draft ticket",
+        "--risk",
+        "low",
+        "--json",
+    ]);
+    let ticket_id = created["value"]["id"].as_str().unwrap().to_string();
+
+    let output = repo.pulse(&["run", "worker", "--ticket", &ticket_id, "--json"]);
+    assert_eq!(error_code(&output), "run_ticket_not_ready");
+
+    fs::remove_file(repo.path().join(".pulse/config/runners.json")).unwrap();
+    let output = repo.pulse(&["run", "worker", "--ticket", &ticket_id, "--json"]);
+    assert_eq!(error_code(&output), "run_config_missing");
+
+    let output = repo.pulse(&["run", "audit", "--ticket", &ticket_id, "--json"]);
+    assert_eq!(error_code(&output), "run_role_lifecycle_unsupported");
+}
+
+#[test]
+fn reviewer_and_qa_roles_require_verifying_tickets() {
+    let repo = TestRepo::from_fixture("minimal-service");
+    let ticket_id = setup_ready_ticket(&repo);
+
+    let output = repo.pulse(&["run", "reviewer", "--ticket", &ticket_id, "--json"]);
+    assert_eq!(error_code(&output), "run_ticket_not_verifying");
+    let output = repo.pulse(&["run", "qa", "--ticket", &ticket_id, "--json"]);
+    assert_eq!(error_code(&output), "run_ticket_not_verifying");
+}
+
+#[test]
+fn qa_role_runs_after_worker_handoff_with_baseline_input() {
+    let repo = TestRepo::from_fixture("minimal-service");
+    let ticket_id = setup_ready_ticket(&repo);
+    install_worker_script(
+        &repo,
+        r#"
+RUN_DIR="$(dirname "$1")"
+. "$RUN_DIR/worker-env"
+"$PULSE" work handoff --lease "$LEASE_ID" --session "$SESSION_ID" \
+  --source-commit "$SOURCE_COMMIT" --summary "did the work" \
+  --idempotency-key handoff-1 --json
+echo '{"status": "handed_off", "summary": "done"}'
+"#,
+    );
+    set_worker_command(&repo, "sh scripts/fake-worker.sh {input}");
+    let outcome = run_outcome(&repo, &ticket_id);
+    assert_eq!(outcome["status"], "handed_off");
+
+    // The default qa command just echoes JSON; the run must classify it as
+    // completed and leave the verifying status untouched.
+    let out = repo.pulse_ok(&["run", "qa", "--ticket", &ticket_id, "--json"]);
+    assert_eq!(out["status"], "completed");
+    assert_eq!(node_status(&repo, &ticket_id), "verifying");
+
+    let qa_input: Value = serde_json::from_slice(
+        &fs::read(
+            repo.path()
+                .join(".pulse/runtime/run")
+                .join(&ticket_id)
+                .join("qa-input.json"),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(qa_input["schema_version"], 1);
+    assert_eq!(qa_input["ticket_id"], ticket_id.as_str());
+    assert!(qa_input["source_commit"].is_string());
+}

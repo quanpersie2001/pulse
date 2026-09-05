@@ -681,7 +681,7 @@ fn normalize_acceptance_proofs(proofs: &mut [AcceptanceProof]) {
     proofs.sort_by(|left, right| left.acceptance_id.cmp(&right.acceptance_id));
 }
 
-fn ticket_acceptance_ids(repo_root: &Path, node: &Node) -> Result<Vec<String>> {
+pub(crate) fn ticket_acceptance_ids(repo_root: &Path, node: &Node) -> Result<Vec<String>> {
     let brief_path = repo_root.join(&node.content_dir).join("ticket.md");
     let bytes = fs::read(&brief_path).map_err(|error| PulseError::io(&brief_path, error))?;
     let markdown = String::from_utf8(bytes)

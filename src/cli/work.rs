@@ -1,9 +1,65 @@
 use std::path::PathBuf;
 
+use crate::execution::{AcceptanceProof, VerificationCheck, VerificationDisposition};
 use crate::graph::model::contract::{Materialization, Risk, TicketRole};
 use crate::graph::model::node::NodeStatus;
 use crate::id::WorkKind;
 use clap::{Subcommand, ValueEnum};
+
+/// Verification disposition for `pulse work verify`.
+#[derive(Clone, Copy, ValueEnum)]
+#[value(rename_all = "snake_case")]
+pub(crate) enum VerifyDispositionArg {
+    Passed,
+    Rework,
+    Blocked,
+}
+
+impl From<VerifyDispositionArg> for VerificationDisposition {
+    fn from(value: VerifyDispositionArg) -> Self {
+        match value {
+            VerifyDispositionArg::Passed => VerificationDisposition::Passed,
+            VerifyDispositionArg::Rework => VerificationDisposition::Rework,
+            VerifyDispositionArg::Blocked => VerificationDisposition::Blocked,
+        }
+    }
+}
+
+fn parse_check(value: &str) -> Result<VerificationCheck, String> {
+    let parts: Vec<&str> = value.splitn(3, '=').collect();
+    let [name, command, exit] = parts.as_slice() else {
+        return Err("check must be name=command=exit_code".to_string());
+    };
+    let exit_code = exit
+        .parse::<i32>()
+        .map_err(|_| format!("check exit_code must be an integer: {exit}"))?;
+    Ok(VerificationCheck {
+        name: (*name).to_string(),
+        command: (*command).to_string(),
+        exit_code,
+        artifact_ids: vec![],
+    })
+}
+
+fn parse_proof(value: &str) -> Result<AcceptanceProof, String> {
+    let parts: Vec<&str> = value.splitn(3, '=').collect();
+    let [acceptance_id, checks, receipts] = parts.as_slice() else {
+        return Err("proof must be AC-ID=checks=receipts".to_string());
+    };
+    let split_list = |value: &str| -> Vec<String> {
+        value
+            .split(',')
+            .map(str::trim)
+            .filter(|entry| !entry.is_empty())
+            .map(str::to_string)
+            .collect()
+    };
+    Ok(AcceptanceProof {
+        acceptance_id: (*acceptance_id).to_string(),
+        check_names: split_list(checks),
+        evidence_receipt_ids: split_list(receipts),
+    })
+}
 
 #[derive(Subcommand)]
 pub(crate) enum WorkCommand {
@@ -119,6 +175,48 @@ pub(crate) enum WorkCommand {
         source_commit: String,
         #[arg(long)]
         summary: String,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Submit the worker handoff proof for an active assignment.
+    Handoff {
+        /// Lease ID binding this handoff to its assignment (from the run input).
+        #[arg(long)]
+        lease: String,
+        #[arg(long)]
+        session: String,
+        #[arg(long, default_value = "agent:runner:worker")]
+        actor: String,
+        #[arg(long)]
+        source_commit: String,
+        #[arg(long)]
+        summary: String,
+        #[arg(long = "changed-path")]
+        changed_paths: Vec<String>,
+        #[arg(long = "evidence-receipt")]
+        evidence_receipt_ids: Vec<String>,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Record an independent verification observation for a handoff.
+    Verify {
+        ticket_id: String,
+        #[arg(long)]
+        handoff: String,
+        #[arg(long)]
+        actor: String,
+        #[arg(long)]
+        source_commit: String,
+        #[arg(long, default_value = "passed")]
+        disposition: VerifyDispositionArg,
+        #[arg(long)]
+        summary: String,
+        /// Passing/failed check as `name=command=exit_code`.
+        #[arg(long = "check", value_parser = parse_check)]
+        checks: Vec<VerificationCheck>,
+        /// Acceptance proof as `AC-ID=check1,check2=receipt1,receipt2`.
+        #[arg(long = "proof", value_parser = parse_proof)]
+        proofs: Vec<AcceptanceProof>,
         #[arg(long)]
         json: bool,
     },
@@ -505,6 +603,64 @@ pub(crate) fn handle(
                 explicit_key.unwrap_or_default().to_string(),
             )?;
             render(json, &out, format!("closed Ticket {}", out.ticket_id))
+        }
+        WorkCommand::Handoff {
+            lease,
+            session,
+            actor,
+            source_commit,
+            summary,
+            changed_paths,
+            evidence_receipt_ids,
+            json,
+        } => {
+            let out = store.submit_execution_handoff(crate::execution::SubmitHandoffArgs {
+                lease_id: lease,
+                actor,
+                session_id: session,
+                source_commit,
+                summary,
+                changed_paths,
+                evidence_receipt_ids,
+                idempotency_key: explicit_key.unwrap_or_default().to_string(),
+            })?;
+            render(
+                json,
+                &out,
+                format!("handed off Ticket {} ({})", out.ticket_id, out.handoff_id),
+            )
+        }
+        WorkCommand::Verify {
+            ticket_id: _,
+            handoff,
+            actor,
+            source_commit,
+            disposition,
+            summary,
+            checks,
+            proofs,
+            json,
+        } => {
+            let out = store.complete_execution_verification(
+                crate::execution::CompleteVerificationArgs {
+                    handoff_id: handoff,
+                    actor,
+                    source_commit,
+                    disposition: disposition.into(),
+                    summary,
+                    checks,
+                    acceptance_proofs: proofs,
+                    idempotency_key: explicit_key.unwrap_or_default().to_string(),
+                },
+            )?;
+            render(
+                json,
+                &out,
+                format!(
+                    "verification {} -> {}",
+                    out.verification_id, out.resulting_status
+                ),
+            )
         }
         WorkCommand::CloseStory {
             story_id,

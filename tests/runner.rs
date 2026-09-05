@@ -6,6 +6,18 @@
 //! contract. Timing-sensitive assertions use generous margins so the suite
 //! stays deterministic under parallel load.
 
+#[path = "runner/cli_run.rs"]
+mod cli_run;
+#[path = "common/bin.rs"]
+mod common_bin;
+// The shared fixture helpers cover several crates; the runner crate uses a
+// subset, so unused helpers are expected here.
+#[allow(dead_code)]
+#[path = "common/fixture_repo.rs"]
+mod common_fixture_repo;
+#[path = "common/git.rs"]
+mod common_git;
+
 use std::collections::BTreeMap;
 use std::process::Command;
 use std::sync::atomic::Ordering;

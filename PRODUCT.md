@@ -1029,7 +1029,7 @@ done và qualification pass.
 |---|---|---|
 | 5.1 Work graph | Đã có spine | `pulse init` cấp Core grants; Ticket tạo `ticket.md`, `work sync` bind hash/metadata, ambiguity và ready gates hoạt động. Legacy JSON contract API vẫn tồn tại cho callers cũ. |
 | 5.2 Packet | Đã rút gọn | Packet có ticket prose, context, docs/QA/source/tags/handoff; không còn dispatch, capability, scope enforcement, assurance hay `not_installed`. |
-| 5.3 Runner | Chưa có | Tách contract chạy lệnh từ `qa/executor.rs` thành `runner/`; thay `daemon/` |
+| 5.3 Runner | Spine đã có | `runners.json` bootstrap qua `init`, `pulse run worker|reviewer|qa`, lease TTL, run record + event, inconclusive classification; `src/runner/` owns argv/timeout/bounded output; isolation, recovery và artifacts ingest còn lại Bước 4. |
 | 5.4 Docs | Đã rút gọn | Registry tám trường, `tags.json`, `docs tags add/list`, tag filtering và path/tag applicability đã có. |
 | 5.5 Evidence/QA | Đã có spine | Close hỗ trợ mọi risk; high/critical yêu cầu actor human. Runner và QA execution vẫn là Bước 4. |
 | 5.6 Ratchet | Chỉ có store + validate | `capture`, `validate`, `promote`, `applicable`; packet inject; usage feedback |

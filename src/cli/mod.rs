@@ -6,6 +6,7 @@ mod init;
 mod knowledge;
 pub mod output;
 mod qa;
+mod run;
 mod work;
 
 use clap::Parser;
@@ -44,5 +45,23 @@ pub fn run(cli: Cli) -> Result<(), PulseError> {
         args::Command::Evidence { command } => evidence::handle(&store, command),
         args::Command::Knowledge { command } => knowledge::handle(&store, command),
         args::Command::Qa { command } => qa::handle(&store, command),
+        args::Command::Run {
+            role,
+            ticket,
+            ttl_seconds,
+            idempotency_key,
+            json,
+        } => run::handle(
+            &store,
+            &role,
+            &ticket,
+            ttl_seconds,
+            &if idempotency_key.is_empty() {
+                explicit_key.unwrap_or_default().to_string()
+            } else {
+                idempotency_key
+            },
+            json,
+        ),
     }
 }

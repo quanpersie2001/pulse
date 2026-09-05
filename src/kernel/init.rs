@@ -19,6 +19,26 @@ use crate::{PulseError, Result};
 
 const PROPOSED_IGNORE_ENTRIES: [&str; 2] = [".pulse/runtime/", ".pulse/cache/"];
 
+/// Default role commands recorded at init. Role names are fixed; commands are
+/// plain argv lines parsed without a shell and can be re-pointed at any agent
+/// or script by editing this file.
+const DEFAULT_RUNNER_ROLES_JSON: &str = r#"
+{
+  "worker": {
+    "command": "claude -p --output-format json --input-file {input}",
+    "timeout_seconds": 3600
+  },
+  "reviewer": {
+    "command": "codex exec --json --input {input}",
+    "timeout_seconds": 1800
+  },
+  "qa": {
+    "command": "node scripts/qa-run.mjs {input}",
+    "timeout_seconds": 900
+  }
+}
+"#;
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum RepositoryInitStatus {
@@ -70,9 +90,16 @@ pub(crate) fn initialize_repository(
 
     let mut created = Vec::new();
     let mut preserved = Vec::new();
-    for relative in ["docs", "works", "knowledge/learnings", ".pulse/events"] {
+    for relative in [
+        "docs",
+        "works",
+        "knowledge/learnings",
+        ".pulse/events",
+        ".pulse/config",
+    ] {
         ensure_directory(&repo_root, relative, &mut created, &mut preserved)?;
     }
+    ensure_runner_roles_config(&repo_root, &mut created, &mut preserved)?;
 
     let graph = crate::graph::store::bootstrap(&repo_root)?;
     created.extend(graph.created);
@@ -300,6 +327,23 @@ fn ensure_directory(
         fs::create_dir_all(&path).map_err(|error| PulseError::io(&path, error))?;
         created.push(path);
     }
+    Ok(())
+}
+
+/// Bootstrap `.pulse/config/runners.json` with the default role commands.
+/// Existing configuration is preserved untouched.
+fn ensure_runner_roles_config(
+    repo_root: &Path,
+    created: &mut Vec<PathBuf>,
+    preserved: &mut Vec<PathBuf>,
+) -> Result<()> {
+    let path = repo_root.join(".pulse/config/runners.json");
+    if path.exists() {
+        preserved.push(path);
+        return Ok(());
+    }
+    fs::write(&path, DEFAULT_RUNNER_ROLES_JSON).map_err(|error| PulseError::io(&path, error))?;
+    created.push(path);
     Ok(())
 }
 
