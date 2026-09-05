@@ -1,136 +1,142 @@
-# Handoff: Pulse — Bước 5 hoàn thành, golden path chạy thật trên examples/todolist
+# Handoff: Pulse — Bước 6, đóng mốc v0.1 và sửa theo dogfood
 
-## Trạng thái bàn giao
+## Bối cảnh
 
-- Repo: `/Users/quannv.dev/Workspace/Personal/pulse`
-- Nhánh: `features/harness-experimental`
-- HEAD: `a6e058b` (ngay trên `07bb38a`..`a6e058b` là 20 commit của Bước 5, xem
-  `git log 257ef76..HEAD`)
-- Working tree: sạch (chỉ file handoff này được cập nhật để bàn giao).
-- Cả ba gate xanh trên working tree:
+Repo: `/Users/quannv.dev/Workspace/Personal/pulse`, nhánh `features/harness-experimental`,
+HEAD `845ff01`. Working tree sạch. Ba gate xanh, 504 test.
 
-```text
-cargo fmt --check          -> OK
-cargo clippy --all-targets --quiet -- -D warnings  -> OK
-cargo test --all-targets   -> 504 pass, 0 fail
-```
+Đã đạt: golden path PRODUCT.md §7 chạy thật trên `examples/todolist/` với hai
+Ticket đóng bằng receipt (TK-001, TK-002), worker và reviewer là agent thật,
+kill giữa chừng resume được, learning LRN-001 được capture, promote và inject
+vào packet của Ticket sau (đã kiểm chứng lại độc lập ngày 2026-09-06).
 
-## Bước 5 đã đạt: golden path §7 chạy thật, hai Ticket đóng bằng bằng chứng
+Đọc trước khi sửa: `AGENTS.md`, `PRODUCT.md`, `ARCHITECTURE.md`,
+`examples/todolist/works/ST-001/` (log lần chạy thật), và Git log
+`257ef76..845ff01` (30 commit của Bước 4 và 5, commit message ghi rõ từng fix).
 
-Target: `examples/todolist/` (Node ESM thuần, không dependency) trong cùng Git
-history, KHÔNG nested `.git`, mọi lệnh `pulse` chạy `--repo-root
-examples/todolist` hoặc cwd tại đó. Không bao giờ chạy Pulse đột biến với
-`--repo-root .` tại gốc repo phát triển.
+Quy tắc: mỗi mục một commit, có test, ba gate xanh
+(`cargo fmt --check`, `cargo clippy --all-targets --quiet -- -D warnings`,
+`cargo test --all-targets`, default threading). Không chạy Pulse với
+`--repo-root .` ở gốc; chạy thật chỉ trong `examples/todolist/`. Commit kết bằng
+`Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>`.
 
-1. **init** — `pulse init` trên thư mục con hoạt động (Decision 13.1 đã có từ
-   trước); tracked đúng theo PRODUCT §4; `runners.json` mặc định bootstrap.
-2. **Story + Ticket** — `ST-001` (`qa.md` fenced `pulse-qa`, 2 case qua 2
-   risk) + `TK-001` (ticket.md đầy đủ, risk medium, QA required trên ST-001,
-   docs required trên `DOC-TODOLIST-BEHAVIOR` đã register, scope `src/**`);
-   sync → shaped → ready qua 10 gate families.
-3. **Packet** — packet đủ context: ticket.md nguyên văn, story summary, QA
-   baseline kèm hash, docs required/suggested, source fence, handoff protocol.
-4. **Worker thật** — `pulse run worker` chạy Claude Code headless thật: agent
-   đọc packet, implement `completeTodo` + CLI `done` + tests + doc, gọi
-   `pulse work handoff --lease … --session … --source-commit …` đúng cú pháp
-   (lease-bound, `run_handed_off`).
-5. **QA + docs + reviewer + close** — `pulse run qa` chạy `scripts/qa-run.mjs`
-   (script của repo) ghi `qa_checkpoint` passed cho cả 2 case; `docs validate
-   --record` ghi `documentation_validation`; `pulse run reviewer` chạy agent
-   khác, tự chạy verify + CLI round-trip, ghi verification passed với proofs
-   AC→checks+receipts; `pulse work close` đóng TK-001 (close_4655176f).
-6. **Kill giữa chừng + sửa source sau handoff** — kill -9 `pulse run` giữa
-   flight: lease sống, ticket active, không run record; chạy lại resume cùng
-   lease. Sửa file sau handoff làm dirty fence stale: verify bị từ chối
-   `verification_source_mismatch`, và phải `work release` (mở rộng mới) để
-   thoát. Lại có episode worker agent khai handed_off mà không làm gì
-   (worktree-stranded, xem finding 12): reviewer chặn, không có receipt giả
-   nào được dùng để close.
-7. **Knowledge ratchet** — `knowledge capture --from TK-001` (LRN-001,
-   provenance tự suy) → `validate-learning --evidence <receipt>` → `promote
-   --document DOC-TODOLIST-BEHAVIOR`; `TK-002` (ticket sau chạm cùng path) thấy
-   LRN-001 inject trong packet với why_applicable + required_checks.
-   `TK-002` cũng đã chạy full cycle thật và đóng (close_a166a0ec).
+## Quyết định đã chốt
 
-## Commit của Bước 5 (mỗi commit xanh cả ba gate)
+1. **Isolation: từ chối thay vì auto-worktree.** Finding 12 của Bước 5: lease
+   zombie đẩy Ticket sau vào worktree, việc của worker rơi vào worktree và
+   phải cứu tay. Rule mới: `pulse run` **từ chối** khi có Ticket khác đang
+   `active`, in ra Ticket đó và gợi ý `--isolation worktree` để ép. Worktree
+   chỉ được tạo khi cờ này có mặt. Cập nhật PRODUCT.md §3 nguyên tắc 10, §5.3
+   "Isolation rule", §5.7 "Chạy song song".
+2. **Learning có `scope`.** `harness` (bài học về cách dùng Pulse, ví dụ LRN-001
+   "đừng sửa file sau handoff") và `repository` (bài học về codebase). Harness
+   learning không inject theo path; nó đi vào bootstrap prompt của runner role
+   tương ứng và có thể promote vào `AGENTS.md` của target. Repository learning
+   inject theo path/tag/symbol như hiện tại.
+3. **Promote phải đổi nội dung đích.** `knowledge promote --document <id>` chỉ
+   được ghi relation `promoted_to` khi content hash của doc **khác** hash lúc
+   bắt đầu; nếu không đổi thì lỗi `promotion_target_unchanged`. Cách làm: lệnh
+   in ra đoạn text đề xuất và vị trí (heading) rồi chờ developer/agent sửa
+   file, hoặc nhận `--insert-after <heading>` để tự chèn đoạn text từ
+   `guidance` của learning. Chọn cách thứ hai làm mặc định, có `--dry-run`.
+4. **Một key cho rationale.** `## Documentation impact` và `## QA impact` cùng
+   nhận `Rationale:` (và chấp nhận `Reason:` như alias, không lỗi). Template
+   dùng `Rationale`.
 
-1. `07bb38a` — app todolist + AGENTS/PULSE/docs/verify/qa-run
-2. `9acfe45` — runner bootstrap commands/prompts khớp CLI thật
-3. `6e9826b` — pulse init examples/todolist + register docs
-4. `f53cdd5` — ST-001 + TK-001 ready
-5. `5384eea` — packet handoff protocol syntax + story.md
-6. `1adf61c` — runner:worker provisioning state
-7. `da8f654` — dirty identity hash theo normalized path (subdir repos)
-8. `871b392` — content-hash binding phủ uncommitted bytes
-9. `af3330c` — so sánh source binding theo subtree identity
-10. `30030b7` — handoff idempotency key có attempt suffix
-11. `470ca19` — release recovery phủ verifying tickets
-12. `70a6c9c` — reviewer input mang proof receipts
-13. `49becbb` — verify key cũng có attempt suffix
-14. `0be448b` — receipt tham chiếu nhiều proof tính một lần
-15. `f110efe` — fence receipt so với expected commit theo subtree
-16. `1903c00` — close releases lease
-17. `679879d` — knowledge ratchet ladder + packet injection
-18. `0d75c6d`, `a6e058b` — land TK-001, TK-002 (code + evidence + events)
+## Việc cần làm, theo thứ tự
 
-## Finding/Bài học khi dogfood (đã sửa code, trừ mục ghi rõ)
+### 6.1 Đóng mốc v0.1
 
-1. Default runner commands dùng flag CLI không tồn tại + `--output-format
-   json` phá contract JSON-dòng-cuối → đổi sang pointer prompt + text output
-   (PRODUCT §5.3 đã cập nhật mẫu).
-2. `worker-prompt.md` chỉ sai cú pháp handoff → viết lại với lệnh đúng, điền
-   sẵn lease/session/commit.
-3. Packet `handoff.commands` sai cú pháp → sửa.
-4. Dirty fence của repo-con: `git diff` với pathspec `:(top)` trả path
-   top-relative, `ls-files --others` trả cwd-relative → mọi file dirty đều
-   break hoặc bị bỏ sót. Đã fix bằng normalized path + `--full-name`.
-5. `.pulse/policy/` + `.pulse/config/` chưa nằm trong Pulse metadata loại trừ
-   khỏi dirty identity → provisioning runner làm fence bẩn. Đã fix.
-6. Receipt content-binding từ chối file dirty-với-HEAD dù hash khớp, trong khi
-   close lại chấp nhận → record-time chỉ check commit relation; dirty thuộc
-   về handoff fence.
-7. Source binding so raw commit id: commit ngoài subtree (chính repo Pulse!)
-   làm gãy proof chain của repo-con → so theo tree hash tại prefix
-   (`source::same_source_state`).
-8. Handoff/verify idempotency key deterministic khiến resume replay receipt
-   cũ → prompt dùng attempt suffix.
-9. Không lối thoát cho ticket `verifying` khi proof stale → `work release`
-   giờ demote verifying→ready; chain cũ không bao giờ close được nữa vì close
-   bind revision.
-10. Reviewer để sót docs receipt trong proofs → reviewer input giờ list sẵn
-    receipt candidates.
-11. Close đếm trùng receipt tham chiếu từ nhiều proof → dedupe.
-12. Close không release lease (sai PRODUCT §5.5) → lease Zombie ép ticket sau
-    vào worktree isolation; work của worker rơi vào worktree. Đã fix; worktree
-    là runtime disposable — công việc trong đó phải được salvaged thủ công
-    (đã làm cho TK-002).
+- Xoá `examples/todolist/Oops.rej.orig` (rác từ lúc salvage TK-002).
+- README Status: "Golden path đã chạy thật trên `examples/todolist/`, hai
+  Ticket đóng bằng receipt; xem `examples/todolist/works/ST-001/`". Bảng What
+  works today thêm `pulse run`, `events tail`, `note`, `knowledge capture|
+  promote|applicable`.
+- PRODUCT.md §7 thêm dòng "Đạt ngày 2026-09-05, HEAD 845ff01". §8 cột hiện
+  trạng cho 5.3, 5.6, 5.7. §13 ghi ba quyết định mới ở trên.
+- `git tag v0.1.0` tại commit này. Không push.
 
-## Khoảng cách còn lại (nhận thức, không phải việc đã xong)
+### 6.2 Isolation rule mới (quyết định 1)
 
-- **Story close (ST-001) chưa chạy**: cần `qa_checkpoint` scope
-  `story_close` passed trên HEAD hiện tại; `scripts/qa-run.mjs` mới chỉ ghi
-  `ticket_checkpoint`. Cần runner input cho story scope hoặc flag script, rồi
-  `pulse work close-story ST-001`.
-- TK-002 review cycle dùng receipt docs do reviewer tự record; nếu muốn tách
-  bạch actor, `docs validate --record` cho reviewer role cần xem lại grant.
-- Reviewer output contract (`disposition/acceptance/findings`) vẫn chưa được
-  parse/classify trong `classify_outcome` (reviewer "completed" chỉ cần JSON
-  cuối parse được; content check thuộc review layer — đã thấy rõ trong episode
-  TK-002).
-- Artifact ingest (PRODUCT §5.3 bước 7) chưa wire vào `pulse run`.
-- QA input gửi case id+revision, không gửi nguyên văn intent/steps/expected
-  (script tự đọc qa.md trong repo — chấp nhận được cho local-first, cân nhắc
-  đưa đầy đủ vào input).
-- Knowledge: chưa có `applicable --work`, `reviewed` transition, usage
-  feedback; naming `validate-learning` lệch PRODUCT (`validate` đã bị chiếm bởi
-  store check).
-- `work edit` vẫn chỉ sửa title; `ticket.md` + `work sync` là đường cập nhật.
+Sửa runner: khi có lease `active` của Ticket khác trong cùng repo-root, từ chối
+với `run_isolation_required` kèm Ticket id và lệnh gợi ý. `--isolation
+worktree` giữ nguyên hành vi tạo worktree và dọn khi terminal. Test: hai
+Ticket, `run` thứ hai bị từ chối; với cờ thì tạo worktree; close Ticket đầu
+thì `run` thứ hai không cần cờ. Xoá `auto_isolation` config nếu có.
 
-## Việc tiếp theo đề xuất
+### 6.3 Rationale/Reason (quyết định 4)
 
-1. Story qualification: thêm scope `story_close` vào qa flow + chạy
-   `close-story ST-001` (đóng tiêu chí phụ §7).
-2. `knowledge applicable --work <id>` CLI + usage feedback ở handoff.
-3. Classifier cho reviewer: `rework` phải map verification rework thật
-   (như worker `unproven_claim`), không chỉ JSON parse được.
-4. PRODUCT §8 cập nhật cột hiện trạng cho 5.6 (ratchet đã có ladder + inject).
+`src/graph/model/brief.rs`: docs và QA impact cùng đọc `rationale`, alias
+`reason`. Template `work create` dùng `Rationale`. Sửa `ticket.md` của TK-001,
+TK-002 trong `examples/todolist/` chỉ nếu parser mới không đọc được chúng
+(không nên phải sửa vì có alias). Test parser cả hai key.
+
+### 6.4 Story close chạy thật
+
+`scripts/qa-run.mjs` trong todolist nhận `qa_scope` từ input; `pulse run qa
+--scope story_close --story ST-001` (hoặc cú pháp tương đương đã có) tạo input
+với toàn bộ case required của baseline, ghi `qa_checkpoint` scope `story_close`.
+Rồi `pulse work close-story ST-001` trong `examples/todolist/`, commit kết quả
+(node, receipt, event). Đây là tiêu chí phụ của §7.
+
+### 6.5 Reviewer output được phân loại
+
+`classify_outcome` cho role `reviewer`: JSON cuối có `disposition`
+(`pass|rework`), `acceptance` map, `findings`. `rework` phải tạo verification
+receipt disposition rework thật và Ticket sang `rework`, không chỉ "completed".
+Thiếu `disposition` hoặc acceptance không cover đủ AC thì `inconclusive`. Test
+với fake reviewer script trả ba trường hợp.
+
+### 6.6 Artifact ingest trong `pulse run`
+
+Output JSON `artifacts[] {path, role, case_id?}`: hash SHA-256, copy vào
+`.pulse/evidence/artifacts/sha256/`, ghi vào receipt tương ứng. Path ngoài
+repo-root hoặc không tồn tại thì receipt `inconclusive` với lý do. Test với qa
+runner ghi log file.
+
+### 6.7 Ratchet hoàn thiện (quyết định 2 và 3)
+
+- Thêm `scope: harness | repository` vào learning schema; `knowledge capture`
+  hỏi hoặc nhận `--scope`, mặc định `repository`. Đổi LRN-001 trong
+  `examples/todolist/` sang `harness` bằng `knowledge edit`.
+- Injection: repository learning vào packet như hiện tại; harness learning vào
+  bootstrap prompt của runner (mục `## Harness learnings` trong
+  `worker-prompt.md` tương đương) và không vào packet theo path.
+- `knowledge promote --document <id> --insert-after "<heading>" [--dry-run]`
+  chèn đoạn text từ `guidance` và `summary`, sau đó mới ghi relation với hash
+  mới. Hash không đổi thì `promotion_target_unchanged`. Thêm `--agents-md` làm
+  đích cho harness learning. Chạy lại promote cho LRN-001 vào
+  `examples/todolist/AGENTS.md`, xoá relation cũ trỏ vào DOC-TODOLIST-BEHAVIOR.
+- Handoff ghi `knowledge_usage[] {learning_id, injected, applied, outcome}`;
+  `pulse work handoff --learning-used LRN-001=helpful|not_needed|misleading`.
+  `knowledge show` in usage count. Packet của TK-001/TK-002 không có usage là
+  bình thường (trước khi có field).
+- Đổi tên `validate-learning` thành `knowledge validate <id> --evidence` và
+  lệnh store check thành `knowledge check`. Thêm `knowledge applicable --work
+  <id> --json` trả `required|recommended|suggested|excluded` với
+  `why_applicable`, dùng cùng logic packet đang dùng.
+- QA input gửi nguyên văn `intent`, `steps`, `expected` của case, không chỉ id.
+
+### 6.8 Docs sau cùng
+
+`ARCHITECTURE.md` (runner isolation, learning scope, promote), `README.md`,
+`AGENTS.md` nếu rule đổi, `docs/GLOSSARY.md` (Learning scope, Isolation).
+`examples/todolist/AGENTS.md` nhận mục harness learnings.
+
+## Kết quả mong đợi
+
+- `examples/todolist/`: ST-001 `done` với receipt story_close; LRN-001 scope
+  `harness`, promote thật vào `AGENTS.md` của todolist với hash mới; không file
+  rác.
+- `pulse run worker --ticket X` khi Y đang active: bị từ chối, thông báo rõ.
+- Reviewer trả `rework` làm Ticket sang `rework`.
+- `knowledge applicable --work TK-00x` in đúng bucket.
+- Tag `v0.1.0`.
+
+## Sau Bước 6
+
+Dùng thật thêm 5 đến 10 Ticket trên todolist với vai đảo (Codex worker, Claude
+reviewer), Ticket R0 và R2, một `decision_work`. Ghi ma sát vào
+`examples/todolist/works/friction.md`. Chỉ sau đó mới xét v0.2: MCP server,
+`pulse doctor`, self-hosting cho chính repo Pulse. Cuối session thay file này
+bằng handoff cho đợt dùng thật đó.
