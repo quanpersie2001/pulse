@@ -35,8 +35,8 @@ pub(crate) enum KnowledgeCommand {
         json: bool,
     },
     /// Record an evidence-backed validation: candidate|reviewed ->
-    /// validated.
-    ValidateLearning {
+    /// validated (`knowledge validate <id> --evidence <receipt>`).
+    Validate {
         learning_id: String,
         /// Evidence receipt id that proves the learning.
         #[arg(long)]
@@ -100,7 +100,17 @@ pub(crate) enum KnowledgeCommand {
         #[command(subcommand)]
         command: KnowledgeRelationCommand,
     },
-    Validate {
+    /// Validate the whole knowledge store (relations, endpoints, ladder).
+    Check {
+        #[arg(long)]
+        json: bool,
+    },
+    /// Show the knowledge recall decision for one work item: the same
+    /// buckets the packet injects from.
+    Applicable {
+        /// Work item (Ticket) to evaluate.
+        #[arg(long)]
+        work: String,
         #[arg(long)]
         json: bool,
     },
@@ -346,7 +356,7 @@ pub(crate) fn handle(store: &JsonGraphStore, command: KnowledgeCommand) -> Resul
             )?;
             render(json, &out, format!("captured {} from {from}", out.value.id))
         }
-        KnowledgeCommand::ValidateLearning {
+        KnowledgeCommand::Validate {
             learning_id,
             evidence,
             actor,
@@ -475,7 +485,18 @@ pub(crate) fn handle(store: &JsonGraphStore, command: KnowledgeCommand) -> Resul
                 render(json, &out, format!("{} {}", out.code, out.relation_id))
             }
         },
-        KnowledgeCommand::Validate { json } => {
+        KnowledgeCommand::Applicable { work, json } => {
+            let out = store.knowledge_applicable(&work)?;
+            let human = format!(
+                "applicable for {work}: required {}, recommended {}, suggested {}, excluded {}",
+                out.required.len(),
+                out.recommended.len(),
+                out.suggested.len(),
+                out.excluded.len()
+            );
+            render(json, &out, human)
+        }
+        KnowledgeCommand::Check { json } => {
             let out = knowledge.validate()?;
             let ok = out.valid;
             render(json, &out, if ok { "valid" } else { "invalid" }.to_string())?;

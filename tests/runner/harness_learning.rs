@@ -134,7 +134,7 @@ fn harness_learnings_inject_into_the_worker_prompt_not_the_packet() {
     for learning_id in ["LRN-001", "LRN-002"] {
         repo.pulse_ok(&[
             "knowledge",
-            "validate-learning",
+            "validate",
             learning_id,
             "--evidence",
             "rcpt_01J00000000000000000000001",

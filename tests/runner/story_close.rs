@@ -106,6 +106,11 @@ fn story_close_qa_run_commits_full_baseline_input() {
     assert_eq!(input["qa_posture"], "required");
     assert_eq!(input["cases"][0]["id"], "QA-001");
     assert_eq!(input["cases"][0]["revision"], 1);
+    // Cases travel verbatim so the executor never resolves the baseline.
+    assert!(!input["cases"][0]["intent"].as_str().unwrap().is_empty());
+    assert!(!input["cases"][0]["steps"].as_array().unwrap().is_empty());
+    assert!(!input["cases"][0]["expected"].as_array().unwrap().is_empty());
+    assert_eq!(input["cases"][0]["surface"], "api");
     assert_eq!(input["cases"].as_array().unwrap().len(), 1);
     assert_eq!(input["baseline_revision"], 1);
     assert!(input["baseline_content_hash"]

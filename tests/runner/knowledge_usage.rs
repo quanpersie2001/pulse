@@ -108,7 +108,7 @@ fn handoff_records_usage_and_knowledge_show_aggregates_it() {
     for learning_id in ["LRN-001", "LRN-002"] {
         repo.pulse_ok(&[
             "knowledge",
-            "validate-learning",
+            "validate",
             learning_id,
             "--evidence",
             "rcpt_01J00000000000000000000001",

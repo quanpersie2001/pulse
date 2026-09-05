@@ -465,9 +465,15 @@ impl JsonGraphStore {
             "baseline_revision": baseline.revision,
             "baseline_content_hash": baseline.content_hash,
             "qa_posture": "required",
+            // Cases travel verbatim (intent, steps, expected) so the
+            // executor never has to resolve the baseline itself.
             "cases": baseline.cases.iter().map(|case| json!({
                 "id": case.id,
                 "revision": case.revision,
+                "intent": case.intent,
+                "steps": case.steps,
+                "expected": case.expected,
+                "surface": case.surface,
             })).collect::<Vec<_>>(),
             "artifact_dir": "artifacts",
         }))?;
@@ -884,10 +890,16 @@ impl JsonGraphStore {
                     "baseline_revision": resolution.as_ref().map(|r| r.revision),
                     "baseline_content_hash": resolution.as_ref().map(|r| r.content_hash.clone()),
                     "qa_posture": qa_posture_str(posture),
+                    // Cases travel verbatim (intent, steps, expected) so
+                    // the executor never has to resolve the baseline itself.
                     "cases": resolution.as_ref().map(|r| {
                         r.cases.iter().map(|case| json!({
                             "id": case.id,
                             "revision": case.revision,
+                            "intent": case.intent,
+                            "steps": case.steps,
+                            "expected": case.expected,
+                            "surface": case.surface,
                         })).collect::<Vec<_>>()
                     }).unwrap_or_default(),
                     "artifact_dir": "artifacts",

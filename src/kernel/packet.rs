@@ -467,35 +467,100 @@ impl JsonGraphStore {
 pub(crate) const MAX_KNOWLEDGE_ITEMS: usize = 5;
 
 /// Applicable validated or promoted learnings for the subject Ticket:
-/// a learning applies when an applicability path matches a Ticket code
-/// anchor (exact, or `prefix/**` subtree) or an applicability work label
-/// matches a Ticket tag. Candidate and disputed learnings are never
-/// injected. Bounded and sorted by learning id for deterministic packets.
+/// required and recommended feed the packet; suggested and excluded carry
+/// the rest of the recall decision. Bounded and sorted by learning id for
+/// deterministic output.
 fn applicable_knowledge(
     repo_root: &Path,
     code_anchors: Vec<String>,
     tags: &[String],
 ) -> Vec<work_packet::PacketKnowledgeItem> {
+    let buckets = applicable_knowledge_buckets(repo_root, &code_anchors, tags);
+    let mut items: Vec<work_packet::PacketKnowledgeItem> = buckets
+        .required
+        .into_iter()
+        .chain(buckets.recommended)
+        .collect();
+    items.sort_by(|left, right| left.detail_ref.cmp(&right.detail_ref));
+    items.truncate(MAX_KNOWLEDGE_ITEMS);
+    items
+}
+
+/// One applicable learning with its identity, for `knowledge applicable`.
+#[derive(Debug, Clone, serde::Serialize)]
+pub(crate) struct ApplicableKnowledgeItem {
+    pub id: String,
+    pub summary: String,
+    pub why_applicable: String,
+    pub required_checks: Vec<String>,
+}
+
+/// One learning left out of injection, with the mechanical reason.
+#[derive(Debug, Clone, serde::Serialize)]
+pub(crate) struct ExcludedKnowledgeItem {
+    pub id: String,
+    pub reason: String,
+}
+
+/// The four recall buckets for one Ticket (Decision 13.3: one shared logic
+/// for the packet and `knowledge applicable`). Bucket rules:
+/// - excluded: candidate/disputed/superseded/retired statuses, harness scope;
+/// - required: matched and confidence `enforced` (the ratchet demands it);
+/// - recommended: matched validated/promoted learnings;
+/// - suggested: enforced-confidence learnings without a path/tag match, as
+///   a reference only.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct KnowledgeBuckets {
+    pub required: Vec<work_packet::PacketKnowledgeItem>,
+    pub recommended: Vec<work_packet::PacketKnowledgeItem>,
+    pub suggested: Vec<work_packet::PacketKnowledgeItem>,
+    pub excluded: Vec<ExcludedKnowledgeItem>,
+}
+
+impl KnowledgeBuckets {
+    /// Move an item into `required` or `recommended` by confidence.
+    fn push_matched(&mut self, enforced: bool, item: work_packet::PacketKnowledgeItem) {
+        if enforced {
+            self.required.push(item);
+        } else {
+            self.recommended.push(item);
+        }
+    }
+}
+
+/// Compute the applicability buckets for a Ticket's code anchors and tags.
+pub(crate) fn applicable_knowledge_buckets(
+    repo_root: &Path,
+    code_anchors: &[String],
+    tags: &[String],
+) -> KnowledgeBuckets {
+    let mut buckets = KnowledgeBuckets::default();
     let Ok((entries, _)) = crate::knowledge::validate::load_records(repo_root) else {
-        return Vec::new();
+        return buckets;
     };
-    let mut items = Vec::new();
+    use crate::knowledge::model::{Confidence, LearningScope, LearningStatus};
     for (id, learning) in &entries {
-        // Harness learnings are about operating Pulse itself; they surface
-        // in runner bootstrap prompts, never in packets by path.
-        if learning.scope == crate::knowledge::model::LearningScope::Harness {
+        if learning.scope == LearningScope::Harness {
+            buckets.excluded.push(ExcludedKnowledgeItem {
+                id: id.clone(),
+                reason: "harness scope injects via the runner bootstrap prompt, not by path"
+                    .to_string(),
+            });
             continue;
         }
         if !matches!(
             learning.status,
-            crate::knowledge::model::LearningStatus::Validated
-                | crate::knowledge::model::LearningStatus::Promoted
+            LearningStatus::Validated | LearningStatus::Promoted
         ) {
+            buckets.excluded.push(ExcludedKnowledgeItem {
+                id: id.clone(),
+                reason: format!("status {:?} is not injected", learning.status),
+            });
             continue;
         }
         let mut reasons = Vec::new();
         for pattern in &learning.applicability.paths {
-            for anchor in &code_anchors {
+            for anchor in code_anchors {
                 if knowledge_path_matches(anchor, pattern) {
                     reasons.push(format!("anchor {anchor} matches path {pattern}"));
                     break;
@@ -508,21 +573,75 @@ fn applicable_knowledge(
                 break;
             }
         }
+        let enforced = learning.validation.confidence == Confidence::Enforced;
         if reasons.is_empty() {
+            if enforced {
+                buckets.suggested.push(work_packet::PacketKnowledgeItem {
+                    summary: learning.summary.clone(),
+                    why_applicable: "enforced ratchet check; no path or tag match".to_string(),
+                    required_checks: learning.guidance.required_checks.clone(),
+                    detail_ref: Some(id.clone()),
+                });
+            }
             continue;
         }
-        items.push(work_packet::PacketKnowledgeItem {
-            summary: learning.summary.clone(),
-            why_applicable: reasons.join("; "),
-            required_checks: learning.guidance.required_checks.clone(),
-            detail_ref: Some(id.clone()),
-        });
-        if items.len() >= MAX_KNOWLEDGE_ITEMS {
-            break;
-        }
+        buckets.push_matched(
+            enforced,
+            work_packet::PacketKnowledgeItem {
+                summary: learning.summary.clone(),
+                why_applicable: reasons.join("; "),
+                required_checks: learning.guidance.required_checks.clone(),
+                detail_ref: Some(id.clone()),
+            },
+        );
     }
-    items.sort_by(|left, right| left.detail_ref.cmp(&right.detail_ref));
-    items
+    buckets
+}
+
+/// `knowledge applicable --work <id>`: the recall decision for one Ticket,
+/// shared with packet injection by construction.
+#[derive(Debug, Clone, serde::Serialize)]
+pub(crate) struct KnowledgeApplicableReport {
+    pub schema_version: u32,
+    pub code: String,
+    pub work: String,
+    pub required: Vec<ApplicableKnowledgeItem>,
+    pub recommended: Vec<ApplicableKnowledgeItem>,
+    pub suggested: Vec<ApplicableKnowledgeItem>,
+    pub excluded: Vec<ExcludedKnowledgeItem>,
+}
+
+impl JsonGraphStore {
+    /// Build the applicability report for one Ticket.
+    pub(crate) fn knowledge_applicable(
+        &self,
+        work_id: &str,
+    ) -> PulseResult<KnowledgeApplicableReport> {
+        let node = self.show_node(work_id)?;
+        let anchors = if node.kind == crate::id::WorkKind::Ticket {
+            self.read_ticket_brief(work_id)
+                .map(|brief| brief.code_anchors)
+                .unwrap_or_default()
+        } else {
+            Vec::new()
+        };
+        let buckets = applicable_knowledge_buckets(&self.repo_root, &anchors, &node.tags);
+        let item = |value: work_packet::PacketKnowledgeItem| ApplicableKnowledgeItem {
+            id: value.detail_ref.unwrap_or_default(),
+            summary: value.summary,
+            why_applicable: value.why_applicable,
+            required_checks: value.required_checks,
+        };
+        Ok(KnowledgeApplicableReport {
+            schema_version: 1,
+            code: "ok".to_string(),
+            work: work_id.to_string(),
+            required: buckets.required.into_iter().map(item).collect(),
+            recommended: buckets.recommended.into_iter().map(item).collect(),
+            suggested: buckets.suggested.into_iter().map(item).collect(),
+            excluded: buckets.excluded,
+        })
+    }
 }
 
 fn knowledge_path_matches(anchor: &str, pattern: &str) -> bool {

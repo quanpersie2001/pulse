@@ -204,7 +204,7 @@ fn knowledge_cli_json_contracts_cover_crud_relations_validation_export_status() 
         format!("applied-to--LRN-001--work--{work_id}")
     );
 
-    let valid = run_ok(&repo, &["knowledge", "validate", "--json"]);
+    let valid = run_ok(&repo, &["knowledge", "check", "--json"]);
     assert_eq!(valid["schema_version"], 1);
     assert_eq!(valid["code"], "ok");
     assert_eq!(valid["valid"], true);
@@ -382,7 +382,7 @@ fn capture_validate_promote_ratchet_lifecycle() {
         &repo,
         &[
             "knowledge",
-            "validate-learning",
+            "validate",
             "LRN-001",
             "--evidence",
             "rcpt_01J00000000000000000000000",
@@ -427,7 +427,7 @@ fn capture_validate_promote_ratchet_lifecycle() {
         &repo,
         &[
             "knowledge",
-            "validate-learning",
+            "validate",
             "LRN-001",
             "--evidence",
             "rcpt_01J00000000000000000000001",
@@ -513,7 +513,7 @@ fn capture_validate_promote_ratchet_lifecycle() {
         &repo,
         &[
             "knowledge",
-            "validate-learning",
+            "validate",
             "LRN-001",
             "--evidence",
             "rcpt_01J00000000000000000000001",
@@ -603,7 +603,7 @@ fn validated_learning(repo: &TempDir, work_id: &str, title: &str, scope: Option<
         repo,
         &[
             "knowledge",
-            "validate-learning",
+            "validate",
             &learning_id,
             "--evidence",
             "rcpt_01J00000000000000000000001",
@@ -743,7 +743,7 @@ fn promote_inserts_content_and_binds_the_new_hash() {
     );
 
     // The store check passes with the promotion relation in place.
-    run_ok(&repo, &["knowledge", "validate", "--json"]);
+    run_ok(&repo, &["knowledge", "check", "--json"]);
 }
 
 #[test]
@@ -831,7 +831,7 @@ fn harness_promotion_lands_in_agents_md_and_validates() {
     assert!(content.contains(out["inserted_block"].as_str().unwrap()));
 
     // The non-registry AGENTS.md endpoint resolves as a repository file.
-    let check = run_ok(&repo, &["knowledge", "validate", "--json"]);
+    let check = run_ok(&repo, &["knowledge", "check", "--json"]);
     let text = serde_json::to_string(&check).unwrap();
     assert!(
         !text.contains("knowledge_relation_endpoint_missing"),
@@ -844,4 +844,161 @@ fn sha256_hex(bytes: &[u8]) -> String {
     let mut hasher = Sha256::new();
     hasher.update(bytes);
     format!("{:x}", hasher.finalize())
+}
+
+#[test]
+fn applicable_buckets_share_the_packet_logic() {
+    let (repo, work_id) = setup_repo();
+
+    // LRN-001: repository learning matching the ticket's default anchor.
+    let mut draft = json!({
+        "title": "Matching lesson",
+        "kind": "failure_pattern",
+        "severity": "medium",
+        "summary": "Applies by path match.",
+        "guidance": {"do": [], "avoid": [], "required_checks": ["Run the check."]},
+        "applicability": {"paths": ["src/**"]},
+        "provenance_targets": [{
+            "relation": "derived_from",
+            "kind": "work",
+            "id": work_id,
+            "revision": null,
+            "content_hash": null
+        }],
+        "source_commits": [],
+        "routing": null,
+        "promotion": null,
+        "freshness": null,
+        "trust": null,
+        "content": null
+    });
+    let draft_file = write_json(&repo.path().join("learning-match.json"), &draft);
+    run_ok(
+        &repo,
+        &[
+            "knowledge",
+            "create",
+            "--file",
+            &draft_file,
+            "--actor",
+            "human:test",
+            "--json",
+        ],
+    );
+
+    // LRN-002: harness scope never injects by path.
+    draft["title"] = json!("Harness lesson");
+    draft["scope"] = json!("harness");
+    draft["summary"] = json!("Harness-scope lesson.");
+    let harness_file = write_json(&repo.path().join("learning-harness.json"), &draft);
+    run_ok(
+        &repo,
+        &[
+            "knowledge",
+            "create",
+            "--file",
+            &harness_file,
+            "--actor",
+            "human:test",
+            "--json",
+        ],
+    );
+
+    // LRN-003 stays a candidate: excluded from injection.
+    draft["scope"] = json!("repository");
+    draft["title"] = json!("Candidate lesson");
+    draft["summary"] = json!("Still a candidate.");
+    draft["applicability"] = json!({"paths": ["src/**"]});
+    let candidate_file = write_json(&repo.path().join("learning-candidate.json"), &draft);
+    run_ok(
+        &repo,
+        &[
+            "knowledge",
+            "create",
+            "--file",
+            &candidate_file,
+            "--actor",
+            "human:test",
+            "--json",
+        ],
+    );
+
+    // Validate LRN-001 so it becomes injectable.
+    let receipt = json!({
+        "schema_version": 1,
+        "receipt_version": 2,
+        "id": "rcpt_01J00000000000000000000001",
+        "kind": "qa_checkpoint",
+        "result": "passed",
+        "actor": {"kind": "human", "id": "test"},
+        "recorded_at": "2026-09-06T00:00:00Z",
+        "subject": {"kind": "work", "id": work_id},
+        "bindings": {},
+        "payload": {
+            "payload_version": 1,
+            "qa_scope": "ticket_checkpoint",
+            "story_id": "ST-000",
+            "ticket_id": work_id,
+            "baseline_revision": 1,
+            "baseline_content_hash": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+            "cases": [{"case_id": "QA-001", "case_revision": 1, "outcome": "passed"}],
+            "executor": {"name": "t", "version": "1"},
+            "observations": ["observed"]
+        }
+    });
+    fs::create_dir_all(repo.path().join(".pulse/evidence/receipts")).unwrap();
+    fs::write(
+        repo.path()
+            .join(".pulse/evidence/receipts/rcpt_01J00000000000000000000001.json"),
+        serde_json::to_vec_pretty(&receipt).unwrap(),
+    )
+    .unwrap();
+    run_ok(
+        &repo,
+        &[
+            "knowledge",
+            "validate",
+            "LRN-001",
+            "--evidence",
+            "rcpt_01J00000000000000000000001",
+            "--actor",
+            "human:test",
+            "--json",
+        ],
+    );
+
+    let out = run_ok(
+        &repo,
+        &["knowledge", "applicable", "--work", &work_id, "--json"],
+    );
+    assert_eq!(out["schema_version"], 1);
+    assert_eq!(out["work"], work_id.as_str());
+
+    let recommended = out["recommended"].as_array().unwrap();
+    assert_eq!(recommended.len(), 1);
+    assert_eq!(recommended[0]["id"], "LRN-001");
+    assert!(recommended[0]["why_applicable"]
+        .as_str()
+        .unwrap()
+        .contains("matches path"));
+    assert_eq!(recommended[0]["required_checks"][0], "Run the check.");
+
+    let excluded = out["excluded"].as_array().unwrap();
+    let excluded_ids: Vec<&str> = excluded
+        .iter()
+        .map(|item| item["id"].as_str().unwrap())
+        .collect();
+    assert!(excluded_ids.contains(&"LRN-002"), "{excluded:?}");
+    assert!(excluded_ids.contains(&"LRN-003"), "{excluded:?}");
+    let harness_entry = excluded
+        .iter()
+        .find(|item| item["id"] == "LRN-002")
+        .unwrap();
+    assert!(harness_entry["reason"]
+        .as_str()
+        .unwrap()
+        .contains("harness scope"));
+
+    assert_eq!(out["required"].as_array().unwrap().len(), 0);
+    assert_eq!(out["suggested"].as_array().unwrap().len(), 0);
 }
