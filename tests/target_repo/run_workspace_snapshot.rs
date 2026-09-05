@@ -601,3 +601,43 @@ fn snapshot_validates_base_commit_as_head_ancestor() {
         WorkspaceSnapshotStatus::Unsupported
     );
 }
+
+#[test]
+fn subdir_dirty_identity_hashes_inside_tracked_and_untracked_changes() {
+    let tmp = tempfile::tempdir().unwrap();
+    fs::create_dir_all(tmp.path().join("sub/src")).unwrap();
+    fs::create_dir_all(tmp.path().join("sub/.pulse/policy")).unwrap();
+    fs::write(tmp.path().join("sub/src/app.js"), b"baseline\n").unwrap();
+    fs::write(tmp.path().join("sub/.pulse/policy/authority.json"), b"{}\n").unwrap();
+    let _base = git::commit_all(tmp.path());
+    let sub = tmp.path().join("sub");
+
+    let clean = pulse::source::worktree_dirty_identity(&sub).unwrap();
+    assert!(!clean.dirty);
+
+    // Dirty a tracked source file and add an untracked one inside the
+    // subdir root: both must be hashed (regression: git lists tracked
+    // paths toplevel-relative with :(top) pathspecs and untracked paths
+    // cwd-relative without --full-name, which broke subdir repos).
+    fs::write(sub.join("src/app.js"), b"dirty tracked\n").unwrap();
+    fs::write(sub.join("new-untracked.txt"), b"dirty untracked\n").unwrap();
+    let dirty = pulse::source::worktree_dirty_identity(&sub).unwrap();
+    assert!(dirty.dirty);
+    assert_ne!(dirty.identity, clean.identity);
+
+    // Pulse policy truth is excluded: dirtying it must not move identity.
+    fs::write(
+        sub.join(".pulse/policy/authority.json"),
+        b"{\"provisioned\": true}\n",
+    )
+    .unwrap();
+    let with_policy_dirty = pulse::source::worktree_dirty_identity(&sub).unwrap();
+    assert_eq!(with_policy_dirty.identity, dirty.identity);
+
+    // Reverting the source files restores the clean identity.
+    fs::write(sub.join("src/app.js"), b"baseline\n").unwrap();
+    fs::remove_file(sub.join("new-untracked.txt")).unwrap();
+    let restored = pulse::source::worktree_dirty_identity(&sub).unwrap();
+    assert_eq!(restored.identity, clean.identity);
+    assert!(!restored.dirty);
+}

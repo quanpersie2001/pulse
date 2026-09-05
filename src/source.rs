@@ -747,7 +747,14 @@ pub fn worktree_dirty_identity(repo_root: &Path) -> Result<WorktreeDirtyIdentity
         "work_packet_source_unavailable",
     )?;
 
-    let mut untracked_args = vec!["ls-files", "--others", "--exclude-standard", "-z", "--"];
+    let mut untracked_args = vec![
+        "ls-files",
+        "--others",
+        "--exclude-standard",
+        "-z",
+        "--full-name",
+        "--",
+    ];
     let root_pathspec = prefix.root_pathspec();
     if let Some(pathspec) = &root_pathspec {
         untracked_args.push(pathspec.as_str());
@@ -780,12 +787,16 @@ pub fn worktree_dirty_identity(repo_root: &Path) -> Result<WorktreeDirtyIdentity
             _ => {
                 // The file vanished between listing and reading; treat
                 // the identity as unstable rather than silent.
-                let bytes = match read_bounded(&repo_root.join(path)) {
+                //
+                // Git lists tracked paths relative to the worktree toplevel
+                // (the pathspec is `:(top)`-anchored), so join the
+                // prefix-normalized path, never the raw listing.
+                let bytes = match read_bounded(&repo_root.join(normalized)) {
                     Some(bytes) => bytes,
                     None => {
                         return Err(PulseError::validation(
                             "work_packet_source_unavailable",
-                            format!("dirty file {path} disappeared while hashing"),
+                            format!("dirty file {normalized} disappeared while hashing"),
                         ))
                     }
                 };
@@ -805,12 +816,12 @@ pub fn worktree_dirty_identity(repo_root: &Path) -> Result<WorktreeDirtyIdentity
         if is_pulse_metadata_path(normalized) || is_pulse_runtime_generated_path(normalized) {
             continue;
         }
-        let bytes = match read_bounded(&repo_root.join(path)) {
+        let bytes = match read_bounded(&repo_root.join(normalized)) {
             Some(bytes) => bytes,
             None => {
                 return Err(PulseError::validation(
                     "work_packet_source_unavailable",
-                    format!("untracked file {path} disappeared while hashing"),
+                    format!("untracked file {normalized} disappeared while hashing"),
                 ))
             }
         };
@@ -1838,12 +1849,18 @@ fn os_str_bytes(value: &std::ffi::OsStr) -> Result<&[u8]> {
     })
 }
 
+/// Pulse-owned truth planes never belong in the source-dirty identity:
+/// graph, events, evidence, docs registry, knowledge, authority policy and
+/// config. Mutating them (for example the runner-actor provisioning that
+/// `pulse run` performs) must not invalidate source bindings.
 fn is_pulse_metadata_path(path: &str) -> bool {
     path.starts_with(".pulse/workgraph/")
         || path.starts_with(".pulse/events/")
         || path.starts_with(".pulse/evidence/")
         || path.starts_with(".pulse/docs/")
         || path.starts_with(".pulse/knowledge/")
+        || path.starts_with(".pulse/policy/")
+        || path.starts_with(".pulse/config/")
 }
 
 /// Resolve the HEAD symbolic ref, if any.
