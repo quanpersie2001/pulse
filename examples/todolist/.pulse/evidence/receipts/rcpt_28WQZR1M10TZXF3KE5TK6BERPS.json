@@ -1,0 +1,62 @@
+{
+  "actor": {
+    "id": "runner:qa",
+    "kind": "agent"
+  },
+  "bindings": {
+    "artifacts": [],
+    "content": [
+      {
+        "path": "works/ST-001/qa.md",
+        "sha256": "sha256:d4587c8546445c99c658e4869828bb131a72a146461341a1006dc2de0e976125"
+      }
+    ],
+    "source": {
+      "commit": "1adf61cbff390840a737f6b7f4e31558154ec422",
+      "kind": "git_commit",
+      "repository_id": "repo_01M1RWXYDW6Q0WT9J0NMA466BH"
+    },
+    "work": []
+  },
+  "id": "rcpt_28WQZR1M10TZXF3KE5TK6BERPS",
+  "kind": "qa_checkpoint",
+  "payload": {
+    "baseline_content_hash": "sha256:d4587c8546445c99c658e4869828bb131a72a146461341a1006dc2de0e976125",
+    "baseline_revision": 1,
+    "cases": [
+      {
+        "case_id": "QA-001",
+        "case_revision": 1,
+        "outcome": "passed"
+      },
+      {
+        "case_id": "QA-002",
+        "case_revision": 1,
+        "outcome": "passed"
+      }
+    ],
+    "executor": {
+      "capabilities": [
+        "module"
+      ],
+      "name": "todolist-qa-runner",
+      "version": "1.0.0"
+    },
+    "observations": [
+      "QA-001: completeTodo returned Completed and marked the todo done without mutating the input",
+      "QA-002: completeTodo returned NotFound and left the list unchanged"
+    ],
+    "payload_version": 1,
+    "qa_scope": "ticket_checkpoint",
+    "story_id": "ST-001",
+    "ticket_id": "TK-001"
+  },
+  "receipt_version": 2,
+  "recorded_at": "2026-09-05T14:32:11.778Z",
+  "result": "passed",
+  "schema_version": 1,
+  "subject": {
+    "id": "TK-001",
+    "kind": "work"
+  }
+}

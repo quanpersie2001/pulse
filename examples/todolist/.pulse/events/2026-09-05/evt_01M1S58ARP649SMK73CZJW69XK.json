@@ -1,0 +1,28 @@
+{
+  "actor": {
+    "id": "quanpersie2001",
+    "kind": "human"
+  },
+  "event_type": "work.node.transitioned",
+  "id": "evt_01M1S58ARP649SMK73CZJW69XK",
+  "occurred_at": "2026-09-05T16:08:33.805336Z",
+  "payload": {
+    "expected_revision": 10,
+    "from": "verifying",
+    "gate_coverage": [
+      "transition_direction",
+      "graph_integrity"
+    ],
+    "graph_fingerprint_after": "sha256:0c5a522abbc1b174d5a720a17e17c226644c057d8aa8fff6504dcf62ca81b2d7",
+    "graph_fingerprint_before": "sha256:5c2b7bf5e90e84d020d6b55f7a13ee381d4de49b978b985c1761cbb4c53b6da6",
+    "reason": null,
+    "target_requires_status_reason": false,
+    "to": "ready"
+  },
+  "schema_version": 1,
+  "subject": {
+    "id": "TK-001",
+    "kind": "ticket",
+    "revision": 11
+  }
+}

@@ -2,7 +2,14 @@
 // (cwd); each invocation reads, mutates through the module, and writes back.
 import { readFile, writeFile } from "node:fs/promises";
 import process from "node:process";
-import { addTodo, createTodo, pendingTodos, removeTodo } from "./todolist.mjs";
+import {
+  CompleteOutcome,
+  addTodo,
+  completeTodo,
+  createTodo,
+  pendingTodos,
+  removeTodo,
+} from "./todolist.mjs";
 
 const STATE_FILE = ".todolist.json";
 
@@ -21,7 +28,7 @@ async function saveTodos(todos) {
 
 function usage() {
   console.error(
-    "usage: node src/cli.mjs add <id> <title> | list | remove <id>",
+    "usage: node src/cli.mjs add <id> <title> | list | done <id> | remove <id>",
   );
   process.exitCode = 2;
 }
@@ -42,6 +49,20 @@ switch (command) {
     for (const todo of pendingTodos(todos)) {
       console.log(`${todo.id}\t${todo.title}`);
     }
+    break;
+  }
+  case "done": {
+    if (!id) {
+      usage();
+      break;
+    }
+    const result = completeTodo(todos, id);
+    if (result.outcome === CompleteOutcome.Completed) {
+      await saveTodos(result.todos);
+    } else {
+      process.exitCode = 1;
+    }
+    console.log(result.outcome);
     break;
   }
   case "remove": {

@@ -32,3 +32,22 @@ export function removeTodo(todos, id) {
 export function pendingTodos(todos) {
   return todos.filter((todo) => !todo.done);
 }
+
+// Stable public outcome names for completeTodo. Renaming is human-gated.
+export const CompleteOutcome = Object.freeze({
+  Completed: "Completed",
+  NotFound: "NotFound",
+});
+
+// Returns `{ outcome, todos }`. On Completed the returned list is a new
+// array with the matched todo marked done; on NotFound the input list is
+// returned untouched. Never throws for unknown ids.
+export function completeTodo(todos, id) {
+  const index = todos.findIndex((todo) => todo.id === id);
+  if (index === -1) {
+    return { outcome: CompleteOutcome.NotFound, todos };
+  }
+  const next = todos.slice();
+  next[index] = { ...todos[index], done: true };
+  return { outcome: CompleteOutcome.Completed, todos: next };
+}

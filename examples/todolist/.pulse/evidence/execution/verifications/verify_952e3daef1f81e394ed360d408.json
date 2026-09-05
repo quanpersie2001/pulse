@@ -1,0 +1,71 @@
+{
+  "acceptance_proofs": [
+    {
+      "acceptance_id": "AC-1",
+      "check_names": [
+        "cli_roundtrip",
+        "verify"
+      ],
+      "evidence_receipt_ids": [
+        "rcpt_28WQZR1M10TZXF3KE5TK6BERPS"
+      ]
+    },
+    {
+      "acceptance_id": "AC-2",
+      "check_names": [
+        "cli_roundtrip",
+        "verify"
+      ],
+      "evidence_receipt_ids": [
+        "rcpt_28WQZR1M10TZXF3KE5TK6BERPS"
+      ]
+    }
+  ],
+  "checks": [
+    {
+      "artifact_ids": [],
+      "command": "node scripts/verify.mjs",
+      "exit_code": 0,
+      "name": "verify"
+    },
+    {
+      "artifact_ids": [],
+      "command": "node src/cli.mjs add t1 one; node src/cli.mjs done t1; node src/cli.mjs done nope; node src/cli.mjs list; cat .todolist.json",
+      "exit_code": 0,
+      "name": "cli_roundtrip"
+    },
+    {
+      "artifact_ids": [],
+      "command": "pulse evidence receipt list --kind qa_checkpoint --json",
+      "exit_code": 0,
+      "name": "qa_receipts"
+    },
+    {
+      "artifact_ids": [],
+      "command": "pulse evidence receipt list --kind documentation_validation --json",
+      "exit_code": 0,
+      "name": "doc_receipts"
+    },
+    {
+      "artifact_ids": [],
+      "command": "git diff --stat 1adf61cbff390840a737f6b7f4e31558154ec422 470ca19d84bee467b0b6655b14f563b4a3b5464b -- examples/todolist",
+      "exit_code": 0,
+      "name": "subtree_identity"
+    }
+  ],
+  "disposition": "passed",
+  "handoff_id": "handoff_cb8de5683a3adea7854db6187b",
+  "idempotency_key_hash": "sha256:952e3daef1f81e394ed360d40866bd62ab7548d0d534bafe9b14c2881b751ed9",
+  "lease_id": "lease_06c9c88787798d2eee7ccc7d46_g000002",
+  "recorded_at": "2026-09-05T15:50:12.510225+00:00",
+  "resulting_revision": 10,
+  "resulting_status": "verifying",
+  "schema_version": 1,
+  "source_commit": "470ca19d84bee467b0b6655b14f563b4a3b5464b",
+  "source_dirty_hash": "sha256:55e7dfd57570ed48431a36c030ee5bc86846c8ba116b0c3dd012543b0099c79b",
+  "summary": "Independent review of TK-001 handoff. Diff adds CompleteOutcome and completeTodo to src/todolist.mjs (copy-on-write, NotFound returns input list), wires 'done <id>' in src/cli.mjs (Completed exit 0 saves state; NotFound exit 1 no write; missing id usage exit 2), adds three completeTodo tests, and replaces the Completing todos placeholder in docs/product/todolist.md. node scripts/verify.mjs: 10/10 pass. CLI round-trip in a scratch dir confirmed done:true persisted and exit codes. qa_checkpoint receipt rcpt_28WQZR1M10TZXF3KE5TK6BERPS passes QA-001 and QA-002; it binds to commit 1adf61c but the examples/todolist subtree is identical at 470ca19 and the works/ST-001/qa.md sha256 matches the receipt. documentation_validation receipt rcpt_01M1S0AYVZJ1DBH6JQZ42PCEAP passed. No new dependencies. Observation, non-blocking: scripts/qa-run.mjs carries an unclaimed pre-existing uncommitted edit (fixes nonexistent String.prototype.matchIndices and receipt id encoding) outside this Ticket's scope, disclosed in the handoff.",
+  "ticket_id": "TK-001",
+  "verification_fingerprint": "sha256:ae560ece490f9ccc03e1ccc464a10dafb22d3432f86b981d85629b55f064b6c7",
+  "verification_id": "verify_952e3daef1f81e394ed360d408",
+  "verified_by": "agent:runner:reviewer"
+}

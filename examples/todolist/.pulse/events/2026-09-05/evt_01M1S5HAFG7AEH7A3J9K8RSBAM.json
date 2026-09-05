@@ -1,0 +1,18 @@
+{
+  "actor": {
+    "id": "runner:worker",
+    "kind": "agent"
+  },
+  "event_type": "note.recorded",
+  "id": "evt_01M1S5HAFG7AEH7A3J9K8RSBAM",
+  "occurred_at": "2026-09-05T16:13:28.432862Z",
+  "payload": {
+    "message": "Runtime defect observed while recording handoff_855fdfcc38b77e86132342f1fd: 'pulse work handoff --evidence-receipt <id>' fails with lock_timeout after 10s even though the workgraph flock is free (verified with an independent non-blocking flock probe). Handoff without --evidence-receipt succeeds immediately. Likely re-entrant WriteGuard acquisition: the handoff holds the write lock and the receipt lookup for --evidence-receipt acquires it again. Handoff recorded without receipt ids; candidate receipts are named in the handoff summary.",
+    "ticket_id": "TK-001"
+  },
+  "schema_version": 1,
+  "subject": {
+    "id": "TK-001",
+    "kind": "resource"
+  }
+}

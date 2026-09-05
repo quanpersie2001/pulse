@@ -1,0 +1,21 @@
+{
+  "actor": {
+    "id": "quanpersie2001",
+    "kind": "human"
+  },
+  "event_type": "evidence.receipt.recorded",
+  "id": "evt_01M1S0AYYY1TETBBB471R0028Q",
+  "occurred_at": "2026-09-05T14:42:37.150951Z",
+  "payload": {
+    "receipt_hash": "sha256:fed1b2ff05662255cafbbccb1bea77857ee25f763550c5f9f07d35d718194161",
+    "receipt_id": "rcpt_01M1S0AYVZJ1DBH6JQZ42PCEAP",
+    "receipt_kind": "documentation_validation",
+    "result": "passed",
+    "subject": "repo_01M1RWXYDW6Q0WT9J0NMA466BH"
+  },
+  "schema_version": 1,
+  "subject": {
+    "id": "rcpt_01M1S0AYVZJ1DBH6JQZ42PCEAP",
+    "kind": "receipt"
+  }
+}

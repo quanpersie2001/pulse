@@ -12,6 +12,16 @@ User-visible behavior of the todolist CLI and domain module.
 
 ## Completing todos
 
-Not yet available. Completing a todo must use stable outcome names
-(`Completed` for a known id, `NotFound` for an unknown id) so callers and
-tests can match on outcomes instead of exceptions.
+- `node src/cli.mjs done <id>` marks the todo with that id as done in the
+  state file and prints the outcome name on its own line.
+- Outcomes are stable public names, not exceptions:
+  - `Completed`: a todo with that id existed; it is now done and no longer
+    appears in `list`. Exit code is 0.
+  - `NotFound`: no todo has that id; the state file is left untouched. Exit
+    code is 1.
+- Completing an already-done todo reports `Completed` and is a no-op.
+- The domain module exposes the same behavior as
+  `completeTodo(todos, id)`, which returns `{ outcome, todos }`. The `todos`
+  in the result is a new list on `Completed` and the input list on
+  `NotFound`; the caller's input list is never mutated. `CompleteOutcome`
+  exports the outcome names as constants.

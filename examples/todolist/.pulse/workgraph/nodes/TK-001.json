@@ -25,11 +25,11 @@
       "rationale": "new public behavior on the core list identity invariants."
     }
   },
-  "revision": 4,
+  "revision": 15,
   "risk": "medium",
   "role": "implementation",
   "schema_version": 1,
-  "status": "ready",
+  "status": "done",
   "title": "Implement reliable todo completion",
-  "updated_at": "2026-09-05T14:07:14.276815Z"
+  "updated_at": "2026-09-05T16:27:55.895696Z"
 }

@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
+  CompleteOutcome,
   addTodo,
+  completeTodo,
   createTodo,
   findTodo,
   pendingTodos,
@@ -49,4 +51,37 @@ test("pendingTodos filters done items", () => {
     { id: "t2", title: "two", done: false },
   ];
   assert.deepEqual(pendingTodos(todos).map((todo) => todo.id), ["t2"]);
+});
+
+// QA-001 / AC-1
+test("completeTodo marks a known id done and returns Completed without mutating input", () => {
+  const todos = [createTodo("t1", "one")];
+  const snapshot = structuredClone(todos);
+  const result = completeTodo(todos, "t1");
+  assert.equal(result.outcome, "Completed");
+  assert.equal(result.outcome, CompleteOutcome.Completed);
+  assert.deepEqual(result.todos, [{ id: "t1", title: "one", done: true }]);
+  assert.deepEqual(todos, snapshot);
+  assert.notEqual(result.todos, todos);
+});
+
+// QA-002 / AC-2
+test("completeTodo returns NotFound for an unknown id and changes nothing", () => {
+  const todos = [{ id: "t1", title: "one", done: true }];
+  const snapshot = structuredClone(todos);
+  const result = completeTodo(todos, "missing-id");
+  assert.equal(result.outcome, "NotFound");
+  assert.equal(result.outcome, CompleteOutcome.NotFound);
+  assert.deepEqual(result.todos, todos);
+  assert.deepEqual(todos, snapshot);
+});
+
+test("completeTodo only touches the matched todo", () => {
+  const todos = [createTodo("t1", "one"), createTodo("t2", "two")];
+  const result = completeTodo(todos, "t2");
+  assert.deepEqual(result.todos.map((todo) => [todo.id, todo.done]), [
+    ["t1", false],
+    ["t2", true],
+  ]);
+  assert.equal(todos[1].done, false);
 });

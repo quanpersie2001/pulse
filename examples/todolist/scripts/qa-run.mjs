@@ -19,16 +19,18 @@ const PULSE_BIN = process.env.PULSE_BIN ?? "pulse";
 const CROCKFORD = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
 
 function newReceiptId() {
-  let time = Date.now();
-  let id = "";
-  for (let i = 0; i < 10; i += 1) {
-    id = CROCKFORD[time % 32] + id;
-    time = Math.floor(time / 32);
-  }
+  const enc = (value, width) => {
+    let out = "";
+    for (let i = width - 1; i >= 0; i -= 1) {
+      out = CROCKFORD[Number((value >> BigInt(i * 5)) & 31n)] + out;
+    }
+    return out;
+  };
+  let randomness = 0n;
   for (const byte of randomBytes(10)) {
-    id += CROCKFORD[(byte >> 3) & 31];
+    randomness = (randomness << 8n) | BigInt(byte);
   }
-  return `rcpt_${id}`;
+  return `rcpt_${enc(BigInt(Date.now()), 10)}${enc(randomness, 16)}`;
 }
 
 function sha256(bytes) {
@@ -36,11 +38,15 @@ function sha256(bytes) {
 }
 
 function extractPulseQaBlock(markdown) {
-  const starts = [...markdown.matchIndices("```pulse-qa")];
-  if (starts.length !== 1) {
+  const marker = "```pulse-qa";
+  const first = markdown.indexOf(marker);
+  if (first < 0) {
     throw new Error("qa.md must contain exactly one pulse-qa block");
   }
-  const contentStart = starts[0][0] + "```pulse-qa".length;
+  if (markdown.indexOf(marker, first + marker.length) >= 0) {
+    throw new Error("qa.md must contain exactly one pulse-qa block");
+  }
+  const contentStart = first + marker.length;
   const rest = markdown.slice(contentStart).replace(/^[ \t]*\n/, "");
   const end = rest.indexOf("```");
   if (end < 0) {

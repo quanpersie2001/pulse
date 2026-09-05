@@ -1,0 +1,26 @@
+{
+  "active_revision": 5,
+  "changed_paths": [
+    "docs/product/todolist.md",
+    "src/cli.mjs",
+    "src/todolist.mjs",
+    "test/todolist.test.mjs"
+  ],
+  "evidence_receipt_ids": [],
+  "handoff_fingerprint": "sha256:bf8fa74f216dbfeb79b09b8636a5cea9477d5b5cda24490bc428afcc96b838fe",
+  "handoff_id": "handoff_16ac37152ad295a828b0c7f334",
+  "idempotency_key_hash": "sha256:16ac37152ad295a828b0c7f334ab47d3b67b75b8cf9dd52dc946f1634335771f",
+  "lease_id": "lease_06c9c88787798d2eee7ccc7d46",
+  "project_id": "TK-001",
+  "recorded_at": "2026-09-05T14:29:43.484415+00:00",
+  "recorded_by": "agent:runner:worker",
+  "repository_id": "repo_01M1RWXYDW6Q0WT9J0NMA466BH",
+  "schema_version": 1,
+  "session_id": "run:rsv_06c9c88787798d2eee7ccc7d46",
+  "source_commit": "1adf61cbff390840a737f6b7f4e31558154ec422",
+  "source_dirty_hash": "sha256:1b86819b20c4721d0273002a30cfdf7c48684b2e5c4a21a6408ee19d96dcd05b",
+  "summary": "Added CompleteOutcome and completeTodo to src/todolist.mjs (returns {outcome, todos}; Completed copies the list with the matched todo done, NotFound returns the input list; never mutates input). Wired 'done <id>' in src/cli.mjs: saves state and prints Completed (exit 0) or prints NotFound without writing (exit 1). Added tests for QA-001/AC-1, QA-002/AC-2 and a multi-item case; replaced the 'Completing todos' placeholder in docs/product/todolist.md. Verified: node scripts/verify.mjs passes 10/10; manual CLI run add/done/list round-trips through .todolist.json.",
+  "ticket_id": "TK-001",
+  "verifying_revision": 6,
+  "workspace_id": "checkout"
+}

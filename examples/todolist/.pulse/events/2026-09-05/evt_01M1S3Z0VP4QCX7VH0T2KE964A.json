@@ -1,0 +1,18 @@
+{
+  "actor": {
+    "id": "quanpersie2001",
+    "kind": "human"
+  },
+  "event_type": "work.assignment.released",
+  "id": "evt_01M1S3Z0VP4QCX7VH0T2KE964A",
+  "occurred_at": "2026-09-05T15:46:00.182712Z",
+  "payload": {
+    "lease_id": "lease_06c9c88787798d2eee7ccc7d46",
+    "reason": "proof chain stale after operator edited scripts/qa-run.mjs post-handoff"
+  },
+  "schema_version": 1,
+  "subject": {
+    "id": "TK-001",
+    "kind": "ticket"
+  }
+}

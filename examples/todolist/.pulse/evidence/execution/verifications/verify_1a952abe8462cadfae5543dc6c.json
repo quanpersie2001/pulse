@@ -1,0 +1,55 @@
+{
+  "acceptance_proofs": [
+    {
+      "acceptance_id": "AC-1",
+      "check_names": [
+        "cli-roundtrip",
+        "verify"
+      ],
+      "evidence_receipt_ids": [
+        "rcpt_01M1S0AYVZJ1DBH6JQZ42PCEAP",
+        "rcpt_28WQZR1M10TZXF3KE5TK6BERPS"
+      ]
+    },
+    {
+      "acceptance_id": "AC-2",
+      "check_names": [
+        "cli-roundtrip",
+        "verify"
+      ],
+      "evidence_receipt_ids": [
+        "rcpt_01M1S0AYVZJ1DBH6JQZ42PCEAP",
+        "rcpt_28WQZR1M10TZXF3KE5TK6BERPS"
+      ]
+    }
+  ],
+  "checks": [
+    {
+      "artifact_ids": [],
+      "command": "node scripts/verify.mjs",
+      "exit_code": 0,
+      "name": "verify"
+    },
+    {
+      "artifact_ids": [],
+      "command": "node src/cli.mjs add/done/list round trip in scratch dir",
+      "exit_code": 0,
+      "name": "cli-roundtrip"
+    }
+  ],
+  "disposition": "passed",
+  "handoff_id": "handoff_855fdfcc38b77e86132342f1fd",
+  "idempotency_key_hash": "sha256:1a952abe8462cadfae5543dc6c35a7bed28d6ec9a1bebdc52c71877bf11f7905",
+  "lease_id": "lease_06c9c88787798d2eee7ccc7d46_g000003",
+  "recorded_at": "2026-09-05T16:15:30.893691+00:00",
+  "resulting_revision": 14,
+  "resulting_status": "verifying",
+  "schema_version": 1,
+  "source_commit": "49becbb87152f602dea82ddb8e062b0b0fd32008",
+  "source_dirty_hash": "sha256:55e7dfd57570ed48431a36c030ee5bc86846c8ba116b0c3dd012543b0099c79b",
+  "summary": "Independent review at 49becbb: diff limited to the four claimed paths; completeTodo returns {outcome,todos} with frozen CompleteOutcome names, copies on Completed, returns input unchanged on NotFound, never mutates input; CLI done writes state and exits 0 on Completed, exits 1 without writing on NotFound, exits 2 on missing id (confirmed by scratch-dir round trip). node scripts/verify.mjs passed 10/10. qa_checkpoint rcpt_28WQZR1M10TZXF3KE5TK6BERPS (QA-001/QA-002 passed) binds works/ST-001/qa.md at its current hash; documentation_validation rcpt_01M1S0AYVZJ1DBH6JQZ42PCEAP binds docs/product/todolist.md at its current hash (placeholder replaced). Note: scripts/qa-run.mjs carries a pre-existing uncommitted edit outside this Ticket's scope, not part of the handoff.",
+  "ticket_id": "TK-001",
+  "verification_fingerprint": "sha256:27adbb5db1bd536bf9ce324b5ffa084bb19b49050515620a5f8a293bfd89f03f",
+  "verification_id": "verify_1a952abe8462cadfae5543dc6c",
+  "verified_by": "agent:runner:reviewer"
+}

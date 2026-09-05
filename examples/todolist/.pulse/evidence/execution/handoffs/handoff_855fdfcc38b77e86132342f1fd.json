@@ -1,0 +1,26 @@
+{
+  "active_revision": 12,
+  "changed_paths": [
+    "docs/product/todolist.md",
+    "src/cli.mjs",
+    "src/todolist.mjs",
+    "test/todolist.test.mjs"
+  ],
+  "evidence_receipt_ids": [],
+  "handoff_fingerprint": "sha256:a4ee9d51c8685001c2af86a7beb32ea0a59e54a6bb86f6c9ff84c8491866de6c",
+  "handoff_id": "handoff_855fdfcc38b77e86132342f1fd",
+  "idempotency_key_hash": "sha256:855fdfcc38b77e86132342f1fd3944e0212bdf7620dcdeafe18f10cebb6124ad",
+  "lease_id": "lease_06c9c88787798d2eee7ccc7d46_g000003",
+  "project_id": "TK-001",
+  "recorded_at": "2026-09-05T16:13:12.945339+00:00",
+  "recorded_by": "agent:runner:worker",
+  "repository_id": "repo_01M1RWXYDW6Q0WT9J0NMA466BH",
+  "schema_version": 1,
+  "session_id": "run:rsv_06c9c88787798d2eee7ccc7d46_g000003",
+  "source_commit": "49becbb87152f602dea82ddb8e062b0b0fd32008",
+  "source_dirty_hash": "sha256:55e7dfd57570ed48431a36c030ee5bc86846c8ba116b0c3dd012543b0099c79b",
+  "summary": "Added CompleteOutcome and completeTodo to src/todolist.mjs (returns {outcome, todos}; Completed copies the list with the matched todo done, NotFound returns the input list unchanged; never mutates input). Wired 'done <id>' in src/cli.mjs: saves state and prints Completed (exit 0) or prints NotFound without writing (exit 1); missing id prints usage (exit 2). Added tests for QA-001/AC-1, QA-002/AC-2 plus a multi-item case; replaced the 'Completing todos' placeholder in docs/product/todolist.md. Verified on this lease at 49becbb: node scripts/verify.mjs passes 10/10; CLI add/done/list round-trip in a scratch dir writes done:true to .todolist.json with the documented exit codes. AC-1 -> 'completeTodo marks a known id done...' test; AC-2 -> 'completeTodo returns NotFound...' test. Candidate receipts for the reviewer: qa_checkpoint rcpt_28WQZR1M10TZXF3KE5TK6BERPS (QA-001/QA-002 passed), documentation_validation rcpt_01M1S0AYVZJ1DBH6JQZ42PCEAP. Note: scripts/qa-run.mjs carries a pre-existing uncommitted edit (matchIndices fix, receipt id encoding) outside this Ticket's scope; left untouched and not claimed as a changed path.",
+  "ticket_id": "TK-001",
+  "verifying_revision": 13,
+  "workspace_id": "checkout"
+}

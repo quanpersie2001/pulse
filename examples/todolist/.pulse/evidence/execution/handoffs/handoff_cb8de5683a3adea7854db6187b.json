@@ -1,0 +1,26 @@
+{
+  "active_revision": 8,
+  "changed_paths": [
+    "docs/product/todolist.md",
+    "src/cli.mjs",
+    "src/todolist.mjs",
+    "test/todolist.test.mjs"
+  ],
+  "evidence_receipt_ids": [],
+  "handoff_fingerprint": "sha256:2197de88df26cf30ce7a57237a0eb69f39751b8754cf285fd43846cdd641c9cf",
+  "handoff_id": "handoff_cb8de5683a3adea7854db6187b",
+  "idempotency_key_hash": "sha256:cb8de5683a3adea7854db6187bca85f63a0bed8c67fc0044c69f6de0614bf8d2",
+  "lease_id": "lease_06c9c88787798d2eee7ccc7d46_g000002",
+  "project_id": "TK-001",
+  "recorded_at": "2026-09-05T15:48:12.043552+00:00",
+  "recorded_by": "agent:runner:worker",
+  "repository_id": "repo_01M1RWXYDW6Q0WT9J0NMA466BH",
+  "schema_version": 1,
+  "session_id": "run:rsv_06c9c88787798d2eee7ccc7d46_g000002",
+  "source_commit": "470ca19d84bee467b0b6655b14f563b4a3b5464b",
+  "source_dirty_hash": "sha256:55e7dfd57570ed48431a36c030ee5bc86846c8ba116b0c3dd012543b0099c79b",
+  "summary": "Added CompleteOutcome and completeTodo to src/todolist.mjs (returns {outcome, todos}; Completed copies the list with the matched todo done, NotFound returns the input list unchanged; never mutates input). Wired 'done <id>' in src/cli.mjs: saves state and prints Completed (exit 0) or prints NotFound without writing (exit 1); missing id prints usage (exit 2). Added tests for QA-001/AC-1, QA-002/AC-2 plus a multi-item case; replaced the 'Completing todos' placeholder in docs/product/todolist.md (docs index shows the updated section at lines 13-27). Verified on this lease: node scripts/verify.mjs passes 10/10; CLI add/done/list round-trip in a scratch dir writes done:true to .todolist.json. AC-1 -> completeTodo Completed test; AC-2 -> completeTodo NotFound test. Note: scripts/qa-run.mjs carries a pre-existing uncommitted edit (matchIndices fix, receipt id encoding) that is outside this Ticket's scope; left untouched and not claimed as a changed path.",
+  "ticket_id": "TK-001",
+  "verifying_revision": 9,
+  "workspace_id": "checkout"
+}
