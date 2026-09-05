@@ -465,7 +465,11 @@ impl JsonGraphStore {
             if existing.subject.ticket_id == ticket_id {
                 let source_now = crate::source::head_commit(&self.repo_root)?;
                 let contract_drift = existing.subject.contract_revision != node.contract_revision
-                    || existing.source.commit != source_now;
+                    || !crate::source::same_source_state(
+                        &self.repo_root,
+                        &existing.source.commit,
+                        &source_now,
+                    );
                 if contract_drift && !acknowledge_drift {
                     return Err(PulseError::validation(
                         "run_resume_drift",

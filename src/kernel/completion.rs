@@ -77,9 +77,15 @@ impl JsonGraphStore {
                 "handoff session does not match the active reservation",
             ));
         }
-        if reservation.source.commit != args.source_commit
-            || crate::source::head_commit(&self.repo_root)? != args.source_commit
-        {
+        if !crate::source::same_source_state(
+            &self.repo_root,
+            &reservation.source.commit,
+            &args.source_commit,
+        ) || !crate::source::same_source_state(
+            &self.repo_root,
+            &args.source_commit,
+            &crate::source::head_commit(&self.repo_root)?,
+        ) {
             return Err(PulseError::validation(
                 "handoff_source_mismatch",
                 "handoff source is not the exact active assignment source",
@@ -189,9 +195,15 @@ impl JsonGraphStore {
                 "the handoff author cannot verify their own completion proof",
             ));
         }
-        if handoff.source_commit != args.source_commit
-            || crate::source::head_commit(&self.repo_root)? != args.source_commit
-        {
+        if !crate::source::same_source_state(
+            &self.repo_root,
+            &handoff.source_commit,
+            &args.source_commit,
+        ) || !crate::source::same_source_state(
+            &self.repo_root,
+            &args.source_commit,
+            &crate::source::head_commit(&self.repo_root)?,
+        ) {
             return Err(PulseError::validation(
                 "verification_source_mismatch",
                 "verification is not bound to the handoff source commit",
@@ -401,7 +413,11 @@ impl JsonGraphStore {
             let existing = load_close(&self.repo_root, &close_id)?;
             if existing.verification_id != args.verification_id
                 || existing.closed_by != args.actor
-                || existing.source_commit != args.source_commit
+                || !crate::source::same_source_state(
+                    &self.repo_root,
+                    &existing.source_commit,
+                    &args.source_commit,
+                )
                 || existing.summary != args.summary.trim()
             {
                 return Err(PulseError::validation(
@@ -423,16 +439,26 @@ impl JsonGraphStore {
         let handoff = load_handoff(&self.repo_root, &verification.handoff_id)?;
         if verification.ticket_id != handoff.ticket_id
             || verification.lease_id != handoff.lease_id
-            || verification.source_commit != handoff.source_commit
+            || !crate::source::same_source_state(
+                &self.repo_root,
+                &verification.source_commit,
+                &handoff.source_commit,
+            )
         {
             return Err(PulseError::validation(
                 "close_proof_binding_mismatch",
                 "verification and handoff proofs do not share exact execution bindings",
             ));
         }
-        if verification.source_commit != args.source_commit
-            || crate::source::head_commit(&self.repo_root)? != args.source_commit
-        {
+        if !crate::source::same_source_state(
+            &self.repo_root,
+            &verification.source_commit,
+            &args.source_commit,
+        ) || !crate::source::same_source_state(
+            &self.repo_root,
+            &args.source_commit,
+            &crate::source::head_commit(&self.repo_root)?,
+        ) {
             return Err(PulseError::validation(
                 "close_source_mismatch",
                 "proof close is not bound to the current verified source commit",
@@ -913,7 +939,8 @@ fn validate_documentation_close(
                 "documentation validation receipt lacks an exact source binding",
             )
         })?;
-        if source.commit != verification.source_commit {
+        if !crate::source::same_source_state(repo_root, &source.commit, &verification.source_commit)
+        {
             return Err(PulseError::validation(
                 "close_documentation_source_mismatch",
                 "documentation validation receipt is not bound to the verified source commit",
@@ -1054,7 +1081,7 @@ fn validate_qa_close(
                 "QA checkpoint lacks an exact source binding",
             )
         })?;
-        if source.commit != verification.source_commit
+        if !crate::source::same_source_state(repo_root, &source.commit, &verification.source_commit)
             || (expected_scope == crate::qa::QaExecutionScope::TicketCheckpoint
                 && payload.ticket_id != node.id)
             || receipt.subject.id != expected_subject

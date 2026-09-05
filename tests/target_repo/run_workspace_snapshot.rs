@@ -641,3 +641,30 @@ fn subdir_dirty_identity_hashes_inside_tracked_and_untracked_changes() {
     assert_eq!(restored.identity, clean.identity);
     assert!(!restored.dirty);
 }
+
+#[test]
+fn same_source_state_compares_subtree_not_enclosing_head() {
+    let tmp = tempfile::tempdir().unwrap();
+    fs::create_dir_all(tmp.path().join("sub/src")).unwrap();
+    fs::write(tmp.path().join("sub/src/app.js"), b"baseline\n").unwrap();
+    let base = git::commit_all(tmp.path());
+    let sub = tmp.path().join("sub");
+
+    // Commits outside the subdir do not change the target repo state.
+    fs::write(tmp.path().join("outer.txt"), b"outer change\n").unwrap();
+    git::git(tmp.path(), &["add", "outer.txt"]);
+    git::git(tmp.path(), &["commit", "-m", "outer-only change"]);
+    let head = git::git(tmp.path(), &["rev-parse", "HEAD"]);
+    let head = head.trim();
+    assert!(pulse::source::same_source_state(&sub, &base, head));
+
+    // Commits inside the subdir do.
+    fs::write(sub.join("src/app.js"), b"inside change\n").unwrap();
+    git::git(tmp.path(), &["add", "."]);
+    git::git(tmp.path(), &["commit", "-m", "inside change"]);
+    let head2 = git::git(tmp.path(), &["rev-parse", "HEAD"]);
+    let head2 = head2.trim();
+    assert!(!pulse::source::same_source_state(&sub, &base, head2));
+    assert!(!pulse::source::same_source_state(&sub, head, head2));
+    assert!(pulse::source::same_source_state(&sub, head2, head2));
+}

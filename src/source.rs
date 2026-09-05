@@ -392,6 +392,40 @@ pub fn resolve_full_commit(repo_root: &Path, commit: &str) -> Result<String> {
     Ok(resolved.to_string())
 }
 
+/// Resolved subtree identity of a commit: the tree hash at the repository
+/// root's prefix. For repository roots that are Git subdirectories, commits
+/// outside the prefix do not change this identity, so it — not the raw
+/// commit id — is the comparison key for source bindings across proof
+/// receipts recorded at different times.
+///
+/// # Errors
+///
+/// Returns a typed error when the commit cannot be resolved.
+pub fn source_tree_id(repo_root: &Path, commit: &str) -> Result<String> {
+    let prefix = git_path_prefix(repo_root, "source_binding_stale")?;
+    let spec = if prefix.0.is_empty() {
+        format!("{commit}^{{tree}}")
+    } else {
+        // `<commit>:<path>` resolves to the tree oid of the subtree.
+        format!("{commit}:{}", prefix.0.trim_end_matches('/'))
+    };
+    let output = git(repo_root, ["rev-parse", "--verify", &spec])?;
+    Ok(output.trim().to_string())
+}
+
+/// Whether two source bindings describe the same target-repository state:
+/// identical commit ids, or identical subtree trees at the repository root
+/// prefix (commits elsewhere in the enclosing worktree do not count).
+pub fn same_source_state(repo_root: &Path, left: &str, right: &str) -> bool {
+    if left == right {
+        return true;
+    }
+    matches!(
+        (source_tree_id(repo_root, left), source_tree_id(repo_root, right)),
+        (Ok(left_tree), Ok(right_tree)) if left_tree == right_tree
+    )
+}
+
 pub fn current_status(
     repo_root: &Path,
     commit: &str,
