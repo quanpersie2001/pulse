@@ -1,0 +1,20 @@
+{
+  "created_at": "2026-09-05T17:08:45.207540Z",
+  "created_by": "human:quanpersie2001",
+  "from": {
+    "content_hash": null,
+    "id": "LRN-001",
+    "kind": "learning",
+    "revision": null
+  },
+  "id": "promoted-to--LRN-001--document--DOC-TODOLIST-BEHAVIOR",
+  "revision": 1,
+  "schema_version": 1,
+  "to": {
+    "content_hash": "sha256:e471a14edac5e136ec7e53f2b61a2587bbdbb9da7d5dbf646a4d0f57208f8878",
+    "id": "DOC-TODOLIST-BEHAVIOR",
+    "kind": "document",
+    "revision": 1
+  },
+  "type": "promoted_to"
+}

@@ -1,0 +1,26 @@
+{
+  "active_revision": 5,
+  "changed_paths": [
+    "docs/product/todolist.md",
+    "src/cli.mjs",
+    "src/todolist.mjs",
+    "test/todolist.test.mjs"
+  ],
+  "evidence_receipt_ids": [],
+  "handoff_fingerprint": "sha256:8c6f30ee17c6c44e16792f7a3db17959da305dbb184351d8fab0cbe0ecd4c876",
+  "handoff_id": "handoff_18c393110ea09c57d8bfa17f88",
+  "idempotency_key_hash": "sha256:18c393110ea09c57d8bfa17f882dfa8ab8dff9af0ea2b7f11ba125774bb57d3c",
+  "lease_id": "lease_cbadad5e0e95bf58daf78f3925",
+  "project_id": "TK-002",
+  "recorded_at": "2026-09-05T17:14:40.333433+00:00",
+  "recorded_by": "agent:runner:worker",
+  "repository_id": "repo_01M1RWXYDW6Q0WT9J0NMA466BH",
+  "schema_version": 1,
+  "session_id": "run:rsv_cbadad5e0e95bf58daf78f3925",
+  "source_commit": "679879d936cafef9aabab4227a885e1bf3f6ec8a",
+  "source_dirty_hash": "sha256:1d1c9de2306e7bae8edd10b08a229d3ed8569b42fa641ac70d2df512d6a53453",
+  "summary": "Added completedTodos(todos) filter to src/todolist.mjs, wired a 'completed' CLI command printing done todos as <id>\\t<title> in insertion order, added unit tests for the filter (order, non-mutation, empty), and documented 'Listing completed todos' in docs/product/todolist.md. Verified: node scripts/verify.mjs passes 12/12 (AC-1 covered by the completedTodos tests); manual CLI run in a temp dir shows 'completed' lists only done todos tab-separated in insertion order and 'list' still shows pending; pulse docs validate reports valid.",
+  "ticket_id": "TK-002",
+  "verifying_revision": 6,
+  "workspace_id": ".pulse/runtime/worktrees/TK-002"
+}

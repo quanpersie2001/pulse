@@ -1,0 +1,98 @@
+{
+  "applicability": {
+    "configurations": [],
+    "domains": [],
+    "exclusions": [],
+    "operations": [],
+    "paths": [
+      "scripts/**",
+      "src/**"
+    ],
+    "platforms": [],
+    "risks": [],
+    "signals": [],
+    "surfaces": [],
+    "symbols": [],
+    "technologies": [],
+    "versions": [],
+    "work_kinds": [],
+    "work_labels": []
+  },
+  "content": null,
+  "created_at": "2026-09-05T17:08:12.025118Z",
+  "freshness": {
+    "invalidated_by_paths": [],
+    "platform_constraints": [],
+    "review_after": null,
+    "version_constraints": []
+  },
+  "guidance": {
+    "avoid": [
+      "Editing tracked files, including tooling scripts, after handing off"
+    ],
+    "do": [
+      "Leave the target worktree untouched between handoff and close",
+      "Recover a stale proof chain with work release, then re-run worker, reviewer and close"
+    ],
+    "required_checks": [
+      "node scripts/verify.mjs"
+    ]
+  },
+  "id": "LRN-001",
+  "kind": "process_insight",
+  "promotion": {
+    "rationale": "outcome stability now documented in the behavior contract",
+    "relation_ids": [
+      "promoted-to--LRN-001--document--DOC-TODOLIST-BEHAVIOR"
+    ],
+    "state": "promoted"
+  },
+  "provenance": {
+    "relation_ids": [
+      "derived-from--LRN-001--work--TK-001"
+    ],
+    "source_commits": [
+      "1adf61cbff390840a737f6b7f4e31558154ec422",
+      "470ca19d84bee467b0b6655b14f563b4a3b5464b",
+      "49becbb87152f602dea82ddb8e062b0b0fd32008"
+    ]
+  },
+  "revision": 3,
+  "routing": {
+    "audiences": [
+      "planner",
+      "implementer",
+      "validator",
+      "reviewer"
+    ],
+    "max_summary_tokens": 90,
+    "moments": [
+      "shape",
+      "plan",
+      "execute",
+      "verify",
+      "review"
+    ],
+    "prompt_priority": "suggested"
+  },
+  "schema_version": 1,
+  "severity": "medium",
+  "status": "promoted",
+  "summary": "Editing any tracked file in the target tree after handoff stales the handoff dirty fence: verification is refused and close cannot pass until a fresh cycle.",
+  "title": "Freeze the target tree between handoff and close",
+  "trust": {
+    "contains_untrusted_text": false,
+    "redaction_status": "caller_asserted",
+    "source": "review_required"
+  },
+  "updated_at": "2026-09-05T17:08:45.207540Z",
+  "validation": {
+    "confidence": "medium",
+    "contradiction_status": "none",
+    "reproduction_count": 1,
+    "validated_at": "2026-09-05T17:08:45.029675Z",
+    "validated_by": [
+      "human:quanpersie2001"
+    ]
+  }
+}
