@@ -33,6 +33,7 @@ fn setup() -> (Repo, JsonGraphStore, KnowledgeStore, String) {
 
 fn draft(work_id: &str) -> LearningDraft {
     LearningDraft {
+        scope: None,
         title: "Token rotation requires atomic mutation".to_string(),
         kind: LearningKind::FailurePattern,
         severity: Severity::High,
@@ -215,4 +216,86 @@ fn edit_uses_cas_and_relation_retry_is_idempotent() {
     assert_eq!(first.code, "created");
     let second = knowledge.add_relation("LRN-001", rel, ctx(14)).unwrap();
     assert_eq!(second.code, "unchanged");
+}
+
+#[test]
+fn learning_scope_defaults_to_repository_and_round_trips() {
+    let (_repo, _graph, knowledge, work_id) = setup();
+    let ctx = OperationContext {
+        actor: "human:test".to_string(),
+        now: Utc.timestamp_opt(2, 0).unwrap(),
+    };
+
+    // No scope in the draft: repository is the default.
+    let plain = knowledge
+        .create(
+            draft(&work_id),
+            OperationContext {
+                actor: "human:test".to_string(),
+                now: Utc.timestamp_opt(1, 0).unwrap(),
+            },
+        )
+        .unwrap()
+        .value;
+    assert_eq!(plain.scope, LearningScope::Repository);
+
+    let mut harness_draft = draft(&work_id);
+    harness_draft.scope = Some(LearningScope::Harness);
+    let harness = knowledge.create(harness_draft, ctx.clone()).unwrap().value;
+    assert_eq!(harness.scope, LearningScope::Harness);
+
+    // Patch can move a learning between scopes.
+    let patched = knowledge
+        .edit(
+            &plain.id,
+            plain.revision,
+            LearningPatch {
+                scope: Some(LearningScope::Harness),
+                ..Default::default()
+            },
+            ctx,
+        )
+        .unwrap()
+        .value;
+    assert_eq!(patched.scope, LearningScope::Harness);
+}
+
+#[test]
+fn learning_scope_is_backward_compatible_with_scopeless_records() {
+    // A pre-scope record on disk must still deserialize; the default is
+    // repository.
+    let value = json!({
+        "schema_version": 1,
+        "id": "LRN-001",
+        "revision": 1,
+        "title": "Old record",
+        "status": "candidate",
+        "kind": "failure_pattern",
+        "severity": "low",
+        "summary": "s",
+        "guidance": {"do": [], "avoid": [], "required_checks": []},
+        "applicability": {},
+        "provenance": {"relation_ids": [], "source_commits": []},
+        "validation": {
+            "confidence": "low",
+            "validated_by": [],
+            "validated_at": null,
+            "reproduction_count": 1,
+            "contradiction_status": "none"
+        },
+        "routing": {
+            "audiences": ["implementer"],
+            "moments": ["execute"],
+            "prompt_priority": "suggested",
+            "max_summary_tokens": 90
+        },
+        "promotion": {"state": "unresolved", "rationale": null, "relation_ids": []},
+        "freshness": {"review_after": null, "invalidated_by_paths": [], "version_constraints": [], "platform_constraints": []},
+        "trust": {"source": "review_required", "contains_untrusted_text": false, "redaction_status": "caller_asserted"},
+        "content": null,
+        "created_at": "2026-09-05T00:00:00Z",
+        "updated_at": "2026-09-05T00:00:00Z"
+    });
+    let learning: Learning = serde_json::from_value(value).unwrap();
+    assert_eq!(learning.scope, LearningScope::Repository);
 }

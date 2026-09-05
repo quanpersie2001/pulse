@@ -373,6 +373,7 @@ impl JsonGraphStore {
                         .map(|binding| binding.session_id.as_str())
                         .unwrap_or_default(),
                     &reservation.source.commit,
+                    &harness_learnings_section(&self.repo_root),
                 ),
             )
             .map_err(|error| PulseError::io(&prompt_path, error))?;
@@ -1539,7 +1540,13 @@ fn qa_posture_str(posture: crate::graph::model::contract::QaImpactPosture) -> &'
 /// it never copies the contract into the prompt. Commands are exact, with the
 /// run's lease/session/source facts filled in, so the agent cannot fumble
 /// the proof syntax.
-fn worker_prompt(ticket_id: &str, lease_id: &str, session_id: &str, source_commit: &str) -> String {
+fn worker_prompt(
+    ticket_id: &str,
+    lease_id: &str,
+    session_id: &str,
+    source_commit: &str,
+    harness_learnings: &str,
+) -> String {
     format!(
         "# Pulse worker run — {ticket_id}\n\
          You are `agent:runner:worker` implementing Ticket {ticket_id} in this\n\
@@ -1574,7 +1581,44 @@ fn worker_prompt(ticket_id: &str, lease_id: &str, session_id: &str, source_commi
          `{{\"status\": \"blocked\", \"reason\": \"<why>\"}}`.\n\
          \n\
          Proof comes from the CLI receipt in step 4; the final JSON line is\n\
-         only a summary. Never claim handed_off without a successful step 4.\n"
+         only a summary. Never claim handed_off without a successful step 4.{harness_learnings}\n"
+    )
+}
+
+/// Render the `## Harness learnings` prompt section from validated or
+/// promoted harness-scope learnings. Harness learnings teach how to operate
+/// Pulse itself; they never inject into packets by path, so the bootstrap
+/// prompt is their injection point. Empty when there are none.
+fn harness_learnings_section(repo_root: &Path) -> String {
+    let Ok((entries, _)) = crate::knowledge::validate::load_records(repo_root) else {
+        return String::new();
+    };
+    let mut lines: Vec<String> = Vec::new();
+    for (id, learning) in &entries {
+        if learning.scope != crate::knowledge::model::LearningScope::Harness {
+            continue;
+        }
+        if !matches!(
+            learning.status,
+            crate::knowledge::model::LearningStatus::Validated
+                | crate::knowledge::model::LearningStatus::Promoted
+        ) {
+            continue;
+        }
+        lines.push(format!("- {id}: {}", learning.summary));
+        for check in &learning.guidance.required_checks {
+            lines.push(format!("  - check: {check}"));
+        }
+    }
+    if lines.is_empty() {
+        return String::new();
+    }
+    format!(
+        "\n## Harness learnings\n\
+         Lessons about working with this Pulse harness, learned from earlier\n\
+         runs. Follow them; they are not part of the Ticket contract:\n\
+         {}\n",
+        lines.join("\n")
     )
 }
 

@@ -955,6 +955,12 @@ fn apply_patch(learning: &mut Learning, patch: LearningPatch, now: DateTime<Utc>
             changed.push("severity".to_string());
         }
     }
+    if let Some(v) = patch.scope {
+        if learning.scope != v {
+            learning.scope = v;
+            changed.push("scope".to_string());
+        }
+    }
     if let Some(v) = patch.summary {
         let v = v.trim().to_string();
         if learning.summary != v {

@@ -34,6 +34,7 @@ fn setup() -> (tempfile::TempDir, JsonGraphStore, KnowledgeStore, String) {
 
 fn draft(work_id: &str, title: &str) -> LearningDraft {
     LearningDraft {
+        scope: None,
         title: title.to_string(),
         kind: LearningKind::FailurePattern,
         severity: Severity::High,

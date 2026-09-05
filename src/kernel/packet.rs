@@ -481,6 +481,11 @@ fn applicable_knowledge(
     };
     let mut items = Vec::new();
     for (id, learning) in &entries {
+        // Harness learnings are about operating Pulse itself; they surface
+        // in runner bootstrap prompts, never in packets by path.
+        if learning.scope == crate::knowledge::model::LearningScope::Harness {
+            continue;
+        }
         if !matches!(
             learning.status,
             crate::knowledge::model::LearningStatus::Validated

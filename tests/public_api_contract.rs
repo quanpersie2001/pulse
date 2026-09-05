@@ -114,6 +114,7 @@ fn docs_evidence_knowledge_storage_and_identity_public_paths_compile() {
     assert_eq!(receipt.kind.as_str(), "documentation_validation");
 
     let _learning = LearningDraft {
+        scope: None,
         title: "Use public paths intentionally".to_string(),
         kind: LearningKind::ContextRoutingInsight,
         severity: Severity::Low,

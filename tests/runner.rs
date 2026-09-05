@@ -12,6 +12,8 @@ mod artifacts;
 mod cli_run;
 #[path = "common/bin.rs"]
 mod common_bin;
+#[path = "runner/harness_learning.rs"]
+mod harness_learning;
 #[path = "runner/isolation.rs"]
 mod isolation;
 #[path = "runner/recovery.rs"]

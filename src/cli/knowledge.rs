@@ -24,6 +24,11 @@ pub(crate) enum KnowledgeCommand {
         from: String,
         #[arg(long)]
         file: PathBuf,
+        /// Learning scope: harness (about using Pulse itself) or repository
+        /// (about the codebase). Overrides the draft file's scope; the
+        /// default is repository.
+        #[arg(long)]
+        scope: Option<KnowledgeScopeArg>,
         #[arg(long)]
         actor: String,
         #[arg(long)]
@@ -142,6 +147,22 @@ impl From<KnowledgeStatusArg> for LearningStatus {
             KnowledgeStatusArg::Disputed => LearningStatus::Disputed,
             KnowledgeStatusArg::Superseded => LearningStatus::Superseded,
             KnowledgeStatusArg::Retired => LearningStatus::Retired,
+        }
+    }
+}
+
+#[derive(Clone, Copy, ValueEnum)]
+#[value(rename_all = "snake_case")]
+pub(crate) enum KnowledgeScopeArg {
+    Harness,
+    Repository,
+}
+
+impl From<KnowledgeScopeArg> for crate::knowledge::model::LearningScope {
+    fn from(value: KnowledgeScopeArg) -> Self {
+        match value {
+            KnowledgeScopeArg::Harness => crate::knowledge::model::LearningScope::Harness,
+            KnowledgeScopeArg::Repository => crate::knowledge::model::LearningScope::Repository,
         }
     }
 }
@@ -277,6 +298,7 @@ pub(crate) fn handle(store: &JsonGraphStore, command: KnowledgeCommand) -> Resul
         KnowledgeCommand::Capture {
             from,
             file,
+            scope,
             actor,
             json,
         } => {
@@ -284,6 +306,9 @@ pub(crate) fn handle(store: &JsonGraphStore, command: KnowledgeCommand) -> Resul
                 std::fs::read(&file).map_err(|error| PulseError::io(file.clone(), error))?;
             let mut draft: LearningDraft = serde_json::from_slice(&bytes)
                 .map_err(|error| PulseError::json(file.clone(), error))?;
+            if let Some(scope) = scope {
+                draft.scope = Some(scope.into());
+            }
             let node = store.show_node(&from)?;
             draft
                 .provenance_targets

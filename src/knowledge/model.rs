@@ -11,6 +11,12 @@ pub struct Learning {
     pub title: String,
     pub status: LearningStatus,
     pub kind: LearningKind,
+    /// What the learning is about: `harness` (how to use Pulse itself) or
+    /// `repository` (the codebase). Harness learnings never inject into
+    /// packets by path; they go into runner bootstrap prompts and can be
+    /// promoted into the target repository's AGENTS.md.
+    #[serde(default)]
+    pub scope: LearningScope,
     pub severity: Severity,
     pub summary: String,
     pub guidance: Guidance,
@@ -31,6 +37,8 @@ pub struct Learning {
 pub struct LearningDraft {
     pub title: String,
     pub kind: LearningKind,
+    #[serde(default)]
+    pub scope: Option<LearningScope>,
     pub severity: Severity,
     pub summary: String,
     pub guidance: Guidance,
@@ -50,6 +58,8 @@ pub struct LearningDraft {
 #[serde(deny_unknown_fields)]
 pub struct LearningPatch {
     pub title: Option<String>,
+    #[serde(default)]
+    pub scope: Option<LearningScope>,
     pub severity: Option<Severity>,
     pub summary: Option<String>,
     pub guidance: Option<Guidance>,
@@ -185,6 +195,14 @@ pub struct Trust {
 pub struct ContentBinding {
     pub path: String,
     pub content_hash: String,
+}
+
+#[derive(Default, Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+#[serde(rename_all = "snake_case")]
+pub enum LearningScope {
+    Harness,
+    #[default]
+    Repository,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
@@ -391,6 +409,7 @@ impl LearningDraft {
             title: self.title.trim().to_string(),
             status: LearningStatus::Candidate,
             kind: self.kind,
+            scope: self.scope.unwrap_or_default(),
             severity: self.severity,
             summary: self.summary.trim().to_string(),
             guidance: self.guidance,
