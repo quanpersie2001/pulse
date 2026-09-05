@@ -188,3 +188,93 @@ fn work_ready_rejects_unsupported_profile() {
     let err: Value = serde_json::from_slice(&output.stderr).unwrap();
     assert_eq!(err["code"], "readiness_profile_unsupported");
 }
+
+#[test]
+fn story_reaches_ready_with_ticket_contract_families_not_applicable() {
+    let repo = tempfile::tempdir().unwrap();
+    write_policy(
+        &repo,
+        &[
+            "work.node.create",
+            "work.transition.shaped",
+            "work.transition.ready",
+        ],
+    );
+    let store = JsonGraphStore::new(repo.path());
+    let created = run(
+        &repo,
+        &[
+            "work",
+            "create",
+            "--kind",
+            "story",
+            "--title",
+            "Outcome story",
+            "--json",
+        ],
+    );
+    assert!(created.status.success());
+    let value: Value = serde_json::from_slice(&created.stdout).unwrap();
+    let story_id = value["value"]["id"].as_str().unwrap().to_string();
+    let revision = value["value"]["revision"].as_u64().unwrap();
+
+    let shaped = run(
+        &repo,
+        &[
+            "work",
+            "transition",
+            &story_id,
+            "--to",
+            "shaped",
+            "--expected-revision",
+            &revision.to_string(),
+            "--actor",
+            "human:tester",
+            "--json",
+        ],
+    );
+    assert!(
+        shaped.status.success(),
+        "shaped failed: {}",
+        String::from_utf8_lossy(&shaped.stderr)
+    );
+    let value: Value = serde_json::from_slice(&shaped.stdout).unwrap();
+    let revision = value["value"]["revision"].as_u64().unwrap();
+
+    let ready = run(
+        &repo,
+        &[
+            "work",
+            "transition",
+            &story_id,
+            "--to",
+            "ready",
+            "--expected-revision",
+            &revision.to_string(),
+            "--actor",
+            "human:tester",
+            "--json",
+        ],
+    );
+    assert!(
+        ready.status.success(),
+        "story ready failed: {}",
+        String::from_utf8_lossy(&ready.stderr)
+    );
+
+    // The report explains the reduced Story family set instead of failing on
+    // Ticket-only contract families.
+    let report_out = run(&repo, &["work", "ready", &story_id, "--json"]);
+    assert!(report_out.status.success());
+    let report: Value = serde_json::from_slice(&report_out.stdout).unwrap();
+    assert_eq!(report["status"], "ready");
+    let families = report["gate_families"].as_array().unwrap();
+    for family in ["qa_impact", "documentation_impact", "ticket_ambiguity"] {
+        let entry = families
+            .iter()
+            .find(|f| f["family"] == family)
+            .unwrap_or_else(|| panic!("family {family} missing"));
+        assert_eq!(entry["status"], "not_applicable", "family {family}");
+    }
+    let _ = &store;
+}

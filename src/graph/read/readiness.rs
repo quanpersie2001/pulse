@@ -13,8 +13,10 @@
 //! * readiness never mutates state;
 //! * the structural executability module must not import readiness (one-way
 //!   dependency: readiness consumes the structural report, never the reverse);
-//! * only implementation Tickets can become `ready` under
-//!   `contract_readiness`;
+//! * implementation Tickets become `ready` under the full `contract_readiness`
+//!   profile; Stories become `ready` with the Ticket-contract families
+//!   reporting `not_applicable` (their obligations live in the Story close
+//!   gate);
 //! * the Ticket contract itself is `works/<id>/ticket.md`; readiness consumes
 //!   its parse via `ticket_brief` and never a stored JSON contract.
 
@@ -31,8 +33,8 @@ use crate::id::WorkKind;
 use crate::policy::AuthorityPolicyReport;
 use crate::PulseResult;
 
-/// Current readiness profile identifier. Only implementation Tickets can be
-/// ready under this profile.
+/// Current readiness profile identifier. Implementation Tickets pass every
+/// family; Stories pass with the Ticket-contract families `not_applicable`.
 pub const READINESS_PROFILE: &str = "contract_readiness";
 
 /// Profile identifier recorded on `work.node.transitioned` events that pass the
@@ -450,6 +452,11 @@ impl FamilyEvaluator<'_> {
     }
 
     fn documentation_impact(&mut self) -> GateStatus {
+        if self.inputs.subject.kind != WorkKind::Ticket {
+            // Stories carry no Ticket docs contract; close-time docs
+            // obligations are owned by the Story close gate.
+            return GateStatus::NotApplicable;
+        }
         let posture = self.inputs.subject.documentation_posture();
         match posture {
             crate::graph::model::node::DocumentationImpactPosture::Unknown => {
@@ -488,6 +495,11 @@ impl FamilyEvaluator<'_> {
     }
 
     fn qa_impact(&mut self) -> GateStatus {
+        if self.inputs.subject.kind != WorkKind::Ticket {
+            // Stories own their baseline as the behavioral owner; actual
+            // qualification is enforced by the Story close gate.
+            return GateStatus::NotApplicable;
+        }
         let qa = self
             .inputs
             .subject

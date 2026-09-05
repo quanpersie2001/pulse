@@ -34,6 +34,20 @@ Hai nguồn đã đọc:
   gọi rõ, và chỉ được claim cải thiện sau fresh rerun.
 - Không control-plane song song: không state.json, không HANDOFF.json.
 
+**Matt Pocock skills** (`references/mattpocock`, lấy chuỗi và primitive):
+
+- Chuỗi chính `grill-with-docs → to-spec → to-tickets → implement →
+  code-review`, mỗi skill kết thúc ở một artifact, skill sau không phỏng vấn
+  lại.
+- `wayfinder` là on-ramp cho việc lớn còn mù mờ: đích đến trước, map là index
+  của decision ticket (grilling, prototype, research, task), một ticket một
+  phiên, fog of war, bàn giao sang to-spec chứ không tự build.
+- `grilling` là primitive: một câu một lần, fact tự tra, decision hỏi người,
+  không hành động cho đến khi người xác nhận. Glossary ghi ngay; ADR chỉ khi
+  khó đảo ngược, khó hiểu nếu thiếu context, có trade-off thật.
+- `research` là subagent nền, nguồn sơ cấp, để lại file có trích dẫn.
+- Không lấy: issue tracker ngoài, `CONTEXT.md` ở root, `.scratch/`.
+
 **Khuym** (lấy vài kỹ thuật, không lấy khung):
 
 - Hỏi một câu một lần, kèm recommended answer, khoá quyết định có ID ổn định.
@@ -55,10 +69,11 @@ phần "encode invariant" ánh xạ vào `runners.json` role `check`.
    `AGENTS.md` và tạo `PULSE.md`. Khối này route theo hình dạng yêu cầu và
    trỏ lệnh `pulse` cụ thể. `pulse init --refresh` render lại khối theo
    version CLI, giữ nguyên nội dung ngoài marker; lệch thì báo, không ghi đè.
-2. **Ba skill, explicit-only trừ một.** `pulse-shape` (từ intent đến Ticket
-   `ready`, có thể được gọi ngầm khi yêu cầu có mơ hồ), `pulse-ratchet`
-   (compound và improve-harness, explicit), `pulse-onboard` (brownfield,
-   explicit, read-only pass trước). Không có `using`, không router.
+2. **Skill theo artifact, mỗi skill kết thúc ở một trạng thái graph.** Chuỗi
+   chính `pulse-grill → pulse-spec → pulse-tickets`, on-ramp `pulse-wayfind`
+   cho việc lớn còn mù mờ, primitive `pulse-research`, và hai skill explicit
+   `pulse-ratchet`, `pulse-onboard`. Không có `using`, không router: khối
+   AGENTS.md route theo hình dạng yêu cầu.
 3. **Executing và reviewing không phải skill.** Bootstrap prompt trong
    `src/kernel/run.rs` là contract máy, đã đủ. Khối `AGENTS.md` mô tả cùng
    contract cho agent tương tác.
@@ -88,10 +103,13 @@ Thay đổi nhỏ, hướng rõ (R0)
   -> pulse run worker, pulse run reviewer, pulse work close
 
 Thay đổi nhiều phiên, nhiều Ticket, hoặc risk >= medium (R1–R3)
-  -> nạp skill pulse-shape: Story + qa.md, approach.md khi R2,
-     Decision khi R3, Ticket ready qua ambiguity gate
+  -> pulse-grill (Story shaped) -> pulse-spec (approach.md, qa.md)
+     -> pulse-tickets (Ticket ready, blocked_by)
   -> pulse run worker | reviewer | qa, docs validate --record, work close,
      work close-story
+
+Việc lớn hơn một phiên, đường đi chưa thấy
+  -> pulse-wayfind: Epic + decision_work Ticket + Decision, rồi mới grill
 
 Mơ hồ về sản phẩm còn mở (objective, acceptance, invariant, public contract)
   -> dừng trước mutation; ghi câu hỏi vào ## Open questions với (blocking)
@@ -115,34 +133,119 @@ intent; code và test là implementation; receipt là observation; docs khác l�
 explanation. Mâu thuẫn ảnh hưởng acceptance thì gate fail với `docs_conflict`,
 human quyết.
 
-## Ba skill
+## Skill theo artifact
 
-### `pulse-shape`
+Lấy khung của Matt Pocock (`references/mattpocock`): mỗi skill kết thúc ở một
+artifact và một trạng thái graph, không skill nào làm việc của skill kế tiếp.
+Chuỗi chính và on-ramp:
 
-Câu hỏi: từ intent này đến Ticket `ready` cần gì? SKILL.md dưới 120 dòng, mỗi
-move là một file trong `references/`, nạp theo materialization:
+```text
+pulse-wayfind (on-ramp, việc lớn còn mù mờ)  ──► Epic + decision_work + Decision
+        │
+        ▼
+pulse-grill  ──► Story shaped, glossary, Decision khi khó đảo ngược
+pulse-spec   ──► story.md, approach.md, qa.md   (không phỏng vấn lại)
+pulse-tickets──► Ticket ready, blocked_by
+pulse run worker | reviewer | qa  (không phải skill)
+pulse-ratchet (sau close)
+pulse-onboard (brownfield, explicit)
+pulse-research (primitive, model-invoked, subagent nền)
+```
 
-| Move | Khi nào | Đọc | Ghi | Lệnh |
-|---|---|---|---|---|
-| wayfind | luôn | intent, `docs tree`, `work rollup` | `story.md` (đích, đã biết, chưa biết, quyết định phải ra trước) | `work create --kind story`, `edge add parent` |
-| research | có câu hỏi mà repo không trả lời được | web, docs ngoài | `works/<ST>/research/<topic>.md` có nguồn và ngày | `work create --role decision_work` nếu cần track |
-| brainstorm | R2+ hoặc có lựa chọn khó đảo ngược | `story.md`, `research/`, `docs search` | `approach.md`; `decision.md` | `work create --kind decision`; receipt `decision_acceptance` do human |
-| grill | R1+ | `docs applicable`, `docs get`, code anchors | `## Open questions` với disposition | `work sync`, `work transition shaped` |
-| plan | luôn | `approach.md`, `qa.md`, `docs impact` | `ticket.md` đầy đủ, `qa.md` baseline | `work create --kind ticket --risk`, `edge add blocked_by`, `qa baseline`, `work ready` |
-| validate | R2+ hoặc có giả định chưa chứng minh | `work executability`, `work packet` | `plan.md`; spike là `decision_work` Ticket | `work packet --json` |
+Ánh xạ khái niệm của Matt sang vật liệu Pulse đã có:
 
-Gate human gắn vào trạng thái: Story `shaped` (đích đúng chưa), Decision
-`accepted` (lựa chọn khó đảo ngược), Ticket `ready` (plan đúng chưa). R0 bỏ
-qua skill này hoàn toàn.
+| Matt Pocock | Pulse |
+|---|---|
+| `wayfinder:map` issue, Decisions so far | Epic node, `works/EP-*/brief.md` là index |
+| decision ticket grilling / prototype / task | Ticket `role: decision_work` dưới Epic |
+| decision ticket research | `decision_work` + `works/<id>/research/<topic>.md` |
+| answer khi đóng ticket | Decision node + receipt `decision_acceptance` |
+| frontier, native blocking | `blocked_by` edge + `pulse work ready` |
+| Not yet specified, Out of scope | hai mục trong `brief.md` |
+| glossary `CONTEXT.md` | doc kind `domain`: `docs/domain/glossary.md` trong registry |
+| ADR | Decision node |
+| spec: user stories, seams, testing decisions | `story.md`, `approach.md`, `qa.md` |
+| tracer-bullet ticket + blocked_by | Ticket `implementation`, `ticket.md`, edge |
+| implement, code-review | `pulse run worker`, `pulse run reviewer` |
 
-Quy tắc trong skill: đọc repo và docs trước khi hỏi; một câu một lần với
-recommended answer; mọi claim gắn nhãn authority; không tạo artifact ngoài
-bảng trên; không tạo Ticket cho việc chưa được duyệt.
+### `pulse-wayfind` (user-invoked)
 
-### `pulse-ratchet`
+Chỉ cho việc lớn hơn một phiên và đường đi chưa thấy. Lập kế hoạch, không
+làm.
 
-Câu hỏi: lần chạy này để lại gì cho lần sau, và harness sửa ở đâu? Gộp
-compounding của Khuym với improve-harness và encode-invariant của
+1. Đặt tên đích đến bằng một vòng grill ngắn. `pulse work create --kind epic`,
+   `brief.md` có `## Destination`, `## Notes`, `## Decisions so far`,
+   `## Not yet specified`, `## Out of scope`.
+2. Grill theo chiều rộng để tìm quyết định còn mở. Không có sương mù thì dừng,
+   chuyển sang `pulse-grill` với một Story.
+3. Mỗi câu hỏi nêu được chính xác thành một Ticket `--role decision_work`
+   dưới Epic, `## Question` và loại: grilling, prototype, research, task.
+   Wire `blocked_by` ở lượt hai. Phần chưa nêu được ở lại `Not yet specified`.
+4. Research ticket chạy ngay bằng `pulse-research` subagent, ghi
+   `works/<id>/research/<topic>.md`, không chờ.
+5. Mỗi phiên sau giải một ticket: `pulse work ready` cho frontier, resolve
+   bằng grill hoặc prototype, câu trả lời thành Decision node
+   (`work create --kind decision`, receipt `decision_acceptance` do human),
+   đóng ticket, thêm một dòng vào `Decisions so far`, graduate fog thành
+   ticket mới, ruled-out thì đóng và ghi `Out of scope`.
+6. Map xong khi không còn `decision_work` mở. Bàn giao sang `pulse-grill`
+   hoặc thẳng `pulse-spec` nếu Story đã rõ. Không build từ map.
+
+### `pulse-grill` (user-invoked, có thể implicit khi mơ hồ)
+
+Primitive grilling của Matt giữ nguyên: một câu một lần, kèm câu trả lời gợi
+ý, fact tự tra bằng `pulse docs search/get` và code, decision hỏi người, không
+hành động cho đến khi người xác nhận. Thêm giấy tờ:
+
+- Thuật ngữ chốt xong ghi ngay vào `docs/domain/glossary.md` (đăng ký
+  `DOC-GLOSSARY` kind domain nếu chưa có). Glossary chỉ là từ vựng.
+- Quyết định đủ ba điều kiện (khó đảo ngược, khó hiểu nếu thiếu context, có
+  trade-off thật) thành Decision node. Còn lại ghi `(resolved)` trong
+  `## Open questions` của `story.md`.
+- Kết thúc: `pulse work create --kind story` nếu chưa có, `story.md` có
+  Outcome, Success signals, Scope boundary, Open questions;
+  `pulse work transition --to shaped`. Đây là gate human thứ nhất.
+
+### `pulse-spec` (user-invoked)
+
+Không phỏng vấn lại. Tổng hợp từ cuộc trò chuyện, glossary, Decision, research:
+
+- `approach.md`: solution, implementation decisions, seam để test (ưu tiên seam
+  có sẵn, cao nhất có thể, càng ít càng tốt), testing decisions, out of scope.
+  Hỏi người đúng một lần về seam.
+- `qa.md`: user stories thành QA case trong block `pulse-qa`; `pulse qa
+  baseline` validate.
+- `pulse docs impact` để biết doc nào phải đổi; ghi vào `approach.md`.
+- Nếu giữa chừng thiếu fact ngoài repo, gọi `pulse-research`.
+
+### `pulse-tickets` (user-invoked)
+
+Cắt `approach.md` thành Ticket tracer bullet: lát dọc xuyên mọi tầng, demo
+được độc lập, vừa một context window, prefactoring trước. Wide refactor dùng
+expand–contract. Trình bày breakdown (title, blocked by, delivers) và hỏi
+người về độ mịn và edge trước khi tạo. Rồi theo thứ tự blocker trước:
+
+```text
+pulse work create --kind ticket --risk <r> --parent <ST>
+pulse graph edge add --type blocked_by --from <TK> --to <TK>
+<điền ticket.md: Acceptance có ID, Code anchors, Verify, Open questions
+ disposition, Documentation impact, QA impact với case ID từ qa.md>
+pulse work sync <TK>
+pulse work ready <TK>
+```
+
+Ready gate là gate human thứ hai. R0 không cần ba skill trên: khối AGENTS.md
+dẫn thẳng đến `work create` và `work ready`.
+
+### `pulse-research` (model-invoked, primitive)
+
+Subagent nền, chỉ nguồn sơ cấp, một file `works/<id>/research/<topic>.md`
+có trích dẫn và ngày. Packet liệt kê file này của Story hoặc Epic cha dạng ref.
+Được `pulse-wayfind`, `pulse-grill`, `pulse-spec` gọi; không tự tạo node.
+
+### `pulse-ratchet` (explicit, sau close)
+
+Gộp compounding của Khuym với improve-harness và encode-invariant của
 repository-harness, vì cả ba đều là "failure → owner → intervention → proof":
 
 1. Đọc chuỗi bằng chứng của Ticket vừa đóng: handoff, verification, findings,
@@ -151,30 +254,30 @@ repository-harness, vì cả ba đều là "failure → owner → intervention �
    `repository` (về codebase) hoặc `harness` (về cách dùng Pulse). Không
    reusable thì `non_durable`, không tạo record.
 3. Tìm earliest gap theo phân loại của repository-harness: context,
-   capability, ownership, authority, proof, environment. Ghi vào
-   `guidance.required_checks` hoặc `guidance.avoid`.
+   capability, ownership, authority, proof, environment.
 4. Một intervention, tại owner đúng, không hỏi: `knowledge promote
-   --document` (docs), `--agents-md` (harness learning), `--decision`, hoặc
-   role `check` mới trong `runners.json` khi bài học là invariant cơ học có
-   authority. Ghi giả thuyết trước khi sửa: "nếu thêm X tại owner Y thì agent
-   sau sẽ Z vì W; bằng chứng làm yếu: …; điều kiện gỡ: …".
-5. Fresh rerun là Ticket kế tiếp chạm cùng path. Handoff của nó ghi
-   `knowledge_usage`. `helpful` → `validate`; `misleading` hai lần → `retire`
-   và gỡ intervention. Không có rerun thì giữ `candidate`; không claim cải
-   thiện.
+   --document`, `--agents-md`, `--decision`, hoặc role `check` mới trong
+   `runners.json` khi bài học là invariant cơ học có authority. Ghi giả thuyết
+   trước khi sửa.
+5. Fresh rerun là Ticket kế tiếp chạm cùng path. Handoff ghi
+   `knowledge_usage`. `helpful` thì validated; `misleading` hai lần thì retire
+   và gỡ. Không rerun thì giữ `candidate`, không claim cải thiện.
 
-Explicit-only. Khối `AGENTS.md` nói agent gọi nó sau `work close`, hoặc
-developer gọi định kỳ.
+### `pulse-onboard` (explicit, brownfield)
 
-### `pulse-onboard`
+Hai pass của repository-harness: pass một read-only, baseline Git và ignored
+state, phân loại authority từng claim, so docs với check hiện có, đề xuất theo
+thứ tự sửa instruction sai trước rồi mới thêm; pass hai sau approve chạy
+`pulse init`, `docs register`, `docs tags add`, backup docs vào
+`.pulse/migrations/docs-backups/` trước khi restructure.
 
-Repo brownfield chưa có `.pulse/`. Lấy nguyên hai pass của repository-harness:
-pass một read-only, ghi baseline Git và ignored state trước khi inspect, phân
-loại authority từng claim, so docs với check hiện có, đề xuất; pass hai sau
-approve chạy `pulse init`, `docs register`, `docs tags add`, backup docs vào
-`.pulse/migrations/docs-backups/` trước khi restructure. Bỏ phần evidence
-capsule và audit script, giữ bảng authority và thứ tự đề xuất (sửa instruction
-sai trước, link tới guidance có sẵn, rồi mới thêm mới).
+### Gate human
+
+Gắn vào trạng thái, không gắn vào skill: Story `shaped` (sau grill), Decision
+`accepted` (wayfind hoặc grill), seam trong `approach.md` (spec hỏi một lần),
+breakdown trước khi tạo Ticket (tickets), Ticket `ready`, close receipt. Giữ
+grill → spec → tickets trong một context window; đầy thì `pulse note` để bàn
+giao, không compact giữa chừng.
 
 ## Thay đổi cần làm
 
@@ -195,8 +298,12 @@ CLI và kernel:
 
 Repo Pulse:
 
-- `skills/pulse-shape/`, `skills/pulse-ratchet/`, `skills/pulse-onboard/`,
-  mỗi cái SKILL.md ngắn và `references/`.
+- `skills/pulse-{wayfind,grill,spec,tickets,research,ratchet,onboard}/`,
+  mỗi cái SKILL.md ngắn và `references/`; `pulse-research` model-invoked,
+  `pulse-grill` model-invoked khi phát hiện mơ hồ, còn lại user-invoked.
+- `docs/domain/glossary.md` là đích glossary; `pulse init` đăng ký
+  `DOC-GLOSSARY` kind domain rỗng để grill có chỗ ghi.
+- Template `brief.md` của Epic có năm mục của map.
 - `assets/agents-block.md` là template khối AGENTS, cùng file dùng cho
   `pulse init` và test.
 - `.claude-plugin/plugin.json` và `.codex-plugin/` khai ba skill.
@@ -208,10 +315,11 @@ Repo Pulse:
   ghi "Narrowed by 0009".
 
 Thứ tự: Bước 6 HANDOFF.md trước (scope learning, promote, reviewer
-classification). Rồi khối `AGENTS.md` và `pulse-shape`, dogfood một Ticket R1
-trên todolist bằng agent tương tác không gõ lệnh tay. Rồi `pulse-ratchet` với
-friction tự động, kiểm chứng bằng Ticket kế tiếp thấy intervention trong packet
-hoặc prompt. `pulse-onboard` sau cùng, thử trên một repo thật ngoài todolist.
+classification). Rồi khối `AGENTS.md`, `pulse-grill`, `pulse-spec`,
+`pulse-tickets`, dogfood một Story hai Ticket trên todolist bằng agent tương
+tác không gõ lệnh tay. Rồi `pulse-ratchet` với friction tự động, kiểm chứng
+bằng Ticket kế tiếp. `pulse-wayfind` và `pulse-research` khi có một Epic thật.
+`pulse-onboard` sau cùng, thử trên một repo thật ngoài todolist.
 
 ## Consequences
 
