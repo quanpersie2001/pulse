@@ -602,6 +602,21 @@ impl JsonGraphStore {
                 let acceptance_ids =
                     crate::kernel::completion::ticket_acceptance_ids(&self.repo_root, node)?;
                 let handoffs = verifying_handoffs(&self.repo_root, ticket_id, node.revision)?;
+                let proof_receipts = |kind: crate::evidence::model::ReceiptKind| {
+                    crate::evidence::receipt::list_receipts(
+                        &self.repo_root,
+                        Some(kind),
+                        Some(ticket_id.to_string()),
+                        Some(crate::evidence::model::ReceiptResult::Passed),
+                    )
+                    .map(|list| {
+                        list.receipts
+                            .iter()
+                            .map(|receipt| receipt.id.clone())
+                            .collect::<Vec<_>>()
+                    })
+                    .unwrap_or_default()
+                };
                 Ok(crate::canonical_json::to_canonical_bytes(&json!({
                     "schema_version": 1,
                     "ticket_id": ticket_id,
@@ -614,6 +629,10 @@ impl JsonGraphStore {
                         "recorded_by": handoff.recorded_by,
                         "source_commit": handoff.source_commit,
                     })).collect::<Vec<_>>(),
+                    "proof_receipts": {
+                        "qa_checkpoint": proof_receipts(crate::evidence::model::ReceiptKind::QaCheckpoint),
+                        "documentation_validation": proof_receipts(crate::evidence::model::ReceiptKind::DocumentationValidation),
+                    },
                     "artifact_dir": "artifacts",
                 }))?)
             }
@@ -1110,9 +1129,12 @@ fn reviewer_prompt(ticket_id: &str, source_commit: &str) -> String {
          (`pulse work show {ticket_id} --json`), and re-run this repository's\n\
          verification command yourself (see its AGENTS.md). Do not trust the\n\
          worker summary.\n\
-         3. Collect the proof receipts recorded for this Ticket:\n\
-         `pulse evidence receipt list --kind qa_checkpoint --json` and\n\
-         `pulse evidence receipt list --kind documentation_validation --json`.\n\
+         3. Proof receipts are listed in the input under\n\
+         `proof_receipts` (you can also confirm with `pulse evidence\n\
+         receipt list`). A required-QA Ticket needs a passed\n\
+         qa_checkpoint receipt and a required-docs Ticket needs a\n\
+         documentation_validation receipt referenced in the proofs, or\n\
+         close will refuse.\n\
          4. Record the verdict — one --check per command you ran, exactly\n\
          one --proof per acceptance id mapping it to checks and/or receipts:\n\
          \n\
