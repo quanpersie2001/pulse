@@ -1,0 +1,23 @@
+{
+  "actor": {
+    "id": "agent:runner:qa",
+    "kind": "agent"
+  },
+  "event_type": "run.completed",
+  "id": "evt_01M1SFWQEZP2GGWCA5KBJQ465G",
+  "occurred_at": "2026-09-05T19:14:27.935047Z",
+  "payload": {
+    "inconclusive_reason": null,
+    "lease_id": null,
+    "role": "qa",
+    "run_record": ".pulse/runtime/run/ST-001/qa-outcome.json",
+    "status": "completed",
+    "story_id": "ST-001",
+    "ticket_id": "TK-001"
+  },
+  "schema_version": 1,
+  "subject": {
+    "id": "ST-001",
+    "kind": "resource"
+  }
+}

@@ -4,9 +4,9 @@
   "created_at": "2026-09-05T14:04:22.839639Z",
   "id": "ST-001",
   "kind": "story",
-  "revision": 3,
+  "revision": 4,
   "schema_version": 1,
-  "status": "ready",
+  "status": "done",
   "title": "Todos can be completed reliably",
-  "updated_at": "2026-09-05T19:14:17.077373Z"
+  "updated_at": "2026-09-05T19:16:15.107230Z"
 }

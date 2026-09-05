@@ -1,0 +1,24 @@
+{
+  "actor": {
+    "id": "quanpersie2001",
+    "kind": "human"
+  },
+  "event_type": "work.story.closed",
+  "id": "evt_01M1SG004352DSSJ910K557XFF",
+  "occurred_at": "2026-09-05T19:16:15.107977Z",
+  "payload": {
+    "close_id": "story_close_267424db3a5a70e3630258646d",
+    "from": "ready",
+    "graph_fingerprint_observed": "sha256:6af6c197d9e8c83cd3036548f0e1656bbdc5bc7d8f2ddbd75aef76eb171453cb",
+    "qualification_receipt_ids": [
+      "rcpt_RBQWFS1M10HBXKE7XC1DVQSH26"
+    ],
+    "source_commit": "e9b14975eccadb84d4b0c5c8c17bbe77f324e5f1",
+    "to": "done"
+  },
+  "schema_version": 1,
+  "subject": {
+    "id": "ST-001",
+    "kind": "story"
+  }
+}

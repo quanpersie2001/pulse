@@ -1,0 +1,21 @@
+{
+  "actor": {
+    "id": "runner:qa",
+    "kind": "agent"
+  },
+  "event_type": "evidence.receipt.recorded",
+  "id": "evt_01M1SFWQDAKC9RYQA94P5W2B42",
+  "occurred_at": "2026-09-05T19:14:27.882948Z",
+  "payload": {
+    "receipt_hash": "sha256:3c912380a25a996b8083aa73a848b54bce0acd5ee17e4c99fde21ccc40b1c157",
+    "receipt_id": "rcpt_RBQWFS1M10HBXKE7XC1DVQSH26",
+    "receipt_kind": "qa_checkpoint",
+    "result": "passed",
+    "subject": "ST-001"
+  },
+  "schema_version": 1,
+  "subject": {
+    "id": "rcpt_RBQWFS1M10HBXKE7XC1DVQSH26",
+    "kind": "receipt"
+  }
+}
