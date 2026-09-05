@@ -443,8 +443,8 @@ impl JsonGraphStore {
             tags_vocabulary: vec![],
             handoff: PacketHandoff {
                 commands: vec![
-                    "pulse work handoff <ticket>".to_string(),
-                    "pulse work verify <ticket>".to_string(),
+                    "pulse --idempotency-key handoff:<ticket>:<lease> work handoff --lease <lease> --session <session> --source-commit <commit> --summary <summary> --changed-path <path>".to_string(),
+                    "pulse --idempotency-key verify:<ticket>:<handoff> work verify --handoff <handoff> --actor <actor> --source-commit <commit> --disposition passed --summary <summary> --check <name=command=exit> --proof <AC=checks=receipts>".to_string(),
                 ],
             },
             packet_fingerprint: String::new(),
