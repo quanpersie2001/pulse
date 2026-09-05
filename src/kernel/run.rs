@@ -1564,14 +1564,16 @@ fn worker_prompt(
          the attempt suffix; use -a1 the first time. If a handoff already\n\
          exists for this lease, e.g. the run was resumed after the tree\n\
          changed, use a fresh suffix such as -a2 so the new proof binds\n\
-         the current tree state):\n\
+         the current tree state). If the packet listed entries under\n\
+         `knowledge`, pass one --learning-used per learning:\n\
          \n\
          pulse --idempotency-key handoff:{ticket_id}:{lease_id}-a1 work handoff \\\n\
            --lease {lease_id} \\\n\
            --session {session_id} \\\n\
            --source-commit {source_commit} \\\n\
            --summary \"<what changed and how you verified it>\" \\\n\
-           --changed-path src/example.ext\n\
+           --changed-path src/example.ext \\\n\
+           --learning-used LRN-<n>=helpful|not_needed|misleading\n\
          \n\
          5. Your last output line must be exactly one JSON object with\n\
          nothing after it (no code fence, no trailing prose):\n\

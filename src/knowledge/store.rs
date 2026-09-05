@@ -71,6 +71,17 @@ pub struct LearningShow {
     pub code: String,
     pub learning: Learning,
     pub relations: Vec<KnowledgeRelation>,
+    /// Aggregated handoff-reported usage feedback for this learning.
+    pub usage: KnowledgeUsageSummary,
+}
+
+/// Usage feedback aggregated over every handoff receipt in the repository.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(deny_unknown_fields)]
+pub struct KnowledgeUsageSummary {
+    pub helpful: u64,
+    pub not_needed: u64,
+    pub misleading: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -263,11 +274,13 @@ impl KnowledgeStore {
             .cloned()
             .collect();
         rels.sort_by(|a, b| a.id.cmp(&b.id));
+        let usage = learning_usage_counts(&self.repo_root, id)?;
         Ok(LearningShow {
             schema_version: 1,
             code: "ok".to_string(),
             learning,
             relations: rels,
+            usage,
         })
     }
 
@@ -1387,4 +1400,54 @@ fn insert_after_line(text: &str, line: usize, block: &str) -> String {
         out.push('\n');
     }
     out
+}
+
+/// Aggregate handoff-reported usage feedback for one learning by scanning the
+/// execution handoff receipts. Unknown or malformed receipts are skipped:
+/// usage is advisory signal, not proof.
+fn learning_usage_counts(
+    repo_root: &Path,
+    learning_id: &str,
+) -> PulseResult<KnowledgeUsageSummary> {
+    let directory = repo_root.join(".pulse/evidence/execution/handoffs");
+    let mut summary = KnowledgeUsageSummary::default();
+    let entries = match fs::read_dir(&directory) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(summary),
+        Err(error) => return Err(PulseError::io(&directory, error)),
+    };
+    for entry in entries {
+        let path = match entry {
+            Ok(entry) => entry.path(),
+            Err(error) => return Err(PulseError::io(&directory, error)),
+        };
+        if path.extension().and_then(|ext| ext.to_str()) != Some("json") {
+            continue;
+        }
+        let bytes = match fs::read(&path) {
+            Ok(bytes) => bytes,
+            Err(_) => continue,
+        };
+        let Ok(value) = serde_json::from_slice::<serde_json::Value>(&bytes) else {
+            continue;
+        };
+        let Some(usage) = value
+            .get("knowledge_usage")
+            .and_then(|usage| usage.as_array())
+        else {
+            continue;
+        };
+        for claim in usage {
+            if claim.get("learning_id").and_then(|id| id.as_str()) != Some(learning_id) {
+                continue;
+            }
+            match claim.get("outcome").and_then(|outcome| outcome.as_str()) {
+                Some("helpful") => summary.helpful += 1,
+                Some("not_needed") => summary.not_needed += 1,
+                Some("misleading") => summary.misleading += 1,
+                _ => {}
+            }
+        }
+    }
+    Ok(summary)
 }

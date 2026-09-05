@@ -16,6 +16,8 @@ mod common_bin;
 mod harness_learning;
 #[path = "runner/isolation.rs"]
 mod isolation;
+#[path = "runner/knowledge_usage.rs"]
+mod knowledge_usage;
 #[path = "runner/recovery.rs"]
 mod recovery;
 #[path = "runner/reviewer.rs"]

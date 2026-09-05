@@ -25,6 +25,31 @@ impl From<VerifyDispositionArg> for VerificationDisposition {
     }
 }
 
+/// Parse `LRN-001=helpful|not_needed|misleading` for `--learning-used`.
+fn parse_learning_used(
+    value: &str,
+) -> Result<(String, crate::execution::KnowledgeUsageOutcome), String> {
+    use crate::execution::KnowledgeUsageOutcome;
+    let (learning_id, outcome) = value
+        .split_once('=')
+        .ok_or_else(|| format!("expected <learning-id>=<outcome>, got {value:?}"))?;
+    let learning_id = learning_id.trim();
+    if learning_id.is_empty() {
+        return Err(format!("empty learning id in {value:?}"));
+    }
+    let outcome = match outcome.trim() {
+        "helpful" => KnowledgeUsageOutcome::Helpful,
+        "not_needed" => KnowledgeUsageOutcome::NotNeeded,
+        "misleading" => KnowledgeUsageOutcome::Misleading,
+        other => {
+            return Err(format!(
+                "unknown usage outcome {other:?}; expected helpful, not_needed or misleading"
+            ))
+        }
+    };
+    Ok((learning_id.to_string(), outcome))
+}
+
 fn parse_check(value: &str) -> Result<VerificationCheck, String> {
     let parts: Vec<&str> = value.splitn(3, '=').collect();
     let [name, command, exit] = parts.as_slice() else {
@@ -206,6 +231,9 @@ pub(crate) enum WorkCommand {
         changed_paths: Vec<String>,
         #[arg(long = "evidence-receipt")]
         evidence_receipt_ids: Vec<String>,
+        /// Learning usage feedback as `LRN-001=helpful|not_needed|misleading`.
+        #[arg(long = "learning-used", value_parser = parse_learning_used)]
+        learning_used: Vec<(String, crate::execution::KnowledgeUsageOutcome)>,
         #[arg(long)]
         json: bool,
     },
@@ -632,6 +660,7 @@ pub(crate) fn handle(
             summary,
             changed_paths,
             evidence_receipt_ids,
+            learning_used,
             json,
         } => {
             let out = store.submit_execution_handoff(crate::execution::SubmitHandoffArgs {
@@ -642,6 +671,15 @@ pub(crate) fn handle(
                 summary,
                 changed_paths,
                 evidence_receipt_ids,
+                learning_usage: learning_used
+                    .into_iter()
+                    .map(
+                        |(learning_id, outcome)| crate::execution::KnowledgeUsageClaim {
+                            learning_id,
+                            outcome,
+                        },
+                    )
+                    .collect(),
                 idempotency_key: explicit_key.unwrap_or_default().to_string(),
             })?;
             render(

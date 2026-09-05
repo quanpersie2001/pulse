@@ -9,8 +9,8 @@ use crate::canonical_json::{hash_bytes, to_canonical_bytes};
 use crate::event::{new_event_id, EventEnvelope};
 use crate::execution::{
     validate_checks, AcceptanceProof, CloseReceipt, CloseTicketArgs, CompleteVerificationArgs,
-    HandoffReceipt, SubmitHandoffArgs, VerificationCheck, VerificationDisposition,
-    VerificationReceipt,
+    HandoffReceipt, KnowledgeUsage, KnowledgeUsageOutcome, SubmitHandoffArgs, VerificationCheck,
+    VerificationDisposition, VerificationReceipt,
 };
 use crate::graph::model::contract::{QaImpactPosture, Risk};
 use crate::graph::model::lifecycle::TransitionReason;
@@ -135,6 +135,29 @@ impl JsonGraphStore {
             summary: args.summary.trim().to_string(),
             changed_paths: args.changed_paths,
             evidence_receipt_ids: args.evidence_receipt_ids,
+            knowledge_usage: {
+                // `injected` is observed from the packet committed with this
+                // lease, not from the worker's claim.
+                let injected_ids: std::collections::BTreeSet<String> = self
+                    .work_packet_for_reservation(&reservation.subject.ticket_id, &args.lease_id)
+                    .map(|packet| {
+                        packet
+                            .knowledge
+                            .iter()
+                            .filter_map(|item| item.detail_ref.clone())
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                args.learning_usage
+                    .into_iter()
+                    .map(|claim| KnowledgeUsage {
+                        injected: injected_ids.contains(&claim.learning_id),
+                        applied: claim.outcome == KnowledgeUsageOutcome::Helpful,
+                        learning_id: claim.learning_id,
+                        outcome: claim.outcome,
+                    })
+                    .collect()
+            },
             recorded_by: args.actor.clone(),
             recorded_at: Utc::now().to_rfc3339(),
             handoff_fingerprint: String::new(),

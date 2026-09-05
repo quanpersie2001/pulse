@@ -108,6 +108,8 @@ fn required_docs_close_fixture(mode: DocumentationReceiptMode) -> RequiredDocsCl
             summary: "Required documentation is ready for validation.".to_string(),
             changed_paths: vec!["docs/domain/reservation.md".to_string()],
             evidence_receipt_ids: vec![],
+            learning_usage: Vec::new(),
+
             idempotency_key: "handoff-required-docs".to_string(),
         })
         .unwrap();
@@ -437,6 +439,8 @@ fn required_qa_checkpoint_opens_proof_close_only_with_current_case_coverage() {
             summary: "Behavioral change is ready for independent verification.".to_string(),
             changed_paths: vec![],
             evidence_receipt_ids: vec![],
+            learning_usage: Vec::new(),
+
             idempotency_key: "handoff-required-qa".to_string(),
         })
         .unwrap();
@@ -539,6 +543,8 @@ fn story_qualification_opens_covered_ticket_close_on_the_same_source() {
             summary: "Integrated Story behavior is ready for qualification.".to_string(),
             changed_paths: vec![],
             evidence_receipt_ids: vec![],
+            learning_usage: Vec::new(),
+
             idempotency_key: "handoff-story-qa".to_string(),
         })
         .unwrap();
@@ -712,6 +718,8 @@ fn zero_exit_check_without_receipt_keeps_ticket_nonterminal() {
             summary: "Implementation completed and ready for verification.".to_string(),
             changed_paths: vec![],
             evidence_receipt_ids: vec![],
+            learning_usage: Vec::new(),
+
             idempotency_key: "handoff-happy".to_string(),
         })
         .unwrap();
@@ -825,6 +833,8 @@ fn medium_risk_ticket_closes_with_the_same_proof_gates() {
             summary: "Medium-risk handoff awaiting assurance policy.".to_string(),
             changed_paths: vec![],
             evidence_receipt_ids: vec![],
+            learning_usage: Vec::new(),
+
             idempotency_key: "handoff-medium-risk".to_string(),
         })
         .unwrap();
@@ -901,6 +911,8 @@ fn high_risk_ticket_requires_a_human_closing_actor() {
             summary: "High-risk handoff is ready for review.".to_string(),
             changed_paths: vec![],
             evidence_receipt_ids: vec![],
+            learning_usage: Vec::new(),
+
             idempotency_key: "handoff-high-risk".to_string(),
         })
         .unwrap();
@@ -993,6 +1005,7 @@ fn unauthorized_handoff_does_not_recover_pending_transaction() {
         summary: "pending handoff".to_string(),
         changed_paths: vec![],
         evidence_receipt_ids: vec![],
+        learning_usage: Vec::new(),
         idempotency_key: "unauthorized-handoff-pending-key".to_string(),
     };
     let crashing =
@@ -1034,6 +1047,8 @@ fn unauthorized_verification_does_not_recover_pending_transaction() {
             summary: "handoff for pending verification".to_string(),
             changed_paths: vec![],
             evidence_receipt_ids: vec![],
+            learning_usage: Vec::new(),
+
             idempotency_key: "unauthorized-verification-handoff".to_string(),
         })
         .unwrap();

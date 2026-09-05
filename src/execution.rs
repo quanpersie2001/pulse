@@ -29,6 +29,10 @@ pub struct HandoffReceipt {
     pub changed_paths: Vec<String>,
     #[serde(default)]
     pub evidence_receipt_ids: Vec<String>,
+    /// Usage feedback for packet-injected learnings (empty for receipts
+    /// recorded before the field existed).
+    #[serde(default)]
+    pub knowledge_usage: Vec<KnowledgeUsage>,
     pub recorded_by: String,
     pub recorded_at: String,
     pub handoff_fingerprint: String,
@@ -114,7 +118,36 @@ pub struct SubmitHandoffArgs {
     pub summary: String,
     pub changed_paths: Vec<String>,
     pub evidence_receipt_ids: Vec<String>,
+    /// How the worker used the learnings injected into its packet.
+    pub learning_usage: Vec<KnowledgeUsageClaim>,
     pub idempotency_key: String,
+}
+
+/// One worker-reported learning usage from the CLI: `LRN-001=helpful`.
+#[derive(Debug, Clone)]
+pub struct KnowledgeUsageClaim {
+    pub learning_id: String,
+    pub outcome: KnowledgeUsageOutcome,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum KnowledgeUsageOutcome {
+    Helpful,
+    NotNeeded,
+    Misleading,
+}
+
+/// Recorded usage feedback for one learning, bound into the handoff receipt.
+/// `injected` is computed by Pulse from the committed packet; `applied` is
+/// derived from the outcome (helpful implies applied).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct KnowledgeUsage {
+    pub learning_id: String,
+    pub injected: bool,
+    pub applied: bool,
+    pub outcome: KnowledgeUsageOutcome,
 }
 
 #[derive(Debug, Clone)]
