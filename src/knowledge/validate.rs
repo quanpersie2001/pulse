@@ -188,7 +188,12 @@ pub fn validate_learning_for_mutation(
 ) -> Result<()> {
     let mut report = KnowledgeValidationReport::ok(None);
     validate_learning(repo_root, learning, relations, &mut report);
-    validate_public_mutation_restrictions(learning, &mut report);
+    // The Phase-1 claim freeze guards the candidate edit path; post-candidate
+    // records are maintained through the sanctioned ladder and validated for
+    // full consistency instead.
+    if learning.status == LearningStatus::Candidate {
+        validate_public_mutation_restrictions(learning, &mut report);
+    }
     report.into_result().map(|_| ())
 }
 

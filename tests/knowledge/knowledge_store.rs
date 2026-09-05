@@ -299,3 +299,88 @@ fn learning_scope_is_backward_compatible_with_scopeless_records() {
     let learning: Learning = serde_json::from_value(value).unwrap();
     assert_eq!(learning.scope, LearningScope::Repository);
 }
+
+#[test]
+fn post_candidate_edits_carry_administrative_fields_like_scope() {
+    let (_repo, _graph, knowledge, work_id) = setup();
+    let ctx = |seconds: i64| OperationContext {
+        actor: "human:test".to_string(),
+        now: Utc.timestamp_opt(seconds, 0).unwrap(),
+    };
+    // A resolvable evidence receipt backs the validate transition.
+    let receipt_dir = _repo.path().join(".pulse/evidence/receipts");
+    fs::create_dir_all(&receipt_dir).unwrap();
+    fs::write(
+        receipt_dir.join("rcpt_01J00000000000000000000001.json"),
+        json!({
+            "schema_version": 1,
+            "receipt_version": 2,
+            "id": "rcpt_01J00000000000000000000001",
+            "kind": "qa_checkpoint",
+            "result": "passed",
+            "actor": {"kind": "human", "id": "test"},
+            "recorded_at": "2026-09-06T00:00:00Z",
+            "subject": {"kind": "work", "id": work_id},
+            "bindings": {},
+            "payload": {
+                "payload_version": 1,
+                "qa_scope": "ticket_checkpoint",
+                "story_id": "ST-000",
+                "ticket_id": work_id,
+                "baseline_revision": 1,
+                "baseline_content_hash": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+                "cases": [{"case_id": "QA-001", "case_revision": 1, "outcome": "passed"}],
+                "executor": {"name": "t", "version": "1"},
+                "observations": ["observed"]
+            }
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let learning = knowledge.create(draft(&work_id), ctx(1)).unwrap().value;
+    let validated = knowledge
+        .transition_status(
+            &learning.id,
+            LearningStatus::Validated,
+            Some("rcpt_01J00000000000000000000001"),
+            None,
+            None,
+            ctx(2),
+        )
+        .unwrap()
+        .value;
+
+    // Scope maintenance is administrative: allowed past the candidate phase.
+    let patched = knowledge
+        .edit(
+            &validated.id,
+            validated.revision,
+            LearningPatch {
+                scope: Some(LearningScope::Harness),
+                ..Default::default()
+            },
+            ctx(3),
+        )
+        .unwrap()
+        .value;
+    assert_eq!(patched.scope, LearningScope::Harness);
+
+    // The candidate freeze still holds: a candidate cannot claim a promotion.
+    let fresh = knowledge.create(draft(&work_id), ctx(4)).unwrap().value;
+    let error = knowledge
+        .edit(
+            &fresh.id,
+            fresh.revision,
+            LearningPatch {
+                promotion: Some(Promotion {
+                    state: PromotionState::Promoted,
+                    rationale: None,
+                    relation_ids: vec![],
+                }),
+                ..Default::default()
+            },
+            ctx(5),
+        )
+        .unwrap_err();
+    assert_eq!(error.code(), "learning_promotion_invalid");
+}
