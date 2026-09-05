@@ -1136,9 +1136,13 @@ fn reviewer_prompt(ticket_id: &str, source_commit: &str) -> String {
          documentation_validation receipt referenced in the proofs, or\n\
          close will refuse.\n\
          4. Record the verdict — one --check per command you ran, exactly\n\
-         one --proof per acceptance id mapping it to checks and/or receipts:\n\
+         one --proof per acceptance id mapping it to checks and/or the\n\
+         required proof receipts from the input. Use -a1 in the\n\
+         idempotency key the first time; if a verification already\n\
+         exists for this handoff, use a fresh suffix such as -a2 so the\n\
+         new verdict is recorded instead of replaying the old one:\n\
          \n\
-         pulse --idempotency-key verify:{ticket_id}:<handoff_id> work verify \\\n\
+         pulse --idempotency-key verify:{ticket_id}:<handoff_id>-a1 work verify \\\n\
            --handoff <handoff_id> \\\n\
            --actor agent:runner:reviewer \\\n\
            --source-commit {source_commit} \\\n\

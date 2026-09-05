@@ -505,7 +505,7 @@ echo '{"status": "handed_off", "summary": "done"}'
     assert!(!input["acceptance"].as_array().unwrap().is_empty());
 
     let prompt = fs::read_to_string(run_dir.join("reviewer-prompt.md")).unwrap();
-    assert!(prompt.contains(&format!("verify:{ticket_id}:<handoff_id> work verify")));
+    assert!(prompt.contains(&format!("verify:{ticket_id}:<handoff_id>-a1 work verify")));
     assert!(prompt.contains("--actor agent:runner:reviewer"));
     assert!(prompt.contains("--disposition passed"));
 }
