@@ -1,0 +1,22 @@
+{
+  "actor": {
+    "id": "quannv",
+    "kind": "human"
+  },
+  "event_type": "docs.document.registered",
+  "id": "evt_01M1RY2063ETRHD7HZ3KMNEEBX",
+  "occurred_at": "2026-09-05T14:02:46.326426Z",
+  "payload": {
+    "document_id": "DOC-TODOLIST-BEHAVIOR",
+    "document_revision": 1,
+    "registry_hash_after": "sha256:686f991f6e6e4b18885c1764e426481e1d4a42bbce09d6292ab33d81721244c6",
+    "registry_hash_before": "sha256:59e4a80d4377744eb3f07c1f292c648c209fdafc681d78df6ef0f1ead177daf2",
+    "registry_revision_after": 2,
+    "registry_revision_before": 1
+  },
+  "schema_version": 1,
+  "subject": {
+    "id": "DOC-TODOLIST-BEHAVIOR",
+    "kind": "document"
+  }
+}

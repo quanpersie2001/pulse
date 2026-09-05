@@ -1,0 +1,8 @@
+{
+  "content_root": "../../works",
+  "edge_schema": "schemas/edge.schema.json",
+  "graph_id": "pulse-main",
+  "id_pattern": "^(EP|ST|TK|DEC)-[0-9]{3,}$",
+  "node_schema": "schemas/node.schema.json",
+  "schema_version": 1
+}

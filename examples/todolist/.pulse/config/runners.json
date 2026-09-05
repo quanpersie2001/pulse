@@ -1,0 +1,14 @@
+{
+  "worker": {
+    "command": "claude -p --output-format text --dangerously-skip-permissions 'Pulse worker run. First read .pulse/runtime/run/{ticket}/worker-prompt.md in this repository and follow those instructions exactly.'",
+    "timeout_seconds": 3600
+  },
+  "reviewer": {
+    "command": "claude -p --output-format text --dangerously-skip-permissions 'Pulse reviewer run. First read .pulse/runtime/run/{ticket}/reviewer-prompt.md in this repository and follow those instructions exactly.'",
+    "timeout_seconds": 1800
+  },
+  "qa": {
+    "command": "node scripts/qa-run.mjs {input}",
+    "timeout_seconds": 900
+  }
+}

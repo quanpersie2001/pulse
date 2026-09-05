@@ -1,0 +1,32 @@
+{
+  "principals": [
+    {
+      "grants": [
+        "decision.accept",
+        "decision.propose",
+        "docs.write",
+        "documentation.defer",
+        "evidence.record",
+        "knowledge.capture",
+        "note",
+        "work.assignment.close",
+        "work.assignment.handoff",
+        "work.assignment.prepare",
+        "work.assignment.release",
+        "work.assignment.verify",
+        "work.close",
+        "work.edge.create",
+        "work.materialization.downgrade",
+        "work.node.create",
+        "work.node.update",
+        "work.story.close",
+        "work.transition.ready",
+        "work.transition.shaped"
+      ],
+      "id": "quanpersie2001",
+      "kind": "human"
+    }
+  ],
+  "revision": 1,
+  "schema_version": 1
+}

@@ -1,0 +1,7 @@
+{
+  "artifact_algorithm": "sha256",
+  "max_artifact_bytes": 16777216,
+  "max_inline_receipt_bytes": 262144,
+  "repository_id": "repo_01M1RWXYDW6Q0WT9J0NMA466BH",
+  "schema_version": 1
+}
