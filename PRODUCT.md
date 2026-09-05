@@ -65,7 +65,8 @@ engine, agent framework, QA platform, orchestration engine.
    đảo ngược.
 9. **Đổi agent là đổi một dòng config.** Seam với agent là shell command và
    file, không phải protocol riêng.
-10. **Làm trực tiếp trong checkout.** Worktree chỉ khi chạy song song.
+10. **Làm trực tiếp trong checkout.** `pulse run` từ chối khi một Ticket khác
+    đang `active`; worktree chỉ được tạo khi gọi rõ `--isolation worktree`.
 11. **Human authority explicit.** Automation có quyền theo grant cụ thể, không
     theo vai trò mơ hồ. Không wildcard.
 12. **Failure feeds the ratchet.** Mỗi lớp failure phải có đường thành docs,
@@ -487,9 +488,11 @@ không tự đổi acceptance". Không copy Ticket, docs, QA, knowledge vào pro
 #### Isolation rule
 
 - Mặc định chạy trực tiếp trong checkout.
-- Khi đã có Ticket `active` khác mà gọi `pulse run` cho Ticket mới, Pulse tạo
-  worktree cho Ticket mới, hoặc từ chối nếu `auto_isolation: false`.
-- `--isolation worktree` để ép. Lease theo Ticket, không theo worktree.
+- Khi đã có Ticket `active` khác trong cùng repo-root, `pulse run` **từ chối**
+  với `run_isolation_required`, in ra Ticket đang giữ lease và gợi ý lệnh với
+  `--isolation worktree`. Không auto-worktree.
+- `--isolation worktree` ép tạo worktree cho Ticket mới. Lease theo Ticket,
+  không theo worktree.
 - Worktree do Pulse tạo thì Pulse dọn khi Ticket terminal và không còn
   reference. Không xoá thứ Pulse không tạo.
 - Reviewer/QA trên cùng checkout chạy tuần tự sau worker xong.
@@ -937,9 +940,10 @@ Ticket. Không có semantics delivery.
 #### Chạy song song
 
 Nhiều Ticket song song chỉ khi: hard dependency đã thoả, lease khác nhau,
-Ticket thứ hai trở đi vào worktree, không hard conflict trên write scope (cùng
-file), thứ tự merge rõ. `pulse run` cảnh báo overlap path giữa các Ticket
-active; overlap là advisory, developer quyết định.
+Ticket thứ hai trở đi được gọi với `--isolation worktree` (nếu không, `pulse
+run` từ chối), không hard conflict trên write scope (cùng file), thứ tự merge
+rõ. `pulse run` cảnh báo overlap path giữa các Ticket active; overlap là
+advisory, developer quyết định.
 
 Conductor là developer, hoặc một agent session dùng chính các lệnh Pulse để
 fan-out. Pulse không có orchestration loop riêng.
@@ -1025,17 +1029,22 @@ Tiêu chí phụ: hai Ticket chạy song song bằng hai `pulse run`, Ticket th�
 vào worktree, không va nhau; Story đóng bằng `close-story` sau khi hai Ticket
 done và qualification pass.
 
+> **Đạt:** mục 1–7 đạt ngày 2026-09-05 trên `examples/todolist/`, HEAD
+> `845ff01`, hai Ticket (TK-001, TK-002) đóng bằng receipt với worker và
+> reviewer là agent thật; xem `examples/todolist/works/ST-001/`. Tiêu chí phụ
+> chưa đạt (còn `close-story` trên baseline thật).
+
 ## 8. So với code hiện tại
 
 | Tính năng | Hiện trạng | Việc cần làm |
 |---|---|---|
 | 5.1 Work graph | Đã có spine | `pulse init` cấp Core grants; Ticket tạo `ticket.md`, `work sync` bind hash/metadata, ambiguity và ready gates hoạt động. Legacy JSON contract API vẫn tồn tại cho callers cũ. |
 | 5.2 Packet | Đã rút gọn | Packet có ticket prose, context, docs/QA/source/tags/handoff; không còn dispatch, capability, scope enforcement, assurance hay `not_installed`. |
-| 5.3 Runner | Spine đã có | `runners.json` bootstrap qua `init`, `pulse run worker|reviewer|qa` với isolation rule (checkout mặc định, worktree Pulse-owned khi cần), resume cùng lease, drift acknowledgment (`--acknowledge-drift`), `pulse work release` đưa Ticket về ready, inconclusive classification; artifacts ingest còn lại. |
+| 5.3 Runner | Chạy thật trên dogfood | `pulse run worker|reviewer|qa` đã chạy thật trên `examples/todolist/` với lease, resume sau kill, drift acknowledgment, inconclusive classification; isolation chuyển sang từ chối khi Ticket khác `active` (quyết định 13.2), artifact ingest và reviewer outcome classification còn lại. |
 | 5.4 Docs | Đã rút gọn | Registry tám trường, `tags.json`, `docs tags add/list`, tag filtering và path/tag applicability đã có. |
 | 5.5 Evidence/QA | Đã có spine | Close hỗ trợ mọi risk; high/critical yêu cầu actor human. Runner và QA execution vẫn là Bước 4. |
-| 5.6 Ratchet | Chỉ có store + validate | `capture`, `validate`, `promote`, `applicable`; packet inject; usage feedback |
-| 5.7 Giao tiếp | Đã có | Event log append-only; `pulse note` ghi note vào Ticket, `pulse events tail` đọc với `--since`/`--ticket`/`--follow`; note hiện trong packet (giới hạn 8 note mới nhất). |
+| 5.6 Ratchet | `capture`–`applicable` đã chạy thật | `knowledge capture|validate|promote|applicable` đã chạy thật: LRN-001 được capture, promote và inject vào packet; scope `harness|repository` và promote tự sửa doc là việc còn lại (quyết định 13.3, 13.4). |
+| 5.7 Giao tiếp | Đã có và chạy thật | Event log append-only; `pulse note` ghi note vào Ticket, `pulse events tail` đọc với `--since`/`--ticket`/`--follow`; note hiện trong packet (giới hạn 8 note mới nhất). Đã dùng thật giữa worker/reviewer/developer trong lần chạy golden path. |
 | 5.8 MCP | Stub không bind | Server thật, sau CLI |
 
 ## 9. Triage code
@@ -1092,6 +1101,23 @@ Gặp một dấu hiệu thì dừng feature liên quan, ghi Decision, sửa har
    `runtime/` và `cache/` ignored. Lệnh cấm `--repo-root .` ở gốc Pulse vẫn
    giữ. Việc đầu tiên: `src/source.rs` phải strip `git rev-parse --show-prefix`
    khỏi path Git trả về khi repo-root là thư mục con. Chốt 2026-09-05.
+2. **Isolation: từ chối thay vì auto-worktree.** Khi có Ticket khác đang
+   `active` trong cùng repo-root, `pulse run` **từ chối** với
+   `run_isolation_required` (kèm Ticket id và gợi ý `--isolation worktree`);
+   worktree chỉ được tạo khi cờ này có mặt. Sửa nguyên tắc 10 và §5.3:
+   worktree là opt-in theo lệnh, không auto. Chốt 2026-09-06.
+3. **Learning có `scope`: `harness` hoặc `repository`.** Harness learning là
+   bài học về cách dùng Pulse (ví dụ "đừng sửa file sau handoff"); repository
+   learning là bài học về codebase. Harness learning không inject theo path;
+   nó vào bootstrap prompt của runner role và có thể promote vào `AGENTS.md`
+   của target. Repository learning inject theo path/tag/symbol như thiết kế
+   §5.6. Chốt 2026-09-06.
+4. **Promote phải đổi nội dung đích.** `knowledge promote --document <id>`
+   chỉ ghi relation `promoted_to` khi content hash của doc khác hash lúc bắt
+   đầu; không đổi thì lỗi `promotion_target_unchanged`. Mặc định
+   `--insert-after "<heading>"` tự chèn đoạn text từ `guidance`/`summary` của
+   learning (có `--dry-run`); `--agents-md` là đích cho harness learning.
+   Chốt 2026-09-06.
 
 Còn mở, mặc định nếu không có ý kiến khác:
 

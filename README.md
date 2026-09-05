@@ -32,15 +32,15 @@ The full product definition, target design and golden path are in
 
 ## Status
 
-Pre-release. The Rust core (work graph, packet, docs registry and search,
-evidence receipts, close gates) is implemented and covered by an integration
-suite. The runner, ratchet commands and event-log communication described in
-`PRODUCT.md` are not implemented yet; the daemon runtime that previously
-backed them was removed under
-[Decision 0008](docs/decisions/0008-narrow-scope-to-truth-layer.md).
+v0.1.0. The golden path from `PRODUCT.md` §7 has run for real on
+`examples/todolist/`: two Tickets were closed on evidence receipts by real
+worker/reviewer agents, with kill-and-resume, QA checkpoints, docs validation
+and a captured learning; see `examples/todolist/works/ST-001/` for the run
+log.
 
-Nothing has yet run end to end on a real repository. The next milestone is the
-seven-step golden path in `PRODUCT.md` §7 against `examples/todolist/`.
+Remaining pre-1.0 work (learning promotion ergonomics, artifact ingest,
+reviewer outcome classification, story close on the dogfood target) is tracked
+in `PRODUCT.md` §8.
 
 ## What works today
 
@@ -52,7 +52,9 @@ seven-step golden path in `PRODUCT.md` §7 against `examples/todolist/`.
 | Docs | `pulse docs register\|tags\|list\|show\|applicable\|search\|get\|tree\|index\|validate` | Eight-field registry, controlled tags, path/tag applicability, section-level search |
 | Evidence | `pulse evidence receipt record\|show\|verify`, `artifact put\|verify` | Immutable content-hashed receipts |
 | QA baseline | `pulse qa baseline\|resolve` | Parses the `pulse-qa` block in `works/<story>/qa.md` |
-| Knowledge | `pulse knowledge create\|show\|list\|edit\|validate` | Store and validation only; no promotion or recall yet |
+| Knowledge | `pulse knowledge create\|capture\|show\|list\|edit\|validate\|promote\|applicable` | Capture from a run, validate against evidence, promote into docs, applicability buckets; packet injects required/recommended learnings |
+| Runner | `pulse run <role> --ticket <id>` | Lease, bootstrap prompt, configured command, output classification, inconclusive receipts, worktree isolation, resume after kill |
+| Communication | `pulse events tail`, `pulse note` | Append-only event log with `--since`/`--ticket`/`--follow`; ticket-targeted notes surface in packets |
 
 Every command accepts `--json` and `--repo-root <path>`. A Ticket is created with a generated `works/<id>/ticket.md`; edit that file and run `work sync` before transitioning it.
 
