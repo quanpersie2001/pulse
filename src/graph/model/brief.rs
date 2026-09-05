@@ -383,7 +383,7 @@ fn parse_documentation(sections: &BTreeMap<String, String>) -> Option<Documentat
             .cloned()
             .unwrap_or_else(|| "unknown".to_string()),
         documents,
-        rationale: values.get("rationale").cloned(),
+        rationale: rationale_value(&values),
         required_update: values.get("required update").cloned(),
     })
 }
@@ -412,8 +412,15 @@ fn parse_qa(sections: &BTreeMap<String, String>) -> Option<QaImpactBrief> {
             .cloned()
             .unwrap_or_else(|| "unknown".to_string()),
         cases,
-        reason: values.get("reason").cloned(),
+        reason: rationale_value(&values),
     })
+}
+
+fn rationale_value(values: &BTreeMap<String, String>) -> Option<String> {
+    values
+        .get("rationale")
+        .or_else(|| values.get("reason"))
+        .cloned()
 }
 
 fn required_text(value: Option<&str>, field: &str) -> PulseResult<()> {
@@ -434,7 +441,7 @@ fn invalid(code: &'static str, message: impl Into<String>) -> PulseError {
 /// Render the initial implementation Ticket contract.
 pub fn implementation_template(id: &str, title: &str, materialization: Materialization) -> String {
     let full = materialization != Materialization::R0;
-    format!("# {id} {title}\n\n## Objective\nDescribe the outcome this Ticket must achieve.\n\n{}## Code anchors\n- src/\n\n## Acceptance\n- AC-1: Describe a testable acceptance condition.\n\n## Verify\n- cargo test\n\n## Required changes\n- Describe the required change.\n\n## Invariants\n- Describe the invariant that must remain true.\n\n## Implementation freedom\nguided: agent chooses internal structure within this contract.\n\n## Scope\n- Included work.\n\n## Non-scope\n- Work excluded from this Ticket.\n\n## Open questions\n- (delegated) Record implementation choices that are safe to delegate.\n\n## Documentation impact\n- Posture: none\n- Rationale: Explain why durable docs are unaffected.\n- Documents:\n\n## QA impact\n- Owner:\n- Posture: none\n- Cases:\n- Reason: Explain QA posture.\n\n## Expected handoff\n- Diff and verification results.\n", if full { "## Current behavior\nDescribe the current behavior.\n\n## Target behavior\nDescribe the target behavior.\n\n" } else { "" })
+    format!("# {id} {title}\n\n## Objective\nDescribe the outcome this Ticket must achieve.\n\n{}## Code anchors\n- src/\n\n## Acceptance\n- AC-1: Describe a testable acceptance condition.\n\n## Verify\n- cargo test\n\n## Required changes\n- Describe the required change.\n\n## Invariants\n- Describe the invariant that must remain true.\n\n## Implementation freedom\nguided: agent chooses internal structure within this contract.\n\n## Scope\n- Included work.\n\n## Non-scope\n- Work excluded from this Ticket.\n\n## Open questions\n- (delegated) Record implementation choices that are safe to delegate.\n\n## Documentation impact\n- Posture: none\n- Rationale: Explain why durable docs are unaffected.\n- Documents:\n\n## QA impact\n- Owner:\n- Posture: none\n- Cases:\n- Rationale: Explain the QA posture.\n\n## Expected handoff\n- Diff and verification results.\n", if full { "## Current behavior\nDescribe the current behavior.\n\n## Target behavior\nDescribe the target behavior.\n\n" } else { "" })
 }
 
 /// Render the question-oriented contract for a decision-work Ticket.
@@ -505,5 +512,33 @@ mod tests {
             parse_ticket_brief(&text).unwrap_err().code(),
             "ticket_brief_open_question_disposition_missing"
         );
+    }
+
+    #[test]
+    fn rationale_and_reason_are_interchangeable_in_both_impact_sections() {
+        let canonical = format!(
+            "{R0}\n## Documentation impact\n- Posture: none\n- Rationale: No docs impact.\n- Documents:\n\n\
+             ## QA impact\n- Owner:\n- Posture: none\n- Cases:\n- Rationale: No QA surface.\n"
+        );
+        let aliased = format!(
+            "{R0}\n## Documentation impact\n- Posture: none\n- Reason: No docs impact.\n- Documents:\n\n\
+             ## QA impact\n- Owner:\n- Posture: none\n- Cases:\n- Reason: No QA surface.\n"
+        );
+        let crossed = format!(
+            "{R0}\n## Documentation impact\n- Posture: none\n- Reason: docs via alias.\n- Documents:\n\n\
+             ## QA impact\n- Owner:\n- Posture: none\n- Cases:\n- Rationale: QA via canonical.\n"
+        );
+        for (text, docs, qa) in [
+            (&canonical, "No docs impact.", "No QA surface."),
+            (&aliased, "No docs impact.", "No QA surface."),
+            (&crossed, "docs via alias.", "QA via canonical."),
+        ] {
+            let brief = parse_ticket_brief(text).unwrap();
+            assert_eq!(
+                brief.documentation.as_ref().unwrap().rationale.as_deref(),
+                Some(docs)
+            );
+            assert_eq!(brief.qa.as_ref().unwrap().reason.as_deref(), Some(qa));
+        }
     }
 }
