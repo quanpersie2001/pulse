@@ -534,7 +534,7 @@ fn dirty_bound_content_reports_unsupported_source_snapshot() {
     assert!(report
         .bindings
         .reason_codes
-        .contains(&"dirty_source_unsupported".to_string()));
+        .contains(&"content_binding_stale".to_string()));
 }
 
 #[test]
@@ -594,4 +594,39 @@ fn artifact_put_recovery_rolls_forward_content_metadata_and_event() {
         event_count(repo, "evidence.artifact.recorded", &expected_digest),
         1
     );
+}
+
+#[test]
+fn content_binding_covers_uncommitted_bytes_when_hash_matches() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path();
+    let store = JsonGraphStore::new(repo);
+    let node = store
+        .create_node(WorkKind::Decision, "Uncommitted".to_string())
+        .unwrap()
+        .value;
+    let manifest = pulse::evidence::bootstrap(repo).unwrap().manifest;
+    let content_rel = format!("works/{}/decision.md", node.id);
+    let content_path = repo.join(&content_rel);
+    fs::create_dir_all(content_path.parent().unwrap()).unwrap();
+    fs::write(&content_path, b"accepted decision").unwrap();
+    let source_commit = commit_all(repo);
+    // The ticket changed the file but did not commit: dirty vs HEAD, yet
+    // the receipt pins exactly these bytes.
+    fs::write(&content_path, b"accepted decision, uncommitted edit").unwrap();
+    let content_hash = hash_bytes(&fs::read(&content_path).unwrap());
+    let receipt = make_decision_receipt(
+        "rcpt_01J00000000000000000000005",
+        &node,
+        &manifest,
+        &content_rel,
+        content_hash,
+        source_commit,
+    );
+    let file = repo.join("receipt-uncommitted.json");
+    write_json(&file, &receipt);
+    pulse::evidence::record_receipt(repo, None, &file).unwrap();
+    let report = pulse::evidence::verify_receipt(repo, &receipt.id, true, None).unwrap();
+    assert_eq!(report.bindings.status, "current");
+    assert!(report.bindings.reason_codes.is_empty());
 }

@@ -77,12 +77,13 @@ pub fn content_source_binding_codes(
                 codes.push("source_binding_stale".to_string());
             }
         } else {
-            let scoped_paths = bindings
-                .content
-                .iter()
-                .map(|content| content.path.clone())
-                .collect::<Vec<_>>();
-            match crate::source::current_status(repo_root, &source_binding.commit, &scoped_paths) {
+            // Content bindings already pin the exact bytes of their paths
+            // by hash, so worktree dirtiness of those paths is not a
+            // binding failure — the dirty dimension of an execution is
+            // owned by the handoff fence, not by receipt currency. Only
+            // the commit relationship is checked here (with an empty
+            // scope, `current_status` never reports dirty).
+            match crate::source::current_status(repo_root, &source_binding.commit, &[]) {
                 crate::source::SourceBindingStatus::Current => {}
                 crate::source::SourceBindingStatus::DirtyUnsupported => {
                     codes.push("dirty_source_unsupported".to_string())
