@@ -19,17 +19,21 @@ use crate::{PulseError, Result};
 
 const PROPOSED_IGNORE_ENTRIES: [&str; 2] = [".pulse/runtime/", ".pulse/cache/"];
 
-/// Default role commands recorded at init. Role names are fixed; commands are
-/// plain argv lines parsed without a shell and can be re-pointed at any agent
-/// or script by editing this file.
+/// Default role commands recorded at init. Role names are fixed; commands
+/// are plain argv lines parsed without a shell and can be re-pointed at any
+/// agent or script by editing this file. The agent defaults are valid
+/// Claude Code headless invocations (decision 13.2): a positional pointer
+/// prompt that directs the agent to the Pulse-written bootstrap prompt for
+/// the ticket. `--output-format text` keeps the agent's own final JSON line
+/// as the last stdout line, which is the runner output contract.
 const DEFAULT_RUNNER_ROLES_JSON: &str = r#"
 {
   "worker": {
-    "command": "claude -p --output-format json --input-file {input}",
+    "command": "claude -p --output-format text --dangerously-skip-permissions 'Pulse worker run. First read .pulse/runtime/run/{ticket}/worker-prompt.md in this repository and follow those instructions exactly.'",
     "timeout_seconds": 3600
   },
   "reviewer": {
-    "command": "codex exec --json --input {input}",
+    "command": "claude -p --output-format text --dangerously-skip-permissions 'Pulse reviewer run. First read .pulse/runtime/run/{ticket}/reviewer-prompt.md in this repository and follow those instructions exactly.'",
     "timeout_seconds": 1800
   },
   "qa": {

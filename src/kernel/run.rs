@@ -290,27 +290,50 @@ impl JsonGraphStore {
         let input_json = self.build_role_input(class, ticket_id, &node, &reservation)?;
         fs::write(&input_path, &input_json).map_err(|error| PulseError::io(&input_path, error))?;
         if class == "worker" {
+            let Some(reservation) = &reservation else {
+                return Err(PulseError::validation(
+                    "run_worker_lease_missing",
+                    "worker run requires an active lease before writing its input",
+                ));
+            };
             let prompt_path = run_dir.join("worker-prompt.md");
-            fs::write(&prompt_path, worker_prompt(ticket_id))
-                .map_err(|error| PulseError::io(&prompt_path, error))?;
-            // Shell-sourceable run facts the agent script needs to record
-            // proofs through the CLI.
-            let env_path = run_dir.join("worker-env");
-            let env_text = match &reservation {
-                Some(reservation) => format!(
-                    "TICKET_ID=\"{ticket_id}\"\nLEASE_ID=\"{}\"\nSESSION_ID=\"{}\"\nSOURCE_COMMIT=\"{}\"\nACTOR=\"{}\"\n",
-                    reservation.lease_id,
+            fs::write(
+                &prompt_path,
+                worker_prompt(
+                    ticket_id,
+                    &reservation.lease_id,
                     reservation
                         .runtime_binding
                         .as_ref()
                         .map(|binding| binding.session_id.as_str())
                         .unwrap_or_default(),
-                    reservation.source.commit,
-                    reservation.assignee,
+                    &reservation.source.commit,
                 ),
-                None => format!("TICKET_ID=\"{ticket_id}\"\n"),
-            };
+            )
+            .map_err(|error| PulseError::io(&prompt_path, error))?;
+            // Shell-sourceable run facts the agent script needs to record
+            // proofs through the CLI.
+            let env_path = run_dir.join("worker-env");
+            let env_text = format!(
+                "TICKET_ID=\"{ticket_id}\"\nLEASE_ID=\"{}\"\nSESSION_ID=\"{}\"\nSOURCE_COMMIT=\"{}\"\nACTOR=\"{}\"\n",
+                reservation.lease_id,
+                reservation
+                    .runtime_binding
+                    .as_ref()
+                    .map(|binding| binding.session_id.as_str())
+                    .unwrap_or_default(),
+                reservation.source.commit,
+                reservation.assignee,
+            );
             fs::write(&env_path, env_text).map_err(|error| PulseError::io(&env_path, error))?;
+        }
+        if class == "reviewer" {
+            let prompt_path = run_dir.join("reviewer-prompt.md");
+            fs::write(
+                &prompt_path,
+                reviewer_prompt(ticket_id, &crate::source::head_commit(&self.repo_root)?),
+            )
+            .map_err(|error| PulseError::io(&prompt_path, error))?;
         }
 
         // Materialize argv and execute under the configured bounds.
@@ -574,11 +597,19 @@ impl JsonGraphStore {
             "reviewer" => {
                 let acceptance_ids =
                     crate::kernel::completion::ticket_acceptance_ids(&self.repo_root, node)?;
+                let handoffs = verifying_handoffs(&self.repo_root, ticket_id, node.revision)?;
                 Ok(crate::canonical_json::to_canonical_bytes(&json!({
                     "schema_version": 1,
                     "ticket_id": ticket_id,
                     "source_commit": crate::source::head_commit(&self.repo_root)?,
                     "acceptance": acceptance_ids.into_iter().map(|id| json!({"id": id})).collect::<Vec<_>>(),
+                    "handoffs": handoffs.iter().map(|handoff| json!({
+                        "handoff_id": handoff.handoff_id,
+                        "summary": handoff.summary,
+                        "changed_paths": handoff.changed_paths,
+                        "recorded_by": handoff.recorded_by,
+                        "source_commit": handoff.source_commit,
+                    })).collect::<Vec<_>>(),
                     "artifact_dir": "artifacts",
                 }))?)
             }
@@ -972,6 +1003,39 @@ pub(crate) fn find_lease_handoff(
     ))
 }
 
+/// Handoff receipts binding a Ticket's current verifying revision, sorted
+/// by handoff id. Empty when none match — the reviewer input reports the
+/// truth instead of failing the run.
+fn verifying_handoffs(
+    repo_root: &Path,
+    ticket_id: &str,
+    verifying_revision: u64,
+) -> PulseResult<Vec<crate::execution::HandoffReceipt>> {
+    let directory = repo_root.join(".pulse/evidence/execution/handoffs");
+    let entries = match fs::read_dir(&directory) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => return Err(PulseError::io(&directory, error)),
+    };
+    let mut handoffs: Vec<crate::execution::HandoffReceipt> = Vec::new();
+    for entry in entries {
+        let path = entry
+            .map_err(|error| PulseError::io(&directory, error))?
+            .path();
+        if path.extension().and_then(|ext| ext.to_str()) != Some("json") {
+            continue;
+        }
+        let bytes = fs::read(&path).map_err(|error| PulseError::io(&path, error))?;
+        let handoff: crate::execution::HandoffReceipt =
+            serde_json::from_slice(&bytes).map_err(|error| PulseError::json(&path, error))?;
+        if handoff.ticket_id == ticket_id && handoff.verifying_revision == verifying_revision {
+            handoffs.push(handoff);
+        }
+    }
+    handoffs.sort_by(|left, right| left.handoff_id.cmp(&right.handoff_id));
+    Ok(handoffs)
+}
+
 fn qa_posture_str(posture: crate::graph::model::contract::QaImpactPosture) -> &'static str {
     use crate::graph::model::contract::QaImpactPosture;
     match posture {
@@ -983,18 +1047,80 @@ fn qa_posture_str(posture: crate::graph::model::contract::QaImpactPosture) -> &'
 }
 
 /// The bootstrap prompt points the agent at the packet and the CLI workflow;
-/// it never copies the contract into the prompt.
-fn worker_prompt(ticket_id: &str) -> String {
+/// it never copies the contract into the prompt. Commands are exact, with the
+/// run's lease/session/source facts filled in, so the agent cannot fumble
+/// the proof syntax.
+fn worker_prompt(ticket_id: &str, lease_id: &str, session_id: &str, source_commit: &str) -> String {
     format!(
-        "# Pulse worker run — {ticket_id}\n\n\
-         1. Read `worker-input.json` in this directory. It is your complete work packet.\n\
+        "# Pulse worker run — {ticket_id}\n\
+         You are `agent:runner:worker` implementing Ticket {ticket_id} in this\n\
+         repository. The process runs at the repository root; the `pulse` CLI\n\
+         is on PATH. Work only inside this Ticket's contract.\n\
+         \n\
+         1. Read `worker-input.json` in this directory. It is your complete\n\
+         work packet (contract prose, QA cases, docs, source fence).\n\
+         `worker-env` holds the same run facts as shell variables.\n\
          2. Read required docs with `pulse docs get <section-ref>`; do not guess.\n\
-         3. Implement inside the contract. Do not change acceptance criteria.\n\
-         4. When done, call `pulse work handoff {ticket_id} --actor runner:worker ...` with an\n\
-         acceptance-to-check mapping, then print one final JSON line:\n\
-         `{{\"status\": \"handed_off\", \"summary\": \"...\"}}`\n\
-         5. If blocked, call `pulse work transition {ticket_id} blocked --reason ...` (or leave a\n\
-         `pulse note --ticket {ticket_id}`) and print `{{\"status\": \"blocked\", \"reason\": \"...\"}}`.\n\n\
-         The final JSON line is a summary only; proof comes from the CLI receipts you record.\n"
+         3. Implement. Do not change acceptance criteria. Do not run\n\
+         `git commit` — leave changes in the working tree; the developer\n\
+         commits after close.\n\
+         4. When done, record the handoff proof (edit the summary and paths):\n\
+         \n\
+         pulse --idempotency-key handoff:{ticket_id}:{lease_id} work handoff \\\n\
+           --lease {lease_id} \\\n\
+           --session {session_id} \\\n\
+           --source-commit {source_commit} \\\n\
+           --summary \"<what changed and how you verified it>\" \\\n\
+           --changed-path src/example.ext\n\
+         \n\
+         5. Your last output line must be exactly one JSON object with\n\
+         nothing after it (no code fence, no trailing prose):\n\
+         `{{\"status\": \"handed_off\", \"summary\": \"<one line>\"}}`\n\
+         6. If you cannot finish: `pulse note --ticket {ticket_id} --message\n\
+         \"<why>\" --from agent:runner:worker`, then end with\n\
+         `{{\"status\": \"blocked\", \"reason\": \"<why>\"}}`.\n\
+         \n\
+         Proof comes from the CLI receipt in step 4; the final JSON line is\n\
+         only a summary. Never claim handed_off without a successful step 4.\n"
+    )
+}
+
+/// Bootstrap prompt for the independent reviewer agent. Like the worker
+/// prompt it carries workflow and identity only, plus the exact verify
+/// syntax with the run's facts filled in.
+fn reviewer_prompt(ticket_id: &str, source_commit: &str) -> String {
+    format!(
+        "# Pulse reviewer run — {ticket_id}\n\
+         You are `agent:runner:reviewer` independently reviewing the handoff\n\
+         of Ticket {ticket_id} in this repository. The process runs at the\n\
+         repository root; the `pulse` CLI is on PATH.\n\
+         \n\
+         1. Read `reviewer-input.json` in this directory: the acceptance\n\
+         ids, the handoff receipt(s) to review, and the artifact directory.\n\
+         2. Review independently. Inspect the working-tree changes\n\
+         (`git status --porcelain`, `git diff`), re-read the Ticket contract\n\
+         (`pulse work show {ticket_id} --json`), and re-run this repository's\n\
+         verification command yourself (see its AGENTS.md). Do not trust the\n\
+         worker summary.\n\
+         3. Collect the proof receipts recorded for this Ticket:\n\
+         `pulse evidence receipt list --kind qa_checkpoint --json` and\n\
+         `pulse evidence receipt list --kind documentation_validation --json`.\n\
+         4. Record the verdict — one --check per command you ran, exactly\n\
+         one --proof per acceptance id mapping it to checks and/or receipts:\n\
+         \n\
+         pulse --idempotency-key verify:{ticket_id}:<handoff_id> work verify \\\n\
+           --handoff <handoff_id> \\\n\
+           --actor agent:runner:reviewer \\\n\
+           --source-commit {source_commit} \\\n\
+           --disposition passed \\\n\
+           --summary \"<evidence-based summary>\" \\\n\
+           --check \"verify=<the command you ran>=0\" \\\n\
+           --proof \"AC-1=verify=<receipt_id>,…\"\n\
+         \n\
+         `passed` requires every check to exit 0. Use `--disposition\n\
+         rework` with findings when the handoff does not hold.\n\
+         5. Your last output line must be exactly one JSON object with\n\
+         nothing after it (no code fence):\n\
+         `{{\"disposition\": \"pass\", \"acceptance\": {{…}}, \"findings\": []}}`\n"
     )
 }

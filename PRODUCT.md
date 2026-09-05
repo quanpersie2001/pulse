@@ -449,8 +449,8 @@ không tự rebuild từ revision mới. Contract đổi giữa chừng tạo fi
 ```json
 // .pulse/config/runners.json
 {
-  "worker":   {"command": "claude -p --output-format json --input-file {input}", "timeout_seconds": 3600},
-  "reviewer": {"command": "codex exec --json --input {input}", "timeout_seconds": 1800},
+  "worker":   {"command": "claude -p --output-format text --dangerously-skip-permissions 'Pulse worker run. First read .pulse/runtime/run/{ticket}/worker-prompt.md in this repository and follow those instructions exactly.'", "timeout_seconds": 3600},
+  "reviewer": {"command": "codex exec --sandbox workspace-write '<prompt pointer như worker>'", "timeout_seconds": 1800},
   "qa":       {"command": "node scripts/qa-run.mjs {input}", "timeout_seconds": 900},
   "check":    {"command": "npm run docs:check", "timeout_seconds": 300}
 }
@@ -458,7 +458,9 @@ không tự rebuild từ revision mới. Contract đổi giữa chừng tạo fi
 
 Role là tên tuỳ ý. Placeholder: `{input}` đường dẫn file input, `{ticket}`,
 `{repo}`, `{artifact_dir}`. Không shell interpolation; args parse bằng argv
-parser, không qua `sh -c`.
+parser, không qua `sh -c`. Lệnh agent nhận prompt positional trỏ tới
+bootstrap prompt Pulse viết sẵn; `--output-format text` giữ JSON cuối của
+agent là dòng stdout cuối (contract output của runner).
 
 #### Luồng `pulse run <role> --ticket <id>`
 

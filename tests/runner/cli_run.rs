@@ -123,6 +123,15 @@ pub(crate) fn set_worker_command(repo: &TestRepo, command: &str) {
     commit_all(repo.path());
 }
 
+/// Re-point exactly one role command, leaving the other roles untouched.
+pub(crate) fn set_command(repo: &TestRepo, role: &str, command: &str) {
+    let path = repo.path().join(".pulse/config/runners.json");
+    let mut config: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    config[role]["command"] = Value::String(command.to_string());
+    fs::write(&path, serde_json::to_string_pretty(&config).unwrap()).unwrap();
+    commit_all(repo.path());
+}
+
 fn error_code(output: &std::process::Output) -> String {
     assert!(
         !output.status.success(),
@@ -417,4 +426,86 @@ echo '{"status": "handed_off", "summary": "done"}'
     assert_eq!(qa_input["schema_version"], 1);
     assert_eq!(qa_input["ticket_id"], ticket_id.as_str());
     assert!(qa_input["source_commit"].is_string());
+}
+
+// ---------------------------------------------------------------------------
+// bootstrap prompt and reviewer input contract
+// ---------------------------------------------------------------------------
+
+#[test]
+fn worker_run_writes_exact_handoff_syntax_into_bootstrap_prompt() {
+    let repo = TestRepo::from_fixture("minimal-service");
+    let ticket_id = setup_ready_ticket(&repo);
+    install_worker_script(
+        &repo,
+        r#"echo '{"status": "blocked", "reason": "not started"}'"#,
+    );
+    set_worker_command(&repo, "sh scripts/fake-worker.sh {input}");
+
+    let outcome = run_outcome(&repo, &ticket_id);
+    assert_eq!(outcome["status"], "blocked");
+    let lease_id = outcome["lease_id"].as_str().unwrap().to_string();
+
+    let run_dir = repo.path().join(".pulse/runtime/run").join(&ticket_id);
+    let prompt = fs::read_to_string(run_dir.join("worker-prompt.md")).unwrap();
+    // The exact, runnable handoff command with this run's facts filled in.
+    assert!(prompt.contains(&format!(
+        "pulse --idempotency-key handoff:{ticket_id}:{lease_id} work handoff"
+    )));
+    assert!(prompt.contains(&format!("--lease {lease_id}")));
+    assert!(prompt.contains("--session "));
+    assert!(prompt.contains("--source-commit "));
+    assert!(prompt.contains("agent:runner:worker"));
+    // The old broken forms must not come back.
+    assert!(!prompt.contains(&format!("work handoff {ticket_id}")));
+    assert!(!prompt.contains("--actor runner:worker"));
+}
+
+#[test]
+fn reviewer_run_input_carries_the_verifying_handoff_and_prompt_syntax() {
+    let repo = TestRepo::from_fixture("minimal-service");
+    let ticket_id = setup_ready_ticket(&repo);
+    install_worker_script(
+        &repo,
+        r#"
+RUN_DIR="$(dirname "$1")"
+. "$RUN_DIR/worker-env"
+"$PULSE" work handoff --lease "$LEASE_ID" --session "$SESSION_ID" \
+  --source-commit "$SOURCE_COMMIT" --summary "did the work" \
+  --idempotency-key handoff-1 --json
+echo '{"status": "handed_off", "summary": "done"}'
+"#,
+    );
+    set_worker_command(&repo, "sh scripts/fake-worker.sh {input}");
+    let outcome = run_outcome(&repo, &ticket_id);
+    assert_eq!(outcome["status"], "handed_off");
+
+    let handoff_files = fs::read_dir(repo.path().join(".pulse/evidence/execution/handoffs"))
+        .unwrap()
+        .count();
+    assert_eq!(handoff_files, 1);
+
+    install_worker_script(&repo, r#"echo '{"disposition": "pass", "findings": []}'"#);
+    set_command(&repo, "reviewer", "sh scripts/fake-worker.sh {input}");
+    let out = repo.pulse_ok(&["run", "reviewer", "--ticket", &ticket_id, "--json"]);
+    assert_eq!(out["status"], "completed");
+
+    let run_dir = repo.path().join(".pulse/runtime/run").join(&ticket_id);
+    let input: Value =
+        serde_json::from_slice(&fs::read(run_dir.join("reviewer-input.json")).unwrap()).unwrap();
+    assert_eq!(input["ticket_id"], ticket_id.as_str());
+    let handoffs = input["handoffs"].as_array().unwrap();
+    assert_eq!(handoffs.len(), 1);
+    assert!(handoffs[0]["handoff_id"]
+        .as_str()
+        .unwrap()
+        .starts_with("handoff_"));
+    assert_eq!(handoffs[0]["recorded_by"], "agent:runner:worker");
+    assert_eq!(handoffs[0]["changed_paths"].as_array().unwrap().len(), 0);
+    assert!(!input["acceptance"].as_array().unwrap().is_empty());
+
+    let prompt = fs::read_to_string(run_dir.join("reviewer-prompt.md")).unwrap();
+    assert!(prompt.contains(&format!("verify:{ticket_id}:<handoff_id> work verify")));
+    assert!(prompt.contains("--actor agent:runner:reviewer"));
+    assert!(prompt.contains("--disposition passed"));
 }
