@@ -1,7 +1,7 @@
 # Pulse — Product Definition
 
 > Trạng thái: chốt ngày 2026-09-05, cập nhật 2026-09-06 theo Decision 0009,
-> 0010, 0011. Đây là nguồn sự thật về sản phẩm và thiết kế
+> 0010, 0011, 0012. Đây là nguồn sự thật về sản phẩm và thiết kế
 > mục tiêu. Nó thay thế toàn bộ `pulse-reboot/` (đã xoá, còn trong Git history
 > trước commit này). Khi README, AGENTS.md hay `proposals/` mâu thuẫn với file
 > này, file này thắng cho đến khi có ADR thay thế.
@@ -545,9 +545,44 @@ QA output:
 }
 ```
 
-Reviewer output: `{"disposition": "pass|rework", "acceptance": {"AC-1": {"check": "pnpm test"}}, "findings": []}`.
+Reviewer input (`reviewer-input.json`, Decision 0012) mang **claim để
+verify, không mang lời kể của worker**: không có `summary`, không có checks
+worker khai, không có remaining risk. Reviewer lấy contract từ `pulse work
+show`, diff từ Git, và tự chạy lệnh verify.
+
+```json
+{
+  "schema_version": 1,
+  "ticket_id": "TK-031", "source_commit": "d4e5f6", "contract_revision": 4,
+  "acceptance": [{"id": "AC-1"}, {"id": "AC-2"}],
+  "handoffs": [{"handoff_id": "01JX…H1", "changed_paths": ["src/auth/errors.ts"],
+                "recorded_by": "agent:runner:worker", "source_commit": "d4e5f6"}],
+  "proof_receipts": {"qa_checkpoint": ["01JX…Q1"], "documentation_validation": []},
+  "reviewers_required": 1,
+  "artifact_dir": "artifacts"
+}
+```
+
+Reviewer output:
+
+```json
+{
+  "disposition": "pass|rework",
+  "acceptance": {"AC-1": {"check": "pnpm test auth"}},
+  "findings": [{"acceptance_id": "AC-2", "summary": "…", "owner": "src/auth/RefreshTokenHandler.ts",
+                "check": "pnpm test auth -- --grep revoked", "severity": "high"}]
+}
+```
 
 Check output: `{"status": "passed|failed", "findings": []}`.
+
+**Shape finding** chung cho reviewer, QA, check và `doctor` sau này: `summary`,
+`owner` (repository-relative path hoặc `DOC-ID#section`), `check` (lệnh argv
+đã chạy và thấy fail, hoặc receipt id); reviewer thêm `acceptance_id`, QA thêm
+`case_id`. Thiếu `check` thì finding vẫn được ghi với `unverifiable: true` và
+không một mình là lý do `rework`; một `rework` mà mọi finding đều
+`unverifiable` được ghi `inconclusive`, không phải verdict. Đếm, filename,
+tuổi file, severity không phải finding.
 
 Pulse không biết bên trong là vitest, Playwright, curl hay một agent.
 
@@ -729,6 +764,15 @@ commit khớp target hoặc ancestor policy cho phép, artifact hash khớp, act
 grant, actor độc lập khi gate yêu cầu. Receipt cũ không bị sửa khi hết hiệu lực;
 gate chỉ không dùng nó nữa.
 
+**Ranh giới riêng tư cho plane tracked** (Decision 0012): mọi trường text của
+receipt payload, note, learning và `findings[].summary` bị từ chối với
+`receipt_privacy_violation` khi chứa absolute path ngoài repo root hoặc chuỗi
+khớp mẫu secret (danh sách trong `src/evidence/redaction.rs`, mở rộng bằng
+PR). Path dưới repo root được rewrite thành repository-relative.
+`session_ref` là id mờ, được giữ vì là join key duy nhất với transcript host.
+`stderr_tail` chỉ ở run record trong `runtime/`, không vào receipt. Nội dung
+artifact không được quét.
+
 #### Verification profiles và review layers
 
 Profile nằm trong `PULSE.md` của repo, không hard-code trong Pulse:
@@ -738,12 +782,21 @@ profiles:
   docs-only:         {commands: ["npm run lint:docs"], review: light}
   service-change:    {commands: ["npm run lint", "npm test"], review: standard}
   web-behavior:      {commands: ["npm test"], qa: required, review: standard}
-  migration:         {commands: ["npm run test:migrations"], review: independent, rollback: required}
+  migration:         {commands: ["npm run test:migrations"], review: independent, reviewers: 2, rollback: required}
+  security:          {commands: ["npm test", "npm audit"], review: independent, reviewers: 2, human: required}
 ```
 
 Layers, chọn theo risk: self-check (worker) → mechanical (lint, test, check
 runner) → independent review (reviewer khác worker) → QA checkpoint → human
 gate (security, destructive, production). Không bắt mọi Ticket qua mọi layer.
+
+**Reviewer là bằng chứng, không phải authority** (Decision 0012). Reviewer
+không sửa file; lead không đưa kết luận của mình vào prompt reviewer; không
+chấp nhận theo điểm trung bình. `reviewers` (mặc định 1) là số actor khác nhau,
+khác worker, mỗi actor một receipt `verification` trên cùng `handoff_id`. Chỉ
+profile risk cao khai `reviewers: 2`; không bật tam giác hoá toàn cục. Model
+nào làm reviewer thứ hai là việc của `runners.json` (`reviewer`, `reviewer-2`),
+không phải của Pulse.
 
 #### QA
 
@@ -836,7 +889,10 @@ validation là việc của script.
 
 1. Ticket `verifying`, revision khớp.
 2. Receipt `handoff` trên commit hiện tại.
-3. Receipt `verification` pass, actor khác actor handoff.
+3. Đủ `reviewers` receipt `verification` pass trên handoff hiện hành, mỗi
+   receipt một actor khác nhau và khác actor handoff. Một receipt `rework` là
+   đủ để Ticket `rework`; packet lần sau liệt kê finding của mọi reviewer kèm
+   actor.
 4. Mọi acceptance ID map tới check pass hoặc receipt.
 5. QA `required`: receipt `qa_checkpoint` passed, đúng baseline hash, đủ case,
    đúng commit, actor khác worker. `covered_by_story_close`: Story qualification
@@ -861,6 +917,29 @@ required của Story đã có receipt, closing actor khác QA actor. Ghi node,
 receipt, event atomic. Epic đóng khi developer đánh giá success signals.
 
 ### 5.6 Ratchet: harness tự tốt lên
+
+#### Thang bằng chứng
+
+Cấu hình chỉ chứng minh cơ chế tồn tại; chỉ task thực chứng minh nó được dùng;
+chỉ kết quả sau chứng minh nó có ích (Decision 0012). Mỗi cơ chế của harness
+(doc, role `check`, QA case, learning, profile) có một bậc, tính deterministic
+từ registry, `runners.json`, packet, receipt và relation. Không có điểm số,
+không có con số tổng hợp cho cả repo: không gate nào đọc điểm, và Pulse không
+đọc transcript nên một con số sẽ mãi phản ánh cấu hình chứ không phải hành vi.
+
+| Bậc | Nghĩa | Ví dụ Pulse tính từ đâu |
+|---|---|---|
+| `present` | cơ chế tồn tại | doc trong registry; role trong `runners.json`; learning `candidate` |
+| `wired` | có đường để một task chạm tới | doc `required` trong ít nhất một packet; role `check` nằm trong một profile; learning `promoted` |
+| `exercised` | một task đã dùng và để lại kết quả | `docs_validation` receipt; `check` receipt; handoff ghi `knowledge_usage: helpful` |
+| `outcome_supported` | kết quả sau cho thấy nó có ích | learning có hai provenance `corroborates`; check đã chặn một handoff thật |
+| `missing` | inspect xác nhận thiếu | docs `required` trỏ id không tồn tại; profile gọi role không có |
+| `unobserved` | không có bằng chứng để quyết | chưa Ticket nào chạm path của doc; role chưa từng chạy |
+| `not_applicable` | inspect chứng minh không áp dụng | Story posture `not_applicable` có lý do |
+
+Bậc không phải pass/fail: `exercised` có thể để lộ defect, `unobserved` không
+phải `missing`. Bậc mô tả cơ chế, không mô tả Ticket. Đây là từ vựng chung
+của `pulse-ratchet` và `pulse doctor`.
 
 #### Failure classification
 
@@ -943,12 +1022,36 @@ historical failure → eval fixture; implementation work → Ticket.
 `promoted_to` với content hash mới và đánh dấu learning `promoted`. Handoff có
 `documentation_findings` là promotion candidate; close gate đòi disposition.
 
-Skill `pulse-ratchet` (§5.8) chạy vòng này sau `work close`: được sửa
-`AGENTS.md`, `PULSE.md`, role `check` trong `runners.json` ngay khi có
-candidate, không hỏi, nhưng learning chỉ lên `validated` khi handoff của Ticket
-sau ghi `knowledge_usage: helpful`. Không có rerun thì vẫn `candidate`, không
-claim cải thiện. Đọc transcript host theo `session_ref` để tìm friction là
-Later.
+Skill `pulse-ratchet` (§5.8) chạy vòng này sau `work close` bằng **ba lane
+bằng chứng độc lập và một lead hoà giải** (Decision 0012). Mỗi lane sở hữu
+một bậc của thang bằng chứng, nhận đúng input của mình, read-only, không ủy
+quyền tiếp, không gán severity, trả tối đa năm candidate theo shape finding:
+
+| Lane | Trả lời | Được đọc | Không được đọc |
+|---|---|---|---|
+| `execution` | Chuyện gì đã xảy ra khi chạy Ticket này? | receipt, run record, `events tail --ticket`, note friction, `knowledge_usage` | registry, AGENTS/PULSE.md, `runners.json`, learning |
+| `harness` | Cơ chế nào tồn tại và có được wire không? | registry, `AGENTS.md`, `PULSE.md`, `runners.json`, `qa.md`, profile, packet đã dùng | receipt, note, learning |
+| `knowledge` | Learning hiện có còn đúng, lặp, hay mâu thuẫn không? | `knowledge/`, relation, freshness, Decision accepted, docs approved | receipt, note friction |
+
+Lead là chính session ratchet: giữ mọi candidate; chỉ merge khi cùng target,
+hậu quả, owner, đường sửa; một mình gán severity; không rescan sau khi lane
+xong; mỗi candidate còn lại thành `knowledge capture` với `provenance` trỏ
+lane và receipt. Rồi chọn đúng một intervention theo track: `bootstrap` (chưa
+có harness, gợi `pulse-onboard`), `operationalize` (cơ chế `present` chưa
+`wired|exercised`, wire nó), `optimize` (learning có hai `corroborates`,
+promote lên check hoặc `AGENTS.md`), `undetermined` (lane `unavailable`, ghi
+finding `evidence_gap`, không sửa). Track chỉ chọn intervention, không thêm
+finding, không đổi severity. Ticket R0 chạy `--lanes execution`. Binary Pulse
+không spawn lane; skill dùng fan-out của host.
+
+Ratchet được sửa `AGENTS.md`, `PULSE.md`, role `check` trong `runners.json`
+ngay khi có candidate, không hỏi. Learning kind `ratchet` phải có
+`expected_signal`: một dòng nói handoff của Ticket rerun phải thấy gì. Learning
+chỉ lên `validated` khi handoff của Ticket sau ghi `knowledge_usage: helpful`
+**và** `expected_signal` xuất hiện trong receipt của Ticket đó. Không có rerun
+thì vẫn `candidate`, không claim cải thiện. `pulse ratchet bundle` đóng băng
+input ba lane chỉ được thêm khi dogfood thấy lane rò rỉ sang nhau. Đọc
+transcript host theo `session_ref` để tìm friction là Later.
 
 #### Applicable recall
 
@@ -1065,10 +1168,10 @@ artifact và một trạng thái graph:
 |---|---|---|
 | `pulse-wayfind` (user-invoked, on-ramp) | Epic với `brief.md` là map; `decision_work` Ticket là câu hỏi; Decision node là câu trả lời; `blocked_by` là frontier; một ticket một phiên; map xong thì bàn giao, không build | Destination; Decision accepted |
 | `pulse-grill` (implicit khi mơ hồ) | Story `shaped`; term chốt ghi ngay `docs/domain/glossary.md`; Decision node chỉ khi khó đảo ngược, khó hiểu nếu thiếu context, có trade-off | xác nhận hiểu chung |
-| `pulse-spec` (user-invoked) | `approach.md` (solution, seam, implementation và testing decisions, out of scope), `qa.md`; không phỏng vấn lại | seam, hỏi một lần |
+| `pulse-spec` (user-invoked) | `approach.md` (solution, seam, implementation và testing decisions, out of scope), `qa.md`; không phỏng vấn lại; Story R2+ và Decision R3 qua hai đến ba reviewer cùng prompt read-only, mỗi reviewer `note --kind review`, `decision_acceptance` liệt kê note đã đọc | seam, hỏi một lần |
 | `pulse-tickets` (user-invoked) | Ticket `ready`, `blocked_by`; tracer bullet, blocker tạo trước | breakdown; ready gate |
 | `pulse-research` (model-invoked) | `works/<id>/research/<topic>.md`, subagent nền, nguồn sơ cấp; packet liệt kê dạng ref | không |
-| `pulse-ratchet` (explicit) | learning, một intervention tại owner đúng, chờ rerun | không |
+| `pulse-ratchet` (explicit) | ba lane `execution`/`harness`/`knowledge` độc lập, lead hoà giải, learning có `expected_signal`, một intervention theo track, chờ rerun | không |
 | `pulse-onboard` (explicit) | pass read-only và đề xuất; pass hai `init`, `docs register` | approve trước khi ghi |
 
 Executing và reviewing không phải skill: bootstrap prompt của `pulse run` là
@@ -1108,6 +1211,9 @@ dùng được ngay. Runner actor `runner:<role>` nhận grant theo role: worker
 - Trace tool call, prompt, token của agent; Inspector; adapter transcript cho
   nhiều host. Pulse chỉ giữ `session_ref`.
 - Multi-user authorization, dashboard, report, external tracker sync.
+- Điểm số harness (năm chiều, trần điểm, con số tổng hợp cho repo), renderer
+  HTML/Canvas, host adapter matrix, Harness as Code, Studio. Thang bằng chứng
+  §5.6 là nhãn phân loại tính từ receipt, không phải điểm (Decision 0012).
 - Semantic/hybrid search, embedding, reranker.
 - Windows tier-1 cho đến khi có người dùng Windows.
 - Worktree mặc định.
@@ -1145,10 +1251,10 @@ done và qualification pass.
 |---|---|---|
 | 5.1 Work graph | Đã có spine | `pulse init` cấp Core grants; Ticket tạo `ticket.md`, `work sync` bind hash/metadata, ambiguity và ready gates hoạt động. Legacy JSON contract API vẫn tồn tại cho callers cũ. |
 | 5.2 Packet | Đã rút gọn | Packet có ticket prose, context, docs/QA/source/tags/handoff; không còn dispatch, capability, scope enforcement, assurance hay `not_installed`. |
-| 5.3 Runner | Chạy thật trên dogfood | `pulse run worker|reviewer|qa` đã chạy thật trên `examples/todolist/` với lease, resume sau kill, drift acknowledgment, inconclusive classification; isolation chuyển sang từ chối khi Ticket khác `active` (quyết định 13.2), artifact ingest và reviewer outcome classification còn lại. |
+| 5.3 Runner | Chạy thật trên dogfood | `pulse run worker|reviewer|qa` đã chạy thật trên `examples/todolist/` với lease, resume sau kill, drift acknowledgment, inconclusive classification; isolation chuyển sang từ chối khi Ticket khác `active` (quyết định 13.2). Artifact ingest đang làm. Còn lại theo Decision 0012: `reviewer-input.json` bỏ `summary`, thêm `contract_revision` và `reviewers_required`; `classify_reviewer` validate shape finding và cờ `unverifiable`. |
 | 5.4 Docs | Đã rút gọn | Registry tám trường, `tags.json`, `docs tags add/list`, tag filtering và path/tag applicability đã có. |
-| 5.5 Evidence/QA | Đã có spine | Close hỗ trợ mọi risk; high/critical yêu cầu actor human. `qa.md` còn là fenced JSON: chuyển sang heading và `qa-input.json` theo Decision 0010, receipt dùng `case_hash`. |
-| 5.6 Ratchet | `capture`–`applicable` đã chạy thật | `knowledge capture|validate|promote|applicable` đã chạy thật: LRN-001 được capture, promote và inject vào packet; scope `harness|repository` và promote tự sửa doc là việc còn lại (quyết định 13.3, 13.4). |
+| 5.5 Evidence/QA | Đã có spine | Close hỗ trợ mọi risk; high/critical yêu cầu actor human. `qa.md` còn là fenced JSON: chuyển sang heading và `qa-input.json` theo Decision 0010, receipt dùng `case_hash`. Decision 0012: `src/evidence/redaction.rs` cho plane tracked; trường `reviewers` trong profile và close gate đếm receipt theo actor. |
+| 5.6 Ratchet | `capture`–`applicable` đã chạy thật | `knowledge capture|validate|promote|applicable` đã chạy thật: LRN-001 được capture, promote và inject vào packet; scope `harness|repository` và promote tự sửa doc là việc còn lại (quyết định 13.3, 13.4). Decision 0012: `expected_signal` bắt buộc cho kind `ratchet`, `knowledge validate` đối chiếu nó; ba lane và luật lead sống trong skill `pulse-ratchet`, chưa có lệnh `ratchet bundle`. |
 | 5.7 Giao tiếp | Đã có và chạy thật | Event log append-only; `pulse note` ghi note vào Ticket, `pulse events tail` đọc với `--since`/`--ticket`/`--follow`; note hiện trong packet (giới hạn 8 note mới nhất). Còn một file một event: chuyển sang `<date>.jsonl` và `events compact` theo Decision 0011; `--kind friction`, `session_ref` chưa có. |
 | 5.8 Bề mặt hướng dẫn | Chưa có | Khối AGENTS có marker, `DOC-GLOSSARY`, template `brief.md` năm mục, bảy skill, đổi guard test cấm `skills/` thành guard parse lệnh (Decision 0009). |
 | 5.8 MCP | Stub không bind | Server thật, sau CLI |
@@ -1179,10 +1285,14 @@ examples/todolist/    target repo dogfood
 
 ## 11. Later
 
-Thứ tự ưu tiên sau golden path: MCP server; `pulse doctor` với finding có
-evidence/impact/proposed Ticket; compound run và retrieval eval; persisted
-shaping map và decision frontier cho R2/R3; Story qualification matrix; external
-tracker adapter; semantic search adapter nếu lexical eval chứng minh recall gap;
+Thứ tự ưu tiên sau golden path: MCP server; `pulse doctor` offline,
+deterministic, non-blocking, trả bảng bậc bằng chứng theo cơ chế (§5.6) và
+envelope finding theo shape §5.3 có owner và proposed Ticket; `pulse commands
+--json` với audience `workflow | advanced | maintainer` để khối AGENTS render
+từ inventory và guard test kiểm tra hai chiều; `pulse ratchet bundle` chỉ khi
+dogfood thấy lane rò rỉ; compound run và retrieval eval; persisted shaping map
+và decision frontier cho R2/R3; Story qualification matrix; external tracker
+adapter; semantic search adapter nếu lexical eval chứng minh recall gap;
 conductor agent loop; Windows.
 
 ## 12. Dấu hiệu đang đi sai hướng
@@ -1237,6 +1347,14 @@ Gặp một dấu hiệu thì dừng feature liên quan, ghi Decision, sửa har
 7. **Event log là `events/<date>.jsonl`.** Append với lock và fsync, cursor
    ULID, `events compact` chuyển đổi một lần. Node, edge, receipt, learning
    giữ một file một bản ghi. Decision 0011. Chốt 2026-09-06.
+8. **Thang bằng chứng, reviewer là bằng chứng, lane độc lập.** Bậc
+   `present|wired|exercised|outcome_supported` tính từ receipt, không điểm.
+   Reviewer input không mang lời kể của worker; finding có `owner` và
+   `check`; plane tracked từ chối absolute path và secret; profile risk cao
+   khai `reviewers: 2`; `pulse-ratchet` chạy ba lane `execution|harness|
+   knowledge` với lead hoà giải và learning `ratchet` có `expected_signal`.
+   Không lấy điểm năm chiều, renderer, Canvas, adapter matrix. Decision 0012.
+   Chốt 2026-09-06.
 
 Còn mở, mặc định nếu không có ý kiến khác:
 
@@ -1268,3 +1386,14 @@ ticket, fog of war, research subagent; glossary ghi ngay, ADR sparingly);
 Better Harness (đọc transcript host chứ không tự ghi trace, Task Episode,
 ToolCallTrace không args, commit ↔ session theo trailer và trùng file, mọi claim
 gắn nhãn declared/observed/candidate/unmapped).
+
+Đợt hai Better Harness, Decision 0012 (`references/better-harness`, commit
+`7cd26e9`): thang bằng chứng `Present → Wired → Exercised → Outcome-supported`
+và luật "cấu hình không phải sử dụng"; finding có gap, impact, owner, check;
+reviewer là bằng chứng không phải authority, không chấp nhận theo điểm trung
+bình; pattern A ba lane bằng chứng độc lập với lead hoà giải chỉ merge khi
+cùng target/hậu quả/owner/đường sửa; pattern B tam giác hoá nhiều reviewer
+cùng prompt chỉ cho spec và Decision risk cao; repair verified tách khỏi
+effectiveness; ranh giới riêng tư cho output tracked. Không lấy: điểm năm
+chiều, support track như tầng báo cáo, renderer HTML/Canvas, host adapter
+matrix, Harness as Code, Studio, Inspector, khối lượng prose của SKILL.md.

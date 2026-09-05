@@ -6,6 +6,8 @@
 //! contract. Timing-sensitive assertions use generous margins so the suite
 //! stays deterministic under parallel load.
 
+#[path = "runner/artifacts.rs"]
+mod artifacts;
 #[path = "runner/cli_run.rs"]
 mod cli_run;
 #[path = "common/bin.rs"]

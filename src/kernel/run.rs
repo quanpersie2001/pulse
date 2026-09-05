@@ -37,6 +37,24 @@ use crate::{PulseError, PulseResult};
 /// Default worker lease TTL when the caller does not pin one.
 pub const DEFAULT_RUN_TTL_SECONDS: u64 = 3600;
 
+/// Upper bound for a single run-declared artifact. Artifacts are copies into
+/// the content-addressed evidence store, not a log store.
+pub const MAX_RUN_ARTIFACT_BYTES: u64 = 64 * 1024 * 1024;
+
+/// One run-declared artifact after ingest into the evidence store.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct IngestedArtifact {
+    /// Repository-relative source path the artifact was ingested from.
+    pub path: String,
+    /// Declared role: `log`, `screenshot`, `trace` or a role-specific label.
+    pub role: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub case_id: Option<String>,
+    pub sha256: String,
+    pub size_bytes: u64,
+}
+
 /// Root of the per-Ticket run workspace (gitignored).
 pub const RUN_DIR: &str = ".pulse/runtime/run";
 
@@ -201,6 +219,9 @@ pub struct RunOutcome {
     pub inconclusive_reason: Option<String>,
     pub summary: Option<String>,
     pub run_record_path: String,
+    /// Artifacts declared in the final output and ingested into the evidence
+    /// store, as `(role, digest)` bindings.
+    pub artifacts: Vec<IngestedArtifact>,
     pub event_id: String,
 }
 
@@ -529,7 +550,7 @@ impl JsonGraphStore {
             None,
         );
 
-        let (run, stderr_tail) = match &execution {
+        let (mut run, stderr_tail) = match &execution {
             Ok(outcome) => {
                 // A bounded stderr tail makes inconclusive runs diagnosable
                 // without turning Pulse into a log store.
@@ -549,6 +570,26 @@ impl JsonGraphStore {
                 None,
             ),
         };
+
+        // Ingest artifacts declared in the final output JSON. They are part
+        // of the output contract: an invalid declaration (missing path,
+        // outside the repository, unreadable) demotes the run to inconclusive
+        // instead of silently dropping evidence.
+        let mut ingested: Vec<IngestedArtifact> = Vec::new();
+        if let Ok(outcome) = &execution {
+            if let Ok(value) = runner::parse_output_json(outcome) {
+                match self.ingest_declared_artifacts(&value) {
+                    Ok(artifacts) => ingested = artifacts,
+                    Err(error) => {
+                        run = RunClassification::inconclusive(
+                            "artifact_ingest_failed",
+                            Some(error.to_string()),
+                        );
+                    }
+                }
+            }
+        }
+
         let run_record = RunRecord {
             schema_version: 1,
             role: role.to_string(),
@@ -558,6 +599,7 @@ impl JsonGraphStore {
             inconclusive_reason: run.inconclusive_reason.clone(),
             summary: run.summary.clone(),
             stderr_tail,
+            artifacts: ingested.clone(),
             exit_code: run.exit_code,
             timed_out: run.timed_out,
             cancelled: run.cancelled,
@@ -578,6 +620,11 @@ impl JsonGraphStore {
             "status": run.status,
             "inconclusive_reason": run.inconclusive_reason,
             "run_record": record_path.strip_prefix(&self.repo_root).ok().map(|p| p.to_string_lossy().to_string()),
+            "artifacts": ingested.iter().map(|artifact| json!({
+                "role": artifact.role,
+                "sha256": artifact.sha256,
+                "case_id": artifact.case_id,
+            })).collect::<Vec<_>>(),
         });
         if event_target != subject_ticket {
             event_payload["story_id"] = json!(event_target);
@@ -605,6 +652,7 @@ impl JsonGraphStore {
                 .strip_prefix(&self.repo_root)
                 .map(|p| p.to_string_lossy().to_string())
                 .unwrap_or_else(|_| record_path.display().to_string()),
+            artifacts: ingested,
             event_id: event.id,
         })
     }
@@ -845,6 +893,87 @@ impl JsonGraphStore {
                 }))?)
             }
         }
+    }
+
+    /// Ingest artifacts declared in the final output JSON: `artifacts[]
+    /// {path, role, case_id?}`. Each path must resolve to a regular file
+    /// inside the repository; the content is hashed (SHA-256) and copied into
+    /// the content-addressed evidence store. Shape errors and unsafe paths
+    /// fail the whole ingest; the caller demotes the run to inconclusive.
+    fn ingest_declared_artifacts(
+        &self,
+        value: &serde_json::Value,
+    ) -> PulseResult<Vec<IngestedArtifact>> {
+        let Some(declared) = value.get("artifacts") else {
+            return Ok(Vec::new());
+        };
+        let list = declared.as_array().ok_or_else(|| {
+            PulseError::validation(
+                "run_artifacts_invalid",
+                "output artifacts must be an array of {path, role, case_id?}",
+            )
+        })?;
+        let mut ingested = Vec::with_capacity(list.len());
+        for (index, entry) in list.iter().enumerate() {
+            let invalid = |detail: String| {
+                PulseError::validation(
+                    "run_artifacts_invalid",
+                    format!("artifact {index}: {detail}"),
+                )
+            };
+            let path_str = entry
+                .get("path")
+                .and_then(|path| path.as_str())
+                .filter(|path| !path.trim().is_empty())
+                .ok_or_else(|| invalid("path must be a non-empty string".to_string()))?;
+            let role = entry
+                .get("role")
+                .and_then(|role| role.as_str())
+                .filter(|role| !role.trim().is_empty())
+                .unwrap_or("log");
+            let case_id = entry.get("case_id").and_then(|case| case.as_str());
+            let declared_path = Path::new(path_str);
+            let resolved = if declared_path.is_absolute() {
+                declared_path.to_path_buf()
+            } else {
+                self.repo_root.join(declared_path)
+            };
+            let canonical = resolved
+                .canonicalize()
+                .map_err(|error| invalid(format!("{path_str} does not resolve: {error}")))?;
+            // Compare canonical-to-canonical: on macOS the repository root
+            // itself may sit behind a symlink (`/var` -> `/private/var`).
+            let repo_canonical = self
+                .repo_root
+                .canonicalize()
+                .unwrap_or_else(|_| self.repo_root.clone());
+            if !canonical.starts_with(&repo_canonical) {
+                return Err(invalid(format!(
+                    "{path_str} resolves outside the repository"
+                )));
+            }
+            let outcome = crate::evidence::put_artifact(
+                &self.repo_root,
+                None,
+                &canonical,
+                role.to_string(),
+                None,
+                None,
+                MAX_RUN_ARTIFACT_BYTES,
+            )?;
+            let relative = canonical
+                .strip_prefix(&repo_canonical)
+                .map(|path| path.to_string_lossy().to_string())
+                .unwrap_or_else(|_| path_str.to_string());
+            ingested.push(IngestedArtifact {
+                path: relative,
+                role: role.to_string(),
+                case_id: case_id.map(str::to_string),
+                sha256: outcome.artifact.digest,
+                size_bytes: outcome.artifact.size_bytes,
+            });
+        }
+        Ok(ingested)
     }
 
     /// Classify one finished execution. Success claims are verified against
@@ -1154,6 +1283,9 @@ pub struct RunRecord {
     pub summary: Option<String>,
     /// Last 512 bytes of captured stderr when the run was inconclusive.
     pub stderr_tail: Option<String>,
+    /// Run-declared artifacts ingested into the evidence store.
+    #[serde(default)]
+    pub artifacts: Vec<IngestedArtifact>,
     pub exit_code: Option<i32>,
     pub timed_out: bool,
     pub cancelled: bool,

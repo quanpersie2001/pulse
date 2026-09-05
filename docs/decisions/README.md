@@ -15,6 +15,7 @@ Current decisions:
 - [0009 — Workflow trong repo đích, skill theo artifact trên CLI](0009-skill-surface-over-cli.md)
 - [0010 — QA baseline là markdown heading, JSON chỉ ở biên runner](0010-qa-baseline-markdown-contract.md)
 - [0011 — Event log là JSONL theo ngày](0011-events-jsonl-per-day.md)
+- [0012 — Thang bằng chứng, reviewer là bằng chứng, lane độc lập và lead hoà giải](0012-evidence-ladder-independent-lanes.md)
 
 Add or update a decision when:
 

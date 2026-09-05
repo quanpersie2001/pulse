@@ -90,7 +90,47 @@ required baseline before a Story closes.
 **Posture** — a Ticket's declared QA or docs impact: `required`, `none` with
 rationale, or `deferred`/`covered_by_story_close` with a link.
 
+**Finding** — one repairable gap reported by a reviewer, QA runner, check or
+`doctor`: `summary`, `owner` (path or `DOC-ID#section`) and `check` (the argv
+that showed it or a receipt id); reviewer findings add `acceptance_id`, QA
+findings add `case_id`. A finding without `check` is kept as `unverifiable`
+and cannot alone justify `rework` (Decision 0012).
+
+**Reviewer as evidence** — a reviewer verdict is a receipt to be counted, not
+an authority: the reviewer input carries the worker's claims (changed paths,
+acceptance ids, proof receipts) and never the worker's summary; the reviewer
+re-runs checks itself. **Triangulation** — a profile with `reviewers: 2`
+requires two distinct reviewer actors to pass on the same handoff; used only
+for high-risk profiles, never globally (Decision 0012).
+
+**Redaction boundary** — the mechanical check on every tracked text field
+(receipt payload, note, learning, finding summary) that rejects absolute
+paths outside the repo root and secret-shaped strings with
+`receipt_privacy_violation`; `session_ref` stays as an opaque join key
+(Decision 0012).
+
 ## Ratchet
+
+**Evidence ladder** — the per-mechanism label Pulse derives from receipts,
+not a score: `present` (exists), `wired` (a task can reach it), `exercised`
+(a task used it and left a receipt), `outcome_supported` (a later result
+shows it helped), plus `missing`, `unobserved`, `not_applicable`. Shared
+vocabulary of `pulse-ratchet` and `pulse doctor` (Decision 0012).
+
+**Lane** — one of the three read-only evidence passes `pulse-ratchet` runs
+after a close: `execution` (what happened: receipts, run records, friction
+notes), `harness` (what exists and is wired: registry, `AGENTS.md`,
+`PULSE.md`, `runners.json`, profiles), `knowledge` (what is already known:
+learnings, relations, freshness). A lane sees only its own inputs and returns
+at most five candidate findings without severity. **Lead** — the ratchet
+session that reconciles lanes: keeps every candidate, merges only on the same
+target, consequence, owner and repair route, assigns severity alone, and picks
+exactly one intervention by track (`bootstrap`, `operationalize`, `optimize`,
+`undetermined`) (Decision 0012).
+
+**Expected signal** — the one-line prediction a `ratchet` learning must carry
+of what the next rerun's handoff will show; `knowledge validate` requires both
+`knowledge_usage: helpful` and that signal in the rerun's receipts.
 
 **Learning** — a reusable record in `.pulse/knowledge/entries/` with
 guidance, applicability, provenance and status
