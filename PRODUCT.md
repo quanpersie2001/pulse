@@ -1,6 +1,7 @@
 # Pulse — Product Definition
 
-> Trạng thái: chốt ngày 2026-09-05. Đây là nguồn sự thật về sản phẩm và thiết kế
+> Trạng thái: chốt ngày 2026-09-05, cập nhật 2026-09-06 theo Decision 0009,
+> 0010, 0011. Đây là nguồn sự thật về sản phẩm và thiết kế
 > mục tiêu. Nó thay thế toàn bộ `pulse-reboot/` (đã xoá, còn trong Git history
 > trước commit này). Khi README, AGENTS.md hay `proposals/` mâu thuẫn với file
 > này, file này thắng cho đến khi có ADR thay thế.
@@ -86,17 +87,18 @@ engine, agent framework, QA platform, orchestration engine.
 | Knowledge | Future work nên biết gì khi trigger tương tự xuất hiện? | `.pulse/knowledge/` |
 | Config | Agent nào, policy nào, tag nào? | `.pulse/config/`, `.pulse/policy/` |
 
-Event log `.pulse/events/` là audit trail bất biến cho mọi plane. `.pulse/cache/`
-luôn gitignored, xoá được, không cần cho correctness.
+Event log `.pulse/events/` là audit trail bất biến cho mọi plane, JSONL theo
+ngày (Decision 0011). `.pulse/cache/` luôn gitignored, xoá được, không cần cho
+correctness.
 
 ```text
-AGENTS.md                      # repository map, ngắn, route tới owner
+AGENTS.md                      # repository map, ngắn; khối <!-- PULSE:BEGIN/END --> do pulse init ghi
 PULSE.md                       # intent, risk policy, verification profiles, human gates
 
 docs/
   product/                     # user/system-visible behavior contract
   architecture/                # boundaries, dependency direction, invariants
-  domain/                      # glossary, rules, state machines, error taxonomy
+  domain/                      # glossary.md (DOC-GLOSSARY, grill ghi vào), rules, state machines
   operations/                  # setup, deploy, recovery, runbooks
   reference/                   # authored API/config reference
   generated/                   # projection từ code, không hand-edit
@@ -104,9 +106,9 @@ docs/
   _index.md                    # generated navigation, không phải truth
 
 works/
-  EP-001/  brief.md design.md
-  ST-014/  story.md approach.md qa.md
-  TK-031/  ticket.md plan.md validation.md
+  EP-001/  brief.md design.md              # brief.md là map: Destination, Notes, Decisions so far, Not yet specified, Out of scope
+  ST-014/  story.md approach.md qa.md research/<topic>.md
+  TK-031/  ticket.md plan.md validation.md research/<topic>.md   # research/ khi decision_work
   DEC-006/ decision.md
 
 .pulse/
@@ -123,7 +125,7 @@ works/
   knowledge/
     entries/LRN-001.json
     relations/
-  events/<date>/<ulid>.json
+  events/<date>.jsonl          # một event một dòng, append-only
   policy/authority.json
   config/runners.json
   runtime/                     # lock, transaction intent, lease TTL; gitignored
@@ -475,8 +477,9 @@ agent là dòng stdout cuối (contract output của runner).
 6. Đọc stdout cuối cùng là JSON theo contract của role. Non-zero exit,
    timeout, output malformed thì ghi receipt `inconclusive`, không đoán.
 7. Hash artifact khai báo, copy vào `.pulse/evidence/artifacts/sha256/`.
-8. Ghi receipt tương ứng role và event. Thả process, giữ hoặc thả lease theo
-   role.
+8. Ghi receipt tương ứng role và event `run.completed`, kèm `session_ref` là
+   session id của host agent nếu lấy được. Thả process, giữ hoặc thả lease
+   theo role.
 
 Agent trong lúc chạy vẫn gọi CLI trực tiếp: `pulse work handoff`, `pulse note`,
 `pulse docs get`, `pulse knowledge get`. Output JSON cuối chỉ là tóm tắt.
@@ -507,16 +510,30 @@ Worker input = packet. Worker output:
 
 hoặc `{"status": "blocked", "reason": "…", "decision_request": "…"}`.
 
-QA input:
+QA input (`qa-input.json`, sinh từ parse `qa.md`, Decision 0010; runner không
+đọc `qa.md`):
 
 ```json
 {
-  "ticket_id": "TK-031", "story_id": "ST-014",
-  "source_commit": "d4e5f6", "baseline_hash": "sha256:…",
-  "cases": [ {"id": "QA-001", "intent": "…", "steps": [], "expected": "…", "surface": "api"} ],
-  "artifact_dir": ".pulse/runtime/run/TK-031/qa-artifacts"
+  "schema_version": 1,
+  "ticket_id": "TK-031", "story_id": "ST-014", "qa_scope": "ticket_checkpoint",
+  "source_commit": "d4e5f6",
+  "baseline_path": "works/ST-014/qa.md", "baseline_content_hash": "sha256:…",
+  "posture": "automated",
+  "variables": {"REPO": "/abs", "ARTIFACT_DIR": ".pulse/runtime/run/TK-031/qa-artifacts",
+                "STATE_FILE": ".pulse/runtime/run/TK-031/qa-state.json"},
+  "cases": [ {
+    "id": "QA-001", "title": "…", "case_hash": "sha256:…",
+    "intent": "…", "surface": "api", "priority": "high", "applicability": "required",
+    "risk_refs": ["RISK-LEAK"], "preconditions": ["…"], "steps": ["…"], "expected": ["…"],
+    "evidence": ["stdout"],
+    "check": {"run": ["node", "scripts/x.mjs"], "env": {}, "assert": [{"exit_code": 0}]}
+  } ]
 }
 ```
+
+`check` chỉ có khi case mang block `pulse-check`. Case không có `check` mà
+runner là script thì trả `inconclusive` với lý do, không đoán.
 
 QA output:
 
@@ -735,25 +752,55 @@ Nó khác developer verification (Ticket có thoả contract kỹ thuật không
 một test có thể phục vụ cả hai; khác nhau ở intent, actor, source binding và
 receipt.
 
-**Baseline** `works/<STORY>/qa.md`: một fenced block `pulse-qa` cho máy, prose
-ngoài cho người. Hash toàn file bind vào receipt.
+**Baseline** `works/<STORY>/qa.md`: markdown heading quy ước như `ticket.md`,
+không fenced JSON (Decision 0010). Pulse parse thành `qa-input.json` cho runner.
+Hash toàn file và hash section từng case bind vào receipt; không có `Revision:`
+viết tay.
 
-```json
-{
-  "story_id": "ST-014", "revision": 3,
-  "scope": "Refresh token failure contract",
-  "risks": ["RISK-LEAK"],
-  "cases": [
-    {"id": "QA-001", "intent": "Token hết hạn trả TokenExpired",
-     "steps": ["…"], "expected": "…", "surface": "api",
-     "priority": "high", "risk_refs": ["RISK-LEAK"]}
-  ],
-  "exit_criteria": ["Mọi case high pass trên candidate source"]
-}
+```markdown
+# ST-014 QA baseline — Refresh token failure contract
+
+## Scope
+Client phân biệt được token hết hạn với token không hợp lệ.
+
+## Posture
+automated
+
+## Risks
+- RISK-LEAK: response lộ chi tiết xác thực nội bộ.
+
+## Exit criteria
+- Mọi case required pass trên candidate source.
+
+## Cases
+
+### QA-001 Token hết hạn trả TokenExpired
+- Intent: Client gửi refresh token đã hết hạn thì nhận mã TokenExpired, không phải InvalidToken.
+- Surface: api
+- Priority: high
+- Risks: RISK-LEAK
+- Preconditions:
+  - Một refresh token hợp lệ đã quá hạn 1 giờ.
+- Steps:
+  1. POST /auth/refresh với token đó.
+- Expected:
+  - HTTP 401, body.code = TokenExpired.
+  - Body không chứa lý do nội bộ.
+
+```pulse-check
+run: node scripts/qa/refresh-expired.mjs
+assert:
+  - exit_code: 0
+  - stdout_json_path: {path: "$.code", equals: "TokenExpired"}
+```
 ```
 
-Case nói hành vi, không khoá selector hay implementation detail. Case
-`not_applicable` cần lý do.
+Trường case: `Intent`, `Surface` (`cli|api|ui|job|docs`), `Priority`,
+`Applicability` (`required` mặc định, `not_applicable` cần `Reason`), `Risks`,
+`Preconditions`, `Steps`, `Expected`, `Evidence`, và block `pulse-check` tuỳ
+chọn cho surface `cli|api` (argv không qua shell, tập assertion cố định). Dòng
+`Key:` lạ bị từ chối kèm tên dòng. Case nói hành vi, không khoá selector hay
+implementation detail. Contract đầy đủ trong Decision 0010.
 
 **Story QA posture**: `automated`, `hybrid`, `manual_structured`, `static_proof`,
 `not_applicable` (hiếm, cần lý do). Manual vẫn phải có action log, expected
@@ -870,6 +917,8 @@ Relations: `derived_from`, `corroborates`, `contradicts`, `superseded_by`,
 #### Vòng lặp
 
 ```text
+worker/reviewer gặp ma sát -> pulse note --ticket <id> --kind friction  (luôn, không tự sửa harness)
+close gate gom note friction -> learning candidate, scope harness
 failure / review / QA / recovery có evidence
   -> pulse knowledge capture --from <ticket|receipt>   (candidate)
   -> developer hoặc agent review: reject vague/duplicate, classify, link provenance
@@ -894,6 +943,13 @@ historical failure → eval fixture; implementation work → Ticket.
 `promoted_to` với content hash mới và đánh dấu learning `promoted`. Handoff có
 `documentation_findings` là promotion candidate; close gate đòi disposition.
 
+Skill `pulse-ratchet` (§5.8) chạy vòng này sau `work close`: được sửa
+`AGENTS.md`, `PULSE.md`, role `check` trong `runners.json` ngay khi có
+candidate, không hỏi, nhưng learning chỉ lên `validated` khi handoff của Ticket
+sau ghi `knowledge_usage: helpful`. Không có rerun thì vẫn `candidate`, không
+claim cải thiện. Đọc transcript host theo `session_ref` để tìm friction là
+Later.
+
 #### Applicable recall
 
 `pulse knowledge applicable --work <id> [--audience worker|reviewer|qa]`:
@@ -916,13 +972,20 @@ Compound run post-cycle (`pulse compound <work>`), doctor, retrieval eval là
 
 ### 5.7 Giao tiếp giữa agent: event log, không broker
 
-Kênh là `.pulse/events/` append-only, mọi mutation đã ghi. Mọi process đọc ghi
-qua CLI, sống sót khi process chết, audit lại được. Không daemon, socket,
-presence, mailbox, delivery guarantee.
+Kênh là `.pulse/events/<date>.jsonl` append-only, một event một dòng, mọi
+mutation đã ghi (Decision 0011). Ghi dưới repository lock với fsync; dòng cuối
+cụt do crash bị reader bỏ qua và writer cắt trước khi append. Cursor là ULID
+của event. Mọi process đọc ghi qua CLI, sống sót khi process chết, audit lại
+được. Không daemon, socket, presence, mailbox, delivery guarantee.
+
+Pulse không ghi trace của agent (tool call, prompt, token): đó là transcript
+của host. Pulse chỉ giữ mối nối: `session_ref` trong handoff receipt và
+`run.completed`, và gợi ý trailer `Pulse-Ticket: <id>` khi close.
 
 ```text
 pulse events tail --since <cursor> [--follow] [--ticket <id>] --json
-pulse note --ticket <id> "<nội dung>" [--from <actor>]
+pulse events compact                       # chuyển <date>/evt_*.json cũ sang <date>.jsonl, một lần
+pulse note --ticket <id> "<nội dung>" [--from <actor>] [--kind friction]
 ```
 
 `note` là event nhắm Ticket, hiện trong packet và `events tail` của agent giữ
@@ -961,8 +1024,8 @@ pulse evidence receipt record|show|list|verify, artifact put|show|verify
 pulse qa       baseline <story>, resolve <ticket>
 pulse knowledge create|capture|show|list|edit|validate|promote|supersede|retire|applicable|search|get|relation
 pulse run      <role> --ticket <id> [--isolation worktree]
-pulse events   tail
-pulse note
+pulse events   tail|compact
+pulse note     [--kind friction]
 ```
 
 Mọi lệnh có `--json` với `schema_version`, stable field, non-zero exit khi
@@ -972,6 +1035,45 @@ invalid. Human output ngắn. Mutating command nhận `--expected-revision` và
 MCP server mỏng khoảng 10 tool (`next_ready`, `packet`, `claim`, `handoff`,
 `verify`, `close`, `docs_search`, `docs_get`, `knowledge_applicable`, `note`),
 làm sau khi CLI path chạy thật.
+
+#### Bề mặt hướng dẫn (Decision 0009)
+
+Quy trình sống trong repo đích, không trong Pulse: `pulse init` ghi khối
+`<!-- PULSE:BEGIN --> … <!-- PULSE:END -->` vào `AGENTS.md` và tạo
+`PULSE.md`; `pulse init --refresh` render lại khối theo version CLI, giữ
+nguyên ngoài marker, phát hiện sửa tay trong marker thì báo, không ghi đè.
+Khối route theo hình dạng yêu cầu, không theo chuỗi bước cố định:
+
+```text
+chỉ đọc                 -> work show/packet, docs search/get; không mutation
+nhỏ, hướng rõ, R0       -> work create --risk low, ticket.md tối thiểu, work ready, run
+public behavior / nhiều Ticket / risk >= medium
+                        -> pulse-grill -> pulse-spec -> pulse-tickets -> run
+lớn hơn một phiên, đường đi chưa thấy
+                        -> pulse-wayfind trước, rồi grill
+mơ hồ sản phẩm còn mở   -> dừng trước mutation; Open question (blocking) hoặc Decision;
+                           hỏi một câu kèm câu trả lời gợi ý
+ma sát với harness      -> note --kind friction; không tự sửa AGENTS/PULSE/runners trong Ticket
+sau work close          -> pulse-ratchet
+```
+
+Skill là hướng dẫn, CLI là authority: mọi mutation trong skill là lệnh `pulse`
+nguyên văn, không state riêng, không gate riêng. Mỗi skill kết thúc ở một
+artifact và một trạng thái graph:
+
+| Skill | Kết thúc ở | Gate human |
+|---|---|---|
+| `pulse-wayfind` (user-invoked, on-ramp) | Epic với `brief.md` là map; `decision_work` Ticket là câu hỏi; Decision node là câu trả lời; `blocked_by` là frontier; một ticket một phiên; map xong thì bàn giao, không build | Destination; Decision accepted |
+| `pulse-grill` (implicit khi mơ hồ) | Story `shaped`; term chốt ghi ngay `docs/domain/glossary.md`; Decision node chỉ khi khó đảo ngược, khó hiểu nếu thiếu context, có trade-off | xác nhận hiểu chung |
+| `pulse-spec` (user-invoked) | `approach.md` (solution, seam, implementation và testing decisions, out of scope), `qa.md`; không phỏng vấn lại | seam, hỏi một lần |
+| `pulse-tickets` (user-invoked) | Ticket `ready`, `blocked_by`; tracer bullet, blocker tạo trước | breakdown; ready gate |
+| `pulse-research` (model-invoked) | `works/<id>/research/<topic>.md`, subagent nền, nguồn sơ cấp; packet liệt kê dạng ref | không |
+| `pulse-ratchet` (explicit) | learning, một intervention tại owner đúng, chờ rerun | không |
+| `pulse-onboard` (explicit) | pass read-only và đề xuất; pass hai `init`, `docs register` | approve trước khi ghi |
+
+Executing và reviewing không phải skill: bootstrap prompt của `pulse run` là
+contract. Guard test: mọi lệnh `pulse …` trong `skills/**` và template khối
+AGENTS phải parse được bằng clap của crate.
 
 #### Authority
 
@@ -1001,7 +1103,10 @@ dùng được ngay. Runner actor `runner:<role>` nhận grant theo role: worker
   trong Pulse.
 - Story qualification matrix per platform, flaky waiver grant riêng, priority
   reconciliation receipt, semantic deliberation.
-- Persisted shaping map, decision frontier, fog-of-war.
+- Shaping map hay decision frontier lưu ngoài graph. Fog-of-war chỉ là hai mục
+  prose `Not yet specified` và `Out of scope` trong `brief.md` của Epic.
+- Trace tool call, prompt, token của agent; Inspector; adapter transcript cho
+  nhiều host. Pulse chỉ giữ `session_ref`.
 - Multi-user authorization, dashboard, report, external tracker sync.
 - Semantic/hybrid search, embedding, reranker.
 - Windows tier-1 cho đến khi có người dùng Windows.
@@ -1042,9 +1147,10 @@ done và qualification pass.
 | 5.2 Packet | Đã rút gọn | Packet có ticket prose, context, docs/QA/source/tags/handoff; không còn dispatch, capability, scope enforcement, assurance hay `not_installed`. |
 | 5.3 Runner | Chạy thật trên dogfood | `pulse run worker|reviewer|qa` đã chạy thật trên `examples/todolist/` với lease, resume sau kill, drift acknowledgment, inconclusive classification; isolation chuyển sang từ chối khi Ticket khác `active` (quyết định 13.2), artifact ingest và reviewer outcome classification còn lại. |
 | 5.4 Docs | Đã rút gọn | Registry tám trường, `tags.json`, `docs tags add/list`, tag filtering và path/tag applicability đã có. |
-| 5.5 Evidence/QA | Đã có spine | Close hỗ trợ mọi risk; high/critical yêu cầu actor human. Runner và QA execution vẫn là Bước 4. |
+| 5.5 Evidence/QA | Đã có spine | Close hỗ trợ mọi risk; high/critical yêu cầu actor human. `qa.md` còn là fenced JSON: chuyển sang heading và `qa-input.json` theo Decision 0010, receipt dùng `case_hash`. |
 | 5.6 Ratchet | `capture`–`applicable` đã chạy thật | `knowledge capture|validate|promote|applicable` đã chạy thật: LRN-001 được capture, promote và inject vào packet; scope `harness|repository` và promote tự sửa doc là việc còn lại (quyết định 13.3, 13.4). |
-| 5.7 Giao tiếp | Đã có và chạy thật | Event log append-only; `pulse note` ghi note vào Ticket, `pulse events tail` đọc với `--since`/`--ticket`/`--follow`; note hiện trong packet (giới hạn 8 note mới nhất). Đã dùng thật giữa worker/reviewer/developer trong lần chạy golden path. |
+| 5.7 Giao tiếp | Đã có và chạy thật | Event log append-only; `pulse note` ghi note vào Ticket, `pulse events tail` đọc với `--since`/`--ticket`/`--follow`; note hiện trong packet (giới hạn 8 note mới nhất). Còn một file một event: chuyển sang `<date>.jsonl` và `events compact` theo Decision 0011; `--kind friction`, `session_ref` chưa có. |
+| 5.8 Bề mặt hướng dẫn | Chưa có | Khối AGENTS có marker, `DOC-GLOSSARY`, template `brief.md` năm mục, bảy skill, đổi guard test cấm `skills/` thành guard parse lệnh (Decision 0009). |
 | 5.8 MCP | Stub không bind | Server thật, sau CLI |
 
 ## 9. Triage code
@@ -1118,12 +1224,26 @@ Gặp một dấu hiệu thì dừng feature liên quan, ghi Decision, sửa har
    `--insert-after "<heading>"` tự chèn đoạn text từ `guidance`/`summary` của
    learning (có `--dry-run`); `--agents-md` là đích cho harness learning.
    Chốt 2026-09-06.
+5. **Bề mặt hướng dẫn quay lại, thu hẹp Decision 0007.** Quy trình sống
+   trong khối `AGENTS.md` của repo đích do `pulse init` ghi; bảy skill theo
+   artifact (`wayfind`, `grill`, `spec`, `tickets`, `research`, `ratchet`,
+   `onboard`); không `using`, không router, không state riêng. Ma sát ghi tự
+   động qua `note --kind friction`, ratchet sửa guidance không hỏi, chỉ
+   validated sau rerun. Pulse không ghi trace agent, chỉ giữ `session_ref` và
+   gợi ý trailer `Pulse-Ticket`. Decision 0009. Chốt 2026-09-06.
+6. **`qa.md` là markdown heading, JSON chỉ ở `qa-input.json`.** Block
+   `pulse-check` tuỳ chọn cho case cli/api. Receipt bind hash file và
+   `case_hash`. Decision 0010. Chốt 2026-09-06.
+7. **Event log là `events/<date>.jsonl`.** Append với lock và fsync, cursor
+   ULID, `events compact` chuyển đổi một lần. Node, edge, receipt, learning
+   giữ một file một bản ghi. Decision 0011. Chốt 2026-09-06.
 
 Còn mở, mặc định nếu không có ý kiến khác:
 
-2. **Agent runner đầu tiên.** Mặc định Claude Code headless.
-3. **Thời điểm xoá `daemon/`.** Mặc định xoá ngay trong bước cắt code.
-4. **Cách parse ticket.md.** Mặc định heading quy ước, không fenced block.
+1. **Agent runner đầu tiên.** Mặc định Claude Code headless.
+2. **Thời điểm xoá `daemon/`.** Mặc định xoá ngay trong bước cắt code.
+3. **Cách parse ticket.md.** Mặc định heading quy ước, không fenced block.
+4. **Gộp `evidence/execution/*` vào `evidence/receipts/`.** Mặc định chưa gộp.
 
 ## 14. Nguồn tham khảo đã hấp thụ
 
@@ -1135,3 +1255,16 @@ destination, frontier, fog); QMD và Knowledge Base Builder (search/get tách,
 section unit, progressive index); Paseo (đã học rồi quyết định không làm
 runtime). Chi tiết thiết kế gốc nằm trong Git history của `pulse-reboot/`
 trước commit xoá.
+
+Đợt 2026-09-06 (`references/`): repository-harness (quy trình trong khối
+`AGENTS.md` có marker, route theo hình dạng yêu cầu, phân loại authority
+Authoritative/Observed/Derived/Decision required/Unknown, improve-harness với
+baseline → earliest gap → một intervention → fresh rerun, encode-invariant,
+onboarding read-only trước); Khuym (hỏi một câu một lần với recommended
+answer, validating là gate cứng, gate gắn vào artifact; không lấy state.json,
+HANDOFF.json, go mode); Matt Pocock skills (chuỗi grill-with-docs → to-spec →
+to-tickets → implement, wayfinder với destination, map là index, decision
+ticket, fog of war, research subagent; glossary ghi ngay, ADR sparingly);
+Better Harness (đọc transcript host chứ không tự ghi trace, Task Episode,
+ToolCallTrace không args, commit ↔ session theo trailer và trùng file, mọi claim
+gắn nhãn declared/observed/candidate/unmapped).

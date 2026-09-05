@@ -2,7 +2,9 @@
 
 ## Status
 
-Accepted.
+Accepted. Narrowed by [Decision 0009](0009-skill-surface-over-cli.md) on
+2026-09-06: a guidance-only skill surface returns; the rule that no prose owns
+lifecycle or state stands.
 
 ## Context
 

@@ -951,6 +951,9 @@ impl JsonGraphStore {
                     ),
                 }
             }
+            "reviewer" => {
+                self.classify_reviewer(ticket_id, &value, exit_code, timed_out, cancelled)
+            }
             _ => RunClassification {
                 status: "completed".to_string(),
                 inconclusive_reason: None,
@@ -959,6 +962,134 @@ impl JsonGraphStore {
                 timed_out,
                 cancelled,
             },
+        }
+    }
+
+    /// Reviewer verdicts are claims until graph truth backs them: the final
+    /// JSON must declare a disposition and cover every acceptance id, and a
+    /// pass/rework claim must be backed by a verification receipt the
+    /// reviewer runner recorded against the Ticket's current revision.
+    fn classify_reviewer(
+        &self,
+        ticket_id: &str,
+        value: &serde_json::Value,
+        exit_code: Option<i32>,
+        timed_out: bool,
+        cancelled: bool,
+    ) -> RunClassification {
+        let inconclusive = |reason: &str, detail: Option<String>| RunClassification {
+            exit_code,
+            timed_out,
+            cancelled,
+            ..RunClassification::inconclusive(reason, detail)
+        };
+        let Some(disposition) = value.get("disposition").and_then(|v| v.as_str()) else {
+            return inconclusive(
+                "malformed_output",
+                Some("reviewer output must declare disposition pass or rework".to_string()),
+            );
+        };
+        let Some(acceptance) = value.get("acceptance").and_then(|v| v.as_object()) else {
+            return inconclusive(
+                "malformed_output",
+                Some("reviewer output must include an acceptance map".to_string()),
+            );
+        };
+        if value.get("findings").is_some_and(|f| !f.is_array()) {
+            return inconclusive(
+                "malformed_output",
+                Some("reviewer findings must be an array".to_string()),
+            );
+        }
+        let node = match self.show_node(ticket_id) {
+            Ok(node) => node,
+            Err(error) => return inconclusive("malformed_output", Some(error.to_string())),
+        };
+        let acceptance_ids =
+            match crate::kernel::completion::ticket_acceptance_ids(&self.repo_root, &node) {
+                Ok(ids) => ids,
+                Err(error) => return inconclusive("malformed_output", Some(error.to_string())),
+            };
+        let missing: Vec<String> = acceptance_ids
+            .into_iter()
+            .filter(|id| !acceptance.contains_key(id))
+            .collect();
+        if !missing.is_empty() {
+            return inconclusive(
+                "acceptance_coverage_incomplete",
+                Some(format!("acceptance map does not cover {missing:?}")),
+            );
+        }
+        let verified_by = runner_actor("reviewer");
+        let summary = value
+            .get("summary")
+            .and_then(|v| v.as_str())
+            .map(str::to_string);
+        match disposition {
+            "pass" | "passed" => {
+                let proven = node.status == NodeStatus::Verifying
+                    && verification_bound_to_current_revision(
+                        &self.repo_root,
+                        ticket_id,
+                        crate::execution::VerificationDisposition::Passed,
+                        "verifying",
+                        &verified_by,
+                        node.revision,
+                    );
+                if proven {
+                    RunClassification {
+                        status: "passed".to_string(),
+                        inconclusive_reason: None,
+                        summary,
+                        exit_code,
+                        timed_out,
+                        cancelled,
+                    }
+                } else {
+                    inconclusive(
+                        "unproven_claim",
+                        Some(
+                            "pass reported without a reviewer-recorded verification receipt bound to the current revision"
+                                .to_string(),
+                        ),
+                    )
+                }
+            }
+            "rework" => {
+                let proven = node.status == NodeStatus::Rework
+                    && verification_bound_to_current_revision(
+                        &self.repo_root,
+                        ticket_id,
+                        crate::execution::VerificationDisposition::Rework,
+                        "rework",
+                        &verified_by,
+                        node.revision,
+                    );
+                if proven {
+                    RunClassification {
+                        status: "rework".to_string(),
+                        inconclusive_reason: None,
+                        summary,
+                        exit_code,
+                        timed_out,
+                        cancelled,
+                    }
+                } else {
+                    inconclusive(
+                        "unproven_claim",
+                        Some(
+                            "rework reported without a reviewer-recorded rework verification bound to the current revision"
+                                .to_string(),
+                        ),
+                    )
+                }
+            }
+            other => inconclusive(
+                "malformed_output",
+                Some(format!(
+                    "reviewer disposition must be pass or rework, got {other}"
+                )),
+            ),
         }
     }
 
@@ -1167,6 +1298,30 @@ fn git_ok(repo_root: &Path, args: &[&str]) -> PulseResult<String> {
     Ok(String::from_utf8_lossy(&output.stdout).to_string())
 }
 
+/// Whether a verification receipt with exactly these bindings exists. Used by
+/// reviewer classification to prove a reported verdict went through the CLI
+/// against the Ticket's current revision.
+fn verification_bound_to_current_revision(
+    repo_root: &Path,
+    ticket_id: &str,
+    disposition: crate::execution::VerificationDisposition,
+    resulting_status: &str,
+    verified_by: &str,
+    current_revision: u64,
+) -> bool {
+    crate::kernel::completion::list_verifications(repo_root)
+        .map(|list| {
+            list.iter().any(|verification| {
+                verification.ticket_id == ticket_id
+                    && verification.disposition == disposition
+                    && verification.resulting_status == resulting_status
+                    && verification.verified_by == verified_by
+                    && verification.resulting_revision == current_revision
+            })
+        })
+        .unwrap_or(false)
+}
+
 /// Find the handoff proof bound to `lease_id`, if any.
 pub(crate) fn find_lease_handoff(
     repo_root: &Path,
@@ -1321,7 +1476,7 @@ fn reviewer_prompt(ticket_id: &str, source_commit: &str) -> String {
          exists for this handoff, use a fresh suffix such as -a2 so the\n\
          new verdict is recorded instead of replaying the old one:\n\
          \n\
-         pulse --idempotency-key verify:{ticket_id}:<handoff_id>-a1 work verify \\\n\
+         pulse --idempotency-key verify:{ticket_id}:<handoff_id>-a1 work verify {ticket_id} \\\n\
            --handoff <handoff_id> \\\n\
            --actor agent:runner:reviewer \\\n\
            --source-commit {source_commit} \\\n\
@@ -1333,7 +1488,12 @@ fn reviewer_prompt(ticket_id: &str, source_commit: &str) -> String {
          `passed` requires every check to exit 0. Use `--disposition\n\
          rework` with findings when the handoff does not hold.\n\
          5. Your last output line must be exactly one JSON object with\n\
-         nothing after it (no code fence):\n\
-         `{{\"disposition\": \"pass\", \"acceptance\": {{…}}, \"findings\": []}}`\n"
+         nothing after it (no code fence). It must declare your verdict,\n\
+         cover EVERY acceptance id from reviewer-input.json in\n\
+         `acceptance`, and list `findings`:\n\
+         `{{\"disposition\": \"pass\", \"acceptance\": {{\"AC-1\": \"how it was verified\", …}}, \"findings\": []}}`\n\
+         A disposition without a matching step-4 receipt, or an\n\
+         acceptance map that misses an acceptance id, is recorded as an\n\
+         inconclusive run, not as a verdict.\n"
     )
 }

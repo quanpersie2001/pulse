@@ -12,6 +12,9 @@ Current decisions:
 - [0006 — Peer Worker, Reviewer, and QA task topology](0006-peer-agent-assurance-topology.md)
 - [0007 — Remove the legacy agent skill surface](0007-remove-legacy-agent-skill-surface.md)
 - [0008 — Narrow Pulse to a vendor-neutral truth layer](0008-narrow-scope-to-truth-layer.md)
+- [0009 — Workflow trong repo đích, skill theo artifact trên CLI](0009-skill-surface-over-cli.md)
+- [0010 — QA baseline là markdown heading, JSON chỉ ở biên runner](0010-qa-baseline-markdown-contract.md)
+- [0011 — Event log là JSONL theo ngày](0011-events-jsonl-per-day.md)
 
 Add or update a decision when:
 

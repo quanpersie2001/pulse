@@ -485,10 +485,16 @@ echo '{"status": "handed_off", "summary": "done"}'
         .count();
     assert_eq!(handoff_files, 1);
 
-    install_worker_script(&repo, r#"echo '{"disposition": "pass", "findings": []}'"#);
+    install_worker_script(
+        &repo,
+        r#"echo '{"disposition": "pass", "acceptance": {"AC-1": "re-ran the verify command"}, "findings": []}'"#,
+    );
     set_command(&repo, "reviewer", "sh scripts/fake-worker.sh {input}");
     let out = repo.pulse_ok(&["run", "reviewer", "--ticket", &ticket_id, "--json"]);
-    assert_eq!(out["status"], "completed");
+    // A well-formed claim without a recorded verification receipt stays
+    // inconclusive: the runner never takes the JSON at face value.
+    assert_eq!(out["status"], "inconclusive");
+    assert_eq!(out["inconclusive_reason"], "unproven_claim");
 
     let run_dir = repo.path().join(".pulse/runtime/run").join(&ticket_id);
     let input: Value =

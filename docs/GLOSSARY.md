@@ -78,8 +78,12 @@ commit. Kinds: `handoff`, `verification`, `qa_checkpoint`,
 **Close gate** — the checks `pulse work close` performs before a Ticket
 becomes `done`. Requires independent verification.
 
-**QA baseline** — the `pulse-qa` block in `works/<story>/qa.md` listing the
-behavioral cases a Story promises. **QA checkpoint** — a QA run over the
+**QA baseline** — `works/<story>/qa.md`, markdown with conventional headings
+(`## Scope`, `## Posture`, `## Risks`, `## Exit criteria`, `## Cases` with one
+`### QA-NNN` section per case) listing the behavioral cases a Story promises;
+Pulse parses it into `qa-input.json` for the runner (Decision 0010).
+**pulse-check** — an optional block inside a case giving the runner an argv
+command and fixed assertions. **QA checkpoint** — a QA run over the
 cases a Ticket affects. **Story qualification** — a QA run over the full
 required baseline before a Story closes.
 
@@ -101,8 +105,22 @@ fix follows.
 
 ## Communication
 
-**Event log** — append-only JSON events in `.pulse/events/`, one file per
-event, written by every mutation. Read with `pulse events tail`.
+**Event log** — append-only events in `.pulse/events/<date>.jsonl`, one JSON
+line per event, written by every mutation (Decision 0011). Read with
+`pulse events tail`; the cursor is the event ULID.
+
+**Session ref** — the host agent's session id recorded in a handoff receipt and
+`run.completed` so a Ticket can be joined to the host transcript. Pulse never
+records tool calls itself.
+
+**Friction note** — `pulse note --kind friction`, the mandatory way a worker or
+reviewer reports harness friction; the close gate turns it into a `harness`
+learning candidate.
+
+**Guidance surface** — the `<!-- PULSE:BEGIN/END -->` block `pulse init` writes
+into the target's `AGENTS.md` plus the seven artifact-bound skills
+(`wayfind`, `grill`, `spec`, `tickets`, `research`, `ratchet`, `onboard`);
+guidance only, the CLI stays the sole authority (Decision 0009).
 
 **Note** — an event addressed to a Ticket, written with `pulse note`, shown in
 that Ticket's packet.

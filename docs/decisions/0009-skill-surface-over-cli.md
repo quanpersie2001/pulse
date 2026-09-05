@@ -2,7 +2,7 @@
 
 ## Status
 
-Proposed, 2026-09-06. Thu hẹp Decision 0007: trả lại lớp hướng dẫn, giữ
+Accepted, 2026-09-06. Thu hẹp Decision 0007: trả lại lớp hướng dẫn, giữ
 nguyên nguyên tắc "không prose nào sở hữu lifecycle".
 
 ## Context
@@ -87,6 +87,15 @@ phần "encode invariant" ánh xạ vào `runners.json` role `check`.
 5. **Skill là hướng dẫn, CLI là authority.** Mọi mutation trong skill là lệnh
    `pulse` nguyên văn. Guard test: mọi lệnh `pulse …` trong `skills/**` và
    trong template khối AGENTS phải parse được bằng clap của crate.
+6. **Pulse không ghi trace của agent, chỉ giữ mối nối.** Học từ Better Harness
+   (`references/better-harness`): transcript và tool call là của host, Pulse
+   không log lại. `pulse run` lấy session id của host (Claude Code, Codex) và
+   ghi `session_ref` vào handoff receipt và event `run.completed`. `work
+   close` in gợi ý trailer `Pulse-Ticket: <id>` cho commit của developer,
+   không tự commit. `pulse-ratchet` đọc transcript host trong phạm vi
+   `session_ref` để tìm friction (tool failed, lệnh lặp, permission bị chặn)
+   là việc Later, sau khi ratchet chạy với note friction thủ công; khi làm chỉ
+   giữ tên tool, trạng thái, thời gian, không args, không output.
 
 ## Flow theo hình dạng yêu cầu
 

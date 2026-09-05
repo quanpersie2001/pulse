@@ -626,7 +626,7 @@ pub fn load_handoff(repo_root: &Path, handoff_id: &str) -> Result<HandoffReceipt
     Ok(receipt)
 }
 
-fn list_verifications(repo_root: &Path) -> Result<Vec<VerificationReceipt>> {
+pub(crate) fn list_verifications(repo_root: &Path) -> Result<Vec<VerificationReceipt>> {
     let directory = repo_root.join(".pulse/evidence/execution/verifications");
     if !directory.exists() {
         return Ok(Vec::new());
