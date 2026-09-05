@@ -19,7 +19,7 @@ fn context() -> OperationContext {
     }
 }
 
-pub(super) fn write_policy(root: &std::path::Path, extra_grants: &[&str]) {
+pub(crate) fn write_policy(root: &std::path::Path, extra_grants: &[&str]) {
     let path = root.join(".pulse/policy/authority.json");
     fs::create_dir_all(path.parent().unwrap()).unwrap();
     let mut grants = vec![
@@ -52,32 +52,32 @@ pub(super) fn write_policy(root: &std::path::Path, extra_grants: &[&str]) {
     fs::write(path, to_canonical_bytes(&policy).unwrap()).unwrap();
 }
 
-pub(super) fn bootstrap_repo(repo: &TestRepo, _store: &JsonGraphStore) {
+pub(crate) fn bootstrap_repo(repo: &TestRepo, _store: &JsonGraphStore) {
     write_policy(repo.path(), &[]);
     repo.pulse_ok(&["graph", "bootstrap", "--json"]);
     pulse::evidence::manifest::load(repo.path()).unwrap();
     pulse::docs::manifest::bootstrap(repo.path()).unwrap();
 }
 
-pub(super) fn setup_ready_ticket(root: &std::path::Path, store: &JsonGraphStore) -> String {
+pub(crate) fn setup_ready_ticket(root: &std::path::Path, store: &JsonGraphStore) -> String {
     setup_ready_ticket_with_qa(root, store, FixtureQaPosture::None)
 }
 
-pub(super) fn setup_ready_ticket_with_required_qa(
+pub(crate) fn setup_ready_ticket_with_required_qa(
     root: &std::path::Path,
     store: &JsonGraphStore,
 ) -> String {
     setup_ready_ticket_with_qa(root, store, FixtureQaPosture::Required)
 }
 
-pub(super) fn setup_ready_ticket_with_story_qa(
+pub(crate) fn setup_ready_ticket_with_story_qa(
     root: &std::path::Path,
     store: &JsonGraphStore,
 ) -> String {
     setup_ready_ticket_with_qa(root, store, FixtureQaPosture::CoveredByStoryClose)
 }
 
-pub(super) fn setup_ready_ticket_with_required_docs(
+pub(crate) fn setup_ready_ticket_with_required_docs(
     repo: &TestRepo,
     store: &JsonGraphStore,
 ) -> String {

@@ -81,9 +81,10 @@ pub(crate) enum Command {
     Run {
         /// Runner role defined in .pulse/config/runners.json.
         role: String,
-        /// Ticket to run the role against.
+        /// Ticket to run the role against. Required for worker and reviewer
+        /// runs and for qa ticket_checkpoint runs.
         #[arg(long)]
-        ticket: String,
+        ticket: Option<String>,
         /// Worker lease TTL in seconds.
         #[arg(long, default_value_t = crate::kernel::DEFAULT_RUN_TTL_SECONDS)]
         ttl_seconds: u64,
@@ -91,10 +92,18 @@ pub(crate) enum Command {
         /// ticket and role.
         #[arg(long, default_value = "")]
         idempotency_key: String,
-        /// Workspace isolation: auto isolates into a worktree when another
-        /// Ticket holds a live lease; worktree forces it.
+        /// Workspace isolation: checkout by default; worktree forces a
+        /// Pulse-owned worktree (and is the only way past another Ticket's
+        /// live lease).
         #[arg(long, value_enum, default_value_t = IsolationArg::Auto)]
         isolation: IsolationArg,
+        /// QA execution scope: ticket_checkpoint (default) runs the Ticket's
+        /// affected cases; story_close qualifies the whole Story baseline.
+        #[arg(long, value_enum, default_value_t = RunScopeArg::TicketCheckpoint)]
+        scope: RunScopeArg,
+        /// Story id for qa `--scope story_close` runs.
+        #[arg(long)]
+        story: Option<String>,
         /// Release the interrupted run's stale lease and start fresh when the
         /// packet drifted; without this flag drifted resumes are refused.
         #[arg(long, default_value_t = false)]
@@ -128,6 +137,14 @@ pub(crate) enum EventsCommand {
 pub(crate) enum IsolationArg {
     Auto,
     Worktree,
+}
+
+/// QA execution scope for `pulse run qa`.
+#[derive(Clone, Copy, Debug, ValueEnum, PartialEq, Eq)]
+#[value(rename_all = "snake_case")]
+pub(crate) enum RunScopeArg {
+    TicketCheckpoint,
+    StoryClose,
 }
 
 #[allow(clippy::enum_variant_names)]

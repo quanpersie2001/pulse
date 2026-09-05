@@ -14,6 +14,8 @@ mod common_bin;
 mod isolation;
 #[path = "runner/recovery.rs"]
 mod recovery;
+#[path = "runner/story_close.rs"]
+mod story_close;
 // The shared fixture helpers cover several crates; the runner crate uses a
 // subset, so unused helpers are expected here.
 #[allow(dead_code)]

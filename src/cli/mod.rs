@@ -12,7 +12,7 @@ mod work;
 
 use clap::Parser;
 
-use self::args::IsolationArg;
+use self::args::{IsolationArg, RunScopeArg};
 
 pub use args::Cli;
 pub use output::print_error;
@@ -69,13 +69,15 @@ pub fn run(cli: Cli) -> Result<(), PulseError> {
             ttl_seconds,
             idempotency_key,
             isolation,
+            scope,
+            story,
             acknowledge_drift,
             json,
         } => run::handle(
             &store,
             &run::RunOptions {
                 role: &role,
-                ticket: &ticket,
+                ticket: ticket.as_deref(),
                 ttl_seconds,
                 idempotency_key: &if idempotency_key.is_empty() {
                     explicit_key.unwrap_or_default().to_string()
@@ -83,6 +85,11 @@ pub fn run(cli: Cli) -> Result<(), PulseError> {
                     idempotency_key
                 },
                 forced_worktree: matches!(isolation, IsolationArg::Worktree),
+                scope: match scope {
+                    RunScopeArg::TicketCheckpoint => crate::qa::QaExecutionScope::TicketCheckpoint,
+                    RunScopeArg::StoryClose => crate::qa::QaExecutionScope::StoryClose,
+                },
+                story: story.as_deref(),
                 acknowledge_drift,
             },
             json,

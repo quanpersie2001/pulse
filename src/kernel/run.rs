@@ -204,22 +204,33 @@ pub struct RunOutcome {
     pub event_id: String,
 }
 
+/// Aggregated `pulse run` request: subject ids, scope and execution bounds.
+#[derive(Debug, Clone, Copy)]
+pub struct RunRequest<'a> {
+    pub role: &'a str,
+    /// Initiating Ticket. Required for ticket-checkpoint scope; optional pin
+    /// for qa story_close runs.
+    pub ticket_id: Option<&'a str>,
+    /// Story id for qa `StoryClose` scope runs.
+    pub story_id: Option<&'a str>,
+    pub scope: crate::qa::QaExecutionScope,
+    pub ttl_seconds: u64,
+    pub idempotency_key: &'a str,
+    pub forced_worktree: bool,
+    pub acknowledge_drift: bool,
+}
+
 impl JsonGraphStore {
-    /// Execute the configured command for `role` against `ticket_id`.
+    /// Execute the configured command for `role`.
     ///
-    /// Isolation is deliberate: the run is refused while another Ticket holds
-    /// a live lease unless the operator passes `--isolation worktree`, which
-    /// runs this Ticket in a Pulse-created worktree. Only worker runs take
-    /// leases and can be isolated.
-    pub fn run_role(
-        &self,
-        role: &str,
-        ticket_id: &str,
-        ttl_seconds: u64,
-        idempotency_key: &str,
-        forced_worktree: bool,
-        acknowledge_drift: bool,
-    ) -> PulseResult<RunOutcome> {
+    /// Ticket-checkpoint scope runs the role against `ticket_id`; qa
+    /// story_close scope qualifies a whole Story baseline instead. Isolation
+    /// is deliberate: the run is refused while another Ticket holds a live
+    /// lease unless the operator passes `--isolation worktree`, which runs
+    /// this Ticket in a Pulse-created worktree. Only worker runs take leases
+    /// and can be isolated.
+    pub fn run_role(&self, request: &RunRequest<'_>) -> PulseResult<RunOutcome> {
+        let role = request.role;
         let class = role_class(role)?;
         let config = load_runner_config(&self.repo_root)?;
         let spec = config.roles.get(role).ok_or_else(|| {
@@ -230,12 +241,53 @@ impl JsonGraphStore {
         })?;
         provision_runner_actor(&self.repo_root, role, class)?;
 
+        match request.scope {
+            crate::qa::QaExecutionScope::StoryClose => {
+                if class != "qa" {
+                    return Err(PulseError::validation(
+                        "run_scope_role_invalid",
+                        format!(
+                            "--scope story_close is a qa qualification; role {role} has no story_close scope"
+                        ),
+                    ));
+                }
+                let story_id = request.story_id.ok_or_else(|| {
+                    PulseError::validation(
+                        "run_story_required",
+                        "qa --scope story_close requires --story <id>",
+                    )
+                })?;
+                self.run_story_close_qa(role, story_id, request.ticket_id, spec)
+            }
+            crate::qa::QaExecutionScope::TicketCheckpoint => {
+                let ticket_id = request.ticket_id.ok_or_else(|| {
+                    PulseError::validation(
+                        "run_ticket_required",
+                        format!("pulse run {role} requires --ticket <id>"),
+                    )
+                })?;
+                self.run_ticket_role(role, class, ticket_id, request, spec)
+            }
+        }
+    }
+
+    /// Ticket-checkpoint path: the role runs against one Ticket under the
+    /// lifecycle gates (worker leases a `ready` Ticket; reviewer and qa run
+    /// on `verifying` Tickets).
+    fn run_ticket_role(
+        &self,
+        role: &str,
+        class: &str,
+        ticket_id: &str,
+        request: &RunRequest<'_>,
+        spec: &CommandSpec,
+    ) -> PulseResult<RunOutcome> {
         let node = self.show_node(ticket_id)?;
         let started = Utc::now();
         // Isolation decision happens before the lease so the runtime binding
         // records the exact workspace the worker will run in.
         let workspace: Option<String> = match class {
-            "worker" => self.decide_workspace(ticket_id, forced_worktree)?,
+            "worker" => self.decide_workspace(ticket_id, request.forced_worktree)?,
             _ => None,
         };
         let (lease_id, reservation) = match class {
@@ -243,10 +295,10 @@ impl JsonGraphStore {
                 let outcome = self.take_worker_lease(
                     role,
                     ticket_id,
-                    ttl_seconds,
-                    idempotency_key,
+                    request.ttl_seconds,
+                    request.idempotency_key,
                     workspace.as_deref(),
-                    acknowledge_drift,
+                    request.acknowledge_drift,
                 )?;
                 (Some(outcome.0), Some(outcome.1))
             }
@@ -329,10 +381,140 @@ impl JsonGraphStore {
         }
 
         // Materialize argv and execute under the configured bounds.
+        self.spawn_and_record(
+            role,
+            class,
+            ticket_id,
+            ticket_id,
+            lease_id,
+            &run_dir,
+            &artifact_dir,
+            &input_path,
+            &command_dir,
+            spec,
+            started,
+        )
+    }
+
+    /// Story-close qualification path for qa: run every applicable Story
+    /// baseline case on the integrated checkout so a `story_close` scoped
+    /// `qa_checkpoint` receipt can be recorded subject to the Story. The
+    /// initiating Ticket is `ticket_id` when given, otherwise the lowest-id
+    /// done Ticket owned by the Story; the run itself takes no lease.
+    fn run_story_close_qa(
+        &self,
+        role: &str,
+        story_id: &str,
+        ticket_id: Option<&str>,
+        spec: &CommandSpec,
+    ) -> PulseResult<RunOutcome> {
+        let started = Utc::now();
+        let baseline = crate::qa::resolve_story_cases(&self.repo_root, story_id)?;
+        let initiating = match ticket_id {
+            Some(ticket_id) => {
+                let node = self.show_node(ticket_id)?;
+                let owner = node
+                    .qa
+                    .as_ref()
+                    .and_then(|qa| qa.impact.behavioral_owner.as_deref());
+                if node.kind != crate::id::WorkKind::Ticket || owner != Some(story_id) {
+                    return Err(PulseError::validation(
+                        "run_story_ticket_mismatch",
+                        format!(
+                            "Ticket {ticket_id} is not a Ticket behaviorally owned by Story {story_id}"
+                        ),
+                    ));
+                }
+                ticket_id.to_string()
+            }
+            None => self.lowest_done_ticket_owned_by(story_id)?,
+        };
+
+        let run_dir = self.repo_root.join(RUN_DIR).join(story_id);
+        let artifact_dir = run_dir.join("artifacts");
+        fs::create_dir_all(&artifact_dir).map_err(|error| PulseError::io(&artifact_dir, error))?;
+        let input_path = run_dir.join("qa-input.json");
+        let input_json = crate::canonical_json::to_canonical_bytes(&json!({
+            "schema_version": 1,
+            "qa_scope": "story_close",
+            "ticket_id": initiating,
+            "story_id": story_id,
+            "source_commit": crate::source::head_commit(&self.repo_root)?,
+            "baseline_revision": baseline.revision,
+            "baseline_content_hash": baseline.content_hash,
+            "qa_posture": "required",
+            "cases": baseline.cases.iter().map(|case| json!({
+                "id": case.id,
+                "revision": case.revision,
+            })).collect::<Vec<_>>(),
+            "artifact_dir": "artifacts",
+        }))?;
+        fs::write(&input_path, &input_json).map_err(|error| PulseError::io(&input_path, error))?;
+
+        self.spawn_and_record(
+            role,
+            "qa",
+            &initiating,
+            story_id,
+            None,
+            &run_dir,
+            &artifact_dir,
+            &input_path,
+            &self.repo_root,
+            spec,
+            started,
+        )
+    }
+
+    /// The lowest-id done Ticket with a `parent` edge into `story_id`.
+    fn lowest_done_ticket_owned_by(&self, story_id: &str) -> PulseResult<String> {
+        let projection = self.export_unlocked()?;
+        let mut owned: Vec<String> = projection
+            .edges
+            .iter()
+            .filter(|edge| {
+                edge.edge_type == crate::graph::model::edge::EdgeType::Parent && edge.to == story_id
+            })
+            .map(|edge| edge.from.clone())
+            .collect();
+        owned.sort();
+        owned.dedup();
+        for ticket_id in &owned {
+            if let Ok(node) = self.show_node(ticket_id) {
+                if node.kind == crate::id::WorkKind::Ticket && node.status == NodeStatus::Done {
+                    return Ok(ticket_id.clone());
+                }
+            }
+        }
+        Err(PulseError::validation(
+            "run_story_ticket_missing",
+            format!("Story {story_id} has no done Ticket to carry the story_close qualification"),
+        ))
+    }
+
+    /// Spawn the configured command, classify the outcome and persist the
+    /// run record plus one `run.completed` event. `subject_ticket` names the
+    /// initiating Ticket in the outcome and record; `event_target` is the
+    /// graph subject of the run event (the Story for story_close runs).
+    #[allow(clippy::too_many_arguments)]
+    fn spawn_and_record(
+        &self,
+        role: &str,
+        class: &str,
+        subject_ticket: &str,
+        event_target: &str,
+        lease_id: Option<String>,
+        run_dir: &Path,
+        artifact_dir: &Path,
+        input_path: &Path,
+        command_dir: &Path,
+        spec: &CommandSpec,
+        started: chrono::DateTime<Utc>,
+    ) -> PulseResult<RunOutcome> {
         let argv = runner::split_argv(&spec.command)?;
         let mut values = BTreeMap::new();
         values.insert("input".to_string(), input_path.display().to_string());
-        values.insert("ticket".to_string(), ticket_id.to_string());
+        values.insert("ticket".to_string(), subject_ticket.to_string());
         values.insert("repo".to_string(), self.repo_root.display().to_string());
         values.insert(
             "artifact_dir".to_string(),
@@ -340,7 +522,7 @@ impl JsonGraphStore {
         );
         let argv = runner::materialize_argv(&argv, &values)?;
         let execution = runner::execute(
-            &command_dir,
+            command_dir,
             &argv,
             Duration::from_secs(spec.timeout_seconds),
             spec.max_output_bytes,
@@ -358,7 +540,7 @@ impl JsonGraphStore {
                     Some(String::from_utf8_lossy(&outcome.stderr[tail..]).to_string())
                 };
                 (
-                    self.classify_outcome(class, ticket_id, lease_id.as_deref(), outcome),
+                    self.classify_outcome(class, subject_ticket, lease_id.as_deref(), outcome),
                     stderr_tail,
                 )
             }
@@ -370,7 +552,7 @@ impl JsonGraphStore {
         let run_record = RunRecord {
             schema_version: 1,
             role: role.to_string(),
-            ticket_id: ticket_id.to_string(),
+            ticket_id: subject_ticket.to_string(),
             lease_id: lease_id.clone(),
             status: run.status.clone(),
             inconclusive_reason: run.inconclusive_reason.clone(),
@@ -389,19 +571,23 @@ impl JsonGraphStore {
         )
         .map_err(|error| PulseError::io(&record_path, error))?;
 
+        let mut event_payload = json!({
+            "role": role,
+            "ticket_id": subject_ticket,
+            "lease_id": lease_id,
+            "status": run.status,
+            "inconclusive_reason": run.inconclusive_reason,
+            "run_record": record_path.strip_prefix(&self.repo_root).ok().map(|p| p.to_string_lossy().to_string()),
+        });
+        if event_target != subject_ticket {
+            event_payload["story_id"] = json!(event_target);
+        }
         let event = EventEnvelope::new(
             new_event_id(),
             "run.completed",
             format!("agent:{}", runner_actor(role)),
-            ticket_id,
-            json!({
-                "role": role,
-                "ticket_id": ticket_id,
-                "lease_id": lease_id,
-                "status": run.status,
-                "inconclusive_reason": run.inconclusive_reason,
-                "run_record": record_path.strip_prefix(&self.repo_root).ok().map(|p| p.to_string_lossy().to_string()),
-            }),
+            event_target,
+            event_payload,
             Utc::now(),
         );
         write_event(&self.repo_root, &event)?;
@@ -410,7 +596,7 @@ impl JsonGraphStore {
             schema_version: 1,
             code: format!("run_{}", run.status),
             role: role.to_string(),
-            ticket_id: ticket_id.to_string(),
+            ticket_id: subject_ticket.to_string(),
             lease_id,
             status: run.status,
             inconclusive_reason: run.inconclusive_reason,

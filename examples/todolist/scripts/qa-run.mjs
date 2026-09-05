@@ -192,6 +192,10 @@ async function run(inputPath) {
       : "inconclusive";
 
   // Record the qa_checkpoint receipt through the CLI (evidence.record grant).
+  // Scope: story_close qualifications are subject to the Story; ticket
+  // checkpoints stay subject to the Ticket.
+  const qaScope = input.qa_scope ?? "ticket_checkpoint";
+  const subjectId = qaScope === "story_close" ? input.story_id : input.ticket_id;
   const manifest = JSON.parse(
     await readFile(path.join(repoRoot, ".pulse", "evidence", "manifest.json"), "utf8"),
   );
@@ -211,7 +215,7 @@ async function run(inputPath) {
     result: receiptResult,
     actor: { kind: "agent", id: "runner:qa" },
     recorded_at: new Date().toISOString(),
-    subject: { kind: "work", id: input.ticket_id },
+    subject: { kind: "work", id: subjectId },
     bindings: {
       source: {
         kind: "git_commit",
@@ -222,7 +226,7 @@ async function run(inputPath) {
     },
     payload: {
       payload_version: 1,
-      qa_scope: "ticket_checkpoint",
+      qa_scope: qaScope,
       story_id: input.story_id,
       ticket_id: input.ticket_id,
       baseline_revision: input.baseline_revision,
