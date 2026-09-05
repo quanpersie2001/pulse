@@ -58,9 +58,11 @@ Modules sit bottom-up and never reach up the ladder. Guards:
 - `src/qa/` is the behavioral-QA contract domain: Story baseline parsing
   (`baseline`), checkpoint payload validation (`receipt`) and the executor
   contract that is the seed of the future runner (`executor`).
-- `src/knowledge/` is the ratchet store: model, validate, relation,
-  projection and store. Validation and persistence only; no capture/promote
-  pipeline yet.
+- `src/knowledge/` is the ratchet store: model (with `scope`:
+  `harness | repository`), validate, relation, projection and store.
+  `promote_learning` inserts the learning into its target document and
+  records the `promoted_to` relation bound to the new content hash;
+  re-promotion retires the previous relation in the same transaction.
 - Shared vocabulary and primitives:
   - `src/identity/` actor kinds/refs (re-exported neutrally by evidence).
   - `src/policy/` default-deny authority policy load/validate/authorize.
@@ -135,8 +137,8 @@ module pretends otherwise.
 
 | Capability | PRODUCT.md | Today |
 |---|---|---|
-| Runner (`pulse run <role>`) | §5.3 | Implemented spine: `kernel::run` composes lease, run workspace, `runner` mechanics and events; worker handoff/verify/release CLI exists; isolation worktrees and drift-acknowledged resume are in. Artifact ingest and the recovery saga beyond release are still ahead. |
-| Ratchet commands | §5.6 | `knowledge` store/validate only; no capture/validate/promote/applicable, no packet injection. |
+| Runner (`pulse run <role>`) | §5.3 | Implemented and exercised on `examples/todolist/`: lease, run workspace, bootstrap prompt (with the `## Harness learnings` section), outcome classification (worker `handed_off`/`blocked`, reviewer `pass`/`rework` proven against recorded receipts), artifact ingest into `.pulse/evidence/artifacts/sha256/`, qa `--scope story_close`, drift-acknowledged resume, worktree reclaim. Isolation denies the run while another Ticket holds a live lease; `--isolation worktree` is the only way past it. The recovery saga beyond release is still ahead. |
+| Ratchet commands | §5.6 | Implemented: `capture`, `validate <id> --evidence`, `promote --document|--agents-md --insert-after [--dry-run]` (target must change: `promotion_target_unchanged`), `applicable --work --json` sharing the packet's bucket logic, `check`; packet injects required/recommended repository learnings; handoffs carry `knowledge_usage[]` and `knowledge show` aggregates usage. |
 | Events tail / notes | §5.7 | Implemented: append-only log, `pulse note` writes ticket-targeted events, `pulse events tail` streams with `--since`/`--ticket`/`--follow`; notes surface in the packet (latest 8). |
 | MCP server | §5.8 | stub removed with the daemon; CLI path comes first. |
 | Ticket close for all risks | §5.5 | Implemented; medium/high/critical use the same proof gates, with a human actor for high/critical. |

@@ -59,8 +59,10 @@ with id, path, summary, owner, kind, status, scope and tags.
 command in `.pulse/config/runners.json`. `pulse run <role> --ticket <id>`
 leases, writes input, executes, reads JSON, records a receipt.
 
-**Isolation** — where a runner works. Default is the checkout; a worktree is
-used only for a second concurrent Ticket or on request.
+**Isolation** — where a runner works. Default is the checkout; `pulse run`
+refuses with `run_isolation_required` while another Ticket holds a live
+lease, and a Pulse-owned worktree is created only when the caller passes
+`--isolation worktree`.
 
 **Handoff** — the worker's typed proposal that a Ticket is ready for
 verification. It is not `done`.
@@ -133,11 +135,19 @@ of what the next rerun's handoff will show; `knowledge validate` requires both
 `knowledge_usage: helpful` and that signal in the rerun's receipts.
 
 **Learning** — a reusable record in `.pulse/knowledge/entries/` with
-guidance, applicability, provenance and status
+guidance, applicability, provenance, scope and status
 (`candidate → validated → promoted`).
 
+**Learning scope** — what a learning is about: `repository` (the codebase;
+injects into packets by path/tag) or `harness` (how to operate Pulse itself;
+injects into the runner bootstrap prompt, never by path, and promotes into
+the target's `AGENTS.md`).
+
 **Promotion** — moving a learning into a durable owner: a doc, a Decision, a
-check in `runners.json`, or an eval.
+check in `runners.json`, or an eval. `knowledge promote` inserts the
+learning's content after a chosen heading and records the relation bound to
+the document's new content hash; a promotion that leaves the target
+unchanged is refused.
 
 **Failure class** — the taxonomy applied after a failed run (`context_gap`,
 `tool_gap`, `verification_gap`, `docs_stale`, …) that decides which harness

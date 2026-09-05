@@ -34,13 +34,12 @@ The full product definition, target design and golden path are in
 
 v0.1.0. The golden path from `PRODUCT.md` §7 has run for real on
 `examples/todolist/`: two Tickets were closed on evidence receipts by real
-worker/reviewer agents, with kill-and-resume, QA checkpoints, docs validation
-and a captured learning; see `examples/todolist/works/ST-001/` for the run
-log.
+worker/reviewer agents, and the completion Story was closed on a
+`story_close` QA qualification; see `examples/todolist/works/ST-001/` for the
+run log.
 
-Remaining pre-1.0 work (learning promotion ergonomics, artifact ingest,
-reviewer outcome classification, story close on the dogfood target) is tracked
-in `PRODUCT.md` §8.
+Remaining pre-1.0 work is real-world hardening — more Tickets on the dogfood
+target with rotating worker/reviewer agents — tracked in `PRODUCT.md` §8.
 
 ## What works today
 
@@ -52,8 +51,8 @@ in `PRODUCT.md` §8.
 | Docs | `pulse docs register\|tags\|list\|show\|applicable\|search\|get\|tree\|index\|validate` | Eight-field registry, controlled tags, path/tag applicability, section-level search |
 | Evidence | `pulse evidence receipt record\|show\|verify`, `artifact put\|verify` | Immutable content-hashed receipts |
 | QA baseline | `pulse qa baseline\|resolve` | Parses the `pulse-qa` block in `works/<story>/qa.md` |
-| Knowledge | `pulse knowledge create\|capture\|show\|list\|edit\|validate\|promote\|applicable` | Capture from a run, validate against evidence, promote into docs, applicability buckets; packet injects required/recommended learnings |
-| Runner | `pulse run <role> --ticket <id>` | Lease, bootstrap prompt, configured command, output classification, inconclusive receipts, worktree isolation, resume after kill |
+| Knowledge | `pulse knowledge create\|capture\|show\|list\|edit\|validate\|promote\|applicable\|check` | Capture from a run, validate against evidence, promote by inserting the learning into a doc or `AGENTS.md`, applicability buckets shared with the packet; learnings carry a `scope` (`repository` by path/tag, `harness` via the runner prompt) |
+| Runner | `pulse run <role> --ticket <id>` | Lease, bootstrap prompt, configured command, proven outcome classification, artifact ingest, inconclusive receipts, deny-unless-`--isolation worktree`, resume after kill, qa `--scope story_close` |
 | Communication | `pulse events tail`, `pulse note` | Append-only event log with `--since`/`--ticket`/`--follow`; ticket-targeted notes surface in packets |
 
 Every command accepts `--json` and `--repo-root <path>`. A Ticket is created with a generated `works/<id>/ticket.md`; edit that file and run `work sync` before transitioning it.
