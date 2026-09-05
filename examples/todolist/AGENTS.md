@@ -17,6 +17,12 @@ harness dogfoods: every feature Pulse claims is exercised here first.
 
 ## Constraints
 
+- **LRN-001 — Freeze the target tree between handoff and close**: Editing any tracked file in the target tree after handoff stales the handoff dirty fence: verification is refused and close cannot pass until a fresh cycle.
+  - Do: Leave the target worktree untouched between handoff and close
+  - Do: Recover a stale proof chain with work release, then re-run worker, reviewer and close
+  - Avoid: Editing tracked files, including tooling scripts, after handing off
+  - Check: node scripts/verify.mjs
+
 - Preserve stable public outcome names (`Completed`, `NotFound`) once
   introduced; renaming them is a human-gated decision.
 - Do not add third-party runtime or test dependencies.

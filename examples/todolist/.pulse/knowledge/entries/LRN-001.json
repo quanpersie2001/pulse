@@ -41,9 +41,9 @@
   "id": "LRN-001",
   "kind": "process_insight",
   "promotion": {
-    "rationale": "outcome stability now documented in the behavior contract",
+    "rationale": "Harness lesson: never touch the tree after handoff; it stales the receipt binding.",
     "relation_ids": [
-      "promoted-to--LRN-001--document--DOC-TODOLIST-BEHAVIOR"
+      "promoted-to--LRN-001--document--AGENTS.md"
     ],
     "state": "promoted"
   },
@@ -57,7 +57,7 @@
       "49becbb87152f602dea82ddb8e062b0b0fd32008"
     ]
   },
-  "revision": 3,
+  "revision": 5,
   "routing": {
     "audiences": [
       "planner",
@@ -76,6 +76,7 @@
     "prompt_priority": "suggested"
   },
   "schema_version": 1,
+  "scope": "harness",
   "severity": "medium",
   "status": "promoted",
   "summary": "Editing any tracked file in the target tree after handoff stales the handoff dirty fence: verification is refused and close cannot pass until a fresh cycle.",
@@ -85,7 +86,7 @@
     "redaction_status": "caller_asserted",
     "source": "review_required"
   },
-  "updated_at": "2026-09-05T17:08:45.207540Z",
+  "updated_at": "2026-09-05T23:16:14.854477Z",
   "validation": {
     "confidence": "medium",
     "contradiction_status": "none",
