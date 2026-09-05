@@ -1,5 +1,7 @@
+use std::fs;
 use std::path::{Path, PathBuf};
 
+use crate::PulseError;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -219,6 +221,40 @@ pub fn write_event(repo_root: &Path, event: &EventEnvelope) -> PulseResult<PathB
     let bytes = to_canonical_bytes(event)?;
     storage::create_new(&path, &bytes)?;
     Ok(path)
+}
+
+/// Read every recorded event, sorted by id (ULID order == chronological
+/// order). Unparsable files are skipped so a truncated crash leftover cannot
+/// take down reads.
+pub fn read_events(repo_root: &Path) -> PulseResult<Vec<EventEnvelope>> {
+    let root = repo_root.join(".pulse/events");
+    if !root.exists() {
+        return Ok(Vec::new());
+    }
+    let mut events = Vec::new();
+    let mut stack = vec![root.clone()];
+    while let Some(dir) = stack.pop() {
+        let entries = fs::read_dir(&dir).map_err(|error| PulseError::io(&dir, error))?;
+        for entry in entries {
+            let path = entry.map_err(|error| PulseError::io(&dir, error))?.path();
+            if path.is_dir() {
+                stack.push(path);
+                continue;
+            }
+            if path.extension().and_then(|ext| ext.to_str()) != Some("json") {
+                continue;
+            }
+            let bytes = match fs::read(&path) {
+                Ok(bytes) => bytes,
+                Err(_) => continue,
+            };
+            if let Ok(event) = serde_json::from_slice::<EventEnvelope>(&bytes) {
+                events.push(event);
+            }
+        }
+    }
+    events.sort_by(|left, right| left.id.cmp(&right.id));
+    Ok(events)
 }
 
 pub fn emit_event(

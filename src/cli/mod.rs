@@ -1,5 +1,6 @@
 mod args;
 mod docs;
+mod events;
 mod evidence;
 mod graph;
 mod init;
@@ -47,6 +48,21 @@ pub fn run(cli: Cli) -> Result<(), PulseError> {
         args::Command::Evidence { command } => evidence::handle(&store, command),
         args::Command::Knowledge { command } => knowledge::handle(&store, command),
         args::Command::Qa { command } => qa::handle(&store, command),
+        args::Command::Note {
+            ticket,
+            message,
+            from,
+            json,
+        } => events::handle_note(&store, &ticket, &message, &from, json),
+        args::Command::Events {
+            command:
+                args::EventsCommand::Tail {
+                    since,
+                    ticket,
+                    follow,
+                    json,
+                },
+        } => events::handle_tail(&store, &since, ticket.as_deref(), follow, json),
         args::Command::Run {
             role,
             ticket,

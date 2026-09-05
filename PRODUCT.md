@@ -1033,7 +1033,7 @@ done và qualification pass.
 | 5.4 Docs | Đã rút gọn | Registry tám trường, `tags.json`, `docs tags add/list`, tag filtering và path/tag applicability đã có. |
 | 5.5 Evidence/QA | Đã có spine | Close hỗ trợ mọi risk; high/critical yêu cầu actor human. Runner và QA execution vẫn là Bước 4. |
 | 5.6 Ratchet | Chỉ có store + validate | `capture`, `validate`, `promote`, `applicable`; packet inject; usage feedback |
-| 5.7 Giao tiếp | Event log có | `events tail`, `note`; thay `communication.rs`, `timeline.rs` |
+| 5.7 Giao tiếp | Đã có | Event log append-only; `pulse note` ghi note vào Ticket, `pulse events tail` đọc với `--since`/`--ticket`/`--follow`; note hiện trong packet (giới hạn 8 note mới nhất). |
 | 5.8 MCP | Stub không bind | Server thật, sau CLI |
 
 ## 9. Triage code

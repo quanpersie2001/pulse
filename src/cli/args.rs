@@ -58,6 +58,25 @@ pub(crate) enum Command {
         #[command(subcommand)]
         command: super::qa::QaCommand,
     },
+    /// Record a note targeting a Ticket (append-only event log).
+    Note {
+        /// Ticket the note targets.
+        #[arg(long)]
+        ticket: String,
+        /// Note message (bounded).
+        #[arg(long)]
+        message: String,
+        /// Author of the note (kind:id).
+        #[arg(long, default_value = "human:unknown")]
+        from: String,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Read the append-only event log.
+    Events {
+        #[command(subcommand)]
+        command: EventsCommand,
+    },
     /// Execute a configured runner role against a Ticket.
     Run {
         /// Runner role defined in .pulse/config/runners.json.
@@ -80,6 +99,24 @@ pub(crate) enum Command {
         /// packet drifted; without this flag drifted resumes are refused.
         #[arg(long, default_value_t = false)]
         acknowledge_drift: bool,
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+#[derive(Subcommand)]
+pub(crate) enum EventsCommand {
+    /// Stream recent events (oldest first), optionally following.
+    Tail {
+        /// Only events with an id greater than this cursor (evt_...).
+        #[arg(long, default_value = "0")]
+        since: String,
+        /// Only events targeting this work id.
+        #[arg(long)]
+        ticket: Option<String>,
+        /// Keep polling for new events.
+        #[arg(long, default_value_t = false)]
+        follow: bool,
         #[arg(long)]
         json: bool,
     },

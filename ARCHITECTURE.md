@@ -137,7 +137,7 @@ module pretends otherwise.
 |---|---|---|
 | Runner (`pulse run <role>`) | §5.3 | Implemented spine: `kernel::run` composes lease, run workspace, `runner` mechanics and events; worker handoff/verify/release CLI exists; isolation worktrees and drift-acknowledged resume are in. Artifact ingest and the recovery saga beyond release are still ahead. |
 | Ratchet commands | §5.6 | `knowledge` store/validate only; no capture/validate/promote/applicable, no packet injection. |
-| Events tail / notes | §5.7 | append-only log exists; `events tail` and `note` CLI do not. |
+| Events tail / notes | §5.7 | Implemented: append-only log, `pulse note` writes ticket-targeted events, `pulse events tail` streams with `--since`/`--ticket`/`--follow`; notes surface in the packet (latest 8). |
 | MCP server | §5.8 | stub removed with the daemon; CLI path comes first. |
 | Ticket close for all risks | §5.5 | Implemented; medium/high/critical use the same proof gates, with a human actor for high/critical. |
 | ticket.md as the contract source | §5.1 | Implemented through `graph::model::brief`, `work sync`, ambiguity gating and packet raw content; the legacy JSON contract API was removed. |

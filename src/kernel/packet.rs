@@ -73,6 +73,7 @@ pub(crate) struct PacketPhase1State {
     pub packet_parents: Vec<PacketParentSummary>,
     pub packet_decisions: Vec<PacketDecisionSummary>,
     pub packet_qa: PacketQa,
+    pub notes: Vec<String>,
 
     // -- Reusable extracted data (invariant across fence drop) --
     pub graph: PacketGraph,
@@ -250,6 +251,7 @@ impl JsonGraphStore {
         let packet_parents = extract_packet_parents(&self.repo_root, &node, &projection)?;
         let packet_decisions = extract_packet_decisions(&self.repo_root, &node, &projection);
         let packet_qa = extract_packet_qa(&self.repo_root, &packet_parents);
+        let notes = crate::kernel::communication::list_notes_for_ticket(&self.repo_root, &node.id);
         let graph = extract_graph(&readiness, &projection)?;
         let documentation_base = extract_documentation(&readiness.docs)?;
         let pre_source = packet_base_snapshot(&self.repo_root, repository_id)?;
@@ -297,6 +299,7 @@ impl JsonGraphStore {
             packet_parents,
             packet_decisions,
             packet_qa,
+            notes,
             graph,
             documentation_base,
             source,
@@ -434,7 +437,7 @@ impl JsonGraphStore {
             docs: packet_docs_from_legacy(documentation),
             qa: phase1.packet_qa,
             knowledge: vec![],
-            notes: vec![],
+            notes: phase1.notes,
             rework: vec![],
             source: phase1.source,
             tags_vocabulary: vec![],
