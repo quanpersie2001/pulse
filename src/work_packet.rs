@@ -353,6 +353,10 @@ pub struct PacketSource {
     pub repository_id: String,
     pub commit: String,
     pub dirty: bool,
+    /// sha256 over the tracked diff plus untracked manifest at packet build
+    /// time. Part of the packet fingerprint: any source mutation after the
+    /// packet is built changes it and makes the packet stale.
+    pub dirty_hash: String,
 }
 
 // ---------------------------------------------------------------------------

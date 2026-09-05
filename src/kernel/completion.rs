@@ -85,6 +85,7 @@ impl JsonGraphStore {
                 "handoff source is not the exact active assignment source",
             ));
         }
+        let source_dirty = crate::source::worktree_dirty_identity(&self.repo_root)?;
         for receipt_id in &args.evidence_receipt_ids {
             crate::evidence::receipt::verify_receipt(&self.repo_root, receipt_id, true, None)?;
         }
@@ -119,6 +120,7 @@ impl JsonGraphStore {
             session_id: binding.session_id.clone(),
             repository_id: reservation.source.repository_id,
             source_commit: args.source_commit,
+            source_dirty_hash: source_dirty.identity,
             summary: args.summary.trim().to_string(),
             changed_paths: args.changed_paths,
             evidence_receipt_ids: args.evidence_receipt_ids,
@@ -190,6 +192,13 @@ impl JsonGraphStore {
                 "verification is not bound to the handoff source commit",
             ));
         }
+        let source_dirty = crate::source::worktree_dirty_identity(&self.repo_root)?;
+        if source_dirty.identity != handoff.source_dirty_hash {
+            return Err(PulseError::validation(
+                "verification_source_mismatch",
+                "source worktree changed after the handoff; the proof binding is stale",
+            ));
+        }
         let node_path = self.node_path(&handoff.ticket_id);
         let node_before_bytes =
             fs::read(&node_path).map_err(|error| PulseError::io(&node_path, error))?;
@@ -247,6 +256,7 @@ impl JsonGraphStore {
             ticket_id: handoff.ticket_id,
             lease_id: handoff.lease_id,
             source_commit: args.source_commit,
+            source_dirty_hash: source_dirty.identity,
             disposition: args.disposition,
             summary: args.summary.trim().to_string(),
             checks: args.checks,
@@ -420,6 +430,15 @@ impl JsonGraphStore {
             return Err(PulseError::validation(
                 "close_source_mismatch",
                 "proof close is not bound to the current verified source commit",
+            ));
+        }
+        let source_dirty = crate::source::worktree_dirty_identity(&self.repo_root)?;
+        if source_dirty.identity != verification.source_dirty_hash
+            || source_dirty.identity != handoff.source_dirty_hash
+        {
+            return Err(PulseError::validation(
+                "close_source_stale",
+                "source worktree changed after verification; close requires a fresh proof on the current source",
             ));
         }
         let node_path = self.node_path(&verification.ticket_id);

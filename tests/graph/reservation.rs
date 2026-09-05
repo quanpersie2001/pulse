@@ -316,7 +316,11 @@ fn record_qa_checkpoint(repo: &std::path::Path, ticket_id: &str, source_commit: 
             observations: vec!["Repeated reservation returned one stable identity.".to_string()],
         }),
     };
-    let file = repo.join("qa-checkpoint-input.json");
+    // Receipt input lands under the gitignored cache plane so recording the
+    // receipt does not mutate source state (which would stale the proof
+    // binding under test).
+    std::fs::create_dir_all(repo.join(".pulse/cache")).unwrap();
+    let file = repo.join(".pulse/cache/qa-checkpoint-input.json");
     std::fs::write(
         &file,
         pulse::canonical_json::to_canonical_bytes(&receipt).unwrap(),
@@ -395,7 +399,8 @@ fn record_story_qualification(
             observations: vec!["Full applicable Story baseline passed.".to_string()],
         }),
     };
-    let file = repo.join("story-qualification-input.json");
+    std::fs::create_dir_all(repo.join(".pulse/cache")).unwrap();
+    let file = repo.join(".pulse/cache/story-qualification-input.json");
     std::fs::write(
         &file,
         pulse::canonical_json::to_canonical_bytes(&receipt).unwrap(),
@@ -477,7 +482,10 @@ fn required_qa_checkpoint_opens_proof_close_only_with_current_case_coverage() {
     assert!(
         matches!(
             stale_error.code(),
-            "close_qa_checkpoint_stale" | "content_binding_stale" | "unsupported_source_snapshot"
+            "close_qa_checkpoint_stale"
+                | "content_binding_stale"
+                | "unsupported_source_snapshot"
+                | "close_source_stale"
         ),
         "unexpected stale QA error: {}",
         stale_error.code()

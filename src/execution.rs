@@ -20,6 +20,10 @@ pub struct HandoffReceipt {
     pub session_id: String,
     pub repository_id: String,
     pub source_commit: String,
+    /// Worktree mutation identity bound at handoff time (tracked diff plus
+    /// untracked manifest hash). The close gate rejects a Ticket whose current
+    /// worktree identity no longer matches this value.
+    pub source_dirty_hash: String,
     pub summary: String,
     #[serde(default)]
     pub changed_paths: Vec<String>,
@@ -78,6 +82,9 @@ pub struct VerificationReceipt {
     pub ticket_id: String,
     pub lease_id: String,
     pub source_commit: String,
+    /// Worktree mutation identity observed at verification time; must match
+    /// the handoff binding or the proof is stale.
+    pub source_dirty_hash: String,
     pub disposition: VerificationDisposition,
     pub summary: String,
     pub checks: Vec<VerificationCheck>,

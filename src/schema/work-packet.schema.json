@@ -41,6 +41,6 @@
     "read_budget": {"type": "object", "additionalProperties": false, "required": ["required_sections", "recommended_initial_sections", "max_initial_lines", "suggestion_limit", "snippet_max_bytes_each"], "properties": {"required_sections": {"type": "integer"}, "recommended_initial_sections": {"type": "integer"}, "max_initial_lines": {"type": "integer"}, "suggestion_limit": {"type": "integer"}, "snippet_max_bytes_each": {"type": "integer"}}},
     "qa": {"type": "object", "additionalProperties": false, "required": ["posture", "cases"], "properties": {"posture": {"type": "string"}, "cases": {"type": "array", "items": {"$ref": "#/$defs/raw"}}}},
     "knowledge": {"type": "object", "additionalProperties": false, "required": ["summary", "why_applicable", "required_checks", "detail_ref"], "properties": {"summary": {"type": "string"}, "why_applicable": {"type": "string"}, "required_checks": {"type": "array", "items": {"type": "string"}}, "detail_ref": {"type": ["string", "null"]}}},
-    "source": {"type": "object", "additionalProperties": false, "required": ["repository_id", "commit", "dirty"], "properties": {"repository_id": {"type": "string"}, "commit": {"type": "string"}, "dirty": {"type": "boolean"}}}
+    "source": {"type": "object", "additionalProperties": false, "required": ["repository_id", "commit", "dirty", "dirty_hash"], "properties": {"repository_id": {"type": "string"}, "commit": {"type": "string"}, "dirty": {"type": "boolean"}, "dirty_hash": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}}}
   }
 }

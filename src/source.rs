@@ -120,7 +120,14 @@ pub struct PacketSourceSnapshot {
     pub commit: String,
     pub head_ref: Option<String>,
     pub worktree_root_kind: WorktreeRootKind,
-    pub cleanliness: SourceCleanliness,
+    /// Whether the worktree has tracked or untracked non-ignored changes
+    /// outside Pulse-owned metadata. Dirty worktrees are valid packet bases;
+    /// the dirty state is part of the packet fingerprint instead.
+    pub dirty: bool,
+    /// Stable hash over the tracked diff plus the untracked manifest. Packets
+    /// and execution proofs bind this so any source mutation after binding is
+    /// detectable.
+    pub dirty_hash: String,
     pub operation_state: RepositoryOperationState,
     pub currentness: String,
 }
@@ -476,6 +483,22 @@ fn git<const N: usize>(repo_root: &Path, args: [&str; N]) -> Result<String> {
     git_with_code(repo_root, args, "source_binding_stale")
 }
 
+/// Variable-arity git helper for dynamically built argument lists.
+fn git_args(repo_root: &Path, args: &[&str]) -> Result<String> {
+    let output = Command::new("git")
+        .args(args)
+        .current_dir(repo_root)
+        .output()
+        .map_err(|error| PulseError::io(repo_root.join(".git"), error))?;
+    if !output.status.success() {
+        return Err(PulseError::validation(
+            "work_packet_source_unavailable",
+            String::from_utf8_lossy(&output.stderr).trim().to_string(),
+        ));
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).to_string())
+}
+
 fn packet_git<const N: usize>(repo_root: &Path, args: [&str; N]) -> Result<String> {
     git_with_code(repo_root, args, "work_packet_source_unavailable")
 }
@@ -567,10 +590,11 @@ fn git_with_pathspec(
 /// Capture the exact packet source snapshot for a repository.
 ///
 /// Returns a `PacketSourceSnapshot` with the current HEAD, head_ref,
-/// worktree kind, cleanliness, and operation state. Errors include:
+/// worktree kind, dirty state and operation state. A dirty worktree is a
+/// valid packet base; its content identity (`dirty_hash`) becomes part of the
+/// packet fingerprint. Errors include:
 ///
 /// - `work_packet_source_unavailable` if HEAD cannot be resolved;
-/// - `work_packet_dirty_source_unsupported` if the worktree is dirty;
 /// - `work_packet_source_operation_in_progress` if a Git operation is active.
 pub fn packet_base_snapshot(repo_root: &Path, repository_id: &str) -> Result<PacketSourceSnapshot> {
     let commit = packet_head_commit(repo_root)?;
@@ -584,16 +608,11 @@ pub fn packet_base_snapshot(repo_root: &Path, repository_id: &str) -> Result<Pac
     let head_ref = resolve_head_ref(repo_root)?;
     let worktree_root_kind = detect_worktree_kind(repo_root)?;
 
-    // P2S1-D4: clean committed source only.
-    let cleanliness = check_cleanliness(repo_root)?;
-    if cleanliness == SourceCleanliness::Dirty {
-        return Err(PulseError::validation(
-            "work_packet_dirty_source_unsupported",
-            "tracked or untracked non-ignored changes found in worktree",
-        ));
-    }
+    // Dirty worktrees are allowed; the mutation identity is bound explicitly.
+    let dirty_state = worktree_dirty_identity(repo_root)?;
 
-    // P2S1-D4: no in-progress Git operations.
+    // No in-progress Git operations: their state is transient and would make
+    // the packet base unstable.
     let operation_state = detect_operation_state(repo_root)?;
     if operation_state != RepositoryOperationState::Normal {
         return Err(PulseError::validation(
@@ -608,7 +627,8 @@ pub fn packet_base_snapshot(repo_root: &Path, repository_id: &str) -> Result<Pac
         commit,
         head_ref,
         worktree_root_kind,
-        cleanliness,
+        dirty: dirty_state.dirty,
+        dirty_hash: dirty_state.identity,
         operation_state,
         currentness: "current".to_string(),
     })
@@ -630,7 +650,7 @@ pub fn revalidate_packet_base(repo_root: &Path, expected: &PacketSourceSnapshot)
         )
     })?;
     let head_ref = resolve_head_ref(repo_root)?;
-    let cleanliness = check_cleanliness(repo_root)?;
+    let dirty_state = worktree_dirty_identity(repo_root)?;
     let operation_state = detect_operation_state(repo_root)?;
 
     let worktree_root_kind = detect_worktree_kind(repo_root).map_err(|_| {
@@ -643,7 +663,8 @@ pub fn revalidate_packet_base(repo_root: &Path, expected: &PacketSourceSnapshot)
     if commit != expected.commit
         || head_ref != expected.head_ref
         || worktree_root_kind != expected.worktree_root_kind
-        || cleanliness != expected.cleanliness
+        || dirty_state.dirty != expected.dirty
+        || dirty_state.identity != expected.dirty_hash
         || operation_state != expected.operation_state
     {
         return Err(PulseError::validation(
@@ -692,6 +713,129 @@ fn status_line_path(line: &str) -> Option<&str> {
     // Porcelain v1 rename/copy lines use `old -> new`; source cleanliness is
     // concerned with the destination path now present in the worktree.
     Some(path.rsplit(" -> ").next().unwrap_or(path).trim_matches('"'))
+}
+
+/// Identity of the current worktree mutation relative to HEAD.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorktreeDirtyIdentity {
+    pub dirty: bool,
+    /// sha256 over the sorted manifest of non-Pulse mutations: tracked
+    /// changes (`git diff HEAD --name-status`) with per-file content hashes,
+    /// plus the untracked manifest with per-file content hashes.
+    pub identity: String,
+}
+
+/// Upper bound of bytes read per dirty file when computing the identity.
+/// Files larger than this contribute a hash of their first bytes; the result
+/// stays deterministic.
+const DIRTY_FILE_READ_CAP: u64 = 8 * 1024 * 1024;
+
+/// Compute the stable identity of tracked plus untracked worktree mutations.
+///
+/// Pulse-owned metadata (`.pulse/workgraph|events|evidence|docs|knowledge`)
+/// is excluded: it changes as a side effect of running Pulse and is not
+/// source input. Runtime and cache paths are excluded as well; their tracked
+/// state is enforced separately by `validate_packet_operational_paths`.
+pub fn worktree_dirty_identity(repo_root: &Path) -> Result<WorktreeDirtyIdentity> {
+    let prefix = git_path_prefix(repo_root, "work_packet_source_unavailable")?;
+
+    let tracked = git_with_pathspec(
+        repo_root,
+        &["diff", "HEAD", "--name-status", "-z", "--no-renames"],
+        &prefix,
+        &[],
+        "work_packet_source_unavailable",
+    )?;
+
+    let mut untracked_args = vec!["ls-files", "--others", "--exclude-standard", "-z", "--"];
+    let root_pathspec = prefix.root_pathspec();
+    if let Some(pathspec) = &root_pathspec {
+        untracked_args.push(pathspec.as_str());
+    }
+    untracked_args.extend(PULSE_RUNTIME_EXCLUDE_PATHS.iter().copied());
+    let untracked_output = git_args(repo_root, &untracked_args)?;
+    let untracked: Vec<String> = untracked_output
+        .split('\0')
+        .filter(|entry| !entry.is_empty())
+        .map(str::to_string)
+        .collect();
+
+    let mut manifest: Vec<String> = Vec::new();
+    let mut tracked_records = tracked.split('\0');
+    while let Some(status) = tracked_records.next() {
+        if status.is_empty() {
+            continue;
+        }
+        let Some(path) = tracked_records.next() else {
+            break;
+        };
+        let Some(normalized) = prefix.normalize(path) else {
+            continue;
+        };
+        if is_pulse_metadata_path(normalized) || is_pulse_runtime_generated_path(normalized) {
+            continue;
+        }
+        match status {
+            "D" => manifest.push(format!("D\0{normalized}\0deleted")),
+            _ => {
+                // The file vanished between listing and reading; treat
+                // the identity as unstable rather than silent.
+                let bytes = match read_bounded(&repo_root.join(path)) {
+                    Some(bytes) => bytes,
+                    None => {
+                        return Err(PulseError::validation(
+                            "work_packet_source_unavailable",
+                            format!("dirty file {path} disappeared while hashing"),
+                        ))
+                    }
+                };
+                manifest.push(format!(
+                    "{}\0{}\0{}",
+                    status,
+                    normalized,
+                    hash_bytes(&bytes)
+                ));
+            }
+        }
+    }
+    for path in &untracked {
+        let Some(normalized) = prefix.normalize(path) else {
+            continue;
+        };
+        if is_pulse_metadata_path(normalized) || is_pulse_runtime_generated_path(normalized) {
+            continue;
+        }
+        let bytes = match read_bounded(&repo_root.join(path)) {
+            Some(bytes) => bytes,
+            None => {
+                return Err(PulseError::validation(
+                    "work_packet_source_unavailable",
+                    format!("untracked file {path} disappeared while hashing"),
+                ))
+            }
+        };
+        manifest.push(format!("A\0{}\0{}", normalized, hash_bytes(&bytes)));
+    }
+
+    manifest.sort();
+    let dirty = !manifest.is_empty();
+    let combined = manifest.join("\0");
+    Ok(WorktreeDirtyIdentity {
+        dirty,
+        identity: hash_bytes(combined.as_bytes()),
+    })
+}
+
+/// Read up to [`DIRTY_FILE_READ_CAP`] bytes of a file, or `None` when it
+/// cannot be read.
+fn read_bounded(path: &Path) -> Option<Vec<u8>> {
+    let mut file = fs::File::open(path).ok()?;
+    let mut buffer = Vec::new();
+    (&mut file)
+        .take(DIRTY_FILE_READ_CAP)
+        .read_to_end(&mut buffer)
+        .ok()?;
+    Some(buffer)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1808,7 +1952,8 @@ impl From<PacketSourceSnapshot> for crate::work_packet::PacketSource {
         Self {
             repository_id: snapshot.repository_id,
             commit: snapshot.commit,
-            dirty: snapshot.cleanliness == SourceCleanliness::Dirty,
+            dirty: snapshot.dirty,
+            dirty_hash: snapshot.dirty_hash,
         }
     }
 }
@@ -2105,7 +2250,7 @@ mod tests {
         assert_eq!(snapshot.kind, "git_commit");
         assert_eq!(snapshot.commit.len(), 40);
         assert!(snapshot.head_ref.is_some());
-        assert_eq!(snapshot.cleanliness, SourceCleanliness::Clean);
+        assert!(!snapshot.dirty);
         assert_eq!(snapshot.operation_state, RepositoryOperationState::Normal);
         assert_eq!(
             snapshot.worktree_root_kind,
@@ -2114,31 +2259,29 @@ mod tests {
     }
 
     #[test]
-    fn dirty_tracked_file_rejects() {
+    fn dirty_tracked_file_is_bound_with_content_identity() {
         let tmp = tempfile::tempdir().unwrap();
         init_repo(tmp.path());
         commit_file(tmp.path(), "README.md", b"original");
         fs::write(tmp.path().join("README.md"), b"modified").unwrap();
-        let result = packet_base_snapshot(tmp.path(), "repo_test");
-        assert!(result.is_err());
-        assert_eq!(
-            result.unwrap_err().code(),
-            "work_packet_dirty_source_unsupported"
-        );
+        let snapshot = packet_base_snapshot(tmp.path(), "repo_test").unwrap();
+        assert!(snapshot.dirty);
+        // The identity covers content, not just the path list: a further edit
+        // must produce a different dirty_hash.
+        let first = snapshot.dirty_hash.clone();
+        fs::write(tmp.path().join("README.md"), b"modified again").unwrap();
+        let second = packet_base_snapshot(tmp.path(), "repo_test").unwrap();
+        assert_ne!(first, second.dirty_hash);
     }
 
     #[test]
-    fn untracked_non_ignored_file_rejects() {
+    fn untracked_non_ignored_file_is_bound() {
         let tmp = tempfile::tempdir().unwrap();
         init_repo(tmp.path());
         commit_file(tmp.path(), "README.md", b"hello");
         fs::write(tmp.path().join("untracked.txt"), b"untracked").unwrap();
-        let result = packet_base_snapshot(tmp.path(), "repo_test");
-        assert!(result.is_err());
-        assert_eq!(
-            result.unwrap_err().code(),
-            "work_packet_dirty_source_unsupported"
-        );
+        let snapshot = packet_base_snapshot(tmp.path(), "repo_test").unwrap();
+        assert!(snapshot.dirty);
     }
 
     #[test]
@@ -2148,7 +2291,7 @@ mod tests {
         commit_file(tmp.path(), ".gitignore", b"*.log\n");
         fs::write(tmp.path().join("debug.log"), b"log content").unwrap();
         let snapshot = packet_base_snapshot(tmp.path(), "repo_test").unwrap();
-        assert_eq!(snapshot.cleanliness, SourceCleanliness::Clean);
+        assert!(!snapshot.dirty);
     }
 
     #[test]
@@ -2164,7 +2307,7 @@ mod tests {
             .expect("git checkout --detach");
         let snapshot = packet_base_snapshot(tmp.path(), "repo_test").unwrap();
         assert_eq!(snapshot.head_ref, None);
-        assert_eq!(snapshot.cleanliness, SourceCleanliness::Clean);
+        assert!(!snapshot.dirty);
     }
 
     #[test]
@@ -2460,7 +2603,8 @@ mod tests {
             commit: "0123456789abcdef0123456789abcdef01234567".to_string(),
             head_ref: Some("refs/heads/main".to_string()),
             worktree_root_kind: WorktreeRootKind::PrimaryOrExistingWorktree,
-            cleanliness: SourceCleanliness::Clean,
+            dirty: false,
+            dirty_hash: "sha256:0000".to_string(),
             operation_state: RepositoryOperationState::Normal,
             currentness: "current".to_string(),
         };
@@ -2471,5 +2615,6 @@ mod tests {
             "0123456789abcdef0123456789abcdef01234567"
         );
         assert!(!packet_source.dirty);
+        assert_eq!(packet_source.dirty_hash, "sha256:0000");
     }
 }

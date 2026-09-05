@@ -411,20 +411,50 @@ fn source_status_matrix_dirty_untracked_ignored_detached_and_operation_state() {
     let repo = TestRepo::from_fixture("minimal-service");
     let ticket_id = setup_ready_ticket(&repo);
 
+    // Baseline: clean worktree packet.
+    let clean = packet_ok(&repo, &ticket_id);
+    let clean_fp = clean["packet_fingerprint"].as_str().unwrap().to_string();
+    assert_eq!(clean["source"]["dirty"], false);
+    assert!(clean["source"]["dirty_hash"]
+        .as_str()
+        .unwrap()
+        .starts_with("sha256:"));
+
+    // A dirty tracked file is now a valid packet base and is bound into the
+    // fingerprint via source.dirty_hash.
     fs::write(repo.path().join("src/token.mjs"), b"dirty tracked\n").unwrap();
-    let output = repo.pulse(&["work", "packet", &ticket_id, "--json"]);
-    assert_eq!(error_code(&output), "work_packet_dirty_source_unsupported");
-    git(repo.path(), &["checkout", "--", "src/token.mjs"]);
+    let tracked_dirty = packet_ok(&repo, &ticket_id);
+    assert_eq!(tracked_dirty["source"]["dirty"], true);
+    let tracked_fp = tracked_dirty["packet_fingerprint"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert_ne!(tracked_fp, clean_fp);
 
+    // An untracked file mutates the dirty identity again.
     fs::write(repo.path().join("untracked.txt"), b"dirty untracked\n").unwrap();
-    let output = repo.pulse(&["work", "packet", &ticket_id, "--json"]);
-    assert_eq!(error_code(&output), "work_packet_dirty_source_unsupported");
-    fs::remove_file(repo.path().join("untracked.txt")).unwrap();
+    let untracked_dirty = packet_ok(&repo, &ticket_id);
+    assert_eq!(untracked_dirty["source"]["dirty"], true);
+    assert_ne!(
+        untracked_dirty["packet_fingerprint"].as_str().unwrap(),
+        tracked_fp
+    );
 
+    // Ignored cache content does not affect the dirty identity.
     fs::create_dir_all(repo.path().join(".pulse/cache/i7")).unwrap();
     fs::write(repo.path().join(".pulse/cache/i7/ignored"), b"ignored\n").unwrap();
-    let packet = packet_ok(&repo, &ticket_id);
-    assert_eq!(packet["source"]["dirty"], false);
+    let still_dirty = packet_ok(&repo, &ticket_id);
+    assert_eq!(
+        still_dirty["packet_fingerprint"].as_str().unwrap(),
+        untracked_dirty["packet_fingerprint"].as_str().unwrap()
+    );
+
+    // Restoring the worktree returns to the exact clean packet.
+    fs::remove_file(repo.path().join("untracked.txt")).unwrap();
+    git(repo.path(), &["checkout", "--", "src/token.mjs"]);
+    let restored = packet_ok(&repo, &ticket_id);
+    assert_eq!(restored["source"]["dirty"], false);
+    assert_eq!(restored["packet_fingerprint"].as_str().unwrap(), clean_fp);
 
     let head = repo.git_head();
     git(repo.path(), &["checkout", "--detach", &head]);

@@ -260,6 +260,8 @@ fn work_packet_public_paths_compile() {
         repository_id: "repo".to_string(),
         commit: "0000000000000000000000000000000000000000".to_string(),
         dirty: false,
+        dirty_hash: "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            .to_string(),
     };
     // Verify typed access.
     let _s: &str = &source.repository_id;

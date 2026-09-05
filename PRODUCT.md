@@ -434,8 +434,9 @@ trước khi làm:
 - Handoff protocol: lệnh cần gọi khi xong.
 
 Packet không inline toàn bộ docs; nó trả refs và snippet, agent `docs get` khi
-cần. Packet fence theo source commit và fingerprint của mọi input: code đổi thì
-packet cũ hết hiệu lực và `pulse run` từ chối dùng packet stale.
+cần. Packet fence theo source commit + dirty hash và fingerprint của mọi input:
+worktree được phép bẩn, packet ghi `source.dirty`/`source.dirty_hash`; code hay
+worktree đổi thì packet cũ hết hiệu lực và `pulse run` từ chối dùng packet stale.
 
 Trước lease là preview; trong `pulse run`, packet được commit cùng lease và
 không tự rebuild từ revision mới. Contract đổi giữa chừng tạo finding
