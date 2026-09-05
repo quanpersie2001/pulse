@@ -748,3 +748,104 @@ fn budget_exceeded_rejects_without_truncating_required_context() {
     let output = repo.pulse(&["work", "packet", &ticket_id, "--json"]);
     assert_eq!(error_code(&output), "work_packet_budget_exceeded");
 }
+
+#[test]
+fn packet_injects_applicable_validated_knowledge_only() {
+    let repo = TestRepo::from_fixture("minimal-service");
+    let ticket_id = setup_ready_ticket(&repo);
+
+    // A candidate learning must not appear in the packet.
+    let capture_draft = repo.path().join("learning.json");
+    fs::write(
+        &capture_draft,
+        serde_json::json!({
+            "title": "Freeze the tree between handoff and close",
+            "kind": "process_insight",
+            "severity": "medium",
+            "summary": "Out-of-scope edits after handoff stale the proof chain.",
+            "guidance": {
+                "do": ["Leave the worktree untouched until close."],
+                "avoid": [],
+                "required_checks": ["node scripts/verify.mjs"]
+            },
+            "applicability": {"paths": ["src/**"]},
+            "provenance_targets": [],
+            "source_commits": [],
+            "routing": null,
+            "promotion": null,
+            "freshness": null,
+            "trust": null,
+            "content": null
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let created = repo.pulse_ok(&[
+        "knowledge",
+        "capture",
+        "--from",
+        &ticket_id,
+        "--file",
+        &capture_draft.to_string_lossy(),
+        "--actor",
+        "human:tester",
+        "--json",
+    ]);
+    assert_eq!(created["value"]["status"], "candidate");
+    let before = packet_ok(&repo, &ticket_id);
+    assert!(before["knowledge"].as_array().unwrap().is_empty());
+
+    // Validate it: now it applies via the src/** path match and injects.
+    fs::create_dir_all(repo.path().join(".pulse/evidence/receipts")).unwrap();
+    let receipt = serde_json::json!({
+        "schema_version": 1,
+        "receipt_version": 2,
+        "id": "rcpt_01J00000000000000000000002",
+        "kind": "qa_checkpoint",
+        "result": "passed",
+        "actor": {"kind": "human", "id": "tester"},
+        "recorded_at": "2026-09-05T00:00:00Z",
+        "subject": {"kind": "work", "id": ticket_id},
+        "bindings": {},
+        "payload": {
+            "payload_version": 1,
+            "qa_scope": "ticket_checkpoint",
+            "story_id": "ST-000",
+            "ticket_id": ticket_id,
+            "baseline_revision": 1,
+            "baseline_content_hash": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+            "cases": [{"case_id": "QA-001", "case_revision": 1, "outcome": "passed"}],
+            "executor": {"name": "t", "version": "1"},
+            "observations": ["observed"]
+        }
+    });
+    fs::write(
+        repo.path()
+            .join(".pulse/evidence/receipts/rcpt_01J00000000000000000000002.json"),
+        serde_json::to_vec_pretty(&receipt).unwrap(),
+    )
+    .unwrap();
+    repo.pulse_ok(&[
+        "knowledge",
+        "validate-learning",
+        "LRN-001",
+        "--evidence",
+        "rcpt_01J00000000000000000000002",
+        "--actor",
+        "human:tester",
+        "--json",
+    ]);
+    let after = packet_ok(&repo, &ticket_id);
+    let knowledge = after["knowledge"].as_array().unwrap();
+    assert_eq!(knowledge.len(), 1);
+    assert_eq!(knowledge[0]["detail_ref"], "LRN-001");
+    assert!(knowledge[0]["why_applicable"]
+        .as_str()
+        .unwrap()
+        .contains("src/**"));
+    assert_eq!(knowledge[0]["required_checks"].as_array().unwrap().len(), 1);
+
+    // Packet fingerprint must reflect the injected knowledge (stability).
+    let again = packet_ok(&repo, &ticket_id);
+    assert_eq!(again["packet_fingerprint"], after["packet_fingerprint"]);
+}

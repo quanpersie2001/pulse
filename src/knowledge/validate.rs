@@ -192,6 +192,19 @@ pub fn validate_learning_for_mutation(
     report.into_result().map(|_| ())
 }
 
+/// Lifecycle-transition validation: content invariants still hold, but the
+/// candidate-only Phase-1 claims do not — `validate_learning` / `promote`
+/// are the sanctioned ratchet ladder past that freeze.
+pub fn validate_learning_for_transition(
+    repo_root: &Path,
+    learning: &Learning,
+    relations: &BTreeMap<String, KnowledgeRelation>,
+) -> Result<()> {
+    let mut report = KnowledgeValidationReport::ok(None);
+    validate_learning(repo_root, learning, relations, &mut report);
+    report.into_result().map(|_| ())
+}
+
 pub(crate) fn validate_public_learning_claims(learning: &Learning) -> Result<()> {
     let mut report = KnowledgeValidationReport::ok(None);
     validate_public_mutation_restrictions(learning, &mut report);

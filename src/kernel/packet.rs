@@ -423,7 +423,7 @@ impl JsonGraphStore {
             schema_version: work_packet::PACKET_SCHEMA_VERSION,
             profile: "work_packet".to_string(),
             code: "ready_ticket".to_string(),
-            ticket: phase1.packet_ticket,
+            ticket: phase1.packet_ticket.clone(),
             parents: phase1.packet_parents,
             decisions: phase1.packet_decisions,
             blockers: phase1.graph.hard_blockers,
@@ -436,7 +436,15 @@ impl JsonGraphStore {
                 .collect(),
             docs: packet_docs_from_legacy(documentation),
             qa: phase1.packet_qa,
-            knowledge: vec![],
+            knowledge: applicable_knowledge(
+                &self.repo_root,
+                readiness
+                    .ticket_brief
+                    .as_ref()
+                    .map(|brief| brief.code_anchors.clone())
+                    .unwrap_or_default(),
+                &phase1.packet_ticket.tags,
+            ),
             notes: phase1.notes,
             rework: vec![],
             source: phase1.source,
@@ -453,6 +461,73 @@ impl JsonGraphStore {
         packet.finalize_size()?;
         Ok(packet)
     }
+}
+
+/// Upper bound of knowledge items injected into one packet.
+pub(crate) const MAX_KNOWLEDGE_ITEMS: usize = 5;
+
+/// Applicable validated or promoted learnings for the subject Ticket:
+/// a learning applies when an applicability path matches a Ticket code
+/// anchor (exact, or `prefix/**` subtree) or an applicability work label
+/// matches a Ticket tag. Candidate and disputed learnings are never
+/// injected. Bounded and sorted by learning id for deterministic packets.
+fn applicable_knowledge(
+    repo_root: &Path,
+    code_anchors: Vec<String>,
+    tags: &[String],
+) -> Vec<work_packet::PacketKnowledgeItem> {
+    let Ok((entries, _)) = crate::knowledge::validate::load_records(repo_root) else {
+        return Vec::new();
+    };
+    let mut items = Vec::new();
+    for (id, learning) in &entries {
+        if !matches!(
+            learning.status,
+            crate::knowledge::model::LearningStatus::Validated
+                | crate::knowledge::model::LearningStatus::Promoted
+        ) {
+            continue;
+        }
+        let mut reasons = Vec::new();
+        for pattern in &learning.applicability.paths {
+            for anchor in &code_anchors {
+                if knowledge_path_matches(anchor, pattern) {
+                    reasons.push(format!("anchor {anchor} matches path {pattern}"));
+                    break;
+                }
+            }
+        }
+        for label in &learning.applicability.work_labels {
+            if tags.iter().any(|tag| tag == label) {
+                reasons.push(format!("ticket tag {label}"));
+                break;
+            }
+        }
+        if reasons.is_empty() {
+            continue;
+        }
+        items.push(work_packet::PacketKnowledgeItem {
+            summary: learning.summary.clone(),
+            why_applicable: reasons.join("; "),
+            required_checks: learning.guidance.required_checks.clone(),
+            detail_ref: Some(id.clone()),
+        });
+        if items.len() >= MAX_KNOWLEDGE_ITEMS {
+            break;
+        }
+    }
+    items.sort_by(|left, right| left.detail_ref.cmp(&right.detail_ref));
+    items
+}
+
+fn knowledge_path_matches(anchor: &str, pattern: &str) -> bool {
+    if let Some(prefix) = pattern.strip_suffix("/**") {
+        return anchor.starts_with(prefix);
+    }
+    if let Some(prefix) = pattern.strip_suffix("/*") {
+        return anchor.starts_with(prefix) && !anchor[prefix.len()..].contains('/');
+    }
+    anchor == pattern
 }
 
 // ---------------------------------------------------------------------------

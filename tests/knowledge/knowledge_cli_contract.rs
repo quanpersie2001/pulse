@@ -300,3 +300,211 @@ fn knowledge_cli_errors_are_json_and_non_zero() {
     assert_eq!(invalid["schema_version"], 1);
     assert_eq!(invalid["code"], "knowledge_relation_endpoint_missing");
 }
+
+#[test]
+fn capture_validate_promote_ratchet_lifecycle() {
+    let (repo, work_id) = setup_repo();
+    // Evidence + git context for the validate step.
+    let git_init = Command::new("git")
+        .args(["init", "-q"])
+        .current_dir(repo.path())
+        .output()
+        .unwrap();
+    assert!(git_init.status.success());
+    let commit = Command::new("git")
+        .args(["commit", "--allow-empty", "-q", "-m", "base"])
+        .current_dir(repo.path())
+        .output()
+        .unwrap();
+    assert!(commit.status.success());
+    run_ok(&repo, &["evidence", "bootstrap", "--json"]);
+    let head = String::from_utf8(
+        Command::new("git")
+            .args(["rev-parse", "HEAD"])
+            .current_dir(repo.path())
+            .output()
+            .unwrap()
+            .stdout,
+    )
+    .unwrap()
+    .trim()
+    .to_string();
+    let manifest: Value = serde_json::from_slice(
+        &fs::read(repo.path().join(".pulse/evidence/manifest.json")).unwrap(),
+    )
+    .unwrap();
+    let repository_id = manifest["repository_id"].as_str().unwrap().to_string();
+
+    // Capture: draft carries no provenance; it is derived from the Ticket.
+    let capture_draft = write_json(
+        &repo.path().join("capture.json"),
+        &json!({
+            "title": "Freeze the tree between handoff and close",
+            "kind": "process_insight",
+            "severity": "medium",
+            "summary": "Out-of-scope edits after handoff stale the proof chain.",
+            "guidance": {
+                "do": ["Leave the target worktree untouched until close."],
+                "avoid": ["Do not edit tracked files after handing off."],
+                "required_checks": []
+            },
+            "applicability": {"paths": ["src/**"]},
+            "provenance_targets": [],
+            "source_commits": [],
+            "routing": null,
+            "promotion": null,
+            "freshness": null,
+            "trust": null,
+            "content": null
+        }),
+    );
+    let captured = run_ok(
+        &repo,
+        &[
+            "knowledge",
+            "capture",
+            "--from",
+            &work_id,
+            "--file",
+            &capture_draft,
+            "--actor",
+            "human:test",
+            "--json",
+        ],
+    );
+    assert_eq!(captured["code"], "created");
+    assert_eq!(captured["value"]["status"], "candidate");
+    let relations = captured["relations"].as_array().unwrap();
+    assert_eq!(relations.len(), 1, "derived_from relation auto-added");
+
+    // validate-learning requires evidence that resolves.
+    let missing = run_err(
+        &repo,
+        &[
+            "knowledge",
+            "validate-learning",
+            "LRN-001",
+            "--evidence",
+            "rcpt_01J00000000000000000000000",
+            "--actor",
+            "human:test",
+            "--json",
+        ],
+    );
+    assert_eq!(missing["code"], "knowledge_validate_evidence_missing");
+
+    // Record a resolvable evidence receipt for the transition.
+    let receipt = json!({
+        "schema_version": 1,
+        "receipt_version": 2,
+        "id": "rcpt_01J00000000000000000000001",
+        "kind": "qa_checkpoint",
+        "result": "passed",
+        "actor": {"kind": "human", "id": "test"},
+        "recorded_at": "2026-09-05T00:00:00Z",
+        "subject": {"kind": "work", "id": work_id},
+        "bindings": {},
+        "payload": {
+            "payload_version": 1,
+            "qa_scope": "ticket_checkpoint",
+            "story_id": "ST-000",
+            "ticket_id": work_id,
+            "baseline_revision": 1,
+            "baseline_content_hash": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+            "cases": [{"case_id": "QA-001", "case_revision": 1, "outcome": "passed"}],
+            "executor": {"name": "t", "version": "1"},
+            "observations": ["observed"]
+        }
+    });
+    fs::create_dir_all(repo.path().join(".pulse/evidence/receipts")).unwrap();
+    fs::write(
+        repo.path()
+            .join(".pulse/evidence/receipts/rcpt_01J00000000000000000000001.json"),
+        serde_json::to_vec_pretty(&receipt).unwrap(),
+    )
+    .unwrap();
+    let validated = run_ok(
+        &repo,
+        &[
+            "knowledge",
+            "validate-learning",
+            "LRN-001",
+            "--evidence",
+            "rcpt_01J00000000000000000000001",
+            "--actor",
+            "human:test",
+            "--json",
+        ],
+    );
+    assert_eq!(validated["value"]["status"], "validated");
+    assert_eq!(validated["value"]["validation"]["confidence"], "medium");
+
+    // Promote requires a registry document and records promoted_to.
+    let _ = head;
+    let _ = repository_id;
+    fs::create_dir_all(repo.path().join("docs/product")).unwrap();
+    fs::write(repo.path().join("docs/product/x.md"), "doc body\n").unwrap();
+    let record = write_json(
+        &repo.path().join("doc-record.json"),
+        &json!({
+            "id": "DOC-EXAMPLE",
+            "revision": 1,
+            "path": "docs/product/x.md",
+            "summary": "Example document.",
+            "owner": "human:test",
+            "kind": "product",
+            "status": "approved",
+            "tags": []
+        }),
+    );
+    let registered = run_ok(
+        &repo,
+        &[
+            "docs",
+            "register",
+            "--file",
+            &record,
+            "--expected-registry-revision",
+            "1",
+            "--actor",
+            "human:test",
+            "--json",
+        ],
+    );
+    assert_eq!(registered["code"], "registered");
+
+    let promoted = run_ok(
+        &repo,
+        &[
+            "knowledge",
+            "promote",
+            "LRN-001",
+            "--document",
+            "DOC-EXAMPLE",
+            "--rationale",
+            "belongs in the behavior contract",
+            "--actor",
+            "human:test",
+            "--json",
+        ],
+    );
+    assert_eq!(promoted["value"]["status"], "promoted");
+    assert_eq!(promoted["value"]["promotion"]["state"], "promoted");
+    assert_eq!(promoted["relations"].as_array().unwrap().len(), 1);
+
+    // Illegal transitions are refused.
+    let illegal = run_err(
+        &repo,
+        &[
+            "knowledge",
+            "validate-learning",
+            "LRN-001",
+            "--evidence",
+            "rcpt_01J00000000000000000000001",
+            "--actor",
+            "human:test",
+            "--json",
+        ],
+    );
+    assert_eq!(illegal["code"], "knowledge_transition_invalid");
+}

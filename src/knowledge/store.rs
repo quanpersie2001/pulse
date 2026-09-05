@@ -110,6 +110,10 @@ impl KnowledgeStore {
             failpoint: None,
         }
     }
+
+    pub fn repo_root(&self) -> &std::path::Path {
+        &self.repo_root
+    }
     #[cfg(any(test, debug_assertions))]
     pub fn with_failpoint(repo_root: impl Into<PathBuf>, failpoint: TransactionFailpoint) -> Self {
         Self {
@@ -344,6 +348,199 @@ impl KnowledgeStore {
             knowledge_fingerprint: knowledge_fingerprint(&self.repo_root, &manifest)?,
             value: learning,
             relations: Vec::new(),
+        })
+    }
+
+    /// Ratchet lifecycle transition.
+    ///
+    /// `candidate|reviewed -> validated` requires an evidence receipt id
+    /// that resolves in the evidence store. `validated -> promoted`
+    /// requires a registry document and records a `promoted_to` relation
+    /// bound to the document's current revision and content hash in the
+    /// same transaction.
+    pub fn transition_status(
+        &self,
+        id: &str,
+        to: LearningStatus,
+        evidence_receipt: Option<&str>,
+        document_id: Option<&str>,
+        rationale: Option<String>,
+        ctx: OperationContext,
+    ) -> PulseResult<MutationOutcome<Learning>> {
+        let _guard = WriteGuard::acquire(&self.repo_root)?;
+        let manifest = bootstrap_unlocked(&self.repo_root)?.manifest;
+        recover_prepared_transactions(&self.repo_root)?;
+        let (_entries, mut relations) = load_records(&self.repo_root)?;
+        let path = self.entry_path(id);
+        if !path.exists() {
+            return Err(PulseError::validation(
+                "learning_not_found",
+                format!("learning not found: {id}"),
+            ));
+        }
+        let before_bytes = fs::read(&path).map_err(|e| PulseError::io(&path, e))?;
+        let before_hash = hash_bytes(&before_bytes);
+        let mut learning: Learning =
+            serde_json::from_slice(&before_bytes).map_err(|e| PulseError::json(&path, e))?;
+        let from = learning.status;
+        let mut new_relations: Vec<KnowledgeRelation> = Vec::new();
+        match (from, to) {
+            (LearningStatus::Candidate | LearningStatus::Reviewed, LearningStatus::Validated) => {
+                let receipt_id = evidence_receipt.ok_or_else(|| {
+                    PulseError::validation(
+                        "knowledge_validate_evidence_missing",
+                        "validating a learning requires --evidence <receipt-id>",
+                    )
+                })?;
+                crate::evidence::receipt::load_receipt(&self.repo_root, receipt_id).map_err(
+                    |error| {
+                        PulseError::validation(
+                            "knowledge_validate_evidence_missing",
+                            format!("evidence receipt does not resolve: {error}"),
+                        )
+                    },
+                )?;
+                learning.validation.validated_by.push(ctx.actor.clone());
+                learning.validation.validated_at = Some(ctx.now);
+                if learning.validation.confidence == Confidence::Low {
+                    learning.validation.confidence = Confidence::Medium;
+                }
+            }
+            (LearningStatus::Validated, LearningStatus::Promoted) => {
+                let doc_id = document_id.ok_or_else(|| {
+                    PulseError::validation(
+                        "knowledge_promote_document_missing",
+                        "promoting a learning requires --document <doc-id>",
+                    )
+                })?;
+                let registry: crate::docs::model::DocsRegistryEnvelope =
+                    crate::storage::read_json(&self.repo_root.join(".pulse/docs/registry.json"))
+                        .map_err(|_| {
+                            PulseError::validation(
+                                "knowledge_relation_endpoint_missing",
+                                "target document missing",
+                            )
+                        })?;
+                let doc = registry
+                    .documents
+                    .iter()
+                    .find(|doc| doc.id == doc_id)
+                    .ok_or_else(|| {
+                        PulseError::validation(
+                            "knowledge_relation_endpoint_missing",
+                            format!("target document missing: {doc_id}"),
+                        )
+                    })?;
+                let doc_bytes = fs::read(self.repo_root.join(&doc.path))
+                    .map_err(|error| PulseError::io(self.repo_root.join(&doc.path), error))?;
+                let relation = KnowledgeRelation::new(
+                    RelationType::PromotedTo,
+                    id.to_string(),
+                    Endpoint {
+                        kind: EndpointKind::Document,
+                        id: doc.id.clone(),
+                        revision: Some(doc.revision),
+                        content_hash: Some(hash_bytes(&doc_bytes)),
+                    },
+                    ctx.now,
+                    ctx.actor.clone(),
+                )?;
+                self.validate_new_relation_endpoint(&relation)?;
+                if self.relation_path(&relation.id).exists() {
+                    return Err(PulseError::validation(
+                        "knowledge_relation_conflict",
+                        format!("relation already exists: {}", relation.id),
+                    ));
+                }
+                learning.promotion.state = PromotionState::Promoted;
+                learning.promotion.rationale = rationale;
+                relations.insert(relation.id.clone(), relation.clone());
+                new_relations.push(relation);
+            }
+            _ => {
+                return Err(PulseError::validation(
+                    "knowledge_transition_invalid",
+                    format!("cannot transition learning from {from:?} to {to:?}"),
+                ))
+            }
+        }
+        learning.status = to;
+        learning.revision += 1;
+        learning.updated_at = ctx.now;
+        learning.normalize();
+        learning.promotion.relation_ids = learning
+            .promotion
+            .relation_ids
+            .iter()
+            .cloned()
+            .chain(new_relations.iter().map(|r| r.id.clone()))
+            .collect();
+        crate::knowledge::validate::validate_learning_for_transition(
+            &self.repo_root,
+            &learning,
+            &relations,
+        )?;
+        let after_bytes = to_canonical_bytes(&learning)?;
+        let mut targets = vec![TransactionTarget::new(
+            self.entry_path(id),
+            FileState::Present {
+                hash: before_hash,
+                revision: learning.revision - 1,
+            },
+            FileState::Present {
+                hash: hash_bytes(&after_bytes),
+                revision: learning.revision,
+            },
+            &after_bytes,
+        )];
+        for relation in &new_relations {
+            let bytes = to_canonical_bytes(relation)?;
+            targets.push(TransactionTarget::new(
+                self.relation_path(&relation.id),
+                FileState::Absent,
+                FileState::Present {
+                    hash: hash_bytes(&bytes),
+                    revision: 1,
+                },
+                &bytes,
+            ));
+        }
+        let relation_ids = new_relations
+            .iter()
+            .map(|r| r.id.clone())
+            .collect::<Vec<_>>();
+        let event = EventEnvelope::new(
+            new_event_id(),
+            "knowledge.learning.transitioned",
+            ctx.actor.clone(),
+            id,
+            json!({
+                "learning_id": id,
+                "from": from,
+                "to": to,
+                "revision_after": learning.revision,
+                "hash_after": hash_bytes(&after_bytes),
+                "relations": relation_ids,
+            }),
+            ctx.now,
+        );
+        let intent = MultiTargetTransactionIntent::prepared(
+            event.id.clone(),
+            "knowledge.learning.transitioned",
+            ctx.actor,
+            targets,
+            event_path(&self.repo_root, &event),
+            serde_json::to_value(event)?,
+        )?;
+        let prepared = prepare_multi_target_transaction(&self.repo_root, intent)?;
+        commit_prepared_multi_target_transaction(&prepared, self.failpoint)?;
+        Ok(MutationOutcome {
+            schema_version: 1,
+            code: "transitioned".to_string(),
+            status: MutationStatus::Updated,
+            knowledge_fingerprint: knowledge_fingerprint(&self.repo_root, &manifest)?,
+            value: learning,
+            relations: relation_ids,
         })
     }
 

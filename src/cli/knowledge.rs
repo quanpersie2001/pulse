@@ -14,6 +14,47 @@ pub(crate) enum KnowledgeCommand {
         #[arg(long)]
         json: bool,
     },
+    /// Capture a learning candidate from a Ticket: the draft file carries
+    /// the content (title, kind, severity, summary, guidance,
+    /// applicability); provenance is derived from the Ticket's graph state
+    /// and execution evidence.
+    Capture {
+        /// Ticket whose outcome the learning captures.
+        #[arg(long)]
+        from: String,
+        #[arg(long)]
+        file: PathBuf,
+        #[arg(long)]
+        actor: String,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Record an evidence-backed validation: candidate|reviewed ->
+    /// validated.
+    ValidateLearning {
+        learning_id: String,
+        /// Evidence receipt id that proves the learning.
+        #[arg(long)]
+        evidence: String,
+        #[arg(long)]
+        actor: String,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Promote a validated learning into a registry document: validated ->
+    /// promoted, recording the promoted_to relation with the document's
+    /// current revision and content hash.
+    Promote {
+        learning_id: String,
+        #[arg(long)]
+        document: String,
+        #[arg(long)]
+        rationale: Option<String>,
+        #[arg(long)]
+        actor: String,
+        #[arg(long)]
+        json: bool,
+    },
     Show {
         learning_id: String,
         #[arg(long)]
@@ -233,6 +274,87 @@ pub(crate) fn handle(store: &JsonGraphStore, command: KnowledgeCommand) -> Resul
             )?;
             render(json, &out, format!("created {}", out.value.id))
         }
+        KnowledgeCommand::Capture {
+            from,
+            file,
+            actor,
+            json,
+        } => {
+            let bytes =
+                std::fs::read(&file).map_err(|error| PulseError::io(file.clone(), error))?;
+            let mut draft: LearningDraft = serde_json::from_slice(&bytes)
+                .map_err(|error| PulseError::json(file.clone(), error))?;
+            let node = store.show_node(&from)?;
+            draft
+                .provenance_targets
+                .push(crate::knowledge::model::ProvenanceTargetDraft {
+                    relation: RelationType::DerivedFrom,
+                    kind: EndpointKind::Work,
+                    id: node.id.clone(),
+                    revision: Some(node.revision),
+                    content_hash: None,
+                });
+            for commit in ticket_source_commits(knowledge.repo_root(), &from) {
+                if !draft.source_commits.contains(&commit) {
+                    draft.source_commits.push(commit);
+                }
+            }
+            let out = knowledge.create(
+                draft,
+                KnowledgeOperationContext {
+                    actor,
+                    now: chrono::Utc::now(),
+                },
+            )?;
+            render(json, &out, format!("captured {} from {from}", out.value.id))
+        }
+        KnowledgeCommand::ValidateLearning {
+            learning_id,
+            evidence,
+            actor,
+            json,
+        } => {
+            let out = knowledge.transition_status(
+                &learning_id,
+                LearningStatus::Validated,
+                Some(&evidence),
+                None,
+                None,
+                KnowledgeOperationContext {
+                    actor,
+                    now: chrono::Utc::now(),
+                },
+            )?;
+            render(
+                json,
+                &out,
+                format!("validated {} -> validated", out.value.id),
+            )
+        }
+        KnowledgeCommand::Promote {
+            learning_id,
+            document,
+            rationale,
+            actor,
+            json,
+        } => {
+            let out = knowledge.transition_status(
+                &learning_id,
+                LearningStatus::Promoted,
+                None,
+                Some(&document),
+                rationale,
+                KnowledgeOperationContext {
+                    actor,
+                    now: chrono::Utc::now(),
+                },
+            )?;
+            render(
+                json,
+                &out,
+                format!("{} promoted to {document}", out.value.id),
+            )
+        }
         KnowledgeCommand::Show { learning_id, json } => {
             let out = knowledge.show(&learning_id)?;
             render(json, &out, learning_id)
@@ -315,4 +437,33 @@ pub(crate) fn handle(store: &JsonGraphStore, command: KnowledgeCommand) -> Resul
             render(json, &out, format!("knowledge cache {:?}", out.cache_state))
         }
     }
+}
+
+/// Source commits bound to a Ticket's execution handoffs, newest last.
+fn ticket_source_commits(repo_root: &std::path::Path, ticket_id: &str) -> Vec<String> {
+    let directory = repo_root.join(".pulse/evidence/execution/handoffs");
+    let Ok(entries) = std::fs::read_dir(&directory) else {
+        return Vec::new();
+    };
+    let mut commits = Vec::new();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|ext| ext.to_str()) != Some("json") {
+            continue;
+        }
+        let Ok(bytes) = std::fs::read(&path) else {
+            continue;
+        };
+        let Ok(receipt) = serde_json::from_slice::<serde_json::Value>(&bytes) else {
+            continue;
+        };
+        if receipt["ticket_id"].as_str() == Some(ticket_id) {
+            if let Some(commit) = receipt["source_commit"].as_str() {
+                if !commits.iter().any(|existing| existing == commit) {
+                    commits.push(commit.to_string());
+                }
+            }
+        }
+    }
+    commits
 }
