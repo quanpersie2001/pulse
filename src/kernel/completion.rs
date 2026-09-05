@@ -85,7 +85,12 @@ impl JsonGraphStore {
                 "handoff source is not the exact active assignment source",
             ));
         }
-        let source_dirty = crate::source::worktree_dirty_identity(&self.repo_root)?;
+        let workspace = workspace_dir(
+            &self.repo_root,
+            &reservation.subject.ticket_id,
+            &binding.workspace_id,
+        )?;
+        let source_dirty = crate::source::worktree_dirty_identity(&workspace)?;
         for receipt_id in &args.evidence_receipt_ids {
             crate::evidence::receipt::verify_receipt(&self.repo_root, receipt_id, true, None)?;
         }
@@ -192,7 +197,8 @@ impl JsonGraphStore {
                 "verification is not bound to the handoff source commit",
             ));
         }
-        let source_dirty = crate::source::worktree_dirty_identity(&self.repo_root)?;
+        let workspace = workspace_dir(&self.repo_root, &handoff.ticket_id, &handoff.workspace_id)?;
+        let source_dirty = crate::source::worktree_dirty_identity(&workspace)?;
         if source_dirty.identity != handoff.source_dirty_hash {
             return Err(PulseError::validation(
                 "verification_source_mismatch",
@@ -432,7 +438,8 @@ impl JsonGraphStore {
                 "proof close is not bound to the current verified source commit",
             ));
         }
-        let source_dirty = crate::source::worktree_dirty_identity(&self.repo_root)?;
+        let workspace = workspace_dir(&self.repo_root, &handoff.ticket_id, &handoff.workspace_id)?;
+        let source_dirty = crate::source::worktree_dirty_identity(&workspace)?;
         if source_dirty.identity != verification.source_dirty_hash
             || source_dirty.identity != handoff.source_dirty_hash
         {
@@ -510,6 +517,9 @@ impl JsonGraphStore {
             }),
             self.failpoint,
         )?;
+        // Terminal Ticket: reclaim the Pulse-owned worktree, if any. The
+        // guard only removes registered worktrees under the Pulse root.
+        let _ = crate::kernel::run::cleanup_ticket_worktree(&self.repo_root, &close.ticket_id);
         Ok(close)
     }
 }
@@ -679,6 +689,23 @@ fn normalize_acceptance_proofs(proofs: &mut [AcceptanceProof]) {
         normalize_strings(&mut proof.evidence_receipt_ids);
     }
     proofs.sort_by(|left, right| left.acceptance_id.cmp(&right.acceptance_id));
+}
+
+/// The checkout directory a proof's dirty identity is computed against: the
+/// canonical checkout by default, or the Pulse-owned worktree recorded in the
+/// assignment binding when the run was isolated. Any other workspace id
+/// (operator-managed workspaces) falls back to the canonical checkout.
+pub(crate) fn workspace_dir(
+    repo_root: &Path,
+    ticket_id: &str,
+    workspace_id: &str,
+) -> Result<PathBuf> {
+    let expected_prefix = format!(".pulse/runtime/worktrees/{ticket_id}");
+    if workspace_id.starts_with(&expected_prefix) {
+        let relative = crate::storage::safe_repo_relative(workspace_id)?;
+        return Ok(repo_root.join(relative));
+    }
+    Ok(repo_root.to_path_buf())
 }
 
 pub(crate) fn ticket_acceptance_ids(repo_root: &Path, node: &Node) -> Result<Vec<String>> {

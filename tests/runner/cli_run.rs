@@ -16,7 +16,7 @@ use crate::common_bin::bin;
 use crate::common_fixture_repo::TestRepo;
 use crate::common_git::commit_all;
 
-const ACTOR: &str = "human:tester";
+pub(crate) const ACTOR: &str = "human:tester";
 
 fn ticket_markdown(ticket_id: &str) -> String {
     format!(
@@ -37,7 +37,7 @@ fn ticket_markdown(ticket_id: &str) -> String {
 
 /// Bring a fixture repo to a `ready` implementation Ticket through the
 /// markdown contract, returning the Ticket ID.
-fn setup_ready_ticket(repo: &TestRepo) -> String {
+pub(crate) fn setup_ready_ticket(repo: &TestRepo) -> String {
     repo.pulse_ok(&["init", "--actor", ACTOR, "--json"]);
     let created = repo.pulse_ok(&[
         "work",
@@ -101,7 +101,7 @@ fn setup_ready_ticket(repo: &TestRepo) -> String {
     ticket_id
 }
 
-fn install_worker_script(repo: &TestRepo, body: &str) {
+pub(crate) fn install_worker_script(repo: &TestRepo, body: &str) {
     let script = format!(
         "#!/bin/sh\nset -e\nREPO_ROOT=\"$(pwd)\"\nPULSE=\"{}\"\n{body}\n",
         bin()
@@ -112,7 +112,7 @@ fn install_worker_script(repo: &TestRepo, body: &str) {
     commit_all(repo.path());
 }
 
-fn set_worker_command(repo: &TestRepo, command: &str) {
+pub(crate) fn set_worker_command(repo: &TestRepo, command: &str) {
     let config = serde_json::json!({
         "worker": {"command": command, "timeout_seconds": 30},
         "reviewer": {"command": "echo '{\"ok\":true}'", "timeout_seconds": 60},
@@ -134,11 +134,11 @@ fn error_code(output: &std::process::Output) -> String {
     err["code"].as_str().unwrap().to_string()
 }
 
-fn run_outcome(repo: &TestRepo, ticket_id: &str) -> Value {
+pub(crate) fn run_outcome(repo: &TestRepo, ticket_id: &str) -> Value {
     repo.pulse_ok(&["run", "worker", "--ticket", ticket_id, "--json"])
 }
 
-fn node_status(repo: &TestRepo, ticket_id: &str) -> String {
+pub(crate) fn node_status(repo: &TestRepo, ticket_id: &str) -> String {
     let shown = repo.pulse_ok(&["work", "show", ticket_id, "--json"]);
     shown["node"]["status"].as_str().unwrap().to_string()
 }

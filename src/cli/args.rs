@@ -72,9 +72,21 @@ pub(crate) enum Command {
         /// ticket and role.
         #[arg(long, default_value = "")]
         idempotency_key: String,
+        /// Workspace isolation: auto isolates into a worktree when another
+        /// Ticket holds a live lease; worktree forces it.
+        #[arg(long, value_enum, default_value_t = IsolationArg::Auto)]
+        isolation: IsolationArg,
         #[arg(long)]
         json: bool,
     },
+}
+
+/// Workspace isolation policy for `pulse run`.
+#[derive(Clone, Copy, Debug, ValueEnum, PartialEq, Eq)]
+#[value(rename_all = "snake_case")]
+pub(crate) enum IsolationArg {
+    Auto,
+    Worktree,
 }
 
 #[allow(clippy::enum_variant_names)]

@@ -9,9 +9,10 @@ pub(crate) fn handle(
     ticket: &str,
     ttl_seconds: u64,
     idempotency_key: &str,
+    forced_worktree: bool,
     json: bool,
 ) -> Result<(), PulseError> {
-    let outcome = store.run_role(role, ticket, ttl_seconds, idempotency_key)?;
+    let outcome = store.run_role(role, ticket, ttl_seconds, idempotency_key, forced_worktree)?;
     let human = match outcome.inconclusive_reason.as_deref() {
         Some(reason) => format!(
             "run {}: {} ({})\nrecord: {}",

@@ -16,9 +16,10 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use chrono::Utc;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 
+use std::process::Command;
 use std::time::Duration;
 
 use crate::event::{new_event_id, write_event, EventEnvelope};
@@ -27,8 +28,8 @@ use crate::graph::store::JsonGraphStore;
 use crate::identity::actor::ActorKind;
 use crate::policy::authority::{authority_path, AuthorityPrincipal};
 use crate::reservation::{
-    ActivateReservationArgs, AssignmentAcknowledgement, CoreReservation, ReserveWorkArgs,
-    RuntimeBinding,
+    ActivateReservationArgs, AssignmentAcknowledgement, CoreReservation, ReservationState,
+    ReserveWorkArgs, RuntimeBinding,
 };
 use crate::runner::{self, CommandSpec};
 use crate::{PulseError, PulseResult};
@@ -94,8 +95,24 @@ fn role_grants(class: &str) -> &'static [&'static str] {
     }
 }
 
+/// Parsed `.pulse/config/runners.json`: role commands plus the
+/// `auto_isolation` policy (default true).
+#[derive(Debug, Clone, Deserialize)]
+pub struct RunnersConfig {
+    /// When another Ticket holds a live lease, `pulse run` isolates the new
+    /// Ticket in a worktree. `false` refuses the run instead.
+    #[serde(default = "default_true")]
+    pub auto_isolation: bool,
+    #[serde(flatten)]
+    pub roles: BTreeMap<String, CommandSpec>,
+}
+
+fn default_true() -> bool {
+    true
+}
+
 /// Load and validate `.pulse/config/runners.json`.
-pub fn load_runner_roles(repo_root: &Path) -> PulseResult<BTreeMap<String, CommandSpec>> {
+pub fn load_runner_config(repo_root: &Path) -> PulseResult<RunnersConfig> {
     let path = repo_root.join(".pulse/config/runners.json");
     let bytes = fs::read(&path).map_err(|error| {
         if error.kind() == std::io::ErrorKind::NotFound {
@@ -110,15 +127,15 @@ pub fn load_runner_roles(repo_root: &Path) -> PulseResult<BTreeMap<String, Comma
             PulseError::io(&path, error)
         }
     })?;
-    let roles: BTreeMap<String, CommandSpec> =
+    let config: RunnersConfig =
         serde_json::from_slice(&bytes).map_err(|error| PulseError::json(&path, error))?;
-    for (role, spec) in &roles {
+    for (role, spec) in &config.roles {
         role_class(role)?;
         spec.validate().map_err(|error| {
             PulseError::validation("run_config_invalid", format!("role {role}: {error}"))
         })?;
     }
-    Ok(roles)
+    Ok(config)
 }
 
 /// Ensure a `runner:<role>` principal exists with exactly the role grants.
@@ -198,16 +215,21 @@ pub struct RunOutcome {
 
 impl JsonGraphStore {
     /// Execute the configured command for `role` against `ticket_id`.
+    ///
+    /// `isolation` is `auto` (checkout by default, worktree when another
+    /// Ticket holds a live lease and `auto_isolation` allows it) or `worktree`
+    /// (forced). Only worker runs take leases and can be isolated.
     pub fn run_role(
         &self,
         role: &str,
         ticket_id: &str,
         ttl_seconds: u64,
         idempotency_key: &str,
+        forced_worktree: bool,
     ) -> PulseResult<RunOutcome> {
         let class = role_class(role)?;
-        let roles = load_runner_roles(&self.repo_root)?;
-        let spec = roles.get(role).ok_or_else(|| {
+        let config = load_runner_config(&self.repo_root)?;
+        let spec = config.roles.get(role).ok_or_else(|| {
             PulseError::validation(
                 "run_role_missing",
                 format!("role {role} is not defined in .pulse/config/runners.json"),
@@ -217,10 +239,21 @@ impl JsonGraphStore {
 
         let node = self.show_node(ticket_id)?;
         let started = Utc::now();
+        // Isolation decision happens before the lease so the runtime binding
+        // records the exact workspace the worker will run in.
+        let workspace: Option<String> = match class {
+            "worker" => self.decide_workspace(ticket_id, forced_worktree, config.auto_isolation)?,
+            _ => None,
+        };
         let (lease_id, reservation) = match class {
             "worker" => {
-                let outcome =
-                    self.take_worker_lease(role, ticket_id, ttl_seconds, idempotency_key)?;
+                let outcome = self.take_worker_lease(
+                    role,
+                    ticket_id,
+                    ttl_seconds,
+                    idempotency_key,
+                    workspace.as_deref(),
+                )?;
                 (Some(outcome.0), Some(outcome.1))
             }
             _ => {
@@ -236,6 +269,12 @@ impl JsonGraphStore {
                 (None, None)
             }
         };
+        // Worker command runs inside the ticket workspace; reviewer/qa run
+        // sequentially after the worker in the same checkout.
+        let command_dir = workspace
+            .as_ref()
+            .map(|relative| self.repo_root.join(relative))
+            .unwrap_or_else(|| self.repo_root.clone());
 
         // Commit the bounded input contract into the run workspace.
         let run_dir = self.repo_root.join(RUN_DIR).join(ticket_id);
@@ -283,26 +322,34 @@ impl JsonGraphStore {
             artifact_dir.display().to_string(),
         );
         let argv = runner::materialize_argv(&argv, &values)?;
-        let outcome = runner::execute(
-            &self.repo_root,
+        let execution = runner::execute(
+            &command_dir,
             &argv,
             Duration::from_secs(spec.timeout_seconds),
             spec.max_output_bytes,
             None,
         );
 
-        let run = match outcome {
-            Ok(outcome) => self.classify_outcome(class, ticket_id, lease_id.as_deref(), &outcome),
-            Err(error) => RunClassification {
-                status: "inconclusive".to_string(),
-                inconclusive_reason: Some("spawn_failed".to_string()),
-                summary: Some(error.to_string()),
-                exit_code: None,
-                timed_out: false,
-                cancelled: false,
-            },
+        let (run, stderr_tail) = match &execution {
+            Ok(outcome) => {
+                // A bounded stderr tail makes inconclusive runs diagnosable
+                // without turning Pulse into a log store.
+                let stderr_tail: Option<String> = if outcome.stderr.is_empty() {
+                    None
+                } else {
+                    let tail = outcome.stderr.len().saturating_sub(512);
+                    Some(String::from_utf8_lossy(&outcome.stderr[tail..]).to_string())
+                };
+                (
+                    self.classify_outcome(class, ticket_id, lease_id.as_deref(), outcome),
+                    stderr_tail,
+                )
+            }
+            Err(error) => (
+                RunClassification::inconclusive("spawn_failed", Some(error.to_string())),
+                None,
+            ),
         };
-
         let run_record = RunRecord {
             schema_version: 1,
             role: role.to_string(),
@@ -311,6 +358,7 @@ impl JsonGraphStore {
             status: run.status.clone(),
             inconclusive_reason: run.inconclusive_reason.clone(),
             summary: run.summary.clone(),
+            stderr_tail,
             exit_code: run.exit_code,
             timed_out: run.timed_out,
             cancelled: run.cancelled,
@@ -367,6 +415,7 @@ impl JsonGraphStore {
         ticket_id: &str,
         ttl_seconds: u64,
         idempotency_key: &str,
+        workspace: Option<&str>,
     ) -> PulseResult<(String, CoreReservation)> {
         let actor = runner_actor(role);
         let node = self.show_node(ticket_id)?;
@@ -397,7 +446,7 @@ impl JsonGraphStore {
             actor,
             runtime_binding: RuntimeBinding {
                 project_id: reserved.reservation.subject.ticket_id.clone(),
-                workspace_id: "checkout".to_string(),
+                workspace_id: workspace.unwrap_or("checkout").to_string(),
                 session_id: session_id.clone(),
                 provider_id: format!("runner:{role}"),
             },
@@ -610,6 +659,33 @@ impl JsonGraphStore {
             },
         }
     }
+
+    /// Decide where this worker run executes: the checkout by default, or a
+    /// Pulse-created worktree when another Ticket holds a live lease (auto)
+    /// or the operator forces worktree isolation.
+    fn decide_workspace(
+        &self,
+        ticket_id: &str,
+        forced_worktree: bool,
+        auto_isolation: bool,
+    ) -> PulseResult<Option<String>> {
+        if !forced_worktree {
+            let foreign_live = has_live_foreign_lease(&self.repo_root, ticket_id)?;
+            if !foreign_live {
+                return Ok(None);
+            }
+            if !auto_isolation {
+                return Err(PulseError::validation(
+                    "run_isolation_refused",
+                    format!(
+                        "another Ticket holds a live lease and auto_isolation is disabled; run {ticket_id} later or pass --isolation worktree"
+                    ),
+                ));
+            }
+        }
+        let relative = ensure_ticket_worktree(&self.repo_root, ticket_id)?;
+        Ok(Some(relative))
+    }
 }
 
 struct RunClassification {
@@ -645,11 +721,147 @@ pub struct RunRecord {
     pub status: String,
     pub inconclusive_reason: Option<String>,
     pub summary: Option<String>,
+    /// Last 512 bytes of captured stderr when the run was inconclusive.
+    pub stderr_tail: Option<String>,
     pub exit_code: Option<i32>,
     pub timed_out: bool,
     pub cancelled: bool,
     pub started_at: String,
     pub finished_at: String,
+}
+
+/// Root of Pulse-owned per-Ticket worktrees (gitignored).
+pub const WORKTREES_DIR: &str = ".pulse/runtime/worktrees";
+
+/// Whether any Ticket other than `ticket_id` holds a live lease.
+fn has_live_foreign_lease(repo_root: &Path, ticket_id: &str) -> PulseResult<bool> {
+    let directory = repo_root.join(".pulse/runtime/assignment/reservations");
+    if !directory.exists() {
+        return Ok(false);
+    }
+    let entries = fs::read_dir(&directory).map_err(|error| PulseError::io(&directory, error))?;
+    for entry in entries {
+        let path = entry
+            .map_err(|error| PulseError::io(&directory, error))?
+            .path();
+        if path.extension().and_then(|ext| ext.to_str()) != Some("json") {
+            continue;
+        }
+        let bytes = fs::read(&path).map_err(|error| PulseError::io(&path, error))?;
+        let reservation: CoreReservation =
+            serde_json::from_slice(&bytes).map_err(|error| PulseError::json(&path, error))?;
+        if reservation.subject.ticket_id != ticket_id
+            && matches!(
+                reservation.state,
+                ReservationState::Reserved
+                    | ReservationState::Acknowledged
+                    | ReservationState::Active
+            )
+        {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+/// Relative workspace id for a Ticket's Pulse-owned worktree.
+fn ticket_worktree_rel(ticket_id: &str) -> String {
+    format!("{WORKTREES_DIR}/{ticket_id}")
+}
+
+/// Create (or reuse) the Pulse-owned detached worktree for a Ticket.
+fn ensure_ticket_worktree(repo_root: &Path, ticket_id: &str) -> PulseResult<String> {
+    let relative = ticket_worktree_rel(ticket_id);
+    let absolute = repo_root.join(&relative);
+    if absolute.exists() {
+        // Reuse a worktree from an earlier run of the same Ticket.
+        if git_ok(repo_root, &["worktree", "list", "--porcelain"])?
+            .contains(&absolute.to_string_lossy().to_string())
+        {
+            return Ok(relative);
+        }
+        // A stale plain directory is Pulse-owned runtime state; replace it.
+        fs::remove_dir_all(&absolute).map_err(|error| PulseError::io(&absolute, error))?;
+    }
+    if let Some(parent) = absolute.parent() {
+        fs::create_dir_all(parent).map_err(|error| PulseError::io(parent, error))?;
+    }
+    let output = Command::new("git")
+        .current_dir(repo_root)
+        .args(["worktree", "add", "--detach"])
+        .arg(&absolute)
+        .output()
+        .map_err(|error| PulseError::io(repo_root, error))?;
+    if !output.status.success() {
+        return Err(PulseError::validation(
+            "run_worktree_unavailable",
+            format!(
+                "git worktree add failed: {}",
+                String::from_utf8_lossy(&output.stderr).trim()
+            ),
+        ));
+    }
+    // Ownership marker: only worktrees Pulse created (and marked) are ever
+    // removed by cleanup.
+    let marker = absolute.join(".pulse-owned");
+    fs::write(&marker, b"created by pulse run\n")
+        .map_err(|error| PulseError::io(&marker, error))?;
+    Ok(relative)
+}
+
+/// Remove a Pulse-owned worktree after its Ticket reached a terminal state.
+/// Only worktrees that are (a) under the Pulse worktrees root for this
+/// Ticket and (b) registered with Git are ever removed; foreign directories
+/// and worktrees are never touched.
+pub(crate) fn cleanup_ticket_worktree(repo_root: &Path, ticket_id: &str) -> PulseResult<()> {
+    let relative = ticket_worktree_rel(ticket_id);
+    let absolute = repo_root.join(&relative);
+    if !absolute.exists() {
+        return Ok(());
+    }
+    let registered = git_ok(repo_root, &["worktree", "list", "--porcelain"])?
+        .contains(&absolute.to_string_lossy().to_string());
+    let owned = absolute.join(".pulse-owned").exists();
+    if !registered || !owned {
+        // Not ours (foreign worktree, or no longer a Git worktree): leave it
+        // alone.
+        return Ok(());
+    }
+    let output = Command::new("git")
+        .current_dir(repo_root)
+        .args(["worktree", "remove", "--force"])
+        .arg(&absolute)
+        .output()
+        .map_err(|error| PulseError::io(repo_root, error))?;
+    if !output.status.success() {
+        return Err(PulseError::validation(
+            "run_worktree_cleanup_failed",
+            format!(
+                "git worktree remove failed: {}",
+                String::from_utf8_lossy(&output.stderr).trim()
+            ),
+        ));
+    }
+    Ok(())
+}
+
+fn git_ok(repo_root: &Path, args: &[&str]) -> PulseResult<String> {
+    let output = Command::new("git")
+        .current_dir(repo_root)
+        .args(args)
+        .output()
+        .map_err(|error| PulseError::io(repo_root, error))?;
+    if !output.status.success() {
+        return Err(PulseError::validation(
+            "run_worktree_unavailable",
+            format!(
+                "git {} failed: {}",
+                args.first().unwrap_or(&""),
+                String::from_utf8_lossy(&output.stderr).trim()
+            ),
+        ));
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).to_string())
 }
 
 /// Find the handoff proof bound to `lease_id`, if any.

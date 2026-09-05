@@ -397,6 +397,11 @@ impl JsonGraphStore {
             payload: json!({"lease_id": lease_id, "reason": reason}),
             failpoint: self.failpoint,
         })?;
+        // Best-effort worktree reclaim: the runtime plane is disposable and
+        // the guard only ever removes Pulse-owned registered worktrees, so a
+        // failure here never invalidates the release itself.
+        let _ =
+            crate::kernel::run::cleanup_ticket_worktree(&self.repo_root, &before.subject.ticket_id);
         Ok(after)
     }
 

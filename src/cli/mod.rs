@@ -11,6 +11,8 @@ mod work;
 
 use clap::Parser;
 
+use self::args::IsolationArg;
+
 pub use args::Cli;
 pub use output::print_error;
 
@@ -50,6 +52,7 @@ pub fn run(cli: Cli) -> Result<(), PulseError> {
             ticket,
             ttl_seconds,
             idempotency_key,
+            isolation,
             json,
         } => run::handle(
             &store,
@@ -61,6 +64,7 @@ pub fn run(cli: Cli) -> Result<(), PulseError> {
             } else {
                 idempotency_key
             },
+            matches!(isolation, IsolationArg::Worktree),
             json,
         ),
     }

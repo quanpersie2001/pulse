@@ -10,6 +10,8 @@
 mod cli_run;
 #[path = "common/bin.rs"]
 mod common_bin;
+#[path = "runner/isolation.rs"]
+mod isolation;
 // The shared fixture helpers cover several crates; the runner crate uses a
 // subset, so unused helpers are expected here.
 #[allow(dead_code)]
