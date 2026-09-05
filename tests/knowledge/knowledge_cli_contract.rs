@@ -1002,3 +1002,78 @@ fn applicable_buckets_share_the_packet_logic() {
     assert_eq!(out["required"].as_array().unwrap().len(), 0);
     assert_eq!(out["suggested"].as_array().unwrap().len(), 0);
 }
+
+#[test]
+fn re_promotion_moves_the_target_and_retires_the_old_relation() {
+    let (repo, _work, learning_id, doc_path) = promotion_setup();
+
+    // First promotion lands in the registry document.
+    run_ok(
+        &repo,
+        &[
+            "knowledge",
+            "promote",
+            &learning_id,
+            "--document",
+            "DOC-PROMOTION-TARGET",
+            "--insert-after",
+            "Guidance",
+            "--actor",
+            "human:test",
+            "--json",
+        ],
+    );
+    fs::write(
+        repo.path().join("AGENTS.md"),
+        "# Repository map\n\n## Constraints\n\nBe careful.\n",
+    )
+    .unwrap();
+
+    // Re-promotion moves the learning to AGENTS.md: the doc block lands
+    // there, the old promoted_to relation is retired, exactly one remains.
+    let out = run_ok(
+        &repo,
+        &[
+            "knowledge",
+            "promote",
+            &learning_id,
+            "--agents-md",
+            "--insert-after",
+            "Constraints",
+            "--actor",
+            "human:test",
+            "--json",
+        ],
+    );
+    assert_eq!(out["code"], "promoted");
+    assert_eq!(out["target_path"], "AGENTS.md");
+    let agents = fs::read_to_string(repo.path().join("AGENTS.md")).unwrap();
+    assert!(agents.contains(out["inserted_block"].as_str().unwrap()));
+
+    let shown = run_ok(&repo, &["knowledge", "show", &learning_id, "--json"]);
+    assert_eq!(shown["learning"]["status"], "promoted");
+    let relations = shown["relations"].as_array().unwrap();
+    let promoted: Vec<&Value> = relations
+        .iter()
+        .filter(|relation| relation["type"] == "promoted_to")
+        .collect();
+    assert_eq!(promoted.len(), 1, "exactly one live promotion");
+    assert_eq!(promoted[0]["to"]["id"], "AGENTS.md");
+    // The relation pointing at the old document is gone from disk.
+    let relation_files: Vec<_> = fs::read_dir(repo.path().join(".pulse/knowledge/relations"))
+        .unwrap()
+        .collect();
+    let live = relation_files
+        .iter()
+        .filter(|entry| {
+            entry
+                .as_ref()
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .contains("promoted-to")
+        })
+        .count();
+    assert_eq!(live, 1, "the retired relation file must be deleted");
+    let _ = doc_path;
+}

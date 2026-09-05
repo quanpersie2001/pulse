@@ -585,11 +585,18 @@ impl KnowledgeStore {
         let before_hash = hash_bytes(&before_bytes);
         let mut learning: Learning =
             serde_json::from_slice(&before_bytes).map_err(|e| PulseError::json(&path, e))?;
-        if learning.status != LearningStatus::Validated {
+        // Re-promotion (Decision 13.4): a promoted learning can move to a new
+        // target; its previous promoted_to relations are retired in the same
+        // transaction so exactly one promotion target stays current.
+        let from_status = learning.status;
+        let mut retired_relation_ids: Vec<String> = Vec::new();
+        if learning.status == LearningStatus::Promoted {
+            retired_relation_ids = learning.promotion.relation_ids.clone();
+        } else if learning.status != LearningStatus::Validated {
             return Err(PulseError::validation(
                 "knowledge_transition_invalid",
                 format!(
-                    "only validated learnings can be promoted; {} is {:?}",
+                    "only validated or promoted learnings can be promoted; {} is {:?}",
                     learning.id, learning.status
                 ),
             ));
@@ -718,18 +725,17 @@ impl KnowledgeStore {
         }
         learning.promotion.state = PromotionState::Promoted;
         learning.promotion.rationale = args.rationale;
+        // Missing retired ids are tolerated: the promotion list is replaced
+        // wholesale below either way.
+        for retired in &retired_relation_ids {
+            relations.remove(retired);
+        }
         relations.insert(relation.id.clone(), relation.clone());
         learning.status = LearningStatus::Promoted;
         learning.revision += 1;
         learning.updated_at = ctx.now;
         learning.normalize();
-        learning.promotion.relation_ids = learning
-            .promotion
-            .relation_ids
-            .iter()
-            .cloned()
-            .chain(std::iter::once(relation.id.clone()))
-            .collect();
+        learning.promotion.relation_ids = vec![relation.id.clone()];
         crate::knowledge::validate::validate_learning_for_transition(
             &self.repo_root,
             &learning,
@@ -758,6 +764,23 @@ impl KnowledgeStore {
             },
             &relation_bytes,
         ));
+        for retired in &retired_relation_ids {
+            let retired_path = self.relation_path(retired);
+            if !retired_path.exists() {
+                continue;
+            }
+            let retired_bytes =
+                fs::read(&retired_path).map_err(|error| PulseError::io(&retired_path, error))?;
+            targets.push(TransactionTarget::new(
+                retired_path,
+                FileState::Present {
+                    hash: hash_bytes(&retired_bytes),
+                    revision: 1,
+                },
+                FileState::Absent,
+                &[],
+            ));
+        }
         let event = EventEnvelope::new(
             new_event_id(),
             "knowledge.learning.transitioned",
@@ -765,7 +788,7 @@ impl KnowledgeStore {
             &learning.id,
             json!({
                 "learning_id": learning.id,
-                "from": "validated",
+                "from": from_status,
                 "to": "promoted",
                 "revision_after": learning.revision,
                 "hash_after": hash_bytes(&learning_after),
