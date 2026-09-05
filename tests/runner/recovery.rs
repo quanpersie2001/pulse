@@ -11,7 +11,7 @@ use std::fs;
 
 use serde_json::Value;
 
-use crate::cli_run::{install_worker_script, node_status, setup_ready_ticket, ACTOR};
+use crate::cli_run::{install_worker_script, node_status, run_outcome, setup_ready_ticket, ACTOR};
 use crate::common_fixture_repo::TestRepo;
 use crate::common_git::commit_all;
 
@@ -224,4 +224,62 @@ fn drifted_packet_needs_explicit_acknowledge_even_when_ready_again() {
         out["lease_id"].as_str().unwrap(),
         reserved.reservation.lease_id.as_str()
     );
+}
+
+#[test]
+fn release_demotes_stale_verifying_ticket_to_ready_for_a_fresh_cycle() {
+    let repo = TestRepo::from_fixture("minimal-service");
+    let ticket_id = setup_ready_ticket(&repo);
+    install_worker_script(
+        &repo,
+        r#"
+RUN_DIR="$(dirname "$1")"
+. "$RUN_DIR/worker-env"
+"$PULSE" work handoff --lease "$LEASE_ID" --session "$SESSION_ID" \
+  --source-commit "$SOURCE_COMMIT" --summary "did the work" \
+  --idempotency-key handoff-1 --json
+echo '{"status": "handed_off", "summary": "done"}'
+"#,
+    );
+    set_worker_command(&repo, "sh scripts/fake-worker.sh {input}");
+    let outcome = run_outcome(&repo, &ticket_id);
+    assert_eq!(outcome["status"], "handed_off");
+    assert_eq!(node_status(&repo, &ticket_id), "verifying");
+
+    // The tree changed after the handoff (operator edit), so the proof
+    // chain can never verify again. Release is the operator recovery: the
+    // lease is freed and the verifying Ticket returns to ready.
+    fs::write(repo.path().join("src/token.mjs"), b"operator edit\n").unwrap();
+    repo.pulse_ok(&[
+        "work",
+        "release",
+        &ticket_id,
+        "--actor",
+        ACTOR,
+        "--reason",
+        "proof chain stale after out-of-band tree change",
+        "--json",
+    ]);
+    assert_eq!(node_status(&repo, &ticket_id), "ready");
+
+    // A fresh worker cycle runs on a new lease and hands off cleanly.
+    install_worker_script(
+        &repo,
+        r#"
+RUN_DIR="$(dirname "$1")"
+. "$RUN_DIR/worker-env"
+"$PULSE" work handoff --lease "$LEASE_ID" --session "$SESSION_ID" \
+  --source-commit "$SOURCE_COMMIT" --summary "did the work again" \
+  --idempotency-key handoff-2 --json
+echo '{"status": "handed_off", "summary": "done"}'
+"#,
+    );
+    set_worker_command(&repo, "sh scripts/fake-worker.sh {input}");
+    let second = run_outcome(&repo, &ticket_id);
+    assert_eq!(second["status"], "handed_off");
+    assert_ne!(
+        second["lease_id"].as_str().unwrap(),
+        outcome["lease_id"].as_str().unwrap()
+    );
+    assert_eq!(node_status(&repo, &ticket_id), "verifying");
 }

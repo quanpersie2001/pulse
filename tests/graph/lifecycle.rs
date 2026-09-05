@@ -54,6 +54,10 @@ fn table_covers_every_from_to_expectation() {
         // Release: an active Ticket returns to ready through the reservation
         // release API (no gate family).
         (Active, Ready),
+        // Release recovery: a verifying Ticket whose proof chain went stale
+        // returns to ready through the same release API; the stale chain can
+        // never close because close binds the exact verified revision.
+        (Verifying, Ready),
     ];
     let gated = [
         (Draft, Shaped),

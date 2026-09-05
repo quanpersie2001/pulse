@@ -406,10 +406,13 @@ impl JsonGraphStore {
         Ok(after)
     }
 
-    /// Operator release: free whatever live lease a Ticket holds and return an
-    /// `active` Ticket to `ready` so it can be dispatched again. This is the
-    /// recovery path for a stuck, crashed or expired run — never an automatic
-    /// retry.
+    /// Operator release: free whatever live lease a Ticket holds and return
+    /// an `active` or `verifying` Ticket to `ready` so it can be dispatched
+    /// again. This is the recovery path for a stuck, crashed or expired run,
+    /// or for a verifying proof chain that went stale — never an automatic
+    /// retry. The stale handoff/verification chain stays as evidence but can
+    /// never gate a close again: close binds the exact verified revision and
+    /// a fresh cycle changes it.
     ///
     /// # Errors
     ///
@@ -429,7 +432,13 @@ impl JsonGraphStore {
         };
         let released = self.release_reservation(lease_id.as_str(), actor, reason)?;
         let node = self.show_node(ticket_id)?;
-        if node.status == NodeStatus::Active {
+        if matches!(node.status, NodeStatus::Active | NodeStatus::Verifying) {
+            // Recovery demotion: an active Ticket returns to ready, and a
+            // verifying Ticket whose proof chain went stale (crashed run,
+            // drifted tree) also returns to ready. The stale handoff stays
+            // as evidence but can never gate a close again: a fresh cycle
+            // changes the revision and close binds the exact verified
+            // revision.
             self.transition_node_with_context(
                 ticket_id,
                 NodeStatus::Ready,

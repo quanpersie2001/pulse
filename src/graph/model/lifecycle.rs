@@ -223,6 +223,7 @@ fn supported_targets(from: NodeStatus) -> Vec<NodeStatus> {
             NodeStatus::Cancelled,
         ],
         NodeStatus::Active => vec![NodeStatus::Ready],
+        NodeStatus::Verifying => vec![NodeStatus::Ready],
         NodeStatus::Rework => vec![NodeStatus::Active],
         NodeStatus::Blocked => vec![NodeStatus::Draft, NodeStatus::Shaped, NodeStatus::Cancelled],
         _ => vec![],
