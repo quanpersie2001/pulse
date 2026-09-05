@@ -13,6 +13,7 @@ pub mod knowledge;
 pub mod policy;
 pub mod qa;
 pub mod reservation;
+pub mod runner;
 pub mod source;
 pub mod storage;
 pub mod work_packet;
