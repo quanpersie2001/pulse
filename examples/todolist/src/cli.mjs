@@ -6,6 +6,7 @@ import {
   CompleteOutcome,
   addTodo,
   completeTodo,
+  completedTodos,
   createTodo,
   pendingTodos,
   removeTodo,
@@ -28,7 +29,7 @@ async function saveTodos(todos) {
 
 function usage() {
   console.error(
-    "usage: node src/cli.mjs add <id> <title> | list | done <id> | remove <id>",
+    "usage: node src/cli.mjs add <id> <title> | list | completed | done <id> | remove <id>",
   );
   process.exitCode = 2;
 }
@@ -47,6 +48,12 @@ switch (command) {
   }
   case "list": {
     for (const todo of pendingTodos(todos)) {
+      console.log(`${todo.id}\t${todo.title}`);
+    }
+    break;
+  }
+  case "completed": {
+    for (const todo of completedTodos(todos)) {
       console.log(`${todo.id}\t${todo.title}`);
     }
     break;

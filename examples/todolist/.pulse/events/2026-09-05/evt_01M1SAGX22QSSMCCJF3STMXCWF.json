@@ -1,0 +1,22 @@
+{
+  "actor": {
+    "id": "agent:runner:reviewer",
+    "kind": "agent"
+  },
+  "event_type": "run.completed",
+  "id": "evt_01M1SAGX22QSSMCCJF3STMXCWF",
+  "occurred_at": "2026-09-05T17:40:37.570912Z",
+  "payload": {
+    "inconclusive_reason": null,
+    "lease_id": null,
+    "role": "reviewer",
+    "run_record": ".pulse/runtime/run/TK-002/reviewer-outcome.json",
+    "status": "completed",
+    "ticket_id": "TK-002"
+  },
+  "schema_version": 1,
+  "subject": {
+    "id": "TK-002",
+    "kind": "resource"
+  }
+}

@@ -1,0 +1,18 @@
+{
+  "actor": {
+    "id": "quanpersie2001",
+    "kind": "human"
+  },
+  "event_type": "work.assignment.released",
+  "id": "evt_01M1SAK5A07W5JMBW5G3G61PEM",
+  "occurred_at": "2026-09-05T17:41:51.552685Z",
+  "payload": {
+    "lease_id": "lease_cbadad5e0e95bf58daf78f3925_g000002",
+    "reason": "ticket closed"
+  },
+  "schema_version": 1,
+  "subject": {
+    "id": "TK-002",
+    "kind": "ticket"
+  }
+}

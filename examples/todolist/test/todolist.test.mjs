@@ -4,6 +4,7 @@ import {
   CompleteOutcome,
   addTodo,
   completeTodo,
+  completedTodos,
   createTodo,
   findTodo,
   pendingTodos,
@@ -51,6 +52,24 @@ test("pendingTodos filters done items", () => {
     { id: "t2", title: "two", done: false },
   ];
   assert.deepEqual(pendingTodos(todos).map((todo) => todo.id), ["t2"]);
+});
+
+// TK-002 AC-1
+test("completedTodos keeps only done items in insertion order without mutating input", () => {
+  const todos = [
+    { id: "t1", title: "one", done: true },
+    { id: "t2", title: "two", done: false },
+    { id: "t3", title: "three", done: true },
+  ];
+  const snapshot = structuredClone(todos);
+  const completed = completedTodos(todos);
+  assert.deepEqual(completed.map((todo) => todo.id), ["t1", "t3"]);
+  assert.deepEqual(todos, snapshot);
+  assert.notEqual(completed, todos);
+});
+
+test("completedTodos returns an empty list when nothing is done", () => {
+  assert.deepEqual(completedTodos([createTodo("t1", "one")]), []);
 });
 
 // QA-001 / AC-1

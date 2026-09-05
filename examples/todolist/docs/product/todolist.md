@@ -10,6 +10,15 @@ User-visible behavior of the todolist CLI and domain module.
   `<id>\t<title>`.
 - `node src/cli.mjs remove <id>` drops the todo with that id.
 
+## Listing completed todos
+
+- `node src/cli.mjs completed` prints one done todo per line as
+  `<id>\t<title>`, in insertion order. Pending todos are not shown; a list
+  with no done todos prints nothing. Exit code is 0.
+- The domain module exposes the same filter as `completedTodos(todos)`,
+  which returns a new list of the done todos in insertion order and never
+  mutates its input.
+
 ## Completing todos
 
 - `node src/cli.mjs done <id>` marks the todo with that id as done in the

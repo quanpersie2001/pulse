@@ -20,11 +20,11 @@
       "rationale": "read-only listing; completion behavior itself is unchanged."
     }
   },
-  "revision": 6,
+  "revision": 11,
   "risk": "low",
   "role": "implementation",
   "schema_version": 1,
-  "status": "verifying",
+  "status": "done",
   "title": "List completed todos in the CLI",
-  "updated_at": "2026-09-05T17:14:40.333420Z"
+  "updated_at": "2026-09-05T17:41:51.483068Z"
 }

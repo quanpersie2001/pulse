@@ -33,6 +33,11 @@ export function pendingTodos(todos) {
   return todos.filter((todo) => !todo.done);
 }
 
+// Done todos in insertion order; the input list is never mutated.
+export function completedTodos(todos) {
+  return todos.filter((todo) => todo.done);
+}
+
 // Stable public outcome names for completeTodo. Renaming is human-gated.
 export const CompleteOutcome = Object.freeze({
   Completed: "Completed",

@@ -1,0 +1,26 @@
+{
+  "active_revision": 8,
+  "changed_paths": [
+    "docs/product/todolist.md",
+    "src/cli.mjs",
+    "src/todolist.mjs",
+    "test/todolist.test.mjs"
+  ],
+  "evidence_receipt_ids": [],
+  "handoff_fingerprint": "sha256:ee2a004416c76352dfb270029fc318f2020ab1fd1b301633fbd9bf3dbf0a5c29",
+  "handoff_id": "handoff_1059a86fc7bbee2ada741618a5",
+  "idempotency_key_hash": "sha256:1059a86fc7bbee2ada741618a5fc5c932fb62a3f0a0b68393954668b93c5df4e",
+  "lease_id": "lease_cbadad5e0e95bf58daf78f3925_g000002",
+  "project_id": "TK-002",
+  "recorded_at": "2026-09-05T17:38:18.504846+00:00",
+  "recorded_by": "agent:runner:worker",
+  "repository_id": "repo_01M1RWXYDW6Q0WT9J0NMA466BH",
+  "schema_version": 1,
+  "session_id": "run:rsv_cbadad5e0e95bf58daf78f3925_g000002",
+  "source_commit": "1903c00237ae17a727c6581fbd12f9927be947c5",
+  "source_dirty_hash": "sha256:87bffb05daaa5a1c24e24f586499e9200bccacb0c04393168ffe7be82971248e",
+  "summary": "Added completedTodos(todos) filter to src/todolist.mjs (done items in insertion order, input never mutated), wired a 'completed' command in src/cli.mjs printing <id>\\t<title> per done todo and listing it in usage, added unit tests for the filter (order, non-mutation, empty list), and documented 'Listing completed todos' in docs/product/todolist.md. Verified on lease g000002 at 1903c00: node scripts/verify.mjs passes 12/12; CLI run in a scratch dir shows 'completed' emits only done todos tab-separated in insertion order (od -c confirms \\t) and prints nothing with exit 0 when none are done, while 'list' still shows pending; pulse docs validate reports valid. AC-1 -> 'completedTodos keeps only done items in insertion order without mutating input' and 'completedTodos returns an empty list when nothing is done' tests plus the CLI run. Note: untracked Oops.rej.orig at repo root is a stray patch-reject artifact not created by this run; left untouched and not claimed.",
+  "ticket_id": "TK-002",
+  "verifying_revision": 9,
+  "workspace_id": "checkout"
+}
