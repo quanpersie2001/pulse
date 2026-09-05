@@ -73,7 +73,7 @@ pub fn content_source_binding_codes(
         if source_binding.kind != "git_commit" {
             codes.push("source_binding_stale".to_string());
         } else if let Some(expected) = source {
-            if expected != source_binding.commit {
+            if !crate::source::same_source_state(repo_root, expected, &source_binding.commit) {
                 codes.push("source_binding_stale".to_string());
             }
         } else {
