@@ -546,6 +546,11 @@ impl JsonGraphStore {
         // Terminal Ticket: reclaim the Pulse-owned worktree, if any. The
         // guard only removes registered worktrees under the Pulse root.
         let _ = crate::kernel::run::cleanup_ticket_worktree(&self.repo_root, &close.ticket_id);
+        // Done means the lease is gone (PRODUCT 5.5 close gate releases the
+        // lease): a terminal Ticket must never hold a live reservation, and
+        // a lingering active lease would force every other Ticket into
+        // worktree isolation.
+        self.release_reservation_under_lock(&close.lease_id, &args.actor, "ticket closed")?;
         Ok(close)
     }
 }

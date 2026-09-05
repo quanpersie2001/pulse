@@ -369,9 +369,34 @@ impl JsonGraphStore {
         let _guard = WriteGuard::acquire(&self.repo_root)?;
         authorize_assignment(&self.repo_root, actor, "work.assignment.release")?;
         recover_prepared_transactions(&self.repo_root)?;
+        match self.release_reservation_under_lock(lease_id, actor, reason)? {
+            Some(after) => {
+                // Best-effort worktree reclaim: the runtime plane is
+                // disposable and the guard only ever removes Pulse-owned
+                // registered worktrees, so a failure here never invalidates
+                // the release itself.
+                let _ = crate::kernel::run::cleanup_ticket_worktree(
+                    &self.repo_root,
+                    &after.subject.ticket_id,
+                );
+                Ok(after)
+            }
+            None => load_reservation(&self.repo_root, lease_id),
+        }
+    }
+
+    /// Reservation release for a caller that already holds the repository
+    /// fence and has authorized the operation. Returns `Ok(None)` when the
+    /// reservation was already released.
+    pub(crate) fn release_reservation_under_lock(
+        &self,
+        lease_id: &str,
+        actor: &str,
+        reason: &str,
+    ) -> Result<Option<CoreReservation>> {
         let before = load_reservation(&self.repo_root, lease_id)?;
         if before.state == ReservationState::Released {
-            return Ok(before);
+            return Ok(None);
         }
         if !matches!(
             before.state,
@@ -398,12 +423,7 @@ impl JsonGraphStore {
             payload: json!({"lease_id": lease_id, "reason": reason}),
             failpoint: self.failpoint,
         })?;
-        // Best-effort worktree reclaim: the runtime plane is disposable and
-        // the guard only ever removes Pulse-owned registered worktrees, so a
-        // failure here never invalidates the release itself.
-        let _ =
-            crate::kernel::run::cleanup_ticket_worktree(&self.repo_root, &before.subject.ticket_id);
-        Ok(after)
+        Ok(Some(after))
     }
 
     /// Operator release: free whatever live lease a Ticket holds and return
