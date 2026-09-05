@@ -1,0 +1,38 @@
+{
+  "actor": {
+    "id": "unknown",
+    "kind": "human"
+  },
+  "event_type": "work.node.created",
+  "id": "evt_01M1RY5VF1TN4MZ849XRCD8ZWJ",
+  "occurred_at": "2026-09-05T14:04:52.544760Z",
+  "payload": {
+    "node": {
+      "brief_hash": "sha256:300f72191254ff8a653bc346deaadd606306eb69ed4a60f9c4fd2c49ed00edd4",
+      "content_dir": "works/TK-001",
+      "contract_revision": 1,
+      "created_at": "2026-09-05T14:04:52.544760Z",
+      "id": "TK-001",
+      "kind": "ticket",
+      "materialization": "R1",
+      "qa": {
+        "impact": {
+          "posture": "unknown"
+        }
+      },
+      "revision": 1,
+      "risk": "medium",
+      "role": "implementation",
+      "schema_version": 1,
+      "status": "draft",
+      "title": "Implement reliable todo completion",
+      "updated_at": "2026-09-05T14:04:52.544760Z"
+    }
+  },
+  "schema_version": 1,
+  "subject": {
+    "id": "TK-001",
+    "kind": "ticket",
+    "revision": 1
+  }
+}

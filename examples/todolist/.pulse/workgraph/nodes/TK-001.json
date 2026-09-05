@@ -1,0 +1,35 @@
+{
+  "brief_hash": "sha256:ac52f23cf4c3add1548e508a88a36998d03acad7eb437c2d0114b5789d551f1b",
+  "content_dir": "works/TK-001",
+  "contract_revision": 2,
+  "created_at": "2026-09-05T14:04:52.544760Z",
+  "documentation": {
+    "impact": {
+      "posture": "required",
+      "required_documents": [
+        "DOC-TODOLIST-BEHAVIOR"
+      ]
+    }
+  },
+  "id": "TK-001",
+  "kind": "ticket",
+  "materialization": "R1",
+  "qa": {
+    "impact": {
+      "affected_case_ids": [
+        "QA-001",
+        "QA-002"
+      ],
+      "behavioral_owner": "ST-001",
+      "posture": "required",
+      "rationale": "new public behavior on the core list identity invariants."
+    }
+  },
+  "revision": 3,
+  "risk": "medium",
+  "role": "implementation",
+  "schema_version": 1,
+  "status": "shaped",
+  "title": "Implement reliable todo completion",
+  "updated_at": "2026-09-05T14:06:27.514931Z"
+}

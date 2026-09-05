@@ -1,0 +1,10 @@
+{
+  "created_at": "2026-09-05T14:04:52.619976Z",
+  "created_by": "human:unknown",
+  "from": "TK-001",
+  "id": "parent--TK-001--ST-001",
+  "revision": 1,
+  "schema_version": 1,
+  "to": "ST-001",
+  "type": "parent"
+}

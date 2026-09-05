@@ -1,0 +1,27 @@
+{
+  "actor": {
+    "id": "quannv",
+    "kind": "human"
+  },
+  "event_type": "work.contract.updated",
+  "id": "evt_01M1RY75QYZ2F5YKAVC9AXY6Y9",
+  "occurred_at": "2026-09-05T14:05:35.840099Z",
+  "payload": {
+    "brief_hash": "sha256:ac52f23cf4c3add1548e508a88a36998d03acad7eb437c2d0114b5789d551f1b",
+    "expected_revision": 1,
+    "gate_coverage": [
+      "ticket_brief_parse",
+      "node_revision_cas",
+      "brief_hash"
+    ],
+    "new_contract_revision": 2,
+    "new_revision": 2,
+    "ticket_id": "TK-001"
+  },
+  "schema_version": 1,
+  "subject": {
+    "id": "TK-001",
+    "kind": "ticket",
+    "revision": 2
+  }
+}
