@@ -450,7 +450,7 @@ fn worker_run_writes_exact_handoff_syntax_into_bootstrap_prompt() {
     let prompt = fs::read_to_string(run_dir.join("worker-prompt.md")).unwrap();
     // The exact, runnable handoff command with this run's facts filled in.
     assert!(prompt.contains(&format!(
-        "pulse --idempotency-key handoff:{ticket_id}:{lease_id} work handoff"
+        "pulse --idempotency-key handoff:{ticket_id}:{lease_id}-a1 work handoff"
     )));
     assert!(prompt.contains(&format!("--lease {lease_id}")));
     assert!(prompt.contains("--session "));

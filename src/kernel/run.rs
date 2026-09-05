@@ -1068,9 +1068,13 @@ fn worker_prompt(ticket_id: &str, lease_id: &str, session_id: &str, source_commi
          3. Implement. Do not change acceptance criteria. Do not run\n\
          `git commit` — leave changes in the working tree; the developer\n\
          commits after close.\n\
-         4. When done, record the handoff proof (edit the summary and paths):\n\
+         4. When done, record the handoff proof (edit the summary, paths and\n\
+         the attempt suffix; use -a1 the first time. If a handoff already\n\
+         exists for this lease, e.g. the run was resumed after the tree\n\
+         changed, use a fresh suffix such as -a2 so the new proof binds\n\
+         the current tree state):\n\
          \n\
-         pulse --idempotency-key handoff:{ticket_id}:{lease_id} work handoff \\\n\
+         pulse --idempotency-key handoff:{ticket_id}:{lease_id}-a1 work handoff \\\n\
            --lease {lease_id} \\\n\
            --session {session_id} \\\n\
            --source-commit {source_commit} \\\n\
