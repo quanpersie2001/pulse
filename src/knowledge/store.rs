@@ -544,6 +544,249 @@ impl KnowledgeStore {
         })
     }
 
+    /// Promote a validated learning by inserting its content into a target
+    /// document (Decision 13.4): the text block built from summary and
+    /// guidance is inserted after the given heading, the document is written,
+    /// and only then is the `promoted_to` relation recorded bound to the
+    /// document's NEW content hash. A promotion that would leave the target
+    /// byte-identical (e.g. the block is already present) fails with
+    /// `promotion_target_unchanged`. `dry_run` reports the proposed insertion
+    /// without writing or transitioning.
+    pub fn promote_learning(
+        &self,
+        args: PromoteArgs<'_>,
+        ctx: OperationContext,
+    ) -> PulseResult<PromoteOutcome> {
+        let _guard = WriteGuard::acquire(&self.repo_root)?;
+        let _manifest = bootstrap_unlocked(&self.repo_root)?.manifest;
+        recover_prepared_transactions(&self.repo_root)?;
+        let (_entries, mut relations) = load_records(&self.repo_root)?;
+        let path = self.entry_path(args.learning_id);
+        if !path.exists() {
+            return Err(PulseError::validation(
+                "learning_not_found",
+                format!("learning not found: {}", args.learning_id),
+            ));
+        }
+        let before_bytes = fs::read(&path).map_err(|e| PulseError::io(&path, e))?;
+        let before_hash = hash_bytes(&before_bytes);
+        let mut learning: Learning =
+            serde_json::from_slice(&before_bytes).map_err(|e| PulseError::json(&path, e))?;
+        if learning.status != LearningStatus::Validated {
+            return Err(PulseError::validation(
+                "knowledge_transition_invalid",
+                format!(
+                    "only validated learnings can be promoted; {} is {:?}",
+                    learning.id, learning.status
+                ),
+            ));
+        }
+
+        // Resolve the target file and relation endpoint identity.
+        let (target_path, endpoint_id, endpoint_revision) = match &args.target {
+            PromoteTarget::Document(doc_id) => {
+                let registry: crate::docs::model::DocsRegistryEnvelope =
+                    crate::storage::read_json(&self.repo_root.join(".pulse/docs/registry.json"))
+                        .map_err(|_| {
+                            PulseError::validation(
+                                "knowledge_relation_endpoint_missing",
+                                "target document missing",
+                            )
+                        })?;
+                let doc = registry
+                    .documents
+                    .iter()
+                    .find(|doc| &doc.id == doc_id)
+                    .ok_or_else(|| {
+                        PulseError::validation(
+                            "knowledge_relation_endpoint_missing",
+                            format!("target document missing: {doc_id}"),
+                        )
+                    })?;
+                (
+                    self.repo_root.join(&doc.path),
+                    doc.id.clone(),
+                    Some(doc.revision),
+                )
+            }
+            PromoteTarget::AgentsMd => (
+                self.repo_root.join("AGENTS.md"),
+                "AGENTS.md".to_string(),
+                None,
+            ),
+        };
+        let target_bytes =
+            fs::read(&target_path).map_err(|error| PulseError::io(&target_path, error))?;
+        let target_text = String::from_utf8(target_bytes.clone()).map_err(|_| {
+            PulseError::validation(
+                "promotion_target_invalid",
+                "promotion target must be UTF-8 markdown",
+            )
+        })?;
+
+        let block = promotion_block(&learning);
+        let heading_line = find_heading_line(&target_text, args.insert_after)?;
+        // Insert below the heading and its blank-line separator so the block
+        // opens the heading's section.
+        let mut insert_at = heading_line + 1;
+        let lines: Vec<&str> = target_text.lines().collect();
+        while insert_at < lines.len() && lines[insert_at].trim().is_empty() {
+            insert_at += 1;
+        }
+        if target_text.contains(&block) {
+            return Err(PulseError::validation(
+                "promotion_target_unchanged",
+                format!(
+                    "{} already contains the promotion block for {}; nothing to insert",
+                    target_path.display(),
+                    learning.id
+                ),
+            ));
+        }
+        let updated = insert_after_line(&target_text, insert_at.saturating_sub(1), &block);
+        let line_of_block = target_text[..target_text
+            .lines()
+            .take(insert_at)
+            .map(|line| line.len() + 1)
+            .sum::<usize>()]
+            .lines()
+            .count() as u64
+            + 1;
+        if args.dry_run {
+            return Ok(PromoteOutcome {
+                schema_version: 1,
+                code: "promotion_dry_run".to_string(),
+                dry_run: true,
+                learning_id: learning.id.clone(),
+                target_path: target_path
+                    .strip_prefix(&self.repo_root)
+                    .map(|path| path.to_string_lossy().to_string())
+                    .unwrap_or_else(|_| target_path.display().to_string()),
+                insert_after: args.insert_after.to_string(),
+                inserted_at_line: line_of_block,
+                inserted_block: block,
+                target_content_hash: hash_bytes(updated.as_bytes()),
+            });
+        }
+
+        // The promotion must change the target document (Decision 13.4).
+        crate::storage::atomic_write(&target_path, updated.as_bytes())?;
+        let after_bytes =
+            fs::read(&target_path).map_err(|error| PulseError::io(&target_path, error))?;
+        let hash_after = hash_bytes(&after_bytes);
+        if hash_after == hash_bytes(&target_bytes) {
+            return Err(PulseError::validation(
+                "promotion_target_unchanged",
+                format!(
+                    "writing {} did not change its content; refusing to record a promotion",
+                    target_path.display()
+                ),
+            ));
+        }
+
+        let relation = KnowledgeRelation::new(
+            RelationType::PromotedTo,
+            learning.id.clone(),
+            Endpoint {
+                kind: EndpointKind::Document,
+                id: endpoint_id,
+                revision: endpoint_revision,
+                content_hash: Some(hash_after.clone()),
+            },
+            ctx.now,
+            ctx.actor.clone(),
+        )?;
+        self.validate_new_relation_endpoint(&relation)?;
+        if self.relation_path(&relation.id).exists() {
+            return Err(PulseError::validation(
+                "knowledge_relation_conflict",
+                format!("relation already exists: {}", relation.id),
+            ));
+        }
+        learning.promotion.state = PromotionState::Promoted;
+        learning.promotion.rationale = args.rationale;
+        relations.insert(relation.id.clone(), relation.clone());
+        learning.status = LearningStatus::Promoted;
+        learning.revision += 1;
+        learning.updated_at = ctx.now;
+        learning.normalize();
+        learning.promotion.relation_ids = learning
+            .promotion
+            .relation_ids
+            .iter()
+            .cloned()
+            .chain(std::iter::once(relation.id.clone()))
+            .collect();
+        crate::knowledge::validate::validate_learning_for_transition(
+            &self.repo_root,
+            &learning,
+            &relations,
+        )?;
+        let learning_after = to_canonical_bytes(&learning)?;
+        let relation_bytes = to_canonical_bytes(&relation)?;
+        let mut targets = vec![TransactionTarget::new(
+            path,
+            FileState::Present {
+                hash: before_hash,
+                revision: learning.revision - 1,
+            },
+            FileState::Present {
+                hash: hash_bytes(&learning_after),
+                revision: learning.revision,
+            },
+            &learning_after,
+        )];
+        targets.push(TransactionTarget::new(
+            self.relation_path(&relation.id),
+            FileState::Absent,
+            FileState::Present {
+                hash: hash_bytes(&relation_bytes),
+                revision: 1,
+            },
+            &relation_bytes,
+        ));
+        let event = EventEnvelope::new(
+            new_event_id(),
+            "knowledge.learning.transitioned",
+            ctx.actor.clone(),
+            &learning.id,
+            json!({
+                "learning_id": learning.id,
+                "from": "validated",
+                "to": "promoted",
+                "revision_after": learning.revision,
+                "hash_after": hash_bytes(&learning_after),
+                "relations": [relation.id],
+                "promotion_target_hash": hash_after,
+            }),
+            ctx.now,
+        );
+        let intent = MultiTargetTransactionIntent::prepared(
+            event.id.clone(),
+            "knowledge.learning.transitioned",
+            ctx.actor,
+            targets,
+            event_path(&self.repo_root, &event),
+            serde_json::to_value(event)?,
+        )?;
+        let prepared = prepare_multi_target_transaction(&self.repo_root, intent)?;
+        commit_prepared_multi_target_transaction(&prepared, self.failpoint)?;
+        Ok(PromoteOutcome {
+            schema_version: 1,
+            code: "promoted".to_string(),
+            dry_run: false,
+            learning_id: learning.id.clone(),
+            target_path: target_path
+                .strip_prefix(&self.repo_root)
+                .map(|path| path.to_string_lossy().to_string())
+                .unwrap_or_else(|_| target_path.display().to_string()),
+            insert_after: args.insert_after.to_string(),
+            inserted_at_line: line_of_block,
+            inserted_block: block,
+            target_content_hash: hash_after,
+        })
+    }
+
     pub fn add_relation(
         &self,
         learning_id: &str,
@@ -799,25 +1042,34 @@ impl KnowledgeStore {
                 self.ensure_revision_match(relation.to.revision, node.revision)?;
             }
             EndpointKind::Document => {
-                let registry: crate::docs::model::DocsRegistryEnvelope =
-                    crate::storage::read_json(&self.repo_root.join(".pulse/docs/registry.json"))
-                        .map_err(|_| {
-                            PulseError::validation(
+                let registered =
+                    crate::storage::read_json::<crate::docs::model::DocsRegistryEnvelope>(
+                        self.repo_root.join(".pulse/docs/registry.json").as_path(),
+                    )
+                    .ok()
+                    .and_then(|registry| {
+                        registry
+                            .documents
+                            .iter()
+                            .find(|doc| doc.id == relation.to.id)
+                            .map(|doc| doc.revision)
+                    });
+                match registered {
+                    Some(doc_revision) => {
+                        self.ensure_revision_match(relation.to.revision, doc_revision)?
+                    }
+                    // A document outside the registry (e.g. the repository
+                    // map AGENTS.md) resolves as a repository file.
+                    None => {
+                        let path = self.repo_root.join(&relation.to.id);
+                        if !path.is_file() {
+                            return Err(PulseError::validation(
                                 "knowledge_relation_endpoint_missing",
                                 "target document missing",
-                            )
-                        })?;
-                let Some(doc) = registry
-                    .documents
-                    .iter()
-                    .find(|doc| doc.id == relation.to.id)
-                else {
-                    return Err(PulseError::validation(
-                        "knowledge_relation_endpoint_missing",
-                        "target document missing",
-                    ));
-                };
-                self.ensure_revision_match(relation.to.revision, doc.revision)?;
+                            ));
+                        }
+                    }
+                }
             }
             EndpointKind::Receipt => {
                 let (_receipt, hash) =
@@ -1014,4 +1266,125 @@ fn apply_patch(learning: &mut Learning, patch: LearningPatch, now: DateTime<Utc>
         learning.updated_at = now;
     }
     changed
+}
+
+/// Promotion target: a registry document or the repository map.
+#[derive(Debug, Clone)]
+pub enum PromoteTarget {
+    Document(String),
+    AgentsMd,
+}
+
+/// Arguments for [`KnowledgeStore::promote_learning`].
+#[derive(Debug, Clone)]
+pub struct PromoteArgs<'a> {
+    pub learning_id: &'a str,
+    pub target: PromoteTarget,
+    /// Heading whose section the promotion block is inserted under.
+    pub insert_after: &'a str,
+    pub dry_run: bool,
+    pub rationale: Option<String>,
+}
+
+/// Result of one `knowledge promote` invocation.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct PromoteOutcome {
+    pub schema_version: u32,
+    pub code: String,
+    pub dry_run: bool,
+    pub learning_id: String,
+    pub target_path: String,
+    pub insert_after: String,
+    /// 1-based line where the inserted block starts.
+    pub inserted_at_line: u64,
+    pub inserted_block: String,
+    /// Content hash of the target document after the insertion.
+    pub target_content_hash: String,
+}
+
+/// The deterministic markdown block a promotion inserts: title, summary and
+/// the guidance bullets of the learning.
+fn promotion_block(learning: &Learning) -> String {
+    let mut lines = vec![format!(
+        "- **{} — {}**: {}",
+        learning.id, learning.title, learning.summary
+    )];
+    for item in &learning.guidance.r#do {
+        lines.push(format!("  - Do: {item}"));
+    }
+    for item in &learning.guidance.avoid {
+        lines.push(format!("  - Avoid: {item}"));
+    }
+    for item in &learning.guidance.required_checks {
+        lines.push(format!("  - Check: {item}"));
+    }
+    lines.join("\n")
+}
+
+/// Find the unique ATX heading matching `needle`: exact heading-text match
+/// first, then unique substring containment. Errors name the ambiguity.
+fn find_heading_line(text: &str, needle: &str) -> PulseResult<usize> {
+    let needle = needle.trim();
+    if needle.is_empty() {
+        return Err(PulseError::validation(
+            "promotion_target_heading_missing",
+            "insert-after heading must not be empty",
+        ));
+    }
+    let headings = text
+        .lines()
+        .enumerate()
+        .filter_map(|(index, line)| {
+            let text = line.trim().strip_prefix('#')?.trim_start();
+            Some((index, text.to_ascii_lowercase()))
+        })
+        .collect::<Vec<_>>();
+    let exact: Vec<usize> = headings
+        .iter()
+        .filter(|(_, text)| text == &needle.to_ascii_lowercase())
+        .map(|(index, _)| *index)
+        .collect();
+    let matches = if exact.len() == 1 {
+        exact
+    } else {
+        let partial: Vec<usize> = headings
+            .iter()
+            .filter(|(_, text)| text.contains(&needle.to_ascii_lowercase()))
+            .map(|(index, _)| *index)
+            .collect();
+        match partial.len() {
+            0 => {
+                return Err(PulseError::validation(
+                    "promotion_target_heading_missing",
+                    format!("no heading matches {needle:?}"),
+                ))
+            }
+            1 => partial,
+            _ => {
+                return Err(PulseError::validation(
+                    "promotion_target_heading_ambiguous",
+                    format!(
+                        "{partial_len} headings match {needle:?}; use a longer heading",
+                        partial_len = partial.len()
+                    ),
+                ))
+            }
+        }
+    };
+    Ok(matches[0])
+}
+
+/// Insert `block` (plus one separating blank line) after 0-based `line`.
+fn insert_after_line(text: &str, line: usize, block: &str) -> String {
+    let mut lines: Vec<&str> = text.lines().collect();
+    let at = (line + 1).min(lines.len());
+    let mut block_lines: Vec<&str> = block.lines().collect();
+    block_lines.push("");
+    lines.splice(at..at, block_lines);
+    let mut out = lines.join("\n");
+    if !out.ends_with('\n') {
+        out.push('\n');
+    }
+    out
 }

@@ -443,7 +443,11 @@ fn capture_validate_promote_ratchet_lifecycle() {
     let _ = head;
     let _ = repository_id;
     fs::create_dir_all(repo.path().join("docs/product")).unwrap();
-    fs::write(repo.path().join("docs/product/x.md"), "doc body\n").unwrap();
+    fs::write(
+        repo.path().join("docs/product/x.md"),
+        "# Example\n\n## Guidance\n\ndoc body\n",
+    )
+    .unwrap();
     let record = write_json(
         &repo.path().join("doc-record.json"),
         &json!({
@@ -481,6 +485,8 @@ fn capture_validate_promote_ratchet_lifecycle() {
             "LRN-001",
             "--document",
             "DOC-EXAMPLE",
+            "--insert-after",
+            "Guidance",
             "--rationale",
             "belongs in the behavior contract",
             "--actor",
@@ -488,9 +494,19 @@ fn capture_validate_promote_ratchet_lifecycle() {
             "--json",
         ],
     );
-    assert_eq!(promoted["value"]["status"], "promoted");
-    assert_eq!(promoted["value"]["promotion"]["state"], "promoted");
-    assert_eq!(promoted["relations"].as_array().unwrap().len(), 1);
+    assert_eq!(promoted["code"], "promoted");
+    let shown_after = run_ok(&repo, &["knowledge", "show", "LRN-001", "--json"]);
+    assert_eq!(shown_after["learning"]["status"], "promoted");
+    assert_eq!(shown_after["learning"]["promotion"]["state"], "promoted");
+    // show lists every relation touching the learning: the derived_from
+    // provenance from capture plus the new promoted_to.
+    let relations = shown_after["relations"].as_array().unwrap();
+    assert_eq!(relations.len(), 2);
+    assert!(relations
+        .iter()
+        .any(|relation| relation["type"] == "promoted_to"));
+    let doc_after = fs::read_to_string(repo.path().join("docs/product/x.md")).unwrap();
+    assert!(doc_after.contains("## Guidance\n\n- **LRN-001"));
 
     // Illegal transitions are refused.
     let illegal = run_err(
@@ -507,4 +523,325 @@ fn capture_validate_promote_ratchet_lifecycle() {
         ],
     );
     assert_eq!(illegal["code"], "knowledge_transition_invalid");
+}
+
+fn validated_learning(repo: &TempDir, work_id: &str, title: &str, scope: Option<&str>) -> String {
+    let shown = run_ok(repo, &["work", "show", work_id, "--json"]);
+    let revision = shown["node"]["revision"].as_u64().unwrap();
+    let mut draft = json!({
+        "title": title,
+        "kind": "failure_pattern",
+        "severity": "medium",
+        "summary": "Promotion needs the target document to change.",
+        "guidance": {
+            "do": ["Insert after the chosen heading."],
+            "avoid": [],
+            "required_checks": ["Re-read the promoted section."]
+        },
+        "applicability": {"paths": ["src/**"]},
+        "provenance_targets": [{
+            "relation": "derived_from",
+            "kind": "work",
+            "id": work_id,
+            "revision": revision,
+            "content_hash": null
+        }],
+        "source_commits": [],
+        "routing": null,
+        "promotion": null,
+        "freshness": null,
+        "trust": null,
+        "content": null
+    });
+    if let Some(scope) = scope {
+        draft["scope"] = json!(scope);
+    }
+    let draft_file = write_json(&repo.path().join("learning.json"), &draft);
+    let created = run_ok(
+        repo,
+        &[
+            "knowledge",
+            "create",
+            "--file",
+            &draft_file,
+            "--actor",
+            "human:test",
+            "--json",
+        ],
+    );
+    let learning_id = created["value"]["id"].as_str().unwrap().to_string();
+    let receipt = json!({
+        "schema_version": 1,
+        "receipt_version": 2,
+        "id": format!("rcpt_01J0000000000000000000000{}", if learning_id.ends_with('1') {"1"} else {"2"}),
+        "kind": "qa_checkpoint",
+        "result": "passed",
+        "actor": {"kind": "human", "id": "test"},
+        "recorded_at": "2026-09-06T00:00:00Z",
+        "subject": {"kind": "work", "id": work_id},
+        "bindings": {},
+        "payload": {
+            "payload_version": 1,
+            "qa_scope": "ticket_checkpoint",
+            "story_id": "ST-000",
+            "ticket_id": work_id,
+            "baseline_revision": 1,
+            "baseline_content_hash": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+            "cases": [{"case_id": "QA-001", "case_revision": 1, "outcome": "passed"}],
+            "executor": {"name": "t", "version": "1"},
+            "observations": ["observed"]
+        }
+    });
+    fs::create_dir_all(repo.path().join(".pulse/evidence/receipts")).unwrap();
+    fs::write(
+        repo.path()
+            .join(".pulse/evidence/receipts/rcpt_01J00000000000000000000001.json"),
+        serde_json::to_vec_pretty(&receipt).unwrap(),
+    )
+    .unwrap();
+    run_ok(
+        repo,
+        &[
+            "knowledge",
+            "validate-learning",
+            &learning_id,
+            "--evidence",
+            "rcpt_01J00000000000000000000001",
+            "--actor",
+            "human:test",
+            "--json",
+        ],
+    );
+    learning_id
+}
+
+fn promotion_setup() -> (TempDir, String, String, String) {
+    let (repo, work_id) = setup_repo();
+    let learning_id = validated_learning(&repo, &work_id, "Promotion lesson", None);
+    let doc_path = repo.path().join("docs/promotion-target.md");
+    fs::create_dir_all(doc_path.parent().unwrap()).unwrap();
+    fs::write(
+        &doc_path,
+        "# Promotion target\n\n## Guidance\n\nExisting guidance lives here.\n",
+    )
+    .unwrap();
+    let doc_record = json!({
+        "id": "DOC-PROMOTION-TARGET",
+        "revision": 1,
+        "path": "docs/promotion-target.md",
+        "kind": "domain",
+        "status": "approved",
+        "owner": "team:docs",
+        "summary": "Promotion target document",
+        "scope": {"paths": ["src/**"]},
+        "tags": [],
+        "generated": null,
+        "superseded_by": null
+    });
+    let record_file = write_json(&repo.path().join("doc-record.json"), &doc_record);
+    run_ok(
+        &repo,
+        &[
+            "docs",
+            "register",
+            "--file",
+            &record_file,
+            "--expected-registry-revision",
+            "1",
+            "--actor",
+            "human:test",
+            "--json",
+        ],
+    );
+    (repo, work_id, learning_id, doc_path.display().to_string())
+}
+
+#[test]
+fn promote_dry_run_reports_the_insertion_without_writing() {
+    let (repo, _work, learning_id, doc_path) = promotion_setup();
+    let before = fs::read_to_string(&doc_path).unwrap();
+
+    let out = run_ok(
+        &repo,
+        &[
+            "knowledge",
+            "promote",
+            &learning_id,
+            "--document",
+            "DOC-PROMOTION-TARGET",
+            "--insert-after",
+            "Guidance",
+            "--dry-run",
+            "--actor",
+            "human:test",
+            "--json",
+        ],
+    );
+    assert_eq!(out["code"], "promotion_dry_run");
+    assert_eq!(out["dry_run"], true);
+    assert_eq!(out["target_path"], "docs/promotion-target.md");
+    let block = out["inserted_block"].as_str().unwrap();
+    assert!(block.contains(&format!("- **{learning_id} — Promotion lesson**:")));
+    assert!(block.contains("- Do: Insert after the chosen heading."));
+    assert_eq!(fs::read_to_string(&doc_path).unwrap(), before);
+
+    // The learning is still validated, not promoted.
+    let shown = run_ok(&repo, &["knowledge", "show", &learning_id, "--json"]);
+    assert_eq!(shown["learning"]["status"], "validated");
+}
+
+#[test]
+fn promote_inserts_content_and_binds_the_new_hash() {
+    let (repo, _work, learning_id, doc_path) = promotion_setup();
+
+    let out = run_ok(
+        &repo,
+        &[
+            "knowledge",
+            "promote",
+            &learning_id,
+            "--document",
+            "DOC-PROMOTION-TARGET",
+            "--insert-after",
+            "Guidance",
+            "--actor",
+            "human:test",
+            "--json",
+        ],
+    );
+    assert_eq!(out["code"], "promoted");
+    assert_eq!(out["dry_run"], false);
+
+    let content = fs::read_to_string(&doc_path).unwrap();
+    let block = out["inserted_block"].as_str().unwrap();
+    assert!(content.contains(block), "doc must contain the block");
+    assert!(
+        content.contains("## Guidance\n"),
+        "insert after the heading"
+    );
+    let position = content.find("## Guidance\n").unwrap();
+    let block_position = content.find(block).unwrap();
+    assert!(block_position > position);
+
+    // The relation binds the NEW content hash of the document.
+    let shown = run_ok(&repo, &["knowledge", "show", &learning_id, "--json"]);
+    assert_eq!(shown["learning"]["status"], "promoted");
+    let relations = shown["relations"].as_array().unwrap();
+    let promoted_to = relations
+        .iter()
+        .find(|relation| relation["type"] == "promoted_to")
+        .expect("promoted_to relation recorded");
+    assert_eq!(promoted_to["to"]["kind"], "document");
+    assert_eq!(
+        promoted_to["to"]["content_hash"],
+        out["target_content_hash"]
+    );
+    let expected = sha256_hex(content.as_bytes());
+    assert_eq!(
+        promoted_to["to"]["content_hash"],
+        format!("sha256:{expected}")
+    );
+
+    // The store check passes with the promotion relation in place.
+    run_ok(&repo, &["knowledge", "validate", "--json"]);
+}
+
+#[test]
+fn promote_refuses_when_insertion_would_not_change_the_document() {
+    let (repo, _work, learning_id, doc_path) = promotion_setup();
+
+    // Pre-insert the exact deterministic block: the promotion would be a
+    // no-op, which Decision 13.4 refuses.
+    let block = format!(
+        "- **{learning_id} — Promotion lesson**: Promotion needs the target document to change.\n  - Do: Insert after the chosen heading.\n  - Check: Re-read the promoted section.\n"
+    );
+    let content = fs::read_to_string(&doc_path).unwrap();
+    fs::write(
+        &doc_path,
+        content.replace("## Guidance\n", &format!("## Guidance\n\n{block}\n")),
+    )
+    .unwrap();
+
+    let err = run_err(
+        &repo,
+        &[
+            "knowledge",
+            "promote",
+            &learning_id,
+            "--document",
+            "DOC-PROMOTION-TARGET",
+            "--insert-after",
+            "Guidance",
+            "--actor",
+            "human:test",
+            "--json",
+        ],
+    );
+    assert_eq!(err["code"], "promotion_target_unchanged");
+}
+
+#[test]
+fn promote_reports_missing_and_ambiguous_headings() {
+    let (repo, _work, learning_id, _doc) = promotion_setup();
+    let missing = run_err(
+        &repo,
+        &[
+            "knowledge",
+            "promote",
+            &learning_id,
+            "--document",
+            "DOC-PROMOTION-TARGET",
+            "--insert-after",
+            "No Such Heading",
+            "--actor",
+            "human:test",
+            "--json",
+        ],
+    );
+    assert_eq!(missing["code"], "promotion_target_heading_missing");
+}
+
+#[test]
+fn harness_promotion_lands_in_agents_md_and_validates() {
+    let (repo, work_id) = setup_repo();
+    let learning_id = validated_learning(&repo, &work_id, "Harness lesson", Some("harness"));
+    fs::write(
+        repo.path().join("AGENTS.md"),
+        "# Repository map\n\n## Operating rules\n\nWork inside contracts.\n",
+    )
+    .unwrap();
+
+    let out = run_ok(
+        &repo,
+        &[
+            "knowledge",
+            "promote",
+            &learning_id,
+            "--agents-md",
+            "--insert-after",
+            "Operating rules",
+            "--actor",
+            "human:test",
+            "--json",
+        ],
+    );
+    assert_eq!(out["code"], "promoted");
+    assert_eq!(out["target_path"], "AGENTS.md");
+    let content = fs::read_to_string(repo.path().join("AGENTS.md")).unwrap();
+    assert!(content.contains(out["inserted_block"].as_str().unwrap()));
+
+    // The non-registry AGENTS.md endpoint resolves as a repository file.
+    let check = run_ok(&repo, &["knowledge", "validate", "--json"]);
+    let text = serde_json::to_string(&check).unwrap();
+    assert!(
+        !text.contains("knowledge_relation_endpoint_missing"),
+        "{text}"
+    );
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    hasher.update(bytes);
+    format!("{:x}", hasher.finalize())
 }

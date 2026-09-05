@@ -46,13 +46,25 @@ pub(crate) enum KnowledgeCommand {
         #[arg(long)]
         json: bool,
     },
-    /// Promote a validated learning into a registry document: validated ->
-    /// promoted, recording the promoted_to relation with the document's
-    /// current revision and content hash.
+    /// Promote a validated learning into a target document by inserting its
+    /// content block after a heading (validated -> promoted). The relation is
+    /// recorded bound to the document's new content hash; an insertion that
+    /// leaves the document unchanged is refused.
     Promote {
         learning_id: String,
+        /// Registry document id to promote into (repository learnings).
+        #[arg(long, group = "promote-target")]
+        document: Option<String>,
+        /// Promote into the target repository's AGENTS.md (harness
+        /// learnings).
+        #[arg(long, group = "promote-target")]
+        agents_md: bool,
+        /// Heading whose section the promotion block is inserted under.
+        #[arg(long = "insert-after")]
+        insert_after: String,
+        /// Show the proposed insertion without writing or transitioning.
         #[arg(long)]
-        document: String,
+        dry_run: bool,
         #[arg(long)]
         rationale: Option<String>,
         #[arg(long)]
@@ -262,7 +274,8 @@ impl From<KnowledgeEndpointKindArg> for EndpointKind {
 use crate::cli::output::render;
 use crate::knowledge::model::{LearningDraft, LearningPatch};
 use crate::knowledge::store::{
-    KnowledgeStore, OperationContext as KnowledgeOperationContext, RelationAdd,
+    KnowledgeStore, OperationContext as KnowledgeOperationContext, PromoteArgs, PromoteTarget,
+    RelationAdd,
 };
 use crate::{JsonGraphStore, PulseError};
 
@@ -359,26 +372,48 @@ pub(crate) fn handle(store: &JsonGraphStore, command: KnowledgeCommand) -> Resul
         KnowledgeCommand::Promote {
             learning_id,
             document,
+            agents_md,
+            insert_after,
+            dry_run,
             rationale,
             actor,
             json,
         } => {
-            let out = knowledge.transition_status(
-                &learning_id,
-                LearningStatus::Promoted,
-                None,
-                Some(&document),
-                rationale,
+            let target = match (document, agents_md) {
+                (Some(doc), false) => PromoteTarget::Document(doc),
+                (None, true) => PromoteTarget::AgentsMd,
+                _ => {
+                    return Err(PulseError::validation(
+                        "knowledge_promote_target_invalid",
+                        "promote requires exactly one of --document <id> or --agents-md",
+                    ))
+                }
+            };
+            let out = knowledge.promote_learning(
+                PromoteArgs {
+                    learning_id: &learning_id,
+                    target,
+                    insert_after: &insert_after,
+                    dry_run,
+                    rationale,
+                },
                 KnowledgeOperationContext {
                     actor,
                     now: chrono::Utc::now(),
                 },
             )?;
-            render(
-                json,
-                &out,
-                format!("{} promoted to {document}", out.value.id),
-            )
+            let human = if out.dry_run {
+                format!(
+                    "dry run: would insert at line {} of {}\n{}",
+                    out.inserted_at_line, out.target_path, out.inserted_block
+                )
+            } else {
+                format!(
+                    "{} promoted into {} (line {})",
+                    out.learning_id, out.target_path, out.inserted_at_line
+                )
+            };
+            render(json, &out, human)
         }
         KnowledgeCommand::Show { learning_id, json } => {
             let out = knowledge.show(&learning_id)?;

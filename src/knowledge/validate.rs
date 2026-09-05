@@ -563,26 +563,35 @@ fn validate_endpoint(
         },
         EndpointKind::Document => {
             let path = repo_root.join(".pulse/docs/registry.json");
-            match crate::storage::read_json::<crate::docs::model::DocsRegistryEnvelope>(&path) {
-                Ok(registry) => match registry.documents.iter().find(|doc| doc.id == endpoint.id) {
-                    Some(doc) => validate_revision_match(
-                        endpoint.revision,
-                        doc.revision,
-                        relation_id,
-                        "target document revision mismatch",
-                        report,
-                    ),
-                    None => report.push_error(
-                        "knowledge_relation_endpoint_missing",
-                        Some(relation_id.to_string()),
-                        "target document does not exist",
-                    ),
-                },
-                Err(_) => report.push_error(
-                    "knowledge_relation_endpoint_missing",
-                    Some(relation_id.to_string()),
-                    "target document does not exist",
+            let registered =
+                crate::storage::read_json::<crate::docs::model::DocsRegistryEnvelope>(&path)
+                    .ok()
+                    .and_then(|registry| {
+                        registry
+                            .documents
+                            .iter()
+                            .find(|doc| doc.id == endpoint.id)
+                            .map(|doc| doc.revision)
+                    });
+            match registered {
+                Some(doc_revision) => validate_revision_match(
+                    endpoint.revision,
+                    doc_revision,
+                    relation_id,
+                    "target document revision mismatch",
+                    report,
                 ),
+                // A document outside the registry (e.g. the repository map
+                // AGENTS.md) resolves as a repository file.
+                None => {
+                    if !repo_root.join(&endpoint.id).is_file() {
+                        report.push_error(
+                            "knowledge_relation_endpoint_missing",
+                            Some(relation_id.to_string()),
+                            "target document does not exist",
+                        );
+                    }
+                }
             }
         }
         EndpointKind::Receipt => {
