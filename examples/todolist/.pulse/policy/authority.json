@@ -2,6 +2,16 @@
   "principals": [
     {
       "grants": [
+        "note",
+        "work.assignment.handoff",
+        "work.assignment.prepare",
+        "work.assignment.release"
+      ],
+      "id": "runner:worker",
+      "kind": "agent"
+    },
+    {
+      "grants": [
         "decision.accept",
         "decision.propose",
         "docs.write",
@@ -27,6 +37,6 @@
       "kind": "human"
     }
   ],
-  "revision": 1,
+  "revision": 2,
   "schema_version": 1
 }
