@@ -459,6 +459,13 @@ fn worker_run_writes_exact_handoff_syntax_into_bootstrap_prompt() {
     // The old broken forms must not come back.
     assert!(!prompt.contains(&format!("work handoff {ticket_id}")));
     assert!(!prompt.contains("--actor runner:worker"));
+    // Decision 0013 §4: the context-exhausted exit is spelled out.
+    assert!(prompt.contains("context_exhausted"));
+    assert!(prompt.contains(
+        "--work {ticket_id}"
+            .replace("{ticket_id}", &ticket_id)
+            .as_str()
+    ));
 }
 
 #[test]
@@ -635,4 +642,43 @@ echo '{"status": "handed_off", "summary": "done"}'
     let input: Value =
         serde_json::from_slice(&fs::read(run_dir.join("reviewer-input.json")).unwrap()).unwrap();
     assert_eq!(input["reviewers_required"], 2);
+}
+
+/// Decision 0013 §4: a worker that flushes and ends with
+/// `context_exhausted` classifies like any blocked run — the lease stays
+/// and the next run resumes with the same packet and the handoff note.
+#[test]
+fn worker_context_exhausted_classifies_blocked_and_keeps_the_lease() {
+    let repo = TestRepo::from_fixture("minimal-service");
+    let ticket_id = setup_ready_ticket(&repo);
+    install_worker_script(
+        &repo,
+        r#"
+RUN_DIR="$(dirname "$1")"
+. "$RUN_DIR/worker-env"
+"$PULSE" note --work "$TICKET_ID" \
+  --message "handoff: acceptance mapping verified; next: implement the expired branch" \
+  --from agent:runner:worker --json >/dev/null
+echo '{"status": "blocked", "reason": "context_exhausted"}'
+"#,
+    );
+    set_worker_command(&repo, "sh scripts/fake-worker.sh {input}");
+
+    let outcome = run_outcome(&repo, &ticket_id);
+    assert_eq!(outcome["status"], "blocked");
+    assert_eq!(outcome["summary"], "context_exhausted");
+    // The lease survives for the resume run.
+    assert!(outcome["lease_id"].as_str().unwrap().starts_with("lease_"));
+    assert_eq!(node_status(&repo, &ticket_id), "active");
+
+    // The handoff note the worker flushed is on the event log for the
+    // resume session to find.
+    let tail = repo.pulse_ok(&["events", "tail", "--ticket", &ticket_id, "--json"]);
+    assert!(tail.as_array().unwrap().iter().any(|event| {
+        event["event_type"] == "note.recorded"
+            && event["payload"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("next: implement the expired branch")
+    }));
 }

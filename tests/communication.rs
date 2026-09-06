@@ -342,3 +342,61 @@ fn runner_worker_can_leave_notes_after_provisioning() {
     let packet = repo.pulse_ok(&["work", "packet", &ticket_id, "--json"]);
     assert_eq!(packet["notes"][0], "operator note");
 }
+
+/// Decision 0013 §5: notes target any work node through `--work`; the old
+/// `--ticket` spelling stays as an alias and the output carries `work_id`.
+#[test]
+fn note_accepts_work_flag_alias_and_non_ticket_nodes() {
+    let repo = TestRepo::from_fixture("minimal-service");
+    repo.pulse_ok(&["init", "--actor", ACTOR, "--json"]);
+    let created = repo.pulse_ok(&[
+        "work",
+        "create",
+        "--kind",
+        "decision",
+        "--title",
+        "Adopt event log",
+        "--json",
+    ]);
+    let decision_id = created["value"]["id"].as_str().unwrap().to_string();
+
+    // `--work` targets a Decision.
+    let noted = repo.pulse_ok(&[
+        "note",
+        "--work",
+        &decision_id,
+        "--message",
+        "context: choosing between queues",
+        "--from",
+        "human:tester",
+        "--json",
+    ]);
+    assert_eq!(noted["code"], "note_recorded");
+    assert_eq!(noted["work_id"], decision_id.as_str());
+
+    // The `--ticket` alias still works and reports the same shape.
+    let aliased = repo.pulse_ok(&[
+        "note",
+        "--ticket",
+        &decision_id,
+        "--message",
+        "second note",
+        "--from",
+        "human:tester",
+        "--json",
+    ]);
+    assert_eq!(aliased["work_id"], decision_id.as_str());
+
+    // The note surfaces through events tail filtered by the node.
+    let tail = repo.pulse_ok(&["events", "tail", "--ticket", &decision_id, "--json"]);
+    let payloads: Vec<&Value> = tail
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|event| event["event_type"] == "note.recorded")
+        .collect();
+    assert_eq!(payloads.len(), 2);
+    assert!(payloads
+        .iter()
+        .all(|event| event["payload"]["work_id"] == decision_id.as_str()));
+}

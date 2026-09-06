@@ -49,11 +49,11 @@ pub fn run(cli: Cli) -> Result<(), PulseError> {
         args::Command::Knowledge { command } => knowledge::handle(&store, command),
         args::Command::Qa { command } => qa::handle(&store, command),
         args::Command::Note {
-            ticket,
+            work,
             message,
             from,
             json,
-        } => events::handle_note(&store, &ticket, &message, &from, json),
+        } => events::handle_note(&store, &work, &message, &from, json),
         args::Command::Events {
             command:
                 args::EventsCommand::Tail {

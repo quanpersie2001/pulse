@@ -25,7 +25,7 @@ impl JsonGraphStore {
     /// Record a note targeting a Ticket. Requires the `note` grant.
     pub fn record_note(
         &self,
-        ticket_id: &str,
+        work_id: &str,
         message: &str,
         actor: &str,
     ) -> PulseResult<NoteRecorded> {
@@ -45,8 +45,10 @@ impl JsonGraphStore {
                 format!("note message must stay within {MAX_NOTE_CHARS} characters"),
             ));
         }
-        // The target must exist so notes cannot bind to typos.
-        self.show_node(ticket_id)?;
+        // The target must exist so notes cannot bind to typos. Notes may
+        // target any work node: Epic, Story, Ticket or Decision (Decision
+        // 0013 §5).
+        self.show_node(work_id)?;
         crate::policy::authorize(
             &crate::policy::load_authority_policy(&self.repo_root)?,
             &crate::policy::parse_actor(actor),
@@ -59,9 +61,9 @@ impl JsonGraphStore {
                 event_id,
                 "note.recorded",
                 actor,
-                ticket_id,
+                work_id,
                 json!({
-                    "ticket_id": ticket_id,
+                    "work_id": work_id,
                     "message": cleaned,
                 }),
                 Utc::now(),
@@ -70,7 +72,7 @@ impl JsonGraphStore {
         Ok(NoteRecorded {
             schema_version: 1,
             code: "note_recorded".to_string(),
-            ticket_id: ticket_id.to_string(),
+            work_id: work_id.to_string(),
             message: cleaned,
             recorded_by: actor.to_string(),
         })
@@ -82,7 +84,10 @@ impl JsonGraphStore {
 pub struct NoteRecorded {
     pub schema_version: u32,
     pub code: String,
-    pub ticket_id: String,
+    /// The targeted work node; `ticket_id` remains accepted as an alias
+    /// when reading (Decision 0013 §5).
+    #[serde(alias = "ticket_id")]
+    pub work_id: String,
     pub message: String,
     pub recorded_by: String,
 }

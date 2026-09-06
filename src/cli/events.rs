@@ -20,10 +20,7 @@ pub(crate) fn handle_note(
     render(
         json,
         &note,
-        format!(
-            "note recorded for {} by {}",
-            note.ticket_id, note.recorded_by
-        ),
+        format!("note recorded for {} by {}", note.work_id, note.recorded_by),
     )
 }
 

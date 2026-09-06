@@ -60,9 +60,9 @@ pub(crate) enum Command {
     },
     /// Record a note targeting a Ticket (append-only event log).
     Note {
-        /// Ticket the note targets.
-        #[arg(long)]
-        ticket: String,
+        /// Work node the note targets (Epic, Story, Ticket or Decision id).
+        #[arg(long, alias = "ticket")]
+        work: String,
         /// Note message (bounded).
         #[arg(long)]
         message: String,

@@ -1805,9 +1805,17 @@ fn worker_prompt(
          5. Your last output line must be exactly one JSON object with\n\
          nothing after it (no code fence, no trailing prose):\n\
          `{{\"status\": \"handed_off\", \"summary\": \"<one line>\"}}`\n\
-         6. If you cannot finish: `pulse note --ticket {ticket_id} --message\n\
+         6. If you cannot finish: `pulse note --work {ticket_id} --message\n\
          \"<why>\" --from agent:runner:worker`, then end with\n\
          `{{\"status\": \"blocked\", \"reason\": \"<why>\"}}`.\n\
+         7. If you are running out of context: flush first - durable\n\
+         facts into `works/` and `docs/` via the CLI, then one handoff\n\
+         note `pulse note --work {ticket_id} --message \"handoff:\n\
+         <what remains> | next: <one line>\" --from\n\
+         agent:runner:worker` - and end with\n\
+         `{{\"status\": \"blocked\", \"reason\": \"context_exhausted\"}}`.\n\
+         The lease survives; the next run resumes with the same packet\n\
+         and your note.\n\
          \n\
          Proof comes from the CLI receipt in step 4; the final JSON line is\n\
          only a summary. Never claim handed_off without a successful step 4.{harness_learnings}\n"
