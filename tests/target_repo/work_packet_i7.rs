@@ -827,7 +827,7 @@ fn packet_injects_applicable_validated_knowledge_only() {
     .unwrap();
     repo.pulse_ok(&[
         "knowledge",
-        "validate-learning",
+        "validate",
         "LRN-001",
         "--evidence",
         "rcpt_01J00000000000000000000002",
