@@ -69,6 +69,14 @@ impl JsonGraphStore {
         }
         let handoff_id = deterministic_evidence_id("handoff", &args.idempotency_key);
         let handoff_path = handoff_path(&self.repo_root, &handoff_id);
+        // Verify referenced receipts BEFORE the fence: verify_receipt loads
+        // the docs registry, whose load takes the repository write lock —
+        // acquiring it while this handoff holds the fence would
+        // flock-deadlock the process against itself. Receipts are immutable,
+        // so the pre-fence check cannot race.
+        for receipt_id in &args.evidence_receipt_ids {
+            crate::evidence::receipt::verify_receipt(&self.repo_root, receipt_id, true, None)?;
+        }
         let _guard = WriteGuard::acquire(&self.repo_root)?;
         authorize(&self.repo_root, &args.actor, "work.assignment.handoff")?;
         recover_prepared_transactions(&self.repo_root)?;
@@ -115,9 +123,6 @@ impl JsonGraphStore {
             &binding.workspace_id,
         )?;
         let source_dirty = crate::source::worktree_dirty_identity(&workspace)?;
-        for receipt_id in &args.evidence_receipt_ids {
-            crate::evidence::receipt::verify_receipt(&self.repo_root, receipt_id, true, None)?;
-        }
         let node_path = self.node_path(&reservation.subject.ticket_id);
         let node_before_bytes =
             fs::read(&node_path).map_err(|error| PulseError::io(&node_path, error))?;
