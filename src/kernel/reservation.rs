@@ -109,20 +109,38 @@ impl JsonGraphStore {
     ) -> Result<ReserveWorkOutcome> {
         if let Some(existing) = find_live_reservation_for_ticket(&self.repo_root, &args.ticket_id)?
         {
-            return Err(PulseError::validation(
-                "assignment_live_lease_exists",
-                format!(
-                    "live exclusive reservation {existing} exists for {}",
-                    args.ticket_id
-                ),
-            ));
+            let node_path = self.node_path(&args.ticket_id);
+            let node_bytes =
+                fs::read(&node_path).map_err(|error| PulseError::io(&node_path, error))?;
+            let node: Node = serde_json::from_slice(&node_bytes)
+                .map_err(|error| PulseError::json(&node_path, error))?;
+            if node.status != NodeStatus::Rework {
+                return Err(PulseError::validation(
+                    "assignment_live_lease_exists",
+                    format!(
+                        "live exclusive reservation {existing} exists for {}",
+                        args.ticket_id
+                    ),
+                ));
+            }
+            // A rework verdict ended the assignment that leased this Ticket:
+            // the leftover lease is recovery debris, not a live claim. Release
+            // it so the fresh reservation below can commit a packet that
+            // embeds the rework observations (Decision 0012 §5).
+            self.release_reservation_under_lock(
+                &existing,
+                &args.actor,
+                "rework verdict ends the assignment; fresh dispatch carries the rework observations",
+            )?;
         }
         let packet = self.work_packet_under_fence(&args.ticket_id)?;
         let node_path = self.node_path(&args.ticket_id);
         let node_bytes = fs::read(&node_path).map_err(|error| PulseError::io(&node_path, error))?;
         let node: Node = serde_json::from_slice(&node_bytes)
             .map_err(|error| PulseError::json(&node_path, error))?;
-        if node.status != NodeStatus::Ready || node.revision != packet.ticket.node.revision {
+        if !matches!(node.status, NodeStatus::Ready | NodeStatus::Rework)
+            || node.revision != packet.ticket.node.revision
+        {
             return Err(PulseError::validation(
                 "assignment_subject_not_ready",
                 "Ticket is no longer the exact ready revision captured by the packet",
@@ -283,7 +301,9 @@ impl JsonGraphStore {
             fs::read(&node_path).map_err(|error| PulseError::io(&node_path, error))?;
         let mut node: Node = serde_json::from_slice(&node_before_bytes)
             .map_err(|error| PulseError::json(&node_path, error))?;
-        if node.status != NodeStatus::Ready || node.revision != before.subject.ticket_revision {
+        if !matches!(node.status, NodeStatus::Ready | NodeStatus::Rework)
+            || node.revision != before.subject.ticket_revision
+        {
             return Err(PulseError::validation(
                 "assignment_subject_changed",
                 "Ticket revision/status changed before activation",

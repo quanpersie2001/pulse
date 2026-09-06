@@ -235,7 +235,15 @@ impl JsonGraphStore {
 
         let readiness = self.build_readiness_snapshot_from_projection(&node, &projection)?;
         let inputs = readiness.as_inputs(&node);
-        let readiness_report = evaluate_readiness(&inputs, EvalProfile::Ready)?;
+        // A rework Ticket re-dispatches under the rework profile: identical
+        // contract gate, but the Rework lifecycle itself is eligible because
+        // the worker claim moves the Ticket back to active.
+        let eval_profile = if node.status == NodeStatus::Rework {
+            EvalProfile::Rework
+        } else {
+            EvalProfile::Ready
+        };
+        let readiness_report = evaluate_readiness(&inputs, eval_profile)?;
         if readiness_report.code != "ready" {
             return Err(PulseError::validation(
                 "work_packet_readiness_failed",
@@ -695,11 +703,11 @@ impl JsonGraphStore {
                 format!("subject {} role is not implementation", node.id),
             ));
         }
-        if node.status != NodeStatus::Ready {
+        if node.status != NodeStatus::Ready && node.status != NodeStatus::Rework {
             return Err(PulseError::validation(
                 "work_packet_status_not_ready",
                 format!(
-                    "subject {} status is {:?}, expected ready",
+                    "subject {} status is {:?}, expected ready or rework",
                     node.id, node.status
                 ),
             ));

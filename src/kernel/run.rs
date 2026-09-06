@@ -709,6 +709,25 @@ impl JsonGraphStore {
     ) -> PulseResult<(String, CoreReservation)> {
         let actor = runner_actor(role);
         let node = self.show_node(ticket_id)?;
+        // A rework verdict ended the previous assignment: its committed
+        // packet predates the findings and can never carry them. Release the
+        // leftover lease and dispatch fresh so the new packet embeds the
+        // rework observations; the claim below moves the Ticket
+        // rework -> active. Without this the resume branch would silently
+        // re-run the worker on the stale pre-rework packet.
+        if node.status == NodeStatus::Rework
+            && crate::kernel::reservation::find_live_reservation_for_ticket(
+                &self.repo_root,
+                ticket_id,
+            )?
+            .is_some()
+        {
+            self.release_live_lease_for_ticket(
+                ticket_id,
+                &actor,
+                "rework verdict ends the assignment; fresh dispatch carries the rework observations",
+            )?;
+        }
         let key = if idempotency_key.trim().is_empty() {
             format!("run:{ticket_id}:{role}")
         } else {
@@ -785,11 +804,11 @@ impl JsonGraphStore {
                 }
             }
         }
-        if node.status != NodeStatus::Ready {
+        if node.status != NodeStatus::Ready && node.status != NodeStatus::Rework {
             return Err(PulseError::validation(
                 "run_ticket_not_ready",
                 format!(
-                    "worker runs on ready Tickets; {} is {:?}",
+                    "worker runs on ready or rework Tickets; {} is {:?}",
                     ticket_id, node.status
                 ),
             ));

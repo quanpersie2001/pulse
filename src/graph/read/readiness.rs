@@ -36,10 +36,13 @@ use crate::PulseResult;
 /// Current readiness profile identifier. Implementation Tickets pass every
 /// family; Stories pass with the Ticket-contract families `not_applicable`.
 pub const READINESS_PROFILE: &str = "contract_readiness";
-
 /// Profile identifier recorded on `work.node.transitioned` events that pass the
 /// `draft -> shaped` (and blocked resume) shaping gate.
 pub const SHAPED_GATE_PROFILE: &str = "shaped";
+/// Profile identifier for packet dispatch on a `rework` Ticket: the same
+/// contract gate as `contract_readiness`, but the Rework lifecycle counts as
+/// eligible because the worker claim itself moves the Ticket back to active.
+pub const REWORK_DISPATCH_PROFILE: &str = "rework_dispatch";
 
 pub const READINESS_SCHEMA_VERSION: u32 = 1;
 
@@ -116,6 +119,8 @@ pub enum EvalProfile {
     Shaped,
     /// Full `contract_readiness` readiness gate (`shaped -> ready`).
     Ready,
+    /// `contract_readiness` gate for a `rework` Ticket being re-dispatched.
+    Rework,
 }
 
 /// Current Story QA baseline resolution for a required Ticket checkpoint.
@@ -170,6 +175,7 @@ pub fn evaluate(inputs: &ReadinessInputs, profile: EvalProfile) -> PulseResult<R
 
     let active = active_families(profile);
     let mut evaluator = FamilyEvaluator::new(inputs);
+    evaluator.profile = profile;
 
     for (family, active_for_profile) in ALL_FAMILIES {
         let status = if *active_for_profile {
@@ -263,7 +269,7 @@ pub fn evaluate(inputs: &ReadinessInputs, profile: EvalProfile) -> PulseResult<R
 fn profile_name(profile: EvalProfile) -> &'static str {
     match profile {
         EvalProfile::Shaped => SHAPED_GATE_PROFILE,
-        EvalProfile::Ready => READINESS_PROFILE,
+        EvalProfile::Ready | EvalProfile::Rework => READINESS_PROFILE,
     }
 }
 
@@ -273,7 +279,7 @@ fn active_families(profile: EvalProfile) -> Vec<&'static str> {
         .filter_map(|(family, active)| active.then_some(*family))
         .filter(|family| match profile {
             EvalProfile::Shaped => SHAPED_FAMILIES.contains(family),
-            EvalProfile::Ready => true,
+            EvalProfile::Ready | EvalProfile::Rework => true,
         })
         .collect()
 }
@@ -309,6 +315,7 @@ const ALL_FAMILIES: &[(&str, bool)] = &[
 struct FamilyEvaluator<'a> {
     inputs: &'a ReadinessInputs<'a>,
     codes: Vec<String>,
+    profile: EvalProfile,
 }
 
 impl<'a> FamilyEvaluator<'a> {
@@ -316,6 +323,7 @@ impl<'a> FamilyEvaluator<'a> {
         Self {
             inputs,
             codes: Vec::new(),
+            profile: EvalProfile::Ready,
         }
     }
 
@@ -377,6 +385,7 @@ impl FamilyEvaluator<'_> {
     fn lifecycle_eligibility(&mut self) -> GateStatus {
         match self.inputs.subject.status {
             NodeStatus::Draft | NodeStatus::Shaped | NodeStatus::Ready => GateStatus::Passed,
+            NodeStatus::Rework if self.profile == EvalProfile::Rework => GateStatus::Passed,
             NodeStatus::Blocked => {
                 self.note("lifecycle_blocked");
                 GateStatus::Failed
@@ -405,8 +414,22 @@ impl FamilyEvaluator<'_> {
                 GateStatus::Failed
             }
             crate::graph::read::executability::StructuralState::Paused => {
-                self.note("structural_paused");
-                GateStatus::Failed
+                // Re-dispatch profile: a Rework Ticket is Paused because it is
+                // in execution, not because it is undISPATCHable. The worker
+                // claim is exactly what moves it back to active; open hard
+                // blockers still refuse.
+                if self.profile == EvalProfile::Rework
+                    && self.inputs.subject.status == NodeStatus::Rework
+                    && !report.hard_blockers.iter().any(|b| {
+                        b.resolution
+                            != crate::graph::read::executability::BlockerResolution::Satisfied
+                    })
+                {
+                    GateStatus::Passed
+                } else {
+                    self.note("structural_paused");
+                    GateStatus::Failed
+                }
             }
             crate::graph::read::executability::StructuralState::NotExecutableKind => {
                 self.note("not_executable_kind");

@@ -335,7 +335,9 @@ impl JsonGraphStore {
                 NodeStatus::Rework,
                 TransitionReason {
                     code: "verification_rework".to_string(),
-                    summary: args.summary.trim().to_string(),
+                    // The status reason is a bounded pointer (≤500 chars);
+                    // the full verdict lives in the verification receipt.
+                    summary: bounded_reason_summary(&args.summary),
                     reference: Some(verification_id.clone()),
                 },
             )),
@@ -343,7 +345,7 @@ impl JsonGraphStore {
                 NodeStatus::Blocked,
                 TransitionReason {
                     code: "verification_blocked".to_string(),
-                    summary: args.summary.trim().to_string(),
+                    summary: bounded_reason_summary(&args.summary),
                     reference: Some(verification_id.clone()),
                 },
             )),
@@ -1397,4 +1399,15 @@ fn status_name(status: NodeStatus) -> &'static str {
         NodeStatus::Blocked => "blocked",
         _ => "invalid",
     }
+}
+
+/// Bound a verdict summary for the node's `status_reason`: the stored reason
+/// must satisfy the graph validation limit while the verification receipt
+/// keeps the full text. Splits on char boundaries.
+fn bounded_reason_summary(summary: &str) -> String {
+    let trimmed = summary.trim();
+    if trimmed.chars().count() <= 500 {
+        return trimmed.to_string();
+    }
+    trimmed.chars().take(500).collect()
 }
