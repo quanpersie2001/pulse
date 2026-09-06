@@ -1,0 +1,57 @@
+{
+  "acceptance_proofs": [
+    {
+      "acceptance_id": "AC-1",
+      "check_names": [
+        "artifact-contract",
+        "verify"
+      ],
+      "evidence_receipt_ids": []
+    },
+    {
+      "acceptance_id": "AC-2",
+      "check_names": [
+        "artifact-contract",
+        "verify"
+      ],
+      "evidence_receipt_ids": []
+    },
+    {
+      "acceptance_id": "AC-3",
+      "check_names": [
+        "artifact-contract",
+        "verify"
+      ],
+      "evidence_receipt_ids": []
+    }
+  ],
+  "checks": [
+    {
+      "artifact_ids": [],
+      "command": "node scripts/verify.mjs",
+      "exit_code": 0,
+      "name": "verify"
+    },
+    {
+      "artifact_ids": [],
+      "command": "node /tmp/tk006-artifact-contract.mjs",
+      "exit_code": 0,
+      "name": "artifact-contract"
+    }
+  ],
+  "disposition": "passed",
+  "handoff_id": "handoff_695d3dac787ca13a498538de3c",
+  "idempotency_key_hash": "sha256:e1bcd19c32659909e223f74c403f35a8fd4923b08d440376925045a687b9aa0b",
+  "lease_id": "lease_66008aaa463376925e7bbb0e0c",
+  "recorded_at": "2026-09-06T18:19:40.325400+00:00",
+  "resulting_revision": 6,
+  "resulting_status": "verifying",
+  "schema_version": 1,
+  "source_commit": "40b8c46f0764a97b5237cf654fb1b330c25479ad",
+  "source_dirty_hash": "sha256:a7447348f5ed4d888d3a23782739b53f07dc8d47cd591b70083cc147b12ba12d",
+  "summary": "Re-ran node scripts/verify.mjs (20/20 pass, exit 0) and an explicit artifact-contract script: research note compares 3 strategies with trade-off sections citing loadTodos/saveTodos at src/cli.mjs:18-29 (verified accurate against the tree); decision.md names one strategy (unversioned additive array, semantic defaults) with Rationale, Consequences, Reversal triggers, and a TK-005 rule stating pre-due files load through loadTodos unchanged and missing due means undated. Handoff changed only works/TK-006 paths; the src/test/docs edits in the tree belong to TK-007's handoff.",
+  "ticket_id": "TK-006",
+  "verification_fingerprint": "sha256:3ea768efbc984d95fb4064ee39c67500286a552aaf015cce80f5f80176441130",
+  "verification_id": "verify_e1bcd19c32659909e223f74c40",
+  "verified_by": "agent:runner:reviewer"
+}

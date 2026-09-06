@@ -1,0 +1,22 @@
+{
+  "actor": {
+    "id": "quanpersie2001",
+    "kind": "human"
+  },
+  "event_type": "work.assignment.closed",
+  "id": "evt_01M1VZ67DT8ZR3WH24T2DGQP23",
+  "occurred_at": "2026-09-06T18:20:16.698818Z",
+  "payload": {
+    "close_id": "close_e36d4a312538a5c7ad52ead720",
+    "handoff_id": "handoff_695d3dac787ca13a498538de3c",
+    "lease_id": "lease_66008aaa463376925e7bbb0e0c",
+    "source_commit": "bea69384c4bd7566d1050296f043494d473afea4",
+    "to": "done",
+    "verification_id": "verify_e1bcd19c32659909e223f74c40"
+  },
+  "schema_version": 1,
+  "subject": {
+    "id": "TK-006",
+    "kind": "ticket"
+  }
+}

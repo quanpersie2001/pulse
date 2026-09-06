@@ -20,11 +20,11 @@
       "rationale": "domain mutation contract pinned by focused verify tests;"
     }
   },
-  "revision": 4,
+  "revision": 6,
   "risk": "low",
   "role": "implementation",
   "schema_version": 1,
-  "status": "ready",
+  "status": "verifying",
   "title": "Rename a todo in place",
-  "updated_at": "2026-09-06T15:45:26.156693Z"
+  "updated_at": "2026-09-06T17:45:38.458567Z"
 }

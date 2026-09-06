@@ -1,0 +1,22 @@
+{
+  "actor": {
+    "id": "runner:worker",
+    "kind": "agent"
+  },
+  "event_type": "work.assignment.handoff_submitted",
+  "id": "evt_01M1VX6SWYDSDQQ219SD5SHKD2",
+  "occurred_at": "2026-09-06T17:45:38.463126Z",
+  "payload": {
+    "from": "active",
+    "handoff_id": "handoff_bd25fc05798438305fa5e6ba39",
+    "lease_id": "lease_b29c577d715f80c4fae1945a5b",
+    "session_id": "run:rsv_b29c577d715f80c4fae1945a5b",
+    "source_commit": "bea69384c4bd7566d1050296f043494d473afea4",
+    "to": "verifying"
+  },
+  "schema_version": 1,
+  "subject": {
+    "id": "TK-007",
+    "kind": "ticket"
+  }
+}

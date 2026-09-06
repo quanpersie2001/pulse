@@ -1,0 +1,20 @@
+{
+  "actor": {
+    "id": "runner:worker",
+    "kind": "agent"
+  },
+  "event_type": "work.assignment.reserved",
+  "id": "evt_01M1VX2BJND9N1D8W3VWYTT8FT",
+  "occurred_at": "2026-09-06T17:43:12.725969Z",
+  "payload": {
+    "lease_id": "lease_b29c577d715f80c4fae1945a5b",
+    "packet_fingerprint": "sha256:d9a281594508e61ae0ee30cbcc44cda2429479c7a7a4edf500469ff59649e1bf",
+    "source_commit": "bea69384c4bd7566d1050296f043494d473afea4",
+    "ticket_revision": 4
+  },
+  "schema_version": 1,
+  "subject": {
+    "id": "TK-007",
+    "kind": "ticket"
+  }
+}

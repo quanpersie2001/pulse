@@ -1,0 +1,37 @@
+{
+  "actor": {
+    "id": "quanpersie2001",
+    "kind": "human"
+  },
+  "event_type": "work.node.transitioned",
+  "id": "evt_01M1VZ6E26WYQDE6QKBTSK9WFK",
+  "occurred_at": "2026-09-06T18:20:23.412568Z",
+  "payload": {
+    "expected_revision": 3,
+    "from": "shaped",
+    "gate_coverage": [
+      "transition_direction",
+      "graph_integrity",
+      "gate_evaluation",
+      "authority",
+      "readiness_fingerprint"
+    ],
+    "gate_profile": "contract_readiness",
+    "gate_status": "ready",
+    "graph_fingerprint_after": "sha256:9db5f93586a865deb4eea5679b2fdaf01f8ee9080aeddaf059a8febf38257baa",
+    "graph_fingerprint_before": "sha256:d57600201cc3de9974b24e6b3d9b002edd5c74c37f9ba55e3abb48c22f6c1bb3",
+    "input_fingerprint": "sha256:3b881b88eadff2ca5892b11c8d0b764b60fdfbacb02773b53415533e6e6e5146",
+    "reason": {
+      "code": "blocker_terminal",
+      "summary": "TK-006 decision closed and accepted; hard blocker terminal"
+    },
+    "target_requires_status_reason": false,
+    "to": "ready"
+  },
+  "schema_version": 1,
+  "subject": {
+    "id": "TK-005",
+    "kind": "ticket",
+    "revision": 4
+  }
+}

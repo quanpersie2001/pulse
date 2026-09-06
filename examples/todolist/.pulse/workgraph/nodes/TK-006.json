@@ -18,11 +18,11 @@
       "rationale": "research-only ticket; no behavior surface exists to check."
     }
   },
-  "revision": 4,
+  "revision": 7,
   "risk": "medium",
   "role": "decision_work",
   "schema_version": 1,
-  "status": "ready",
+  "status": "done",
   "title": "Decide the state-file schema evolution strategy",
-  "updated_at": "2026-09-06T15:45:26.072179Z"
+  "updated_at": "2026-09-06T18:20:16.687694Z"
 }

@@ -25,11 +25,11 @@
       "rationale": "new public behavior on creation and listing; baseline cases pin"
     }
   },
-  "revision": 3,
+  "revision": 4,
   "risk": "medium",
   "role": "implementation",
   "schema_version": 1,
-  "status": "shaped",
+  "status": "ready",
   "title": "Todos can carry a due date",
-  "updated_at": "2026-09-06T15:43:43.705483Z"
+  "updated_at": "2026-09-06T18:20:23.412568Z"
 }
