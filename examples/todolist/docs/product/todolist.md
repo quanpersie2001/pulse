@@ -2,6 +2,16 @@
 
 User-visible behavior of the todolist CLI and domain module.
 
+## Getting usage
+
+- `node src/cli.mjs help` prints the one-line usage text to stdout and exits
+  0. The same text is printed when `--help` or `-h` appears anywhere on the
+  command line (for example `node src/cli.mjs add --help`); in that case no
+  command runs and the state file is neither read nor written, so the help
+  flag works even when `.todolist.json` is corrupt.
+- An unknown command or a command missing its arguments prints the same usage
+  text to stderr and exits with code 2.
+
 ## Managing todos
 
 - `node src/cli.mjs add <id> <title>` appends a new pending todo. The id must

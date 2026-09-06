@@ -20,11 +20,11 @@
       "rationale": "pure output-shape change covered by focused verify tests; no"
     }
   },
-  "revision": 4,
+  "revision": 10,
   "risk": "low",
   "role": "implementation",
   "schema_version": 1,
-  "status": "ready",
+  "status": "done",
   "title": "Print usage from an explicit help command",
-  "updated_at": "2026-09-06T15:45:26.240777Z"
+  "updated_at": "2026-09-06T19:11:00.730072Z"
 }

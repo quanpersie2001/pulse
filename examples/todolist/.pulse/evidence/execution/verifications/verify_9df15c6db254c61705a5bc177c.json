@@ -1,0 +1,59 @@
+{
+  "acceptance_proofs": [
+    {
+      "acceptance_id": "AC-1",
+      "check_names": [
+        "verify"
+      ],
+      "evidence_receipt_ids": []
+    },
+    {
+      "acceptance_id": "AC-2",
+      "check_names": [
+        "verify"
+      ],
+      "evidence_receipt_ids": []
+    },
+    {
+      "acceptance_id": "AC-3",
+      "check_names": [
+        "verify"
+      ],
+      "evidence_receipt_ids": []
+    }
+  ],
+  "checks": [
+    {
+      "artifact_ids": [],
+      "command": "node scripts/verify.mjs",
+      "exit_code": 0,
+      "name": "verify"
+    }
+  ],
+  "disposition": "rework",
+  "findings": [
+    {
+      "acceptance_id": null,
+      "case_id": null,
+      "check": "documentation_validation",
+      "owner": "agent:runner:worker",
+      "severity": "high",
+      "summary": "Required documentation_validation receipt is absent from the handoff proofs",
+      "unverifiable": false
+    }
+  ],
+  "handoff_id": "handoff_738d0d705e6ec6affc076e3cc3",
+  "idempotency_key_hash": "sha256:9df15c6db254c61705a5bc177c2731674e25415947e2209f07d098fcc25beceb",
+  "lease_id": "lease_e7c8c85061d428bf4bcef21752",
+  "recorded_at": "2026-09-06T19:05:37.979344+00:00",
+  "resulting_revision": 7,
+  "resulting_status": "rework",
+  "schema_version": 1,
+  "source_commit": "455c90b28f1eaad09c1336e98ee2cf426e9f5bc2",
+  "source_dirty_hash": "sha256:6b619563958a73238abb58a833379e259de64e3de4d8f9f6f899450f907959bb",
+  "summary": "Implementation behavior passes the declared verification check, but the required documentation_validation receipt is absent from the handoff proofs.",
+  "ticket_id": "TK-008",
+  "verification_fingerprint": "sha256:101294da72db082b9c54d62251efe22194b3f6ff10f8ca4ba357419dc1a92567",
+  "verification_id": "verify_9df15c6db254c61705a5bc177c",
+  "verified_by": "agent:runner:reviewer"
+}

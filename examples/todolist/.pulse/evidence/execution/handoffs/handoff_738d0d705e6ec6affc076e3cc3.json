@@ -1,0 +1,56 @@
+{
+  "acceptance_proofs": [
+    {
+      "acceptance_id": "AC-1",
+      "check_names": [
+        "verify"
+      ],
+      "evidence_receipt_ids": []
+    },
+    {
+      "acceptance_id": "AC-2",
+      "check_names": [
+        "verify"
+      ],
+      "evidence_receipt_ids": []
+    },
+    {
+      "acceptance_id": "AC-3",
+      "check_names": [
+        "verify"
+      ],
+      "evidence_receipt_ids": []
+    }
+  ],
+  "active_revision": 5,
+  "changed_paths": [
+    "docs/product/todolist.md",
+    "src/cli.mjs",
+    "test/todolist.test.mjs"
+  ],
+  "checks": [
+    {
+      "artifact_ids": [],
+      "command": "node scripts/verify.mjs",
+      "exit_code": 0,
+      "name": "verify"
+    }
+  ],
+  "evidence_receipt_ids": [],
+  "handoff_fingerprint": "sha256:da9f34b6cb1901447208c2c77ac0f7fd169b26b0b61b890a4b1e2acac6e3cf1d",
+  "handoff_id": "handoff_738d0d705e6ec6affc076e3cc3",
+  "idempotency_key_hash": "sha256:738d0d705e6ec6affc076e3cc3a7e2ce4036abe12f07107f1d996998941ff87d",
+  "lease_id": "lease_e7c8c85061d428bf4bcef21752",
+  "project_id": "TK-008",
+  "recorded_at": "2026-09-06T19:03:54.664226+00:00",
+  "recorded_by": "agent:runner:worker",
+  "repository_id": "repo_01M1RWXYDW6Q0WT9J0NMA466BH",
+  "schema_version": 1,
+  "session_id": "run:rsv_e7c8c85061d428bf4bcef21752",
+  "source_commit": "455c90b28f1eaad09c1336e98ee2cf426e9f5bc2",
+  "source_dirty_hash": "sha256:6b619563958a73238abb58a833379e259de64e3de4d8f9f6f899450f907959bb",
+  "summary": "Add help command and --help/-h pre-check printing single-source usage to stdout exit 0; misuse keeps stderr exit 2; doc usage section added",
+  "ticket_id": "TK-008",
+  "verifying_revision": 6,
+  "workspace_id": "checkout"
+}

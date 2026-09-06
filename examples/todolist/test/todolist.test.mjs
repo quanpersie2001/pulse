@@ -435,3 +435,67 @@ test("add with an invalid --due prints one error line, exits 2 and writes nothin
   assert.match(result.stderr, /^usage: /);
   assert.equal(await readFile(statePath, "utf8"), state);
 });
+
+// TK-008 AC-1
+test("help prints usage to stdout and exits 0", async (t) => {
+  const cwd = await mkdtemp(path.join(tmpdir(), "todolist-help-"));
+  t.after(() => rm(cwd, { recursive: true, force: true }));
+
+  const result = runCli(cwd, "help");
+  assert.equal(result.status, 0);
+  assert.match(result.stdout, /^usage: node src\/cli\.mjs [^\n]*\bhelp\b[^\n]*\n$/);
+  assert.equal(result.stderr, "");
+  await assert.rejects(readFile(path.join(cwd, ".todolist.json")), { code: "ENOENT" });
+});
+
+// TK-008 AC-2
+test("--help and -h anywhere print usage to stdout, exit 0 and run no command", async (t) => {
+  const cwd = await mkdtemp(path.join(tmpdir(), "todolist-help-flag-"));
+  t.after(() => rm(cwd, { recursive: true, force: true }));
+  const statePath = path.join(cwd, ".todolist.json");
+  const expected = runCli(cwd, "help").stdout;
+
+  const invocations = [
+    ["--help"],
+    ["-h"],
+    ["--help", "add", "t1", "one"],
+    ["add", "t1", "one", "--help"],
+    ["done", "t1", "-h"],
+    ["remove", "-h", "t1"],
+    ["nonsense", "--help"],
+  ];
+  for (const args of invocations) {
+    const result = runCli(cwd, ...args);
+    const label = args.join(" ");
+    assert.equal(result.status, 0, label);
+    assert.equal(result.stdout, expected, label);
+    assert.equal(result.stderr, "", label);
+    await assert.rejects(readFile(statePath), { code: "ENOENT" }, label);
+  }
+
+  // With existing state, a help flag still leaves the file untouched.
+  const state = `${JSON.stringify([createTodo("t1", "one")], null, 2)}\n`;
+  await writeFile(statePath, state);
+  for (const args of [["done", "t1", "--help"], ["remove", "t1", "-h"]]) {
+    const result = runCli(cwd, ...args);
+    assert.equal(result.status, 0, args.join(" "));
+    assert.equal(result.stdout, expected, args.join(" "));
+    assert.equal(await readFile(statePath, "utf8"), state, args.join(" "));
+  }
+});
+
+// TK-008 AC-3
+test("unknown commands and missing arguments still print usage to stderr and exit 2", async (t) => {
+  const cwd = await mkdtemp(path.join(tmpdir(), "todolist-misuse-"));
+  t.after(() => rm(cwd, { recursive: true, force: true }));
+  const helpText = runCli(cwd, "help").stdout;
+
+  for (const args of [["nonsense"], [], ["done"], ["rename", "t1"]]) {
+    const result = runCli(cwd, ...args);
+    const label = args.join(" ") || "<no args>";
+    assert.equal(result.status, 2, label);
+    assert.equal(result.stdout, "", label);
+    // Same single-source usage text as the help path, just on stderr.
+    assert.equal(result.stderr, helpText, label);
+  }
+});

@@ -1,0 +1,18 @@
+{
+  "actor": {
+    "id": "runner:worker",
+    "kind": "agent"
+  },
+  "event_type": "work.assignment.released",
+  "id": "evt_01M1W1SX4NVJMQDE4S122TZQ7W",
+  "occurred_at": "2026-09-06T19:05:58.677289Z",
+  "payload": {
+    "lease_id": "lease_e7c8c85061d428bf4bcef21752",
+    "reason": "rework verdict ends the assignment; fresh dispatch carries the rework observations"
+  },
+  "schema_version": 1,
+  "subject": {
+    "id": "TK-008",
+    "kind": "ticket"
+  }
+}

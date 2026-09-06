@@ -29,11 +29,25 @@ async function saveTodos(todos) {
   await writeFile(STATE_FILE, `${JSON.stringify(todos, null, 2)}\n`);
 }
 
+// Single source of the usage line: the successful `help` path and the
+// failing misuse path print the same text, only on different streams.
+const USAGE =
+  "usage: node src/cli.mjs help | add <id> <title> [--due <YYYY-MM-DD>] | list | count | completed | done <id> | rename <id> <title> | remove <id>";
+
+// Genuine misuse (unknown command, missing arguments): usage on stderr, exit 2.
 function usage() {
-  console.error(
-    "usage: node src/cli.mjs add <id> <title> [--due <YYYY-MM-DD>] | list | count | completed | done <id> | rename <id> <title> | remove <id>",
-  );
+  console.error(USAGE);
   process.exitCode = 2;
+}
+
+// Explicit help request: usage on stdout, exit 0.
+function printHelp() {
+  console.log(USAGE);
+  process.exitCode = 0;
+}
+
+function isHelpFlag(arg) {
+  return arg === "--help" || arg === "-h";
 }
 
 // Splits the `add` arguments into title words and an optional `--due`
@@ -57,7 +71,15 @@ function parseAddArgs(args) {
   return { titleWords, due };
 }
 
-const [command, id, ...rest] = process.argv.slice(2);
+const argv = process.argv.slice(2);
+const [command, id, ...rest] = argv;
+
+// `--help` / `-h` anywhere on the command line wins before any state is
+// read or any command runs, so it never touches .todolist.json.
+if (argv.some(isHelpFlag)) {
+  printHelp();
+  process.exit();
+}
 
 let todos;
 try {
@@ -73,6 +95,10 @@ try {
 
 if (todos !== undefined) {
   switch (command) {
+    case "help": {
+      printHelp();
+      break;
+    }
     case "add": {
       const { titleWords, due, error } = parseAddArgs(rest);
       if (!id || error || titleWords.length === 0) {

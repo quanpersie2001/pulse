@@ -1,0 +1,22 @@
+{
+  "actor": {
+    "id": "runner:reviewer",
+    "kind": "agent"
+  },
+  "event_type": "work.assignment.verification_completed",
+  "id": "evt_01M1W22SGKNY57Y7X711BZ8YVQ",
+  "occurred_at": "2026-09-06T19:10:49.875311Z",
+  "payload": {
+    "disposition": "passed",
+    "handoff_id": "handoff_8e66fcb0abbe9ff150453323c9",
+    "lease_id": "lease_e7c8c85061d428bf4bcef21752_g000002",
+    "source_commit": "455c90b28f1eaad09c1336e98ee2cf426e9f5bc2",
+    "to": "verifying",
+    "verification_id": "verify_bce15568c4189a3530667f445f"
+  },
+  "schema_version": 1,
+  "subject": {
+    "id": "TK-008",
+    "kind": "ticket"
+  }
+}
