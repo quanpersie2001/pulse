@@ -1,0 +1,30 @@
+{
+  "brief_hash": "sha256:df58e7599b8fe20557611474df57ca4917633a5b35b4721cdf96bcb1e485ef46",
+  "content_dir": "works/TK-004",
+  "contract_revision": 2,
+  "created_at": "2026-09-06T15:36:37.367457Z",
+  "documentation": {
+    "impact": {
+      "posture": "required",
+      "required_documents": [
+        "DOC-TODOLIST-BEHAVIOR"
+      ]
+    }
+  },
+  "id": "TK-004",
+  "kind": "ticket",
+  "materialization": "R1",
+  "qa": {
+    "impact": {
+      "posture": "none",
+      "rationale": "filesystem-bound error path exercised by focused node --test"
+    }
+  },
+  "revision": 4,
+  "risk": "medium",
+  "role": "implementation",
+  "schema_version": 1,
+  "status": "ready",
+  "title": "Fail safely when the state file is corrupt",
+  "updated_at": "2026-09-06T15:45:25.984921Z"
+}

@@ -1,0 +1,38 @@
+{
+  "actor": {
+    "id": "unknown",
+    "kind": "human"
+  },
+  "event_type": "work.node.created",
+  "id": "evt_01M1VNTJA1A3FHCD0AP53BN3S0",
+  "occurred_at": "2026-09-06T15:36:37.428698Z",
+  "payload": {
+    "node": {
+      "brief_hash": "sha256:3ed06b82a153a7628bb435c484fc3ceaa7d0de1591046fdc0d252e1823c03174",
+      "content_dir": "works/TK-005",
+      "contract_revision": 1,
+      "created_at": "2026-09-06T15:36:37.428698Z",
+      "id": "TK-005",
+      "kind": "ticket",
+      "materialization": "R2",
+      "qa": {
+        "impact": {
+          "posture": "unknown"
+        }
+      },
+      "revision": 1,
+      "risk": "medium",
+      "role": "implementation",
+      "schema_version": 1,
+      "status": "draft",
+      "title": "Todos can carry a due date",
+      "updated_at": "2026-09-06T15:36:37.428698Z"
+    }
+  },
+  "schema_version": 1,
+  "subject": {
+    "id": "TK-005",
+    "kind": "ticket",
+    "revision": 1
+  }
+}

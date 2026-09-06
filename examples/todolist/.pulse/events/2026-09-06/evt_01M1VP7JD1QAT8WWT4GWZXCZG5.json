@@ -1,0 +1,37 @@
+{
+  "actor": {
+    "id": "quanpersie2001",
+    "kind": "human"
+  },
+  "event_type": "work.node.transitioned",
+  "id": "evt_01M1VP7JD1QAT8WWT4GWZXCZG5",
+  "occurred_at": "2026-09-06T15:43:43.511573Z",
+  "payload": {
+    "expected_revision": 2,
+    "from": "draft",
+    "gate_coverage": [
+      "transition_direction",
+      "graph_integrity",
+      "gate_evaluation",
+      "authority",
+      "readiness_fingerprint"
+    ],
+    "gate_profile": "shaped",
+    "gate_status": "ready",
+    "graph_fingerprint_after": "sha256:142e761e6f1558f7ce5be95a54395a1ac365d200f4e5e688a4be00411d3510bb",
+    "graph_fingerprint_before": "sha256:669042b63c4503bb80b7255da908cf4a6aa1bfaa484c65f2150663e309cf684d",
+    "input_fingerprint": "sha256:4fc782a9a94da4ffd1b221acada8933549791661c45fb91f6c47e59a4c8bb269",
+    "reason": {
+      "code": "shaped",
+      "summary": "contract shaped for track B dogfood"
+    },
+    "target_requires_status_reason": false,
+    "to": "shaped"
+  },
+  "schema_version": 1,
+  "subject": {
+    "id": "TK-003",
+    "kind": "ticket",
+    "revision": 3
+  }
+}

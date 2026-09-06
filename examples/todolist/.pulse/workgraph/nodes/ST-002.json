@@ -1,0 +1,12 @@
+{
+  "content_dir": "works/ST-002",
+  "contract_revision": 1,
+  "created_at": "2026-09-06T15:36:11.061923Z",
+  "id": "ST-002",
+  "kind": "story",
+  "revision": 1,
+  "schema_version": 1,
+  "status": "draft",
+  "title": "Todos can carry due dates",
+  "updated_at": "2026-09-06T15:36:11.061923Z"
+}

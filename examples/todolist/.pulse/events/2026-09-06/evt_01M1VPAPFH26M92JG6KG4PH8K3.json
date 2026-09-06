@@ -1,0 +1,37 @@
+{
+  "actor": {
+    "id": "quanpersie2001",
+    "kind": "human"
+  },
+  "event_type": "work.node.transitioned",
+  "id": "evt_01M1VPAPFH26M92JG6KG4PH8K3",
+  "occurred_at": "2026-09-06T15:45:25.984921Z",
+  "payload": {
+    "expected_revision": 3,
+    "from": "shaped",
+    "gate_coverage": [
+      "transition_direction",
+      "graph_integrity",
+      "gate_evaluation",
+      "authority",
+      "readiness_fingerprint"
+    ],
+    "gate_profile": "contract_readiness",
+    "gate_status": "ready",
+    "graph_fingerprint_after": "sha256:08573ec9059551bf618f1aab69e008a9e7af1c948b1a2cf0d3c42dafc2495412",
+    "graph_fingerprint_before": "sha256:b610068e08579477fa426325f8275ddbc46a622723464a78b3d51806692df21f",
+    "input_fingerprint": "sha256:dc8e9d09e7502350fa34ce653384deac525bf66dcaed518c473bf3ffb32d0b9c",
+    "reason": {
+      "code": "ready_gate_passed",
+      "summary": "contract readiness passed"
+    },
+    "target_requires_status_reason": false,
+    "to": "ready"
+  },
+  "schema_version": 1,
+  "subject": {
+    "id": "TK-004",
+    "kind": "ticket",
+    "revision": 4
+  }
+}

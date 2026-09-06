@@ -1,0 +1,38 @@
+{
+  "actor": {
+    "id": "unknown",
+    "kind": "human"
+  },
+  "event_type": "work.node.created",
+  "id": "evt_01M1VNTJE0Q53R0459DK9PQQEP",
+  "occurred_at": "2026-09-06T15:36:37.552830Z",
+  "payload": {
+    "node": {
+      "brief_hash": "sha256:b178af7ae82095ac4ad6db85b6c64e056a71eb5273c1880eb2eee05e0c3394e0",
+      "content_dir": "works/TK-006",
+      "contract_revision": 1,
+      "created_at": "2026-09-06T15:36:37.552830Z",
+      "id": "TK-006",
+      "kind": "ticket",
+      "materialization": "R1",
+      "qa": {
+        "impact": {
+          "posture": "unknown"
+        }
+      },
+      "revision": 1,
+      "risk": "medium",
+      "role": "decision_work",
+      "schema_version": 1,
+      "status": "draft",
+      "title": "Decide the state-file schema evolution strategy",
+      "updated_at": "2026-09-06T15:36:37.552830Z"
+    }
+  },
+  "schema_version": 1,
+  "subject": {
+    "id": "TK-006",
+    "kind": "ticket",
+    "revision": 1
+  }
+}

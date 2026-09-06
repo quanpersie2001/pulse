@@ -1,0 +1,30 @@
+{
+  "brief_hash": "sha256:108dabaddd66c707cf27b34a228ba691437b173c8df4430fcdd73c87310ed71b",
+  "content_dir": "works/TK-008",
+  "contract_revision": 2,
+  "created_at": "2026-09-06T15:36:37.703796Z",
+  "documentation": {
+    "impact": {
+      "posture": "required",
+      "required_documents": [
+        "DOC-TODOLIST-BEHAVIOR"
+      ]
+    }
+  },
+  "id": "TK-008",
+  "kind": "ticket",
+  "materialization": "R0",
+  "qa": {
+    "impact": {
+      "posture": "none",
+      "rationale": "pure output-shape change covered by focused verify tests; no"
+    }
+  },
+  "revision": 4,
+  "risk": "low",
+  "role": "implementation",
+  "schema_version": 1,
+  "status": "ready",
+  "title": "Print usage from an explicit help command",
+  "updated_at": "2026-09-06T15:45:26.240777Z"
+}

@@ -1,6 +1,6 @@
 {
   "worker": {
-    "command": "claude -p --output-format text --dangerously-skip-permissions 'Pulse worker run. First read .pulse/runtime/run/{ticket}/worker-prompt.md in this repository and follow those instructions exactly.'",
+    "command": "codex exec --sandbox workspace-write --skip-git-repo-check -C {repo} 'Pulse worker run. First read .pulse/runtime/run/{ticket}/worker-prompt.md in this repository and follow those instructions exactly.'",
     "timeout_seconds": 3600
   },
   "reviewer": {

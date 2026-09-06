@@ -1,0 +1,27 @@
+{
+  "actor": {
+    "id": "unknown",
+    "kind": "human"
+  },
+  "event_type": "work.contract.updated",
+  "id": "evt_01M1VP17PMAK246150B0J67JNP",
+  "occurred_at": "2026-09-06T15:40:15.955134Z",
+  "payload": {
+    "brief_hash": "sha256:df58e7599b8fe20557611474df57ca4917633a5b35b4721cdf96bcb1e485ef46",
+    "expected_revision": 1,
+    "gate_coverage": [
+      "ticket_brief_parse",
+      "node_revision_cas",
+      "brief_hash"
+    ],
+    "new_contract_revision": 2,
+    "new_revision": 2,
+    "ticket_id": "TK-004"
+  },
+  "schema_version": 1,
+  "subject": {
+    "id": "TK-004",
+    "kind": "ticket",
+    "revision": 2
+  }
+}

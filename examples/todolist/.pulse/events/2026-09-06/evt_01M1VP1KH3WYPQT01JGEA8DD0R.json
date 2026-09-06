@@ -1,0 +1,26 @@
+{
+  "actor": {
+    "id": "quanpersie2001",
+    "kind": "system"
+  },
+  "event_type": "work.edge.created",
+  "id": "evt_01M1VP1KH3WYPQT01JGEA8DD0R",
+  "occurred_at": "2026-09-06T15:40:28.063807Z",
+  "payload": {
+    "edge": {
+      "created_at": "2026-09-06T15:40:28.063807Z",
+      "created_by": "quanpersie2001",
+      "from": "ST-002",
+      "id": "related--ST-002--TK-006",
+      "revision": 1,
+      "schema_version": 1,
+      "to": "TK-006",
+      "type": "related"
+    }
+  },
+  "schema_version": 1,
+  "subject": {
+    "id": "related--ST-002--TK-006",
+    "kind": "work"
+  }
+}

@@ -1,0 +1,35 @@
+{
+  "brief_hash": "sha256:dcb342051f0078bf60095bc122cd91cf972a612e0bcc83b2871ffbef1c77300f",
+  "content_dir": "works/TK-005",
+  "contract_revision": 2,
+  "created_at": "2026-09-06T15:36:37.428698Z",
+  "documentation": {
+    "impact": {
+      "posture": "required",
+      "required_documents": [
+        "DOC-TODOLIST-BEHAVIOR"
+      ]
+    }
+  },
+  "id": "TK-005",
+  "kind": "ticket",
+  "materialization": "R2",
+  "qa": {
+    "impact": {
+      "affected_case_ids": [
+        "QA-003",
+        "QA-004"
+      ],
+      "behavioral_owner": "ST-002",
+      "posture": "required",
+      "rationale": "new public behavior on creation and listing; baseline cases pin"
+    }
+  },
+  "revision": 3,
+  "risk": "medium",
+  "role": "implementation",
+  "schema_version": 1,
+  "status": "shaped",
+  "title": "Todos can carry a due date",
+  "updated_at": "2026-09-06T15:43:43.705483Z"
+}
