@@ -168,9 +168,31 @@ reviewer reports harness friction; the close gate turns it into a `harness`
 learning candidate.
 
 **Guidance surface** — the `<!-- PULSE:BEGIN/END -->` block `pulse init` writes
-into the target's `AGENTS.md` plus the seven artifact-bound skills
-(`wayfind`, `grill`, `spec`, `tickets`, `research`, `ratchet`, `onboard`);
+into the target's `AGENTS.md` plus the eight artifact-bound skills
+(`wayfind`, `grill`, `spec`, `tickets`, `research`, `ratchet`, `onboard`,
+`handoff`);
 guidance only, the CLI stays the sole authority (Decision 0009).
 
-**Note** — an event addressed to a Ticket, written with `pulse note`, shown in
-that Ticket's packet.
+**Note** — an event addressed to any node (Epic, Story, Ticket, Decision),
+written with `pulse note --work`, at most 2000 characters, shown in a
+Ticket's packet and in `events tail`. `--ticket` is an alias.
+
+**Handoff receipt** — the `work handoff` record a worker files for one
+Ticket: changed paths, `checks[]`, `acceptance_proofs[]`, bound to lease,
+session, commit and `source_dirty_hash`. Not to be confused with the next
+term.
+
+**Session handoff** — moving a conversation to a fresh agent session when
+context nears its limit. The host counts tokens and enforces the threshold
+with a hook; Pulse never reads transcripts. The `pulse-handoff` skill flushes
+durable state into `works/`, `docs/` and the graph, writes a **handoff doc**
+(live thread only, references not copies) to `.pulse/runtime/handoff/<node>.md`,
+and leaves one pointer note (Decision 0013).
+
+**Context guard** — the host-side Stop hook that blocks a turn once the
+transcript exceeds a byte threshold and instructs the agent to run
+`pulse-handoff`; a sample ships in the target's `docs/operations/`.
+
+**Resume** — `pulse work resume` (Later): a read-only query listing
+non-terminal nodes with a handoff note and the command to reopen each; it
+never spawns an agent or takes a lease.

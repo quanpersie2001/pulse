@@ -1,7 +1,7 @@
 # Pulse — Product Definition
 
 > Trạng thái: chốt ngày 2026-09-05, cập nhật 2026-09-06 theo Decision 0009,
-> 0010, 0011, 0012. Đây là nguồn sự thật về sản phẩm và thiết kế
+> 0010, 0011, 0012, 0013, 0014. Đây là nguồn sự thật về sản phẩm và thiết kế
 > mục tiêu. Nó thay thế toàn bộ `pulse-reboot/` (đã xoá, còn trong Git history
 > trước commit này). Khi README, AGENTS.md hay `proposals/` mâu thuẫn với file
 > này, file này thắng cho đến khi có ADR thay thế.
@@ -128,7 +128,7 @@ works/
   events/<date>.jsonl          # một event một dòng, append-only
   policy/authority.json
   config/runners.json
-  runtime/                     # lock, transaction intent, lease TTL; gitignored
+  runtime/                     # lock, transaction intent, lease TTL, run/<ticket>/, handoff/<node>.md; gitignored
   cache/                       # index, snapshot; gitignored
 ```
 
@@ -479,7 +479,8 @@ agent là dòng stdout cuối (contract output của runner).
 7. Hash artifact khai báo, copy vào `.pulse/evidence/artifacts/sha256/`.
 8. Ghi receipt tương ứng role và event `run.completed`, kèm `session_ref` là
    session id của host agent nếu lấy được. Thả process, giữ hoặc thả lease
-   theo role.
+   theo role. Với role `qa`, Pulse dựng `qa_checkpoint` từ output và artifact
+   đã hash; script không tự ghi receipt (Decision 0014).
 
 Agent trong lúc chạy vẫn gọi CLI trực tiếp: `pulse work handoff`, `pulse note`,
 `pulse docs get`, `pulse knowledge get`. Output JSON cuối chỉ là tóm tắt.
@@ -502,13 +503,18 @@ không tự đổi acceptance". Không copy Ticket, docs, QA, knowledge vào pro
 
 #### Contract input/output theo role
 
-Worker input = packet. Worker output:
+Worker input = packet. Worker ghi handoff qua CLI với claim máy đọc, cùng cú
+pháp `--check` và `--proof` như `work verify` (Decision 0012); `summary` một
+dòng. Worker output:
 
 ```json
 {"status": "handed_off", "handoff_receipt": "01JX…H1", "summary": "…", "blockers": []}
 ```
 
-hoặc `{"status": "blocked", "reason": "…", "decision_request": "…"}`.
+hoặc `{"status": "blocked", "reason": "…", "decision_request": "…"}`. Worker
+hết context giữa chừng làm thủ tục bàn giao phiên (§5.7) rồi trả `blocked`
+với `reason: context_exhausted`; lease giữ, `pulse run` lần sau resume
+(Decision 0013).
 
 QA input (`qa-input.json`, sinh từ parse `qa.md`, Decision 0010; runner không
 đọc `qa.md`):
@@ -752,7 +758,7 @@ Envelope: `id`, `kind`, `subject` (work id + contract_revision), `actor`,
 
 | Kind | Ai ghi | Chứng minh gì |
 |---|---|---|
-| `handoff` | worker | đã làm gì, changed files, checks đã chạy, acceptance → check mapping, remaining risk, docs finding, learning candidate |
+| `handoff` | worker | changed files, `checks[] {name, command, exit_code}`, `acceptance_proofs[] {acceptance_id, check_names, evidence_receipt_ids}`, summary một dòng, docs finding, learning candidate; binding lease, session, commit, `source_dirty_hash`, revision |
 | `verification` | reviewer khác worker | acceptance → check/receipt mapping, disposition pass/rework, findings |
 | `qa_checkpoint` | qa runner | case nào pass/fail trên baseline hash nào, artifact |
 | `docs_validation` | `docs validate --record` | document id + content hash pass mechanical checks |
@@ -881,7 +887,11 @@ hoặc root cause được sửa. Không có waiver grant riêng; developer là 
 **Executor** là runner role `qa`. Pulse cung cấp input/output contract, timeout,
 artifact ingest, receipt. Repo sở hữu script hoặc agent chạy Playwright, HTTP,
 CLI, data assertion. Environment start/stop, deployment identity, trace
-validation là việc của script.
+validation là việc của script. Script chỉ in JSON cuối; `pulse run qa` ingest
+artifact rồi tự dựng `qa_checkpoint` với `bindings.artifacts` đã hash và
+`bindings.content[qa.md]`; drift baseline hay run không sạch thì
+`inconclusive`, không có receipt. Actor `runner:qa` không cần grant
+`evidence.record` (Decision 0014).
 
 #### Close gate Ticket
 
@@ -1088,11 +1098,26 @@ của host. Pulse chỉ giữ mối nối: `session_ref` trong handoff receipt v
 ```text
 pulse events tail --since <cursor> [--follow] [--ticket <id>] --json
 pulse events compact                       # chuyển <date>/evt_*.json cũ sang <date>.jsonl, một lần
-pulse note --ticket <id> "<nội dung>" [--from <actor>] [--kind friction]
+pulse note --work <id> "<nội dung>" [--from <actor>] [--kind friction]   # --ticket là alias
 ```
 
-`note` là event nhắm Ticket, hiện trong packet và `events tail` của agent giữ
-Ticket. Không có semantics delivery.
+`note` là event nhắm một node bất kỳ (Epic, Story, Ticket, Decision), hiện
+trong packet của Ticket và `events tail`. Tối đa 2000 ký tự. Không có
+semantics delivery.
+
+#### Bàn giao phiên (Decision 0013)
+
+Khác với `work handoff` (receipt của một Ticket), bàn giao phiên là chuyển
+một cuộc trò chuyện sang phiên mới khi context sắp đầy. Host đếm và ép ngưỡng
+bằng hook; Pulse không đọc transcript, không đếm token, không gắn hook. Skill
+`pulse-handoff` (user-invoked) làm ba bước: **flush** mọi thứ durable về
+`works/`, `docs/` và graph qua lệnh `pulse`; **doc** chỉ live thread tại
+`.pulse/runtime/handoff/<node>.md`, trỏ path không chép, redact; **note** một
+dòng con trỏ bằng `pulse note --work <node>`, rồi in lệnh mở phiên mới và
+dừng. Nếu live thread không vừa, artifact còn thiếu, quay lại flush. Không
+HANDOFF.json, không file bàn giao trong `works/`. Hook mẫu cho Claude Code
+nằm trong `docs/operations/` của repo đích. `--kind handoff` và `pulse work
+resume` (query thuần, không spawn) là Later.
 
 | Nhu cầu | Cơ chế |
 |---|---|
@@ -1158,6 +1183,9 @@ mơ hồ sản phẩm còn mở   -> dừng trước mutation; Open question (bl
                            hỏi một câu kèm câu trả lời gợi ý
 ma sát với harness      -> note --kind friction; không tự sửa AGENTS/PULSE/runners trong Ticket
 sau work close          -> pulse-ratchet
+context sắp đầy         -> pulse-handoff: flush, doc runtime, note, in lệnh mở, dừng
+phiên mới               -> work list --status active|shaped, events tail, đọc doc handoff
+                           (pulse work resume khi có)
 ```
 
 Skill là hướng dẫn, CLI là authority: mọi mutation trong skill là lệnh `pulse`
@@ -1173,6 +1201,7 @@ artifact và một trạng thái graph:
 | `pulse-research` (model-invoked) | `works/<id>/research/<topic>.md`, subagent nền, nguồn sơ cấp; packet liệt kê dạng ref | không |
 | `pulse-ratchet` (explicit) | ba lane `execution`/`harness`/`knowledge` độc lập, lead hoà giải, learning có `expected_signal`, một intervention theo track, chờ rerun | không |
 | `pulse-onboard` (explicit) | pass read-only và đề xuất; pass hai `init`, `docs register` | approve trước khi ghi |
+| `pulse-handoff` (user-invoked, không model-invoked) | flush về plane qua lệnh `pulse`; doc live thread tại `.pulse/runtime/handoff/<node>.md`; một `note --work` con trỏ; in lệnh mở phiên mới rồi dừng | không |
 
 Executing và reviewing không phải skill: bootstrap prompt của `pulse run` là
 contract. Guard test: mọi lệnh `pulse …` trong `skills/**` và template khối
@@ -1217,6 +1246,8 @@ dùng được ngay. Runner actor `runner:<role>` nhận grant theo role: worker
 - Semantic/hybrid search, embedding, reranker.
 - Windows tier-1 cho đến khi có người dùng Windows.
 - Worktree mặc định.
+- Đếm token, phát hiện ngưỡng context, tự spawn phiên mới. Host làm; Pulse
+  chỉ cung cấp thủ tục bàn giao phiên và chỗ ghi (Decision 0013).
 
 ## 7. Golden path v0.1
 
@@ -1251,12 +1282,12 @@ done và qualification pass.
 |---|---|---|
 | 5.1 Work graph | Đã có spine | `pulse init` cấp Core grants; Ticket tạo `ticket.md`, `work sync` bind hash/metadata, ambiguity và ready gates hoạt động. Legacy JSON contract API vẫn tồn tại cho callers cũ. |
 | 5.2 Packet | Đã rút gọn | Packet có ticket prose, context, docs/QA/source/tags/handoff; không còn dispatch, capability, scope enforcement, assurance hay `not_installed`. |
-| 5.3 Runner | Chạy thật trên dogfood | `pulse run worker|reviewer|qa` đã chạy thật trên `examples/todolist/` với lease, resume sau kill, drift acknowledgment, inconclusive classification; isolation chuyển sang từ chối khi Ticket khác `active` (quyết định 13.2). Artifact ingest đang làm. Còn lại theo Decision 0012: `reviewer-input.json` bỏ `summary`, thêm `contract_revision` và `reviewers_required`; `classify_reviewer` validate shape finding và cờ `unverifiable`. |
+| 5.3 Runner | Chạy thật trên dogfood | `pulse run worker|reviewer|qa` đã chạy thật trên `examples/todolist/` với lease, resume sau kill, drift acknowledgment, inconclusive classification; isolation chuyển sang từ chối khi Ticket khác `active` (quyết định 13.2). Artifact ingest đang làm. Còn lại theo Decision 0012: `work handoff --check/--proof`, `HandoffReceipt.checks/acceptance_proofs`; `reviewer-input.json` bỏ `summary`, thêm `contract_revision`, `reviewers_required` và claim của handoff; `classify_reviewer` validate shape finding và cờ `unverifiable`. Decision 0014: `pulse run qa` tự dựng `qa_checkpoint` với artifact đã hash; `qa-run.mjs` bỏ phần ghi receipt và parse `pulse-qa`. |
 | 5.4 Docs | Đã rút gọn | Registry tám trường, `tags.json`, `docs tags add/list`, tag filtering và path/tag applicability đã có. |
 | 5.5 Evidence/QA | Đã có spine | Close hỗ trợ mọi risk; high/critical yêu cầu actor human. `qa.md` còn là fenced JSON: chuyển sang heading và `qa-input.json` theo Decision 0010, receipt dùng `case_hash`. Decision 0012: `src/evidence/redaction.rs` cho plane tracked; trường `reviewers` trong profile và close gate đếm receipt theo actor. |
 | 5.6 Ratchet | `capture`–`applicable` đã chạy thật | `knowledge capture|validate|promote|applicable` đã chạy thật: LRN-001 được capture, promote và inject vào packet; scope `harness|repository` và promote tự sửa doc là việc còn lại (quyết định 13.3, 13.4). Decision 0012: `expected_signal` bắt buộc cho kind `ratchet`, `knowledge validate` đối chiếu nó; ba lane và luật lead sống trong skill `pulse-ratchet`, chưa có lệnh `ratchet bundle`. |
-| 5.7 Giao tiếp | Đã có và chạy thật | Event log append-only; `pulse note` ghi note vào Ticket, `pulse events tail` đọc với `--since`/`--ticket`/`--follow`; note hiện trong packet (giới hạn 8 note mới nhất). Còn một file một event: chuyển sang `<date>.jsonl` và `events compact` theo Decision 0011; `--kind friction`, `session_ref` chưa có. |
-| 5.8 Bề mặt hướng dẫn | Chưa có | Khối AGENTS có marker, `DOC-GLOSSARY`, template `brief.md` năm mục, bảy skill, đổi guard test cấm `skills/` thành guard parse lệnh (Decision 0009). |
+| 5.7 Giao tiếp | Đã có và chạy thật | Event log append-only; `pulse note` ghi note vào Ticket, `pulse events tail` đọc với `--since`/`--ticket`/`--follow`; note hiện trong packet (giới hạn 8 note mới nhất, mỗi note cắt 500 ký tự). Còn một file một event: chuyển sang `<date>.jsonl` và `events compact` theo Decision 0011; `--kind friction`, `session_ref` chưa có. Decision 0013: đổi cờ `--ticket` thành `--work` (code đã nhận mọi node), skill `pulse-handoff`, hook mẫu; `--kind handoff` và `work resume` là Later. |
+| 5.8 Bề mặt hướng dẫn | Chưa có | Khối AGENTS có marker, `DOC-GLOSSARY`, template `brief.md` năm mục, bảy skill của Decision 0009 cộng `pulse-handoff` của 0013, đổi guard test cấm `skills/` thành guard parse lệnh. |
 | 5.8 MCP | Stub không bind | Server thật, sau CLI |
 
 ## 9. Triage code
@@ -1293,7 +1324,10 @@ từ inventory và guard test kiểm tra hai chiều; `pulse ratchet bundle` ch�
 dogfood thấy lane rò rỉ; compound run và retrieval eval; persisted shaping map
 và decision frontier cho R2/R3; Story qualification matrix; external tracker
 adapter; semantic search adapter nếu lexical eval chứng minh recall gap;
-conductor agent loop; Windows.
+conductor agent loop; Windows. Từ Decision 0012 và 0013, làm khi dogfood
+thấy chậm thật: `note --kind handoff`, `pulse work resume`, gộp hai họ
+receipt (`evidence/execution/*` vào envelope chung) sau khi `doctor` cần đọc
+chúng chung.
 
 ## 12. Dấu hiệu đang đi sai hướng
 
@@ -1353,8 +1387,18 @@ Gặp một dấu hiệu thì dừng feature liên quan, ghi Decision, sửa har
    `check`; plane tracked từ chối absolute path và secret; profile risk cao
    khai `reviewers: 2`; `pulse-ratchet` chạy ba lane `execution|harness|
    knowledge` với lead hoà giải và learning `ratchet` có `expected_signal`.
-   Không lấy điểm năm chiều, renderer, Canvas, adapter matrix. Decision 0012.
-   Chốt 2026-09-06.
+   Không lấy điểm năm chiều, renderer, Canvas, adapter matrix. Handoff mang
+   claim máy đọc `--check`/`--proof`. Decision 0012. Chốt 2026-09-06.
+9. **Bàn giao phiên theo ngưỡng của host.** Host đếm token và ép bằng hook;
+   Pulse không đọc transcript. Skill thứ tám `pulse-handoff` user-invoked:
+   flush về plane, doc live thread ở `.pulse/runtime/handoff/<node>.md`,
+   một `note --work` con trỏ, in lệnh mở, dừng. `--ticket` của `note` đổi
+   thành `--work`. Không HANDOFF.json, không `/tmp` cho target repo. `--kind
+   handoff`, `work resume` là Later. Decision 0013. Chốt 2026-09-06.
+10. **Pulse ghi `qa_checkpoint`, runner chỉ in output.** `pulse run qa`
+    ingest artifact rồi dựng receipt với `bindings.artifacts`; script không
+    cần grant `evidence.record`; drift baseline hay run không sạch thì
+    `inconclusive` không receipt. Decision 0014. Chốt 2026-09-06.
 
 Còn mở, mặc định nếu không có ý kiến khác:
 
@@ -1397,3 +1441,10 @@ cùng prompt chỉ cho spec và Decision risk cao; repair verified tách khỏi
 effectiveness; ranh giới riêng tư cho output tracked. Không lấy: điểm năm
 chiều, support track như tầng báo cáo, renderer HTML/Canvas, host adapter
 matrix, Harness as Code, Studio, Inspector, khối lượng prose của SKILL.md.
+
+Matt Pocock `handoff`, Decision 0013 (`references/mattpocock/skills`,
+`skills/productivity/handoff`): nén không chép, chỉ live thread, mục
+suggested skills, redact, user-invoked với `disable-model-invocation`. Không
+lấy: ghi vào `/tmp` cho target repo (đi ngược repository-legible context),
+biến thể `claude-handoff` tự spawn phiên nền (Pulse không spawn ngoài `pulse
+run`).

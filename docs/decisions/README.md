@@ -16,6 +16,8 @@ Current decisions:
 - [0010 — QA baseline là markdown heading, JSON chỉ ở biên runner](0010-qa-baseline-markdown-contract.md)
 - [0011 — Event log là JSONL theo ngày](0011-events-jsonl-per-day.md)
 - [0012 — Thang bằng chứng, reviewer là bằng chứng, lane độc lập và lead hoà giải](0012-evidence-ladder-independent-lanes.md)
+- [0013 — Bàn giao phiên theo ngưỡng của host](0013-session-handoff-host-threshold.md)
+- [0014 — Pulse ghi `qa_checkpoint`, runner chỉ in output](0014-pulse-records-qa-checkpoint.md)
 
 Add or update a decision when:
 

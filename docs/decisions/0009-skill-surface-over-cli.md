@@ -159,6 +159,7 @@ pulse run worker | reviewer | qa  (không phải skill)
 pulse-ratchet (sau close)
 pulse-onboard (brownfield, explicit)
 pulse-research (primitive, model-invoked, subagent nền)
+pulse-handoff (context sắp đầy, user-invoked; thêm bởi Decision 0013)
 ```
 
 Ánh xạ khái niệm của Matt sang vật liệu Pulse đã có:
@@ -285,8 +286,9 @@ thứ tự sửa instruction sai trước rồi mới thêm; pass hai sau approv
 Gắn vào trạng thái, không gắn vào skill: Story `shaped` (sau grill), Decision
 `accepted` (wayfind hoặc grill), seam trong `approach.md` (spec hỏi một lần),
 breakdown trước khi tạo Ticket (tickets), Ticket `ready`, close receipt. Giữ
-grill → spec → tickets trong một context window; đầy thì `pulse note` để bàn
-giao, không compact giữa chừng.
+grill → spec → tickets trong một context window; đầy thì bàn giao phiên theo
+Decision 0013 (skill `pulse-handoff`: flush, doc runtime, note con trỏ),
+không compact giữa chừng.
 
 ## Thay đổi cần làm
 

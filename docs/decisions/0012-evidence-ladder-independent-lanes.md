@@ -71,9 +71,17 @@ hỏi khác nhau:
    điểm; không có tổng hợp thành một con số cho cả repo.
 2. **Reviewer là bằng chứng, không phải authority.** `reviewer-input.json`
    không mang `handoff.summary` hay bất kỳ lời kể nào của worker; nó mang
-   claim để verify: acceptance id, `changed_paths`, proof receipt id, source
-   commit. Reviewer không sửa file. Lead (close gate hoặc developer) không
-   đưa kết luận của mình vào prompt reviewer.
+   claim để verify: acceptance id, `changed_paths`, `checks[]`,
+   `acceptance_proofs[]`, proof receipt id, source commit. Reviewer không sửa
+   file. Lead (close gate hoặc developer) không đưa kết luận của mình vào
+   prompt reviewer.
+   **Handoff mang claim máy đọc.** `work handoff` nhận `--check
+   "name=command=exit"` và `--proof "AC=checks=receipts"` cùng cú pháp với
+   `work verify`; `HandoffReceipt` thêm `checks[]` và `acceptance_proofs[]`;
+   `summary` về một dòng. Receipt TK-002 thật trong `examples/todolist/` cho
+   thấy vì sao: không có trường cấu trúc, worker nhét mapping AC, lệnh verify
+   và kết quả vào một đoạn `summary` dài, và reviewer chỉ có thể tin hoặc
+   không tin đoạn đó.
 3. **Finding có shape bắt buộc.** Mọi `findings[]` trong `verification`,
    `qa_checkpoint`, `check` output và `doctor` sau này có `summary`, `owner`
    và `check`; `verification` thêm `acceptance_id`, `qa_checkpoint` thêm
@@ -141,6 +149,34 @@ finding". Thêm nữa, Pulse không đọc transcript nên bậc cao nhất từ
 là `wired`; một con số tổng hợp sẽ mãi phản ánh cấu hình chứ không phản ánh
 hành vi.
 
+## Contract handoff
+
+```text
+pulse --idempotency-key handoff:TK-031:<lease>-a1 work handoff \
+  --lease <lease> --session <session> --source-commit d4e5f6 \
+  --summary "Thêm TokenExpired, giữ InvalidToken cho revoked" \
+  --changed-path src/auth/errors.ts --changed-path tests/auth/refresh-token.test.ts \
+  --check "auth=pnpm test auth=0" \
+  --proof "AC-1=auth" --proof "AC-2=auth=rcpt_D1"
+```
+
+`HandoffReceipt` thêm `checks[] {name, command, exit_code, artifact_ids}` và
+`acceptance_proofs[] {acceptance_id, check_names, evidence_receipt_ids}`, cùng
+struct với `VerificationReceipt`. `summary` là một dòng, tối đa 300 ký tự.
+Handoff thiếu proof cho một acceptance id vẫn được ghi; close gate vốn đã đòi
+reviewer map đủ, không đòi worker. Ready gate không đổi.
+
+## Hai họ receipt
+
+Hiện trạng, không phải quyết định: `handoff`, `verification`, `close`,
+`story-close` nằm ở `.pulse/evidence/execution/` với struct riêng trong
+`src/execution.rs`; `qa_checkpoint`, `documentation_validation`,
+`decision_acceptance`, `supersession_reconciliation` nằm ở
+`.pulse/evidence/receipts/` với envelope chung. `pulse evidence receipt list`
+không thấy họ đầu. Hệ quả cho 0012: redaction và validate shape finding phải
+áp lên cả hai đường ghi. Gộp hai họ về một envelope là Decision riêng, sau khi
+`doctor` cần đọc chúng chung (Decision 0011 đã ghi câu hỏi này là còn mở).
+
 ## Contract reviewer
 
 `reviewer-input.json`:
@@ -155,6 +191,11 @@ hành vi.
   "handoffs": [{
     "handoff_id": "01JX…H1",
     "changed_paths": ["src/auth/errors.ts", "tests/auth/refresh-token.test.ts"],
+    "checks": [{"name": "auth", "command": "pnpm test auth", "exit_code": 0}],
+    "acceptance_proofs": [
+      {"acceptance_id": "AC-1", "check_names": ["auth"], "evidence_receipt_ids": []},
+      {"acceptance_id": "AC-2", "check_names": ["auth"], "evidence_receipt_ids": ["rcpt_D1"]}
+    ],
     "recorded_by": "agent:runner:worker",
     "source_commit": "d4e5f6"
   }],
@@ -164,10 +205,11 @@ hành vi.
 }
 ```
 
-Không có `summary`, không có `checks` worker khai, không có `remaining_risk`.
-Reviewer lấy contract từ `pulse work show`, diff từ Git, và tự chạy lệnh
-verify. Handoff receipt đầy đủ vẫn tra được bằng `pulse evidence receipt
-show`, nhưng reviewer phải chủ động mở, và bootstrap prompt không bảo mở.
+Không có `summary`, không có `remaining_risk`. `checks` và `acceptance_proofs`
+là claim có dạng máy đọc: reviewer chạy lại đúng `command`, không tin
+`exit_code` worker khai. Reviewer lấy contract từ `pulse work show`, diff từ
+Git. Handoff receipt đầy đủ vẫn tra được bằng `pulse evidence receipt show`,
+nhưng reviewer phải chủ động mở, và bootstrap prompt không bảo mở.
 
 Reviewer output:
 
@@ -304,11 +346,16 @@ thì `not_needed` hoặc `misleading`, không `helpful`.
 
 Code, cùng lượt với `run.rs` đang dở:
 
+- `src/execution.rs`, `src/kernel/completion.rs`, `src/cli/work.rs`:
+  `HandoffReceipt` thêm `checks[]`, `acceptance_proofs[]`; `work handoff`
+  nhận `--check`, `--proof` bằng parser của `work verify`; `summary` giới hạn
+  300 ký tự; bootstrap prompt worker ghi cú pháp mới.
 - `src/kernel/run.rs`: `reviewer-input.json` bỏ `summary`, thêm
-  `contract_revision`, `reviewers_required`; `classify_reviewer` validate
-  shape finding, gắn `unverifiable`, coi `rework` toàn `unverifiable` là
-  `inconclusive`; bootstrap prompt reviewer bỏ dòng "Do not trust the worker
-  summary" vì không còn gì để không tin.
+  `contract_revision`, `reviewers_required`, `checks`, `acceptance_proofs`
+  của handoff; `classify_reviewer` validate shape finding, gắn
+  `unverifiable`, coi `rework` toàn `unverifiable` là `inconclusive`;
+  bootstrap prompt reviewer bỏ dòng "Do not trust the worker summary" vì
+  không còn gì để không tin.
 - `src/evidence/redaction.rs` (mới): mẫu secret, canonicalize path, hàm
   `check_text_fields`. Gọi từ `evidence receipt record`, `work handoff`,
   `work verify`, `note`, `knowledge create|capture`.
