@@ -52,6 +52,12 @@ impl JsonGraphStore {
         }
         normalize_handoff_checks(&mut args.checks);
         normalize_acceptance_proofs(&mut args.acceptance_proofs);
+        redact_proof_claim(
+            &self.repo_root,
+            &mut args.summary,
+            &mut args.checks,
+            &mut args.acceptance_proofs,
+        )?;
         validate_handoff_claim(&args.checks, &args.acceptance_proofs)?;
         for path in &args.changed_paths {
             crate::storage::paths::validate_relative_path(Path::new(path)).map_err(|_| {
@@ -267,6 +273,33 @@ impl JsonGraphStore {
         }
         normalize_acceptance_proofs(&mut args.acceptance_proofs);
         normalize_findings(&mut args.findings);
+        redact_proof_claim(
+            &self.repo_root,
+            &mut args.summary,
+            &mut args.checks,
+            &mut args.acceptance_proofs,
+        )?;
+        for finding in &mut args.findings {
+            finding.summary = crate::evidence::redaction::clean_text(
+                &self.repo_root,
+                "finding.summary",
+                &finding.summary,
+            )?;
+            finding.owner = crate::evidence::redaction::clean_text(
+                &self.repo_root,
+                "finding.owner",
+                &finding.owner,
+            )?;
+            if let Some(check) = &mut finding.check {
+                *check = crate::evidence::redaction::clean_text(
+                    &self.repo_root,
+                    "finding.check",
+                    check,
+                )?;
+            }
+            // `unverifiable` is derived from the (possibly rewritten) check.
+            finding.normalize();
+        }
         if args.disposition == VerificationDisposition::Rework
             && args.findings.iter().all(|finding| finding.unverifiable)
         {
@@ -291,29 +324,38 @@ impl JsonGraphStore {
         // current typed schema, so a passed check must remain non-terminal until
         // that authority exists.  In particular, caller-provided command/exit
         // records cannot authorize Done by themselves.
-        let (target, reason) = match args.disposition {
-            VerificationDisposition::Passed => (NodeStatus::Verifying, None),
-            VerificationDisposition::Rework => (
+        //
+        // A passed disposition is an observation on the current verifying
+        // revision, not a transition: the node is left untouched so further
+        // reviewers can record against the same handoff (Decision 0012 §5).
+        // Rework and blocked move the Ticket.
+        let transition = match args.disposition {
+            VerificationDisposition::Passed => None,
+            VerificationDisposition::Rework => Some((
                 NodeStatus::Rework,
-                Some(TransitionReason {
+                TransitionReason {
                     code: "verification_rework".to_string(),
                     summary: args.summary.trim().to_string(),
                     reference: Some(verification_id.clone()),
-                }),
-            ),
-            VerificationDisposition::Blocked => (
+                },
+            )),
+            VerificationDisposition::Blocked => Some((
                 NodeStatus::Blocked,
-                Some(TransitionReason {
+                TransitionReason {
                     code: "verification_blocked".to_string(),
                     summary: args.summary.trim().to_string(),
                     reference: Some(verification_id.clone()),
-                }),
-            ),
+                },
+            )),
         };
-        node.status = target;
-        node.status_reason = reason.map(TransitionReason::into_status_reason);
-        node.revision += 1;
-        node.updated_at = Utc::now();
+        if let Some((target, reason)) = transition {
+            node.status = target;
+            node.status_reason = Some(reason.into_status_reason());
+            node.revision += 1;
+            node.updated_at = Utc::now();
+        }
+        let resulting_status = status_name(node.status).to_string();
+        let resulting_revision = node.revision;
         let mut verification = VerificationReceipt {
             schema_version: 1,
             verification_id: verification_id.clone(),
@@ -330,8 +372,8 @@ impl JsonGraphStore {
             findings: args.findings,
             verified_by: args.actor.clone(),
             recorded_at: Utc::now().to_rfc3339(),
-            resulting_status: status_name(target).to_string(),
-            resulting_revision: node.revision,
+            resulting_status,
+            resulting_revision,
             verification_fingerprint: String::new(),
         };
         verification.verification_fingerprint = verification.compute_fingerprint()?;
@@ -360,10 +402,13 @@ impl JsonGraphStore {
 
     /// Resolve the current passed verification for a Ticket and close it.
     ///
-    /// This is the Ticket-oriented entry point used by the CLI. Resolution is
-    /// deliberately narrow: exactly one passed verification must bind the
-    /// Ticket's current verifying revision. A live lease is checked when one
-    /// exists so an ambiguous assignment can never be silently selected.
+    /// This is the Ticket-oriented entry point used by the CLI. Resolution
+    /// is deliberately narrow: the passed verifications binding the
+    /// Ticket's current verifying revision must share one handoff and cover
+    /// the profile's `reviewers` requirement with distinct actors (Decision
+    /// 0012 §5); the close anchor is the lowest verification id of that
+    /// handoff. A live lease is checked when one exists so an ambiguous
+    /// assignment can never be silently selected.
     pub fn close_execution_ticket_for_ticket(
         &self,
         ticket_id: &str,
@@ -373,7 +418,8 @@ impl JsonGraphStore {
         idempotency_key: String,
     ) -> Result<CloseReceipt> {
         let node = self.show_node(ticket_id)?;
-        let mut candidates = list_verifications(&self.repo_root)?
+        let reviewers_required = crate::policy::profile::reviewers_required(&self.repo_root)?;
+        let candidates = list_verifications(&self.repo_root)?
             .into_iter()
             .filter(|verification| {
                 verification.ticket_id == ticket_id
@@ -382,12 +428,35 @@ impl JsonGraphStore {
                     && verification.resulting_revision == node.revision
             })
             .collect::<Vec<_>>();
-        candidates.sort_by(|left, right| left.verification_id.cmp(&right.verification_id));
-        let verification = match candidates.as_slice() {
+        // Group by handoff: the close gate counts distinct reviewer actors
+        // per handoff, not per Ticket.
+        let mut by_handoff: std::collections::BTreeMap<&str, Vec<&VerificationReceipt>> =
+            std::collections::BTreeMap::new();
+        for verification in &candidates {
+            by_handoff
+                .entry(verification.handoff_id.as_str())
+                .or_default()
+                .push(verification);
+        }
+        let mut qualifying: Vec<&VerificationReceipt> = Vec::new();
+        for handoff_verifications in by_handoff.values() {
+            let actors: std::collections::BTreeSet<&str> = handoff_verifications
+                .iter()
+                .map(|verification| verification.verified_by.as_str())
+                .collect();
+            if actors.len() >= reviewers_required as usize {
+                qualifying = handoff_verifications.clone();
+                break;
+            }
+        }
+        qualifying.sort_by(|left, right| left.verification_id.cmp(&right.verification_id));
+        let verification = match qualifying.as_slice() {
             [] => {
                 return Err(PulseError::validation(
                     "close_verification_missing",
-                    format!("no passed verification binds current revision of Ticket {ticket_id}"),
+                    format!(
+                        "no handoff binding current revision of Ticket {ticket_id} carries {reviewers_required} passed verification(s) from distinct actors"
+                    ),
                 ));
             }
             [verification] => verification,
@@ -497,6 +566,38 @@ impl JsonGraphStore {
             return Err(PulseError::validation(
                 "close_proof_binding_mismatch",
                 "verification and handoff proofs do not share exact execution bindings",
+            ));
+        }
+        // Decision 0012 §5: the profile's `reviewers` distinct actors must
+        // each hold a passed verification on this handoff at this revision,
+        // every one different from the worker.
+        let reviewers_required = crate::policy::profile::reviewers_required(&self.repo_root)?;
+        let reviewer_actors: std::collections::BTreeSet<String> =
+            list_verifications(&self.repo_root)?
+                .into_iter()
+                .filter(|candidate| {
+                    candidate.ticket_id == verification.ticket_id
+                        && candidate.handoff_id == verification.handoff_id
+                        && candidate.disposition == VerificationDisposition::Passed
+                        && candidate.resulting_status == "verifying"
+                        && candidate.resulting_revision == verification.resulting_revision
+                })
+                .map(|candidate| candidate.verified_by)
+                .collect();
+        if reviewer_actors.contains(handoff.recorded_by.as_str()) {
+            return Err(PulseError::validation(
+                "verification_independence_required",
+                "a verification on the closed handoff was recorded by the handoff author",
+            ));
+        }
+        if (reviewer_actors.len() as u32) < reviewers_required {
+            return Err(PulseError::validation(
+                "close_reviewers_missing",
+                format!(
+                    "close requires {reviewers_required} passed verification(s) from distinct actors on handoff {} but found {}",
+                    verification.handoff_id,
+                    reviewer_actors.len()
+                ),
             ));
         }
         if !crate::source::same_source_state(
@@ -785,6 +886,37 @@ fn normalize_findings(findings: &mut [Finding]) {
     for finding in findings.iter_mut() {
         finding.normalize();
     }
+}
+
+/// Decision 0012 §4: handoff/verification claim text is on the tracked
+/// plane. Rewrite in-repo absolute paths to repository-relative and refuse
+/// secret-shaped strings before the receipt is built.
+fn redact_proof_claim(
+    repo_root: &Path,
+    summary: &mut String,
+    checks: &mut [VerificationCheck],
+    proofs: &mut [AcceptanceProof],
+) -> Result<()> {
+    *summary = crate::evidence::redaction::clean_text(repo_root, "summary", summary)?;
+    for check in checks.iter_mut() {
+        check.name = crate::evidence::redaction::clean_text(repo_root, "check.name", &check.name)?;
+        check.command =
+            crate::evidence::redaction::clean_text(repo_root, "check.command", &check.command)?;
+    }
+    for proof in proofs.iter_mut() {
+        proof.acceptance_id = crate::evidence::redaction::clean_text(
+            repo_root,
+            "proof.acceptance_id",
+            &proof.acceptance_id,
+        )?;
+        for name in &mut proof.check_names {
+            *name = crate::evidence::redaction::clean_text(repo_root, "proof.check_name", name)?;
+        }
+        for id in &mut proof.evidence_receipt_ids {
+            *id = crate::evidence::redaction::clean_text(repo_root, "proof.receipt_id", id)?;
+        }
+    }
+    Ok(())
 }
 
 /// The checkout directory a proof's dirty identity is computed against: the

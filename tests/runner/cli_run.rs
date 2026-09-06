@@ -596,3 +596,43 @@ echo '{"status": "blocked", "reason": "summary rejected"}'
         "the over-long summary must not produce a handoff receipt"
     );
 }
+
+/// Decision 0012 §5: `reviewers_required` in the reviewer input comes from
+/// the strictest profile declared in PULSE.md, not a constant.
+#[test]
+fn reviewer_input_carries_the_profile_reviewers_requirement() {
+    let repo = TestRepo::from_fixture("minimal-service");
+    let ticket_id = setup_ready_ticket(&repo);
+    std::fs::write(
+        repo.path().join("PULSE.md"),
+        "# Verification Profiles\n\n- `service-change`: `node scripts/verify.mjs`, reviewers: 2\n- `docs-only`: inspect changed Markdown links\n",
+    )
+    .unwrap();
+    commit_all(repo.path());
+    install_worker_script(
+        &repo,
+        r#"
+RUN_DIR="$(dirname "$1")"
+. "$RUN_DIR/worker-env"
+"$PULSE" work handoff --lease "$LEASE_ID" --session "$SESSION_ID" \
+  --source-commit "$SOURCE_COMMIT" --summary "did the work" \
+  --idempotency-key handoff-1 --json
+echo '{"status": "handed_off", "summary": "done"}'
+"#,
+    );
+    set_worker_command(&repo, "sh scripts/fake-worker.sh {input}");
+    let outcome = run_outcome(&repo, &ticket_id);
+    assert_eq!(outcome["status"], "handed_off");
+
+    install_worker_script(
+        &repo,
+        r#"echo '{"disposition": "pass", "acceptance": {"AC-1": "re-ran"}, "findings": []}'"#,
+    );
+    set_command(&repo, "reviewer", "sh scripts/fake-worker.sh {input}");
+    repo.pulse_ok(&["run", "reviewer", "--ticket", &ticket_id, "--json"]);
+
+    let run_dir = repo.path().join(".pulse/runtime/run").join(&ticket_id);
+    let input: Value =
+        serde_json::from_slice(&fs::read(run_dir.join("reviewer-input.json")).unwrap()).unwrap();
+    assert_eq!(input["reviewers_required"], 2);
+}

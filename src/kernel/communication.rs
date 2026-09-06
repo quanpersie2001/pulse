@@ -36,7 +36,10 @@ impl JsonGraphStore {
                 "note message must not be empty",
             ));
         }
-        if trimmed.chars().count() > MAX_NOTE_CHARS {
+        // Notes are tracked-plane text (Decision 0012 §4): rewrite in-repo
+        // absolute paths, refuse secret-shaped strings.
+        let cleaned = crate::evidence::redaction::clean_text(&self.repo_root, "message", trimmed)?;
+        if cleaned.chars().count() > MAX_NOTE_CHARS {
             return Err(PulseError::validation(
                 "note_message_too_long",
                 format!("note message must stay within {MAX_NOTE_CHARS} characters"),
@@ -59,7 +62,7 @@ impl JsonGraphStore {
                 ticket_id,
                 json!({
                     "ticket_id": ticket_id,
-                    "message": trimmed,
+                    "message": cleaned,
                 }),
                 Utc::now(),
             ),
@@ -68,7 +71,7 @@ impl JsonGraphStore {
             schema_version: 1,
             code: "note_recorded".to_string(),
             ticket_id: ticket_id.to_string(),
-            message: trimmed.to_string(),
+            message: cleaned,
             recorded_by: actor.to_string(),
         })
     }

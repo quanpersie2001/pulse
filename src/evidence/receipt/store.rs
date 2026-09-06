@@ -103,6 +103,13 @@ fn record_receipt_envelope_with_size(
     input_size: usize,
 ) -> Result<ReceiptOutcome> {
     validate_receipt_id(&receipt.id)?;
+    // Decision 0012 §4: payload text is on the tracked plane — rewrite
+    // in-repo absolute paths to repository-relative and refuse secrets.
+    let mut payload_value = serde_json::to_value(&receipt.payload)
+        .map_err(|error| PulseError::validation("receipt_schema_invalid", error.to_string()))?;
+    crate::evidence::redaction::clean_json_strings(repo_root, &mut payload_value)?;
+    receipt.payload = serde_json::from_value(payload_value)
+        .map_err(|error| PulseError::validation("receipt_schema_invalid", error.to_string()))?;
     normalize_bindings(&mut receipt);
     let _guard = WriteGuard::acquire(repo_root)?;
     crate::storage::bootstrap(repo_root)?;

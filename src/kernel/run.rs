@@ -901,9 +901,9 @@ impl JsonGraphStore {
                         "qa_checkpoint": proof_receipts(crate::evidence::model::ReceiptKind::QaCheckpoint),
                         "documentation_validation": proof_receipts(crate::evidence::model::ReceiptKind::DocumentationValidation),
                     },
-                    // Fixed until the verification profile carries `reviewers`
-                    // (Decision 0012 §5).
-                    "reviewers_required": 1,
+                    // The verification profile's `reviewers` requirement
+                    // (Decision 0012 §5); strictest declared profile wins.
+                    "reviewers_required": crate::policy::profile::reviewers_required(&self.repo_root)?,
                     "artifact_dir": "artifacts",
                 }))?)
             }

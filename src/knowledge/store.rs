@@ -169,6 +169,25 @@ impl KnowledgeStore {
                 )
             })?;
         }
+        // Learning text is tracked-plane content (Decision 0012 §4): rewrite
+        // in-repo absolute paths to repository-relative, refuse secrets.
+        let mut draft = draft;
+        draft.title =
+            crate::evidence::redaction::clean_text(&self.repo_root, "title", &draft.title)?;
+        draft.summary =
+            crate::evidence::redaction::clean_text(&self.repo_root, "summary", &draft.summary)?;
+        for field in [
+            ("guidance.do", &mut draft.guidance.r#do),
+            ("guidance.avoid", &mut draft.guidance.avoid),
+            (
+                "guidance.required_checks",
+                &mut draft.guidance.required_checks,
+            ),
+        ] {
+            for line in field.1.iter_mut() {
+                *line = crate::evidence::redaction::clean_text(&self.repo_root, field.0, line)?;
+            }
+        }
         let id = self.allocate_id()?;
         if entries.contains_key(&id) || self.entry_path(&id).exists() {
             return Err(PulseError::AlreadyExists { subject: id });

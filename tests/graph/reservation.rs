@@ -1706,3 +1706,115 @@ fn concurrent_terminal_retry_reuses_one_fresh_live_generation() {
     .unwrap();
     assert_eq!(terminal.state, ReservationState::Expired);
 }
+
+#[test]
+fn close_gate_counts_distinct_reviewer_actors_from_the_profile() {
+    // Decision 0012 §5: a profile declaring `reviewers: 2` demands two
+    // passed verification receipts on the same handoff from two distinct
+    // actors before close; one receipt is not a verdict.
+    let repo = TestRepo::from_fixture("minimal-service");
+    let store = JsonGraphStore::new(repo.path());
+    bootstrap_repo(&repo, &store);
+    write_policy(repo.path(), &["work.assignment.release"]);
+    add_reviewer_policy(repo.path());
+    std::fs::write(
+        repo.path().join("PULSE.md"),
+        "# Verification Profiles\n\n- `service-change`: `node scripts/verify.mjs`, reviewers: 2\n",
+    )
+    .unwrap();
+    let ticket_id = setup_ready_ticket(repo.path(), &store);
+
+    let reserved = reserve(&store, &ticket_id, "reservation-two-reviewers");
+    let binding = RuntimeBinding {
+        project_id: "prj_test".to_string(),
+        workspace_id: "wks_test".to_string(),
+        session_id: "ses_test".to_string(),
+        provider_id: "codex".to_string(),
+    };
+    let active = store
+        .activate_reservation(ActivateReservationArgs {
+            lease_id: reserved.reservation.lease_id,
+            actor: "agent:tester".to_string(),
+            runtime_binding: binding,
+            acknowledgement: acknowledgement(&reserved.reservation.packet_fingerprint),
+        })
+        .unwrap();
+    let handoff = store
+        .submit_execution_handoff(SubmitHandoffArgs {
+            lease_id: active.lease_id,
+            actor: "agent:tester".to_string(),
+            session_id: "ses_test".to_string(),
+            source_commit: active.source.commit.clone(),
+            summary: "Ready for independent review.".to_string(),
+            changed_paths: vec![],
+            evidence_receipt_ids: vec![],
+            learning_usage: Vec::new(),
+            checks: Vec::new(),
+            acceptance_proofs: Vec::new(),
+            idempotency_key: "handoff-two-reviewers".to_string(),
+        })
+        .unwrap();
+
+    let verification = |actor: &str, key: &str| {
+        store
+            .complete_execution_verification(CompleteVerificationArgs {
+                handoff_id: handoff.handoff_id.clone(),
+                actor: actor.to_string(),
+                source_commit: handoff.source_commit.clone(),
+                disposition: VerificationDisposition::Passed,
+                summary: format!("{actor} re-ran the focused check."),
+                checks: vec![VerificationCheck {
+                    name: format!("focused-{key}"),
+                    command: "node scripts/verify.mjs".to_string(),
+                    exit_code: 0,
+                    artifact_ids: vec![],
+                }],
+                acceptance_proofs: acceptance_proofs(&format!("focused-{key}")),
+                findings: Vec::new(),
+                idempotency_key: key.to_string(),
+            })
+            .unwrap()
+    };
+    let first = verification("human:reviewer", "verification-reviewer-1");
+    assert_eq!(first.resulting_status, "verifying");
+
+    // The close anchor is reviewer 1's receipt; the gate still counts
+    // actors and refuses while only one exists.
+    let refused = store.close_execution_ticket(CloseTicketArgs {
+        verification_id: first.verification_id.clone(),
+        actor: "human:tester".to_string(),
+        source_commit: handoff.source_commit.clone(),
+        summary: "Too early.".to_string(),
+        idempotency_key: "close-one-reviewer".to_string(),
+    });
+    assert_eq!(refused.unwrap_err().code(), "close_reviewers_missing");
+
+    // A second receipt from the SAME actor does not change the count.
+    let replayed = verification("human:reviewer", "verification-reviewer-1b");
+    let still_refused = store.close_execution_ticket(CloseTicketArgs {
+        verification_id: replayed.verification_id,
+        actor: "human:tester".to_string(),
+        source_commit: handoff.source_commit.clone(),
+        summary: "Still one actor.".to_string(),
+        idempotency_key: "close-one-reviewer-2".to_string(),
+    });
+    assert_eq!(still_refused.unwrap_err().code(), "close_reviewers_missing");
+
+    // A genuinely distinct second actor satisfies the profile.
+    let second = verification("human:tester", "verification-reviewer-2");
+    assert_eq!(second.resulting_status, "verifying");
+    let closed = store
+        .close_execution_ticket(CloseTicketArgs {
+            verification_id: first.verification_id,
+            actor: "human:tester".to_string(),
+            source_commit: handoff.source_commit.clone(),
+            summary: "Two independent reviewers passed.".to_string(),
+            idempotency_key: "close-two-reviewers".to_string(),
+        })
+        .unwrap();
+    assert_eq!(closed.ticket_id, ticket_id);
+    assert_eq!(
+        store.show_node(&ticket_id).unwrap().status,
+        NodeStatus::Done
+    );
+}
