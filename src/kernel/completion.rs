@@ -450,6 +450,11 @@ impl JsonGraphStore {
             }
         }
         qualifying.sort_by(|left, right| left.verification_id.cmp(&right.verification_id));
+        // Duplicate receipts are noise, not ambiguity (Decision 0012 §5): a
+        // reviewer that re-runs `work verify` with a fresh idempotency key
+        // seals a second passed receipt on the same handoff and actor. The
+        // close anchor stays deterministic — the lowest verification id of
+        // the qualifying handoff.
         let verification = match qualifying.as_slice() {
             [] => {
                 return Err(PulseError::validation(
@@ -459,13 +464,7 @@ impl JsonGraphStore {
                     ),
                 ));
             }
-            [verification] => verification,
-            _ => {
-                return Err(PulseError::validation(
-                    "close_verification_ambiguous",
-                    format!("more than one passed verification binds Ticket {ticket_id}"),
-                ));
-            }
+            [verification, ..] => verification,
         };
 
         let live_leases = crate::kernel::reservation::list_reservations(&self.repo_root)?

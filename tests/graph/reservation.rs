@@ -1818,3 +1818,82 @@ fn close_gate_counts_distinct_reviewer_actors_from_the_profile() {
         NodeStatus::Done
     );
 }
+
+#[test]
+fn close_anchor_is_deterministic_under_duplicate_passed_verifications() {
+    // Dogfood regression (TK-003): a reviewer that re-runs `work verify`
+    // with a fresh idempotency key seals a second passed receipt on the
+    // same handoff and actor. Duplicates are noise, not ambiguity
+    // (Decision 0012 §5): close anchors the lowest verification id of the
+    // qualifying handoff.
+    let repo = TestRepo::from_fixture("minimal-service");
+    let store = JsonGraphStore::new(repo.path());
+    bootstrap_repo(&repo, &store);
+    write_policy(repo.path(), &["work.assignment.release"]);
+    add_reviewer_policy(repo.path());
+    let ticket_id = setup_ready_ticket(repo.path(), &store);
+
+    let reserved = reserve(&store, &ticket_id, "reservation-duplicate-verify");
+    let active = store
+        .activate_reservation(ActivateReservationArgs {
+            lease_id: reserved.reservation.lease_id,
+            actor: "agent:tester".to_string(),
+            runtime_binding: binding(),
+            acknowledgement: acknowledgement(&reserved.reservation.packet_fingerprint),
+        })
+        .unwrap();
+    let handoff = store
+        .submit_execution_handoff(SubmitHandoffArgs {
+            lease_id: active.lease_id,
+            actor: "agent:tester".to_string(),
+            session_id: "ses_test".to_string(),
+            source_commit: active.source.commit.clone(),
+            summary: "Ready for independent review.".to_string(),
+            changed_paths: vec![],
+            evidence_receipt_ids: vec![],
+            learning_usage: Vec::new(),
+            checks: Vec::new(),
+            acceptance_proofs: Vec::new(),
+            idempotency_key: "handoff-duplicate-verify".to_string(),
+        })
+        .unwrap();
+
+    let verification = |key: &str| {
+        store
+            .complete_execution_verification(CompleteVerificationArgs {
+                handoff_id: handoff.handoff_id.clone(),
+                actor: "human:reviewer".to_string(),
+                source_commit: handoff.source_commit.clone(),
+                disposition: VerificationDisposition::Passed,
+                summary: format!("Re-ran the focused check ({key})."),
+                checks: vec![VerificationCheck {
+                    name: format!("focused-{key}"),
+                    command: "node scripts/verify.mjs".to_string(),
+                    exit_code: 0,
+                    artifact_ids: vec![],
+                }],
+                acceptance_proofs: acceptance_proofs(&format!("focused-{key}")),
+                findings: Vec::new(),
+                idempotency_key: key.to_string(),
+            })
+            .unwrap()
+    };
+    let first = verification("verification-a");
+    let replay = verification("verification-b");
+    assert_ne!(first.verification_id, replay.verification_id);
+
+    let closed = store
+        .close_execution_ticket_for_ticket(
+            &ticket_id,
+            "human:tester".to_string(),
+            handoff.source_commit,
+            "Duplicate same-actor verifications collapse to one anchor.".to_string(),
+            "close-duplicate-verify".to_string(),
+        )
+        .unwrap();
+    assert_eq!(closed.verification_id, first.verification_id);
+    assert_eq!(
+        store.show_node(&ticket_id).unwrap().status,
+        NodeStatus::Done
+    );
+}
