@@ -1,0 +1,26 @@
+{
+  "actor": {
+    "id": "quanpersie2001",
+    "kind": "human"
+  },
+  "event_type": "knowledge.learning.transitioned",
+  "id": "evt_01M1W26T0DESFRKJBM0M2NNXDY",
+  "occurred_at": "2026-09-06T19:13:01.115722Z",
+  "payload": {
+    "from": "validated",
+    "hash_after": "sha256:d737b7342cb9302ddb75bc70e8f15c4d8d9dca4de1201c542bd13cded58e7f55",
+    "learning_id": "LRN-002",
+    "promotion_target_hash": "sha256:fb5af8e460f66b297bc4700ffcd0fd888d7d05dedbc546853ca623c64149da0f",
+    "relations": [
+      "promoted-to--LRN-002--document--AGENTS.md"
+    ],
+    "revision_after": 3,
+    "to": "promoted"
+  },
+  "schema_version": 1,
+  "subject": {
+    "id": "LRN-002",
+    "kind": "learning",
+    "revision": 3
+  }
+}

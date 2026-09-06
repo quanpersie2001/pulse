@@ -1,0 +1,20 @@
+{
+  "created_at": "2026-09-06T19:12:16.046908Z",
+  "created_by": "human:quanpersie2001",
+  "from": {
+    "content_hash": null,
+    "id": "LRN-002",
+    "kind": "learning",
+    "revision": null
+  },
+  "id": "derived-from--LRN-002--work--TK-004",
+  "revision": 1,
+  "schema_version": 1,
+  "to": {
+    "content_hash": null,
+    "id": "TK-004",
+    "kind": "work",
+    "revision": 10
+  },
+  "type": "derived_from"
+}

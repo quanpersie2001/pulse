@@ -1,0 +1,20 @@
+{
+  "created_at": "2026-09-06T19:13:01.115722Z",
+  "created_by": "human:quanpersie2001",
+  "from": {
+    "content_hash": null,
+    "id": "LRN-002",
+    "kind": "learning",
+    "revision": null
+  },
+  "id": "promoted-to--LRN-002--document--AGENTS.md",
+  "revision": 1,
+  "schema_version": 1,
+  "to": {
+    "content_hash": "sha256:fb5af8e460f66b297bc4700ffcd0fd888d7d05dedbc546853ca623c64149da0f",
+    "id": "AGENTS.md",
+    "kind": "document",
+    "revision": null
+  },
+  "type": "promoted_to"
+}
