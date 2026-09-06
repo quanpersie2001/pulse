@@ -20,11 +20,11 @@
       "rationale": "read-only projection of the already-covered pending filter;"
     }
   },
-  "revision": 4,
+  "revision": 7,
   "risk": "low",
   "role": "implementation",
   "schema_version": 1,
-  "status": "ready",
+  "status": "done",
   "title": "Show the pending count with a count command",
-  "updated_at": "2026-09-06T15:45:25.893762Z"
+  "updated_at": "2026-09-06T16:33:19.671713Z"
 }

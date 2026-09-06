@@ -1,0 +1,56 @@
+{
+  "acceptance_proofs": [
+    {
+      "acceptance_id": "AC-1",
+      "check_names": [
+        "verify"
+      ],
+      "evidence_receipt_ids": []
+    },
+    {
+      "acceptance_id": "AC-2",
+      "check_names": [
+        "verify"
+      ],
+      "evidence_receipt_ids": []
+    },
+    {
+      "acceptance_id": "AC-3",
+      "check_names": [
+        "verify"
+      ],
+      "evidence_receipt_ids": []
+    }
+  ],
+  "active_revision": 5,
+  "changed_paths": [
+    "docs/product/todolist.md",
+    "src/cli.mjs",
+    "test/todolist.test.mjs"
+  ],
+  "checks": [
+    {
+      "artifact_ids": [],
+      "command": "node scripts/verify.mjs",
+      "exit_code": 0,
+      "name": "verify"
+    }
+  ],
+  "evidence_receipt_ids": [],
+  "handoff_fingerprint": "sha256:3852926dd249359d734a46207f767c49d486e1c5150f43ab50b56f4f3a7b200e",
+  "handoff_id": "handoff_85be04dee1c105cf8ed48f2acc",
+  "idempotency_key_hash": "sha256:85be04dee1c105cf8ed48f2acc2bc476bf0e25c057986a89a323187f2033cd5a",
+  "lease_id": "lease_7f51f7460e5d0aa14b0b7f3069",
+  "project_id": "TK-003",
+  "recorded_at": "2026-09-06T16:09:57.804010+00:00",
+  "recorded_by": "agent:runner:worker",
+  "repository_id": "repo_01M1RWXYDW6Q0WT9J0NMA466BH",
+  "schema_version": 1,
+  "session_id": "run:rsv_7f51f7460e5d0aa14b0b7f3069",
+  "source_commit": "e05a21dab63093b6b95d3b39dffbaa6a16a88b38",
+  "source_dirty_hash": "sha256:24b559e5e0beda0a8ed2c103fefb572ee51fbdb2eef876a840213cafcb1e15c3",
+  "summary": "Added the count CLI command with documented behavior and focused end-to-end coverage",
+  "ticket_id": "TK-003",
+  "verifying_revision": 6,
+  "workspace_id": "checkout"
+}

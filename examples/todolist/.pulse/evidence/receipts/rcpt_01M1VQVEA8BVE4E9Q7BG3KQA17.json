@@ -1,0 +1,69 @@
+{
+  "actor": {
+    "id": "runner:reviewer",
+    "kind": "agent"
+  },
+  "bindings": {
+    "artifacts": [],
+    "content": [
+      {
+        "path": ".pulse/docs/registry.json",
+        "sha256": "sha256:686f991f6e6e4b18885c1764e426481e1d4a42bbce09d6292ab33d81721244c6"
+      },
+      {
+        "path": "docs/_index.md",
+        "sha256": "sha256:b1c955a473d58670ef24540ff1f053fc6c0af2e1f097cb51f321f6ce99973161"
+      },
+      {
+        "path": "docs/product/todolist.md",
+        "sha256": "sha256:994d6a3d1430f1050fd13c7c6fa7f564f556f18c0df6e97f2d5c2393e03fefee"
+      }
+    ],
+    "source": {
+      "commit": "e05a21dab63093b6b95d3b39dffbaa6a16a88b38",
+      "kind": "git_commit",
+      "repository_id": "repo_01M1RWXYDW6Q0WT9J0NMA466BH"
+    },
+    "work": []
+  },
+  "id": "rcpt_01M1VQVEA8BVE4E9Q7BG3KQA17",
+  "kind": "documentation_validation",
+  "payload": {
+    "checks": [
+      {
+        "kind": "registry_check",
+        "result": "passed"
+      },
+      {
+        "kind": "link_check",
+        "result": "passed"
+      },
+      {
+        "kind": "generated_freshness_check",
+        "result": "passed"
+      },
+      {
+        "kind": "navigation_projection_check",
+        "result": "passed"
+      }
+    ],
+    "documents": [
+      {
+        "content_hash": "sha256:994d6a3d1430f1050fd13c7c6fa7f564f556f18c0df6e97f2d5c2393e03fefee",
+        "document_id": "DOC-TODOLIST-BEHAVIOR",
+        "document_revision": 1,
+        "path": "docs/product/todolist.md",
+        "result": "passed"
+      }
+    ],
+    "payload_version": 1
+  },
+  "receipt_version": 1,
+  "recorded_at": "2026-09-06T16:12:03.273131Z",
+  "result": "passed",
+  "schema_version": 1,
+  "subject": {
+    "id": "repo_01M1RWXYDW6Q0WT9J0NMA466BH",
+    "kind": "documentation_registry"
+  }
+}

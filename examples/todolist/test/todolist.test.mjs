@@ -1,5 +1,10 @@
 import assert from "node:assert/strict";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { spawnSync } from "node:child_process";
 import { test } from "node:test";
+import { fileURLToPath } from "node:url";
 import {
   CompleteOutcome,
   addTodo,
@@ -10,6 +15,15 @@ import {
   pendingTodos,
   removeTodo,
 } from "../src/todolist.mjs";
+
+const cliPath = fileURLToPath(new URL("../src/cli.mjs", import.meta.url));
+
+function runCli(cwd, ...args) {
+  return spawnSync(process.execPath, [cliPath, ...args], {
+    cwd,
+    encoding: "utf8",
+  });
+}
 
 test("createTodo builds an undone todo with a trimmed title", () => {
   assert.deepEqual(createTodo("t1", "  buy milk  "), {
@@ -52,6 +66,27 @@ test("pendingTodos filters done items", () => {
     { id: "t2", title: "two", done: false },
   ];
   assert.deepEqual(pendingTodos(todos).map((todo) => todo.id), ["t2"]);
+});
+
+// TK-003 AC-1, AC-2, AC-3
+test("count prints the pending count and excludes completed todos", async (t) => {
+  const cwd = await mkdtemp(path.join(tmpdir(), "todolist-count-"));
+  t.after(() => rm(cwd, { recursive: true, force: true }));
+
+  let result = runCli(cwd, "count");
+  assert.equal(result.status, 0);
+  assert.equal(result.stdout, "0\n");
+
+  assert.equal(runCli(cwd, "add", "t1", "one").status, 0);
+  assert.equal(runCli(cwd, "add", "t2", "two").status, 0);
+  result = runCli(cwd, "count");
+  assert.equal(result.status, 0);
+  assert.equal(result.stdout, "2\n");
+
+  assert.equal(runCli(cwd, "done", "t1").status, 0);
+  result = runCli(cwd, "count");
+  assert.equal(result.status, 0);
+  assert.equal(result.stdout, "1\n");
 });
 
 // TK-002 AC-1

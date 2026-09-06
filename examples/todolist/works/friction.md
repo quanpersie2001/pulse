@@ -33,3 +33,33 @@ Feeds the v0.2 backlog (PRODUCT.md §11) after the round.
   first attempt with only `--reason` fails with `missing_status_reason`
   after I already spent a revision bump cycle on `--expected-revision`.
   Friction is small but the flag interdependency is undocumented.
+- `work ready <id>` is a pure readiness report; it does not dispatch the
+  Ticket. The actual `ready` status needs a separate
+  `work transition --to ready` with `--expected-revision` + reason pair.
+  The natural command reports, the mutation hides behind `transition`.
+- Core bug (fixed in f7acd8d): a reviewer re-running `work verify` with a
+  fresh idempotency key seals a second passed receipt; close then refused
+  with `close_verification_ambiguous` even though both receipts were from
+  the same actor on the same handoff.
+- Core bug (fixed in 074fabf): receipts sealed before the A1/A2 envelope
+  fields existed failed fingerprint validation, so THREE old verification
+  receipts and FIVE old handoff receipts blocked every new packet build
+  with `verification_fingerprint_mismatch` — a fresh `work packet` on a
+  brand-new ticket died on year-old evidence.
+- Reviewer agents probe: the claude reviewer recorded a placeholder
+  verification receipt while calibrating its own tooling
+  (`idempotency-key` suffix `-test3`), then recorded the real verdict.
+  Receipt hygiene for agent roles (dry-run mode? probe receipts?) is a
+  v0.2 question.
+- `docs validate --record` without `--actor` fails with
+  `docs_validation_actor_required` only after validation work is done;
+  the reviewer agent hit this and almost skipped recording.
+- The dirty fence is tree-wide: I (the OPERATOR) edited
+  `works/friction.md` — an unrelated tracked prose file — between
+  reviewer verification and close, and close refused with
+  `close_source_stale`. LRN-001 applies to the operator seat too, not
+  just agents. I reverted the file, closed, restored it. Friction: the
+  error names neither the offending path nor the last-clean identity;
+  a `git status`-style hint ("works/friction.md changed since handoff")
+  would have saved a revert dance. Deeper question for v0.2: should
+  docs-alongside-code note files fence-block a close at all?

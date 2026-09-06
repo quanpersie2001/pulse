@@ -8,6 +8,8 @@ User-visible behavior of the todolist CLI and domain module.
   be unique and non-empty; the title is trimmed and must not be blank.
 - `node src/cli.mjs list` prints one pending todo per line as
   `<id>\t<title>`.
+- `node src/cli.mjs count` prints the number of pending todos as a plain
+  integer on one line. An empty list prints `0`; done todos are not counted.
 - `node src/cli.mjs remove <id>` drops the todo with that id.
 
 ## Listing completed todos

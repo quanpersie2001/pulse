@@ -1,0 +1,69 @@
+{
+  "acceptance_proofs": [
+    {
+      "acceptance_id": "AC-1",
+      "check_names": [
+        "cli-count-roundtrip",
+        "verify"
+      ],
+      "evidence_receipt_ids": [
+        "rcpt_01M1VQVEA8BVE4E9Q7BG3KQA17"
+      ]
+    },
+    {
+      "acceptance_id": "AC-2",
+      "check_names": [
+        "cli-count-roundtrip",
+        "verify"
+      ],
+      "evidence_receipt_ids": [
+        "rcpt_01M1VQVEA8BVE4E9Q7BG3KQA17"
+      ]
+    },
+    {
+      "acceptance_id": "AC-3",
+      "check_names": [
+        "cli-count-roundtrip",
+        "verify"
+      ],
+      "evidence_receipt_ids": [
+        "rcpt_01M1VQVEA8BVE4E9Q7BG3KQA17"
+      ]
+    }
+  ],
+  "checks": [
+    {
+      "artifact_ids": [],
+      "command": "node scripts/verify.mjs",
+      "exit_code": 0,
+      "name": "verify"
+    },
+    {
+      "artifact_ids": [],
+      "command": "node src/cli.mjs count/add/done round trip in scratch dir",
+      "exit_code": 0,
+      "name": "cli-count-roundtrip"
+    },
+    {
+      "artifact_ids": [],
+      "command": "pulse docs validate --json",
+      "exit_code": 0,
+      "name": "docs-validate"
+    }
+  ],
+  "disposition": "passed",
+  "handoff_id": "handoff_85be04dee1c105cf8ed48f2acc",
+  "idempotency_key_hash": "sha256:159a3266693aea27a94d3d7dae6709e82ef64a5d261e897c59a59b5976d0747d",
+  "lease_id": "lease_7f51f7460e5d0aa14b0b7f3069",
+  "recorded_at": "2026-09-06T16:15:40.210135+00:00",
+  "resulting_revision": 6,
+  "resulting_status": "verifying",
+  "schema_version": 1,
+  "source_commit": "e05a21dab63093b6b95d3b39dffbaa6a16a88b38",
+  "source_dirty_hash": "sha256:24b559e5e0beda0a8ed2c103fefb572ee51fbdb2eef876a840213cafcb1e15c3",
+  "summary": "Independent review of TK-003 at e05a21d. Diff limited to the three claimed paths: 'count' case added to src/cli.mjs computing pendingTodos(todos).length via console.log (single integer, one line, trailing newline), added to the usage string; docs/product/todolist.md documents the command under Managing todos; test/todolist.test.mjs adds a scratch-dir CLI test spawning the real process across empty/added/done states. node scripts/verify.mjs passes 13/13 (re-run, matches worker's claimed exit 0). Manually re-ran the CLI in a fresh scratch dir: empty state prints '0' and exits 0 (AC-2); after adding two todos prints '2' (AC-1); after 'done t1' prints '1', confirming done todos are excluded (AC-3). src/todolist.mjs is untouched (no public-surface change) and no new dependencies were introduced, matching the Ticket's invariants. The handoff input carried no documentation_validation receipt for this required-docs ticket, so as reviewer I ran 'pulse docs validate --json' (valid, registry_revision 2, all four checks passed) and recorded documentation_validation receipt rcpt_01M1VQVEA8BVE4E9Q7BG3KQA17 bound to docs/product/todolist.md at its current content hash and to source commit e05a21d. QA posture is none, so no qa_checkpoint receipt is required. Working tree HEAD matches the claimed source_commit exactly and no tracked files were edited since handoff, so the dirty fence holds. Note: an earlier verify attempt under idempotency key suffix -test3 (before I rebuilt a stale release binary that mismatched the current canonical_json fingerprint logic) recorded a placeholder passed verdict for this same handoff; this -a2 verdict supersedes it as the operative record.",
+  "ticket_id": "TK-003",
+  "verification_fingerprint": "sha256:f2930d546bf4f78494c315a420c84aff10700b2e571dab1e16a8ba735d497ce3",
+  "verification_id": "verify_159a3266693aea27a94d3d7dae",
+  "verified_by": "agent:runner:reviewer"
+}
