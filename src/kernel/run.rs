@@ -1150,6 +1150,32 @@ impl JsonGraphStore {
                 Some("reviewer findings must be an array".to_string()),
             );
         }
+        // Shaped findings (Decision 0012 §3): every entry needs a non-empty
+        // `summary` and `owner`; a missing `check` marks it unverifiable.
+        let mut findings_all_unverifiable = true;
+        for finding in value
+            .get("findings")
+            .and_then(|f| f.as_array())
+            .map(|list| list.as_slice())
+            .unwrap_or_default()
+        {
+            let non_empty = |field: &str| {
+                finding
+                    .get(field)
+                    .and_then(|v| v.as_str())
+                    .map(str::trim)
+                    .is_some_and(|value| !value.is_empty())
+            };
+            if !non_empty("summary") || !non_empty("owner") {
+                return inconclusive(
+                    "malformed_output",
+                    Some("every finding needs a non-empty summary and owner".to_string()),
+                );
+            }
+            if non_empty("check") {
+                findings_all_unverifiable = false;
+            }
+        }
         let node = match self.show_node(ticket_id) {
             Ok(node) => node,
             Err(error) => return inconclusive("malformed_output", Some(error.to_string())),
@@ -1205,6 +1231,17 @@ impl JsonGraphStore {
                 }
             }
             "rework" => {
+                // A rework verdict backed only by unverifiable findings (or
+                // none) is not a verdict: it never reaches the Ticket.
+                if findings_all_unverifiable {
+                    return inconclusive(
+                        "findings_unverifiable",
+                        Some(
+                            "rework requires at least one finding with the command or receipt that showed the failure"
+                                .to_string(),
+                        ),
+                    );
+                }
                 let proven = node.status == NodeStatus::Rework
                     && verification_bound_to_current_revision(
                         &self.repo_root,
@@ -1691,9 +1728,15 @@ fn reviewer_prompt(ticket_id: &str, source_commit: &str) -> String {
            --proof \"AC-1=verify=<receipt_id>,…\"\n\
          \n\
          `passed` requires every check to exit 0. Use `--disposition\n\
-         rework` with findings when the handoff does not hold.\n\
+         rework` when the handoff does not hold, with one --finding per\n\
+         problem shaped `AC-ID|summary|owner|check|severity` (use - for a\n\
+         missing AC-ID or check; severity is high|medium|low). A rework\n\
+         whose findings all lack a check is not a verdict - name the\n\
+         command or receipt that showed each failure.\n\
          5. Your last output line must be exactly one JSON object with\n\
          nothing after it (no code fence). It must declare your verdict,\n\
+         with `findings` mirroring your --finding entries (same summary,\n\
+         owner, check, severity, acceptance_id).\n\
          cover EVERY acceptance id from reviewer-input.json in\n\
          `acceptance`, and list `findings`:\n\
          `{{\"disposition\": \"pass\", \"acceptance\": {{\"AC-1\": \"how it was verified\", …}}, \"findings\": []}}`\n\

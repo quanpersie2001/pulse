@@ -169,6 +169,7 @@ fn required_docs_close_fixture(mode: DocumentationReceiptMode) -> RequiredDocsCl
                 evidence_receipt_ids,
             }],
             idempotency_key: "verification-required-docs".to_string(),
+            findings: Vec::new(),
         })
         .unwrap();
     RequiredDocsCloseFixture {
@@ -468,6 +469,7 @@ fn required_qa_checkpoint_opens_proof_close_only_with_current_case_coverage() {
                 evidence_receipt_ids: vec![qa_receipt_id],
             }],
             idempotency_key: "verification-required-qa".to_string(),
+            findings: Vec::new(),
         })
         .unwrap();
     let close_args = CloseTicketArgs {
@@ -574,6 +576,7 @@ fn story_qualification_opens_covered_ticket_close_on_the_same_source() {
                 evidence_receipt_ids: vec![receipt_id],
             }],
             idempotency_key: "verification-story-qa".to_string(),
+            findings: Vec::new(),
         })
         .unwrap();
     let close = store
@@ -749,6 +752,7 @@ fn zero_exit_check_without_receipt_keeps_ticket_nonterminal() {
                 artifact_ids: vec![],
             }],
             acceptance_proofs: vec![],
+            findings: Vec::new(),
             idempotency_key: "verification-incomplete".to_string(),
         })
         .unwrap_err();
@@ -774,6 +778,7 @@ fn zero_exit_check_without_receipt_keeps_ticket_nonterminal() {
                 artifact_ids: vec![],
             }],
             acceptance_proofs: acceptance_proofs("focused-test"),
+            findings: Vec::new(),
             idempotency_key: "verification-happy".to_string(),
         })
         .unwrap();
@@ -862,6 +867,7 @@ fn medium_risk_ticket_closes_with_the_same_proof_gates() {
                 artifact_ids: vec![],
             }],
             acceptance_proofs: acceptance_proofs("focused"),
+            findings: Vec::new(),
             idempotency_key: "verification-medium-risk".to_string(),
         })
         .unwrap();
@@ -942,6 +948,7 @@ fn high_risk_ticket_requires_a_human_closing_actor() {
                 artifact_ids: vec![],
             }],
             acceptance_proofs: acceptance_proofs("focused"),
+            findings: Vec::new(),
             idempotency_key: "verification-high-risk".to_string(),
         })
         .unwrap();
@@ -1081,6 +1088,7 @@ fn unauthorized_verification_does_not_recover_pending_transaction() {
             artifact_ids: vec![],
         }],
         acceptance_proofs: acceptance_proofs("focused"),
+        findings: Vec::new(),
         idempotency_key: "unauthorized-verification-pending-key".to_string(),
     };
     let crashing =

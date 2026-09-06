@@ -86,6 +86,59 @@ fn parse_proof(value: &str) -> Result<AcceptanceProof, String> {
     })
 }
 
+/// Parse one shaped finding for `--finding`, as
+/// `<AC-ID|->|<summary>|<owner>|<check|->|<severity>` (Decision 0012 §3).
+/// `-` drops the optional field: no acceptance id, or no check — the latter
+/// marks the finding `unverifiable`. Severity is high|medium|low.
+fn parse_finding(value: &str) -> Result<crate::execution::Finding, String> {
+    use crate::execution::{Finding, FindingSeverity};
+    let parts: Vec<&str> = value.splitn(5, '|').collect();
+    let [acceptance_id, summary, owner, check, severity] = parts.as_slice() else {
+        return Err(
+            "finding must be AC-ID|summary|owner|check|severity (use - for a missing AC-ID or check)"
+                .to_string(),
+        );
+    };
+    let field = |raw: &str, name: &str| -> Result<String, String> {
+        let trimmed = raw.trim();
+        if trimmed.is_empty() {
+            return Err(format!("finding {name} must not be empty"));
+        }
+        Ok(trimmed.to_string())
+    };
+    let acceptance_id = if acceptance_id.trim() == "-" {
+        None
+    } else {
+        Some(field(acceptance_id, "acceptance id")?)
+    };
+    let check = if check.trim() == "-" {
+        None
+    } else {
+        Some(field(check, "check")?)
+    };
+    let severity = match severity.trim() {
+        "high" => FindingSeverity::High,
+        "medium" => FindingSeverity::Medium,
+        "low" => FindingSeverity::Low,
+        other => {
+            return Err(format!(
+                "finding severity must be high, medium or low, got {other:?}"
+            ))
+        }
+    };
+    let mut finding = Finding {
+        summary: field(summary, "summary")?,
+        owner: field(owner, "owner")?,
+        check,
+        severity,
+        acceptance_id,
+        case_id: None,
+        unverifiable: false,
+    };
+    finding.normalize();
+    Ok(finding)
+}
+
 #[derive(Subcommand)]
 pub(crate) enum WorkCommand {
     Create {
@@ -262,6 +315,11 @@ pub(crate) enum WorkCommand {
         /// Acceptance proof as `AC-ID=check1,check2=receipt1,receipt2`.
         #[arg(long = "proof", value_parser = parse_proof)]
         proofs: Vec<AcceptanceProof>,
+        /// Shaped finding as `AC-ID|summary|owner|check|severity` (use - for
+        /// a missing AC-ID or check; severity is high|medium|low). A rework
+        /// needs at least one finding whose check is present.
+        #[arg(long = "finding", value_parser = parse_finding)]
+        findings: Vec<crate::execution::Finding>,
         #[arg(long)]
         json: bool,
     },
@@ -707,6 +765,7 @@ pub(crate) fn handle(
             summary,
             checks,
             proofs,
+            findings,
             json,
         } => {
             let out = store.complete_execution_verification(
@@ -718,6 +777,7 @@ pub(crate) fn handle(
                     summary,
                     checks,
                     acceptance_proofs: proofs,
+                    findings,
                     idempotency_key: explicit_key.unwrap_or_default().to_string(),
                 },
             )?;

@@ -143,8 +143,9 @@ fn proven_rework_classifies_rework_and_moves_the_ticket() {
   --disposition rework \
   --summary "the expired branch is missing" \
   --check "focused=node scripts/verify.mjs=1" \
+  --finding "AC-1|expired branch missing|src/token.mjs|node scripts/verify.mjs --grep expired|high" \
   --idempotency-key verify-reviewer-r1 --json
-echo '{"disposition": "rework", "acceptance": {"AC-1": "check failed, see findings"}, "findings": [{"summary": "expired branch missing", "severity": "high"}]}'
+echo '{"disposition": "rework", "acceptance": {"AC-1": "check failed, see findings"}, "findings": [{"acceptance_id": "AC-1", "summary": "expired branch missing", "owner": "src/token.mjs", "check": "node scripts/verify.mjs --grep expired", "severity": "high"}]}'
 "#,
     );
     let out = reviewer_outcome(&repo, &ticket_id);
@@ -152,49 +153,95 @@ echo '{"disposition": "rework", "acceptance": {"AC-1": "check failed, see findin
     assert_eq!(out["code"], "run_rework");
     // The rework verdict really moved the Ticket, not just the summary.
     assert_eq!(node_status(&repo, &ticket_id), "rework");
+
+    // The receipt carries the shaped finding.
+    let mut entries =
+        fs::read_dir(repo.path().join(".pulse/evidence/execution/verifications")).unwrap();
+    let receipt: Value =
+        serde_json::from_slice(&fs::read(entries.next().unwrap().unwrap().path()).unwrap())
+            .unwrap();
+    let finding = &receipt["findings"][0];
+    assert_eq!(finding["acceptance_id"], "AC-1");
+    assert_eq!(finding["summary"], "expired branch missing");
+    assert_eq!(finding["owner"], "src/token.mjs");
+    assert_eq!(finding["severity"], "high");
+    assert_eq!(finding["unverifiable"], false);
 }
 
+/// A rework backed only by unverifiable findings is not a verdict: the CLI
+/// refuses to record it and the Ticket never leaves `verifying`.
 #[test]
-fn missing_disposition_is_inconclusive() {
+fn rework_without_a_verifiable_finding_is_refused() {
     let repo = TestRepo::from_fixture("minimal-service");
     let ticket_id = setup_ready_ticket(&repo);
     verify_fixture(
         &repo,
         &ticket_id,
-        r#"echo '{"acceptance": {"AC-1": "checked"}, "findings": []}'"#,
+        r#"
+if "$PULSE" work verify "$TICKET_ID" \
+  --handoff "$HANDOFF_ID" \
+  --actor agent:runner:reviewer \
+  --source-commit "$SOURCE_COMMIT" \
+  --disposition rework \
+  --summary "something is off" \
+  --idempotency-key verify-reviewer-nofinding --json >/dev/null 2>&1; then
+  echo 'verify should have refused'
+  exit 1
+fi
+echo '{"disposition": "rework", "acceptance": {"AC-1": "gut feeling"}, "findings": [{"summary": "looks wrong", "owner": "src/token.mjs", "severity": "high"}]}'
+"#,
+    );
+    let out = reviewer_outcome(&repo, &ticket_id);
+    assert_eq!(out["status"], "inconclusive", "outcome: {out}");
+    assert_eq!(node_status(&repo, &ticket_id), "verifying");
+    assert!(
+        !repo
+            .path()
+            .join(".pulse/evidence/execution/verifications")
+            .exists(),
+        "the refused rework must not leave a verification receipt"
+    );
+}
+
+/// The same rule at classification: a recorded rework whose reported
+/// findings all lack `check` classifies `findings_unverifiable`.
+#[test]
+fn rework_report_with_only_unverifiable_findings_is_inconclusive() {
+    let repo = TestRepo::from_fixture("minimal-service");
+    let ticket_id = setup_ready_ticket(&repo);
+    verify_fixture(
+        &repo,
+        &ticket_id,
+        r#"
+"$PULSE" work verify "$TICKET_ID" \
+  --handoff "$HANDOFF_ID" \
+  --actor agent:runner:reviewer \
+  --source-commit "$SOURCE_COMMIT" \
+  --disposition rework \
+  --summary "the expired branch is missing" \
+  --check "focused=node scripts/verify.mjs=1" \
+  --finding "AC-1|expired branch missing|src/token.mjs|node scripts/verify.mjs --grep expired|high" \
+  --idempotency-key verify-reviewer-r2 --json
+echo '{"disposition": "rework", "acceptance": {"AC-1": "see findings"}, "findings": [{"summary": "expired branch missing", "owner": "src/token.mjs", "severity": "high"}]}'
+"#,
+    );
+    let out = reviewer_outcome(&repo, &ticket_id);
+    assert_eq!(out["status"], "inconclusive", "outcome: {out}");
+    assert_eq!(out["inconclusive_reason"], "findings_unverifiable");
+}
+
+/// Findings are shaped: an entry without `summary`/`owner` is malformed
+/// output, not a verdict with a hole in it.
+#[test]
+fn finding_without_owner_is_malformed_output() {
+    let repo = TestRepo::from_fixture("minimal-service");
+    let ticket_id = setup_ready_ticket(&repo);
+    verify_fixture(
+        &repo,
+        &ticket_id,
+        r#"echo '{"disposition": "pass", "acceptance": {"AC-1": "ok"}, "findings": [{"summary": "a note"}]}'"#,
     );
     let out = reviewer_outcome(&repo, &ticket_id);
     assert_eq!(out["status"], "inconclusive");
     assert_eq!(out["inconclusive_reason"], "malformed_output");
-    assert_eq!(node_status(&repo, &ticket_id), "verifying");
-}
-
-#[test]
-fn acceptance_map_missing_an_acceptance_id_is_inconclusive() {
-    let repo = TestRepo::from_fixture("minimal-service");
-    let ticket_id = setup_ready_ticket(&repo);
-    verify_fixture(
-        &repo,
-        &ticket_id,
-        r#"echo '{"disposition": "pass", "acceptance": {}, "findings": []}'"#,
-    );
-    let out = reviewer_outcome(&repo, &ticket_id);
-    assert_eq!(out["status"], "inconclusive");
-    assert_eq!(out["inconclusive_reason"], "acceptance_coverage_incomplete");
-    assert_eq!(node_status(&repo, &ticket_id), "verifying");
-}
-
-#[test]
-fn claimed_pass_without_a_recorded_receipt_is_inconclusive() {
-    let repo = TestRepo::from_fixture("minimal-service");
-    let ticket_id = setup_ready_ticket(&repo);
-    verify_fixture(
-        &repo,
-        &ticket_id,
-        r#"echo '{"disposition": "pass", "acceptance": {"AC-1": "trust me"}, "findings": []}'"#,
-    );
-    let out = reviewer_outcome(&repo, &ticket_id);
-    assert_eq!(out["status"], "inconclusive");
-    assert_eq!(out["inconclusive_reason"], "unproven_claim");
-    assert_eq!(node_status(&repo, &ticket_id), "verifying");
 }

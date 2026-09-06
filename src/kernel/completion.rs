@@ -9,7 +9,7 @@ use crate::canonical_json::{hash_bytes, to_canonical_bytes};
 use crate::event::{new_event_id, EventEnvelope};
 use crate::execution::{
     validate_checks, validate_handoff_claim, AcceptanceProof, CloseReceipt, CloseTicketArgs,
-    CompleteVerificationArgs, HandoffReceipt, KnowledgeUsage, KnowledgeUsageOutcome,
+    CompleteVerificationArgs, Finding, HandoffReceipt, KnowledgeUsage, KnowledgeUsageOutcome,
     SubmitHandoffArgs, VerificationCheck, VerificationDisposition, VerificationReceipt,
     MAX_HANDOFF_SUMMARY_CHARS,
 };
@@ -266,6 +266,17 @@ impl JsonGraphStore {
             ));
         }
         normalize_acceptance_proofs(&mut args.acceptance_proofs);
+        normalize_findings(&mut args.findings);
+        if args.disposition == VerificationDisposition::Rework
+            && args.findings.iter().all(|finding| finding.unverifiable)
+        {
+            // A rework must tell the worker what to fix and how it was shown
+            // broken; findings without a `check` never justify one alone.
+            return Err(PulseError::validation(
+                "findings_unverifiable",
+                "rework requires at least one finding with the command or receipt that showed the failure",
+            ));
+        }
         if args.disposition == VerificationDisposition::Passed {
             let acceptance_ids = ticket_acceptance_ids(&self.repo_root, &node)?;
             validate_acceptance_proofs(
@@ -316,6 +327,7 @@ impl JsonGraphStore {
             summary: args.summary.trim().to_string(),
             checks: args.checks,
             acceptance_proofs: args.acceptance_proofs,
+            findings: args.findings,
             verified_by: args.actor.clone(),
             recorded_at: Utc::now().to_rfc3339(),
             resulting_status: status_name(target).to_string(),
@@ -765,6 +777,13 @@ fn normalize_handoff_checks(checks: &mut [VerificationCheck]) {
     for check in checks.iter_mut() {
         check.name = check.name.trim().to_string();
         check.command = check.command.trim().to_string();
+    }
+}
+
+/// Trim shaped findings in place and derive `unverifiable` from `check`.
+fn normalize_findings(findings: &mut [Finding]) {
+    for finding in findings.iter_mut() {
+        finding.normalize();
     }
 }
 

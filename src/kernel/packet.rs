@@ -446,7 +446,10 @@ impl JsonGraphStore {
                 &phase1.packet_ticket.tags,
             ),
             notes: phase1.notes,
-            rework: vec![],
+            // Every reviewer's rework findings for this Ticket, with the
+            // recording actor, so the next run fixes what was actually shown
+            // broken instead of guessing (Decision 0012 §5).
+            rework: rework_observations(&self.repo_root, &node.id)?,
             source: phase1.source,
             tags_vocabulary: vec![],
             handoff: PacketHandoff {
@@ -1713,4 +1716,128 @@ fn search_suggestions(
         result.rank = (idx as u64) + 1;
     }
     Ok(results)
+}
+
+/// Shaped findings from every rework verification recorded for `ticket_id`,
+/// each carrying the actor that recorded it. Receipt order is deterministic
+/// (sorted by verification id); the packet normalize pass sorts again by
+/// content. Read failures collapse to an empty list — rework observations
+/// must never block a packet rebuild.
+fn rework_observations(
+    repo_root: &Path,
+    ticket_id: &str,
+) -> PulseResult<Vec<crate::work_packet::PacketReworkObservation>> {
+    let mut out = Vec::new();
+    for verification in crate::kernel::completion::list_verifications(repo_root)? {
+        if verification.ticket_id != ticket_id
+            || verification.disposition != crate::execution::VerificationDisposition::Rework
+        {
+            continue;
+        }
+        for finding in &verification.findings {
+            out.push(crate::work_packet::PacketReworkObservation {
+                actor: verification.verified_by.clone(),
+                acceptance_id: finding.acceptance_id.clone(),
+                summary: finding.summary.clone(),
+                owner: finding.owner.clone(),
+                check: finding.check.clone(),
+                severity: finding.severity,
+                unverifiable: finding.unverifiable,
+            });
+        }
+    }
+    Ok(out)
+}
+
+#[cfg(test)]
+mod rework_observation_tests {
+    use crate::execution::{
+        Finding, FindingSeverity, VerificationCheck, VerificationDisposition, VerificationReceipt,
+    };
+
+    fn rework_receipt(ticket_id: &str, actor: &str, findings: Vec<Finding>) -> VerificationReceipt {
+        let mut receipt = VerificationReceipt {
+            schema_version: 1,
+            verification_id: format!("verify_{ticket_id}_{actor}"),
+            idempotency_key_hash: "sha256:00".to_string(),
+            handoff_id: "handoff_x".to_string(),
+            ticket_id: ticket_id.to_string(),
+            lease_id: "lease_x".to_string(),
+            source_commit: "c".repeat(40),
+            source_dirty_hash: "d".repeat(64),
+            disposition: VerificationDisposition::Rework,
+            summary: "rework".to_string(),
+            checks: vec![VerificationCheck {
+                name: "focused".to_string(),
+                command: "node scripts/verify.mjs".to_string(),
+                exit_code: 1,
+                artifact_ids: vec![],
+            }],
+            acceptance_proofs: vec![],
+            findings,
+            verified_by: actor.to_string(),
+            recorded_at: "2026-09-06T00:00:00Z".to_string(),
+            resulting_status: "rework".to_string(),
+            resulting_revision: 9,
+            verification_fingerprint: String::new(),
+        };
+        receipt.verification_fingerprint = receipt.compute_fingerprint().unwrap();
+        receipt
+    }
+
+    /// Decision 0012 §5: the packet's rework observations carry every
+    /// reviewer's findings, each with the actor that recorded it, so the
+    /// next worker run knows exactly what was shown broken and how.
+    #[test]
+    fn rework_observations_carry_findings_with_actor() {
+        let repo = tempfile::tempdir().unwrap();
+        let verifications = repo.path().join(".pulse/evidence/execution/verifications");
+        std::fs::create_dir_all(&verifications).unwrap();
+        for (actor, summary, check) in [
+            (
+                "agent:runner:reviewer",
+                "expired branch missing",
+                Some("node scripts/verify.mjs --grep expired"),
+            ),
+            ("agent:human:second", "gut feeling, ran nothing", None),
+        ] {
+            let receipt = rework_receipt(
+                "TK-1",
+                actor,
+                vec![Finding {
+                    summary: summary.to_string(),
+                    owner: "src/token.mjs".to_string(),
+                    check: check.map(str::to_string),
+                    severity: FindingSeverity::High,
+                    acceptance_id: Some("AC-1".to_string()),
+                    case_id: None,
+                    // `work verify` derives this from the presence of a
+                    // check before recording; mirror that here.
+                    unverifiable: check.is_none(),
+                }],
+            );
+            std::fs::write(
+                verifications.join(format!("{}.json", receipt.verification_id)),
+                serde_json::to_vec(&receipt).unwrap(),
+            )
+            .unwrap();
+        }
+        let observations = super::rework_observations(repo.path(), "TK-1").unwrap();
+        assert_eq!(observations.len(), 2);
+        let by_actor = |actor: &str| {
+            observations
+                .iter()
+                .find(|observation| observation.actor == actor)
+                .unwrap_or_else(|| panic!("no observation for {actor}"))
+        };
+        let recorded = by_actor("agent:runner:reviewer");
+        assert_eq!(recorded.summary, "expired branch missing");
+        assert!(!recorded.unverifiable);
+        let gut = by_actor("agent:human:second");
+        assert_eq!(gut.check, None);
+        assert!(gut.unverifiable);
+        // Findings of other Tickets never leak into this packet.
+        let other = super::rework_observations(repo.path(), "TK-2").unwrap();
+        assert!(other.is_empty());
+    }
 }

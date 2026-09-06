@@ -86,6 +86,61 @@ pub struct AcceptanceProof {
     pub evidence_receipt_ids: Vec<String>,
 }
 
+/// Severity a reviewer assigns to one finding. Fixed vocabulary; severity is
+/// never averaged, merged or turned into a score anywhere in Pulse.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum FindingSeverity {
+    High,
+    Medium,
+    Low,
+}
+
+/// One shaped finding (Decision 0012 §3, PRODUCT §5.3). `summary` and
+/// `owner` (repository-relative path or `DOC-ID#section`) are mandatory.
+/// `check` is the command the reviewer ran and saw fail, or a receipt id;
+/// a finding without one is recorded with `unverifiable: true` and a
+/// disposition `rework` backed only by unverifiable findings is not a
+/// verdict. Counts, filenames, file age and severity are never findings.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct Finding {
+    pub summary: String,
+    pub owner: String,
+    #[serde(default)]
+    pub check: Option<String>,
+    pub severity: FindingSeverity,
+    /// Reviewer findings map to a contract acceptance item; QA findings
+    /// carry `case_id` instead.
+    #[serde(default)]
+    pub acceptance_id: Option<String>,
+    #[serde(default)]
+    pub case_id: Option<String>,
+    pub unverifiable: bool,
+}
+
+impl Finding {
+    /// Normalize text fields in place and derive `unverifiable` from the
+    /// presence of a non-empty `check`.
+    pub fn normalize(&mut self) {
+        self.summary = self.summary.trim().to_string();
+        self.owner = self.owner.trim().to_string();
+        self.check = self
+            .check
+            .as_deref()
+            .map(str::trim)
+            .filter(|check| !check.is_empty())
+            .map(str::to_string);
+        if let Some(acceptance_id) = self.acceptance_id.as_deref() {
+            self.acceptance_id = Some(acceptance_id.trim().to_string());
+        }
+        if let Some(case_id) = self.case_id.as_deref() {
+            self.case_id = Some(case_id.trim().to_string());
+        }
+        self.unverifiable = self.check.is_none();
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct VerificationReceipt {
@@ -104,6 +159,10 @@ pub struct VerificationReceipt {
     pub checks: Vec<VerificationCheck>,
     #[serde(default)]
     pub acceptance_proofs: Vec<AcceptanceProof>,
+    /// Shaped findings; a `rework` disposition must carry at least one
+    /// verifiable finding (`check` present) to count as a verdict.
+    #[serde(default)]
+    pub findings: Vec<Finding>,
     pub verified_by: String,
     pub recorded_at: String,
     pub resulting_status: String,
@@ -173,6 +232,8 @@ pub struct CompleteVerificationArgs {
     pub summary: String,
     pub checks: Vec<VerificationCheck>,
     pub acceptance_proofs: Vec<AcceptanceProof>,
+    /// Shaped findings accompanying the verdict.
+    pub findings: Vec<Finding>,
     pub idempotency_key: String,
 }
 

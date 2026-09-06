@@ -64,8 +64,11 @@ pub struct WorkPacket {
     pub knowledge: Vec<PacketKnowledgeItem>,
     #[serde(default)]
     pub notes: Vec<String>,
+    /// Shaped findings from every rework verification recorded for this
+    /// Ticket, each with the actor that recorded it (Decision 0012 §5: the
+    /// packet after a rework lists the findings of every reviewer).
     #[serde(default)]
-    pub rework: Vec<String>,
+    pub rework: Vec<PacketReworkObservation>,
     pub source: PacketSource,
     #[serde(default)]
     pub tags_vocabulary: Vec<String>,
@@ -377,8 +380,33 @@ impl WorkPacket {
         sort_strings(&mut self.ticket.tags);
         sort_strings(&mut self.tags_vocabulary);
         sort_strings(&mut self.notes);
-        sort_strings(&mut self.rework);
+        self.rework.sort_by(|a, b| {
+            a.actor
+                .cmp(&b.actor)
+                .then(a.summary.cmp(&b.summary))
+                .then(a.owner.cmp(&b.owner))
+        });
     }
+}
+
+/// One reviewer finding from a rework verification, shown to the worker on
+/// the next run: what is broken, where, and how the reviewer showed it.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct PacketReworkObservation {
+    /// Actor that recorded the rework verification (e.g.
+    /// `agent:runner:reviewer`).
+    pub actor: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub acceptance_id: Option<String>,
+    pub summary: String,
+    pub owner: String,
+    /// Command the reviewer ran and saw fail, or a receipt id. Absent means
+    /// the finding is unverifiable; rerun it before trusting the fix.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub check: Option<String>,
+    pub severity: crate::execution::FindingSeverity,
+    pub unverifiable: bool,
 }
 
 impl PacketGraph {
