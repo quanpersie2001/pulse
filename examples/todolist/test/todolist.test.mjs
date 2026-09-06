@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
@@ -24,6 +24,63 @@ function runCli(cwd, ...args) {
     encoding: "utf8",
   });
 }
+
+// TK-004 AC-1, AC-2
+test("every command fails clearly without replacing a corrupt state file", async (t) => {
+  const cwd = await mkdtemp(path.join(tmpdir(), "todolist-corrupt-"));
+  t.after(() => rm(cwd, { recursive: true, force: true }));
+  const statePath = path.join(cwd, ".todolist.json");
+  const corruptState = '{"id":"unfinished"';
+  await writeFile(statePath, corruptState);
+
+  const commands = [
+    ["list"],
+    ["count"],
+    ["completed"],
+    ["add", "t1", "one"],
+    ["done", "t1"],
+    ["remove", "t1"],
+  ];
+
+  for (const args of commands) {
+    const result = runCli(cwd, ...args);
+    assert.equal(result.status, 1, args[0]);
+    assert.equal(result.stdout, "", args[0]);
+    assert.equal(
+      result.stderr,
+      "error: state file contains invalid JSON\n",
+      args[0],
+    );
+    assert.equal(await readFile(statePath, "utf8"), corruptState, args[0]);
+  }
+});
+
+// TK-004 AC-3
+test("valid state files retain existing CLI behavior", async (t) => {
+  const cwd = await mkdtemp(path.join(tmpdir(), "todolist-valid-"));
+  t.after(() => rm(cwd, { recursive: true, force: true }));
+
+  let result = runCli(cwd, "add", "t1", "one");
+  assert.equal(result.status, 0);
+  assert.equal(result.stdout, "");
+
+  result = runCli(cwd, "list");
+  assert.equal(result.status, 0);
+  assert.equal(result.stdout, "t1\tone\n");
+
+  result = runCli(cwd, "done", "t1");
+  assert.equal(result.status, 0);
+  assert.equal(result.stdout, "Completed\n");
+
+  result = runCli(cwd, "completed");
+  assert.equal(result.status, 0);
+  assert.equal(result.stdout, "t1\tone\n");
+
+  result = runCli(cwd, "remove", "t1");
+  assert.equal(result.status, 0);
+  assert.equal(result.stdout, "");
+  assert.deepEqual(JSON.parse(await readFile(path.join(cwd, ".todolist.json"))), []);
+});
 
 test("createTodo builds an undone todo with a trimmed title", () => {
   assert.deepEqual(createTodo("t1", "  buy milk  "), {

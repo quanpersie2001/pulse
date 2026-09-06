@@ -35,55 +35,68 @@ function usage() {
 }
 
 const [command, id, ...rest] = process.argv.slice(2);
-const todos = await loadTodos();
 
-switch (command) {
-  case "add": {
-    if (!id || rest.length === 0) {
-      usage();
+let todos;
+try {
+  todos = await loadTodos();
+} catch (error) {
+  if (error instanceof SyntaxError) {
+    console.error("error: state file contains invalid JSON");
+    process.exitCode = 1;
+  } else {
+    throw error;
+  }
+}
+
+if (todos !== undefined) {
+  switch (command) {
+    case "add": {
+      if (!id || rest.length === 0) {
+        usage();
+        break;
+      }
+      await saveTodos(addTodo(todos, createTodo(id, rest.join(" "))));
       break;
     }
-    await saveTodos(addTodo(todos, createTodo(id, rest.join(" "))));
-    break;
-  }
-  case "list": {
-    for (const todo of pendingTodos(todos)) {
-      console.log(`${todo.id}\t${todo.title}`);
-    }
-    break;
-  }
-  case "count": {
-    console.log(pendingTodos(todos).length);
-    break;
-  }
-  case "completed": {
-    for (const todo of completedTodos(todos)) {
-      console.log(`${todo.id}\t${todo.title}`);
-    }
-    break;
-  }
-  case "done": {
-    if (!id) {
-      usage();
+    case "list": {
+      for (const todo of pendingTodos(todos)) {
+        console.log(`${todo.id}\t${todo.title}`);
+      }
       break;
     }
-    const result = completeTodo(todos, id);
-    if (result.outcome === CompleteOutcome.Completed) {
-      await saveTodos(result.todos);
-    } else {
-      process.exitCode = 1;
-    }
-    console.log(result.outcome);
-    break;
-  }
-  case "remove": {
-    if (!id) {
-      usage();
+    case "count": {
+      console.log(pendingTodos(todos).length);
       break;
     }
-    await saveTodos(removeTodo(todos, id));
-    break;
+    case "completed": {
+      for (const todo of completedTodos(todos)) {
+        console.log(`${todo.id}\t${todo.title}`);
+      }
+      break;
+    }
+    case "done": {
+      if (!id) {
+        usage();
+        break;
+      }
+      const result = completeTodo(todos, id);
+      if (result.outcome === CompleteOutcome.Completed) {
+        await saveTodos(result.todos);
+      } else {
+        process.exitCode = 1;
+      }
+      console.log(result.outcome);
+      break;
+    }
+    case "remove": {
+      if (!id) {
+        usage();
+        break;
+      }
+      await saveTodos(removeTodo(todos, id));
+      break;
+    }
+    default:
+      usage();
   }
-  default:
-    usage();
 }

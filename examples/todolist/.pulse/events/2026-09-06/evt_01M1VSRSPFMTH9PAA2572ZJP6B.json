@@ -1,0 +1,21 @@
+{
+  "actor": {
+    "id": "runner:worker",
+    "kind": "agent"
+  },
+  "event_type": "evidence.receipt.recorded",
+  "id": "evt_01M1VSRSPFMTH9PAA2572ZJP6B",
+  "occurred_at": "2026-09-06T16:45:33.775448Z",
+  "payload": {
+    "receipt_hash": "sha256:c60ac89e5463c6eadd960f529d4b592e9e551bb731573c0d1d0bd1c029cab0e3",
+    "receipt_id": "rcpt_01M1VSRSGQVMEVZTMFBXDXQ8Y6",
+    "receipt_kind": "documentation_validation",
+    "result": "passed",
+    "subject": "repo_01M1RWXYDW6Q0WT9J0NMA466BH"
+  },
+  "schema_version": 1,
+  "subject": {
+    "id": "rcpt_01M1VSRSGQVMEVZTMFBXDXQ8Y6",
+    "kind": "receipt"
+  }
+}

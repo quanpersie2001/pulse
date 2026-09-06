@@ -1,0 +1,77 @@
+{
+  "acceptance_proofs": [
+    {
+      "acceptance_id": "AC-1",
+      "check_names": [
+        "corrupt-repro",
+        "focused-tests",
+        "verify"
+      ],
+      "evidence_receipt_ids": [
+        "rcpt_01M1VWTCEQSY2Z80KF8T0WYKTD"
+      ]
+    },
+    {
+      "acceptance_id": "AC-2",
+      "check_names": [
+        "corrupt-repro",
+        "focused-tests",
+        "verify"
+      ],
+      "evidence_receipt_ids": [
+        "rcpt_01M1VWTCEQSY2Z80KF8T0WYKTD"
+      ]
+    },
+    {
+      "acceptance_id": "AC-3",
+      "check_names": [
+        "focused-tests",
+        "verify"
+      ],
+      "evidence_receipt_ids": [
+        "rcpt_01M1VWTCEQSY2Z80KF8T0WYKTD"
+      ]
+    }
+  ],
+  "checks": [
+    {
+      "artifact_ids": [],
+      "command": "node scripts/verify.mjs",
+      "exit_code": 0,
+      "name": "verify"
+    },
+    {
+      "artifact_ids": [],
+      "command": "node --test test/todolist.test.mjs",
+      "exit_code": 0,
+      "name": "focused-tests"
+    },
+    {
+      "artifact_ids": [],
+      "command": "sh -c 'cd \"$(mktemp -d)\" && printf \"{bad\" > .todolist.json && for c in list count completed \"add t1 x\" \"done t1\" \"remove t1\"; do node \"$OLDPWD/src/cli.mjs\" $c >o 2>e; test $? -eq 1 && test ! -s o && test \"$(wc -l <e)\" -eq 1 && grep -q \"^error:.*state file\" e || exit 1; done && printf \"{bad\" | cmp -s - .todolist.json'",
+      "exit_code": 0,
+      "name": "corrupt-repro"
+    },
+    {
+      "artifact_ids": [],
+      "command": "../../target/debug/pulse evidence receipt verify rcpt_01M1VWTCEQSY2Z80KF8T0WYKTD --json",
+      "exit_code": 0,
+      "name": "docs-receipt"
+    }
+  ],
+  "disposition": "passed",
+  "handoff_id": "handoff_bd8abf264a6ee36b99dd23429e",
+  "idempotency_key_hash": "sha256:2aa416a0ed10d4f2c57f660150c072aba9530a60a70129d8c99300750aa154b9",
+  "lease_id": "lease_c845bbe3fc296d4e3d22732353_g000002",
+  "recorded_at": "2026-09-06T17:41:34.326217+00:00",
+  "resulting_revision": 9,
+  "resulting_status": "verifying",
+  "schema_version": 1,
+  "source_commit": "c3778dac19c98153bac5ab16cddb68593c2e33f3",
+  "source_dirty_hash": "sha256:19585b920de5621c908b5484215c18f6401f443a2615e773f03cc712d88b5be0",
+  "summary": "Independently reproduced TK-004: with a corrupt .todolist.json every command (list, count, completed, add, done, remove) prints exactly one stderr line 'error: state file contains invalid JSON', writes nothing to stdout, exits 1, and leaves the corrupt bytes untouched; with a valid file add/list/count/done/completed/remove behave as before (existing 13 tests plus 2 new pass, 15/15 via node scripts/verify.mjs and node --test). docs/product/todolist.md documents the corrupt-file behavior under Managing todos and documentation_validation receipt rcpt_01M1VWTCEQSY2Z80KF8T0WYKTD binds its current hash sha256:0378ddd3 and commit c3778da for DOC-TODOLIST-BEHAVIOR revision 1.",
+  "ticket_id": "TK-004",
+  "verification_fingerprint": "sha256:5e2c428a67adbd40ea4ef10d3d1aa455e7c7b8b398e27788044187780aa1114f",
+  "verification_id": "verify_2aa416a0ed10d4f2c57f660150",
+  "verified_by": "agent:runner:reviewer"
+}

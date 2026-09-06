@@ -11,6 +11,10 @@ User-visible behavior of the todolist CLI and domain module.
 - `node src/cli.mjs count` prints the number of pending todos as a plain
   integer on one line. An empty list prints `0`; done todos are not counted.
 - `node src/cli.mjs remove <id>` drops the todo with that id.
+- If `.todolist.json` is not valid JSON, every command prints one error line
+  beginning with `error:` and containing `state file`, then exits with code 1.
+  The corrupt file is never changed automatically; recovery requires manually
+  fixing or deleting it.
 
 ## Listing completed todos
 

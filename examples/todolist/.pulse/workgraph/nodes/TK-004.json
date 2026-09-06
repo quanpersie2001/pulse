@@ -20,16 +20,11 @@
       "rationale": "filesystem-bound error path exercised by focused node --test"
     }
   },
-  "revision": 7,
+  "revision": 10,
   "risk": "medium",
   "role": "implementation",
   "schema_version": 1,
-  "status": "rework",
-  "status_reason": {
-    "code": "verification_rework",
-    "reference": "verify_53c2c325078e833293553d6070",
-    "summary": "Corrupt-JSON handling in src/cli.mjs is correct and independently reproduced (AC-1/AC-2/AC-3 hold: single 'error: state file contains invalid JSON' line, exit 1, corrupt bytes untouched, valid-file behavior unchanged); node --test and node scripts/verify.mjs both pass as claimed. But TK-004 has documentation posture required for DOC-TODOLIST-BEHAVIOR and no documentation_validation receipt covers the updated docs/product/todolist.md — the only existing receipts of that kind validate the pre-chan"
-  },
+  "status": "done",
   "title": "Fail safely when the state file is corrupt",
-  "updated_at": "2026-09-06T16:40:33.279884Z"
+  "updated_at": "2026-09-06T17:41:55.039328Z"
 }

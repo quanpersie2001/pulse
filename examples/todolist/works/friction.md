@@ -54,6 +54,31 @@ Feeds the v0.2 backlog (PRODUCT.md §11) after the round.
 - `docs validate --record` without `--actor` fails with
   `docs_validation_actor_required` only after validation work is done;
   the reviewer agent hit this and almost skipped recording.
+
+## 2026-09-06 (TK-004 rework cycle)
+
+- THE rework gap, now fixed (c3778da): after the reviewer's rework
+  verdict, `pulse run worker` silently resumed the OLD lease with the
+  OLD packet — the worker would never see the findings. Worse, two of
+  my monitoring attempts spawned codex into that stale-packet run and I
+  killed them mid-flight. There was no way to tell a re-dispatch from a
+  zombie resume from the outside.
+- The reviewer's rework verdict summary (~1100 chars) was copied
+  verbatim into the node's `status_reason`, which validates at ≤500 —
+  every graph read then refused with `invalid_status_reason`. The
+  ticket was unreadable until hand-repaired. Writer now bounds it
+  (receipt keeps the full text).
+- Packet schema said `rework: [string]` while the code emitted objects:
+  the first packet build with a real observation died on the embedded
+  schema. Track A added the field in code but missed the schema.
+- Whose job is the docs receipt? TK-003's reviewer ran
+  `docs validate --record` itself and passed the worker; TK-004's
+  reviewer rework'd the worker for missing it. Both defensible — the
+  contract is ambiguous. v0.2: assign the receipt in the packet handoff
+  protocol (worker records before handoff is the cleanest read).
+- The rework finding shape worked exactly as designed once visible:
+  check + owner + severity, worker fixed, reviewer re-ran the check.
+  That half of the loop is solid.
 - The dirty fence is tree-wide: I (the OPERATOR) edited
   `works/friction.md` — an unrelated tracked prose file — between
   reviewer verification and close, and close refused with
