@@ -1,0 +1,31 @@
+{
+  "actor": {
+    "id": "agent:runner:qa",
+    "kind": "agent"
+  },
+  "event_type": "run.completed",
+  "id": "evt_01M1W1J7VWD4ZSVQYVHKZGC8SP",
+  "occurred_at": "2026-09-06T19:01:47.516232Z",
+  "payload": {
+    "artifacts": [
+      {
+        "case_id": null,
+        "role": "log",
+        "sha256": "sha256:c6b70fe8aa251af5a6d47cc1156ede937ee965fe05c7470034bd5ecdfe75053b"
+      }
+    ],
+    "inconclusive_reason": null,
+    "lease_id": null,
+    "receipt_id": "rcpt_01M1W1J7S1CC086JKHJGWC9ZYX",
+    "role": "qa",
+    "run_record": ".pulse/runtime/run/ST-002/qa-outcome.json",
+    "status": "completed",
+    "story_id": "ST-002",
+    "ticket_id": "TK-005"
+  },
+  "schema_version": 1,
+  "subject": {
+    "id": "ST-002",
+    "kind": "resource"
+  }
+}

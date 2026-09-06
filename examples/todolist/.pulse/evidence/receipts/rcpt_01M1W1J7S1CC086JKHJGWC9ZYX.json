@@ -1,0 +1,68 @@
+{
+  "actor": {
+    "id": "runner:qa",
+    "kind": "agent"
+  },
+  "bindings": {
+    "artifacts": [
+      {
+        "role": "log",
+        "sha256": "sha256:c6b70fe8aa251af5a6d47cc1156ede937ee965fe05c7470034bd5ecdfe75053b"
+      }
+    ],
+    "content": [
+      {
+        "path": "works/ST-002/qa.md",
+        "sha256": "sha256:d65c4d467c47bafffac98dc7d2d5c250c7827e7a8ee38086cde9618fee8f6b34"
+      }
+    ],
+    "source": {
+      "commit": "a6b7f86520d40b1a89122c5df602e040535f47f4",
+      "kind": "git_commit",
+      "repository_id": "repo_01M1RWXYDW6Q0WT9J0NMA466BH"
+    },
+    "work": []
+  },
+  "id": "rcpt_01M1W1J7S1CC086JKHJGWC9ZYX",
+  "kind": "qa_checkpoint",
+  "payload": {
+    "baseline_content_hash": "sha256:d65c4d467c47bafffac98dc7d2d5c250c7827e7a8ee38086cde9618fee8f6b34",
+    "baseline_revision": 1,
+    "cases": [
+      {
+        "case_id": "QA-003",
+        "case_revision": 1,
+        "outcome": "passed"
+      },
+      {
+        "case_id": "QA-004",
+        "case_revision": 1,
+        "outcome": "passed"
+      }
+    ],
+    "executor": {
+      "capabilities": [
+        "runner"
+      ],
+      "name": "pulse",
+      "version": "0.1.0"
+    },
+    "findings": [],
+    "observations": [
+      "QA-003: createTodo stored due 2026-12-01 verbatim, the undated sibling has no due field and the input list was not mutated",
+      "QA-004: createTodo threw TypeError for 12/01/2026 and 2026-02-30 without returning a todo"
+    ],
+    "payload_version": 1,
+    "qa_scope": "story_close",
+    "story_id": "ST-002",
+    "ticket_id": "TK-005"
+  },
+  "receipt_version": 2,
+  "recorded_at": "2026-09-06T19:01:47.425420Z",
+  "result": "passed",
+  "schema_version": 1,
+  "subject": {
+    "id": "ST-002",
+    "kind": "work"
+  }
+}
