@@ -32,16 +32,25 @@ pub struct HandoffReceipt {
     /// Worker-claimed verification checks (`name`, `command`, `exit_code`).
     /// Claims, not evidence: the reviewer re-runs each command instead of
     /// trusting the recorded exit code.
-    #[serde(default)]
+    ///
+    /// Evolution note: omitted from canonical form when empty so receipts
+    /// sealed before this field existed keep validating (the fingerprint is
+    /// canonical-content hash; an absent field and an empty list must stay
+    /// indistinguishable forever).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub checks: Vec<VerificationCheck>,
     /// Worker-claimed acceptance coverage. Missing proofs for some acceptance
     /// ids are allowed here; the close gate still demands full coverage from
     /// the reviewer's verification.
-    #[serde(default)]
+    ///
+    /// Evolution note: omitted from canonical form when empty (see `checks`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub acceptance_proofs: Vec<AcceptanceProof>,
     /// Usage feedback for packet-injected learnings (empty for receipts
     /// recorded before the field existed).
-    #[serde(default)]
+    ///
+    /// Evolution note: omitted from canonical form when empty (see `checks`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub knowledge_usage: Vec<KnowledgeUsage>,
     pub recorded_by: String,
     pub recorded_at: String,
@@ -157,11 +166,20 @@ pub struct VerificationReceipt {
     pub disposition: VerificationDisposition,
     pub summary: String,
     pub checks: Vec<VerificationCheck>,
-    #[serde(default)]
+    /// Worker-claimed acceptance coverage. Missing proofs for some acceptance
+    /// ids are allowed here; the close gate still demands full coverage from
+    /// the reviewer's verification.
+    ///
+    /// Evolution note: omitted from canonical form when empty so receipts
+    /// sealed before this field existed keep validating.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub acceptance_proofs: Vec<AcceptanceProof>,
     /// Shaped findings; a `rework` disposition must carry at least one
     /// verifiable finding (`check` present) to count as a verdict.
-    #[serde(default)]
+    ///
+    /// Evolution note: omitted from canonical form when empty so receipts
+    /// sealed before this field existed keep validating.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub findings: Vec<Finding>,
     pub verified_by: String,
     pub recorded_at: String,
@@ -396,4 +414,115 @@ pub fn validate_checks(
         ));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod fingerprint_stability_tests {
+    use super::*;
+    use crate::canonical_json::{to_canonical_bytes, to_canonical_value_from};
+
+    fn legacy_handoff_json() -> serde_json::Value {
+        // Field set of a handoff receipt sealed before `checks`,
+        // `acceptance_proofs` and `knowledge_usage` existed (golden-path
+        // era). `evidence_receipt_ids` predates them and stays explicit.
+        serde_json::json!({
+            "schema_version": 1,
+            "handoff_id": "handoff_legacy",
+            "idempotency_key_hash": "sha256:aaa",
+            "ticket_id": "TK-001",
+            "active_revision": 9,
+            "verifying_revision": 10,
+            "lease_id": "lease_1",
+            "project_id": "proj_1",
+            "workspace_id": "ws_1",
+            "session_id": "sess_1",
+            "repository_id": "repo_1",
+            "source_commit": "d4e5f6",
+            "source_dirty_hash": "sha256:bbb",
+            "summary": "did the thing",
+            "changed_paths": ["src/x.mjs"],
+            "evidence_receipt_ids": [],
+            "recorded_by": "agent:runner:worker",
+            "recorded_at": "2026-09-05T00:00:00Z",
+            "handoff_fingerprint": ""
+        })
+    }
+
+    fn legacy_verification_json() -> serde_json::Value {
+        // Field set of a verification receipt sealed before `findings`
+        // existed; `acceptance_proofs` already carried proofs.
+        serde_json::json!({
+            "schema_version": 1,
+            "verification_id": "verify_legacy",
+            "idempotency_key_hash": "sha256:ccc",
+            "handoff_id": "handoff_legacy",
+            "ticket_id": "TK-001",
+            "lease_id": "lease_1",
+            "source_commit": "d4e5f6",
+            "source_dirty_hash": "sha256:bbb",
+            "disposition": "passed",
+            "summary": "checked the thing",
+            "checks": [{"name": "verify", "command": "node scripts/verify.mjs", "exit_code": 0}],
+            "acceptance_proofs": [{"acceptance_id": "AC-1", "check_names": ["verify"]}],
+            "verified_by": "agent:runner:reviewer",
+            "recorded_at": "2026-09-05T00:00:00Z",
+            "resulting_status": "verifying",
+            "resulting_revision": 10,
+            "verification_fingerprint": ""
+        })
+    }
+
+    #[test]
+    fn handoff_without_evolution_fields_seals_and_reloads() {
+        let mut value = legacy_handoff_json();
+        let receipt: HandoffReceipt = serde_json::from_value(value.clone()).unwrap();
+        let fingerprint = receipt.compute_fingerprint().unwrap();
+        value["handoff_fingerprint"] = serde_json::Value::String(fingerprint.clone());
+        let bytes = to_canonical_bytes(&value).unwrap();
+        let reloaded: HandoffReceipt = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(reloaded.compute_fingerprint().unwrap(), fingerprint);
+    }
+
+    #[test]
+    fn verification_without_findings_seals_and_reloads() {
+        let mut value = legacy_verification_json();
+        let receipt: VerificationReceipt = serde_json::from_value(value.clone()).unwrap();
+        let fingerprint = receipt.compute_fingerprint().unwrap();
+        value["verification_fingerprint"] = serde_json::Value::String(fingerprint.clone());
+        let bytes = to_canonical_bytes(&value).unwrap();
+        let reloaded: VerificationReceipt = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(reloaded.compute_fingerprint().unwrap(), fingerprint);
+    }
+
+    #[test]
+    fn empty_evolution_collections_are_omitted_from_canonical_form() {
+        let receipt: HandoffReceipt = serde_json::from_value(legacy_handoff_json()).unwrap();
+        let value = to_canonical_value_from(&receipt).unwrap();
+        assert!(value.get("checks").is_none());
+        assert!(value.get("acceptance_proofs").is_none());
+        assert!(value.get("knowledge_usage").is_none());
+        // Fields from before the evolution convention keep explicit empties.
+        assert_eq!(
+            value.get("evidence_receipt_ids"),
+            Some(&serde_json::Value::Array(vec![]))
+        );
+
+        let verification: VerificationReceipt =
+            serde_json::from_value(legacy_verification_json()).unwrap();
+        let value = to_canonical_value_from(&verification).unwrap();
+        assert!(value.get("findings").is_none());
+        assert!(value.get("acceptance_proofs").is_some());
+    }
+
+    #[test]
+    fn non_empty_evolution_collections_stay_in_canonical_form() {
+        let mut value = legacy_handoff_json();
+        value["checks"] = serde_json::json!([
+            {"name": "verify", "command": "node scripts/verify.mjs", "exit_code": 0}
+        ]);
+        let receipt: HandoffReceipt = serde_json::from_value(value).unwrap();
+        let canonical = to_canonical_value_from(&receipt).unwrap();
+        assert!(canonical.get("checks").is_some());
+        assert!(canonical.get("knowledge_usage").is_none());
+    }
 }
