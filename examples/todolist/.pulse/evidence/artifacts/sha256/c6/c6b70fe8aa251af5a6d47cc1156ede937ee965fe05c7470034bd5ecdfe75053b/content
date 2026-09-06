@@ -1,0 +1,15 @@
+{
+  "cases": [
+    {
+      "id": "QA-003",
+      "status": "passed",
+      "observation": "createTodo stored due 2026-12-01 verbatim, the undated sibling has no due field and the input list was not mutated"
+    },
+    {
+      "id": "QA-004",
+      "status": "passed",
+      "observation": "createTodo threw TypeError for 12/01/2026 and 2026-02-30 without returning a todo"
+    }
+  ],
+  "findings": []
+}

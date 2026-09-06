@@ -6,8 +6,24 @@ User-visible behavior of the todolist CLI and domain module.
 
 - `node src/cli.mjs add <id> <title>` appends a new pending todo. The id must
   be unique and non-empty; the title is trimmed and must not be blank.
+- `node src/cli.mjs add <id> <title> --due <YYYY-MM-DD>` additionally stores
+  a due date. The value must be a real calendar date in `YYYY-MM-DD` form
+  (for example `2026-12-01`); it is stored verbatim with no timezone
+  conversion. `--due=<YYYY-MM-DD>` is accepted too, and the flag may appear
+  anywhere after the id. Without `--due` the todo has no due date and the
+  command behaves exactly as before.
+- An invalid due date, such as `12/01/2026` (wrong format) or `2026-02-30`
+  (not a calendar date), prints one stderr line beginning with `error:`,
+  exits with code 2, and writes nothing to the state file.
 - `node src/cli.mjs list` prints one pending todo per line as
-  `<id>\t<title>`.
+  `<id>\t<title>`. A todo with a due date prints a third column:
+  `<id>\t<title>\t<due>`. Undated todos keep the two-column line.
+- The domain module exposes the same behavior as
+  `createTodo(id, title, { due })`: a valid `due` is stored verbatim on the
+  returned todo, an invalid one throws `TypeError`, and a todo created
+  without `due` carries no `due` field at all (not `null`). State files
+  written before due dates existed load unchanged; a missing `due` simply
+  means the todo is undated.
 - `node src/cli.mjs count` prints the number of pending todos as a plain
   integer on one line. An empty list prints `0`; done todos are not counted.
 - `node src/cli.mjs remove <id>` drops the todo with that id.

@@ -1,0 +1,94 @@
+{
+  "acceptance_proofs": [
+    {
+      "acceptance_id": "AC-1",
+      "check_names": [
+        "docs-validate",
+        "due-tests",
+        "qa-run",
+        "verify"
+      ],
+      "evidence_receipt_ids": [
+        "rcpt_01M1W19322NWRV1QKB3MW3SBH9"
+      ]
+    },
+    {
+      "acceptance_id": "AC-2",
+      "check_names": [
+        "docs-validate",
+        "due-tests",
+        "verify"
+      ],
+      "evidence_receipt_ids": [
+        "rcpt_01M1W19322NWRV1QKB3MW3SBH9"
+      ]
+    },
+    {
+      "acceptance_id": "AC-3",
+      "check_names": [
+        "docs-validate",
+        "due-tests",
+        "qa-run",
+        "verify"
+      ],
+      "evidence_receipt_ids": [
+        "rcpt_01M1W19322NWRV1QKB3MW3SBH9"
+      ]
+    }
+  ],
+  "active_revision": 8,
+  "changed_paths": [
+    "docs/product/todolist.md",
+    "scripts/qa-run.mjs",
+    "src/cli.mjs",
+    "src/todolist.mjs",
+    "test/todolist.test.mjs",
+    "works/TK-005/plan.md",
+    "works/TK-005/validation.md"
+  ],
+  "checks": [
+    {
+      "artifact_ids": [],
+      "command": "node scripts/verify.mjs",
+      "exit_code": 0,
+      "name": "verify"
+    },
+    {
+      "artifact_ids": [],
+      "command": "node --test --test-name-pattern due test/todolist.test.mjs",
+      "exit_code": 0,
+      "name": "due-tests"
+    },
+    {
+      "artifact_ids": [],
+      "command": "node scripts/qa-run.mjs .pulse/runtime/run/TK-005/qa-input.json",
+      "exit_code": 0,
+      "name": "qa-run"
+    },
+    {
+      "artifact_ids": [],
+      "command": "pulse docs validate --record --actor agent:runner:worker --json",
+      "exit_code": 0,
+      "name": "docs-validate"
+    }
+  ],
+  "evidence_receipt_ids": [
+    "rcpt_01M1W19322NWRV1QKB3MW3SBH9"
+  ],
+  "handoff_fingerprint": "sha256:e8b10b9a5d0b8326864e9a6ec89eb5a275ddc602ca3d3ff3817a354c1e46f3e2",
+  "handoff_id": "handoff_52721356f23d79caa297fe801d",
+  "idempotency_key_hash": "sha256:52721356f23d79caa297fe801dcfd61dec34ed3453947240f336a3b30bb8e191",
+  "lease_id": "lease_6e1ceb1d783bf32ad4d72ecdd8_g000002",
+  "project_id": "TK-005",
+  "recorded_at": "2026-09-06T18:57:40.627960+00:00",
+  "recorded_by": "agent:runner:worker",
+  "repository_id": "repo_01M1RWXYDW6Q0WT9J0NMA466BH",
+  "schema_version": 1,
+  "session_id": "run:rsv_6e1ceb1d783bf32ad4d72ecdd8_g000002",
+  "source_commit": "e27b5e4de79a186d1d7d60a12d5b080aa7cfcaaa",
+  "source_dirty_hash": "sha256:3ad5e50b0da42965a44841166956243c4519b172bde51faec40a5015d6b15c1b",
+  "summary": "Rework: optional due dates unchanged (createTodo validates YYYY-MM-DD, add --due, list third column, error exit 2, tests, QA-003/QA-004 handlers, behavior doc); handoff now references documentation_validation receipt rcpt_01M1W19322NWRV1QKB3MW3SBH9 in the proof envelope",
+  "ticket_id": "TK-005",
+  "verifying_revision": 9,
+  "workspace_id": "checkout"
+}

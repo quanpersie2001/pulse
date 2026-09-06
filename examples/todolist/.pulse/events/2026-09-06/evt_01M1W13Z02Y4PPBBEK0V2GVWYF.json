@@ -1,0 +1,27 @@
+{
+  "actor": {
+    "id": "runner:worker",
+    "kind": "agent"
+  },
+  "event_type": "work.assignment.activated",
+  "id": "evt_01M1W13Z02Y4PPBBEK0V2GVWYF",
+  "occurred_at": "2026-09-06T18:53:59.682503Z",
+  "payload": {
+    "acknowledgement_id": "ack:run:rsv_6e1ceb1d783bf32ad4d72ecdd8_g000002",
+    "lease_id": "lease_6e1ceb1d783bf32ad4d72ecdd8_g000002",
+    "packet_fingerprint": "sha256:a1891221bcf28777b7d14b8f7b9404913c09e8026111cd76e02c05ebfcf815ef",
+    "runtime_binding": {
+      "project_id": "TK-005",
+      "provider_id": "runner:worker",
+      "session_id": "run:rsv_6e1ceb1d783bf32ad4d72ecdd8_g000002",
+      "workspace_id": "checkout"
+    },
+    "ticket_revision_after": 8,
+    "ticket_revision_before": 7
+  },
+  "schema_version": 1,
+  "subject": {
+    "id": "TK-005",
+    "kind": "ticket"
+  }
+}

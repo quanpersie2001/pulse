@@ -1,0 +1,83 @@
+{
+  "acceptance_proofs": [
+    {
+      "acceptance_id": "AC-1",
+      "check_names": [
+        "due-tests",
+        "qa-run",
+        "verify"
+      ],
+      "evidence_receipt_ids": []
+    },
+    {
+      "acceptance_id": "AC-2",
+      "check_names": [
+        "due-tests",
+        "verify"
+      ],
+      "evidence_receipt_ids": []
+    },
+    {
+      "acceptance_id": "AC-3",
+      "check_names": [
+        "due-tests",
+        "qa-run",
+        "verify"
+      ],
+      "evidence_receipt_ids": []
+    }
+  ],
+  "active_revision": 5,
+  "changed_paths": [
+    "docs/product/todolist.md",
+    "scripts/qa-run.mjs",
+    "src/cli.mjs",
+    "src/todolist.mjs",
+    "test/todolist.test.mjs",
+    "works/TK-005/plan.md",
+    "works/TK-005/validation.md"
+  ],
+  "checks": [
+    {
+      "artifact_ids": [],
+      "command": "node scripts/verify.mjs",
+      "exit_code": 0,
+      "name": "verify"
+    },
+    {
+      "artifact_ids": [],
+      "command": "node --test --test-name-pattern due test/todolist.test.mjs",
+      "exit_code": 0,
+      "name": "due-tests"
+    },
+    {
+      "artifact_ids": [],
+      "command": "node scripts/qa-run.mjs .pulse/runtime/run/TK-005/qa-input.json",
+      "exit_code": 0,
+      "name": "qa-run"
+    },
+    {
+      "artifact_ids": [],
+      "command": "pulse docs validate --record --actor agent:runner:worker --json",
+      "exit_code": 0,
+      "name": "docs-validate"
+    }
+  ],
+  "evidence_receipt_ids": [],
+  "handoff_fingerprint": "sha256:7a968a8e5986dfe9aec1e25b62db02c0de2877988fff47f4eef4e2b2b97d7dd5",
+  "handoff_id": "handoff_c265be27f9c711b616465545c5",
+  "idempotency_key_hash": "sha256:c265be27f9c711b616465545c53f49372235a08b46e387ed6bf21a08bdd7d8a1",
+  "lease_id": "lease_6e1ceb1d783bf32ad4d72ecdd8",
+  "project_id": "TK-005",
+  "recorded_at": "2026-09-06T18:34:09.278780+00:00",
+  "recorded_by": "agent:runner:worker",
+  "repository_id": "repo_01M1RWXYDW6Q0WT9J0NMA466BH",
+  "schema_version": 1,
+  "session_id": "run:rsv_6e1ceb1d783bf32ad4d72ecdd8",
+  "source_commit": "b2fa6745ddf0f2727164c97bd686c91e33323121",
+  "source_dirty_hash": "sha256:cee6562c59f934d4e6f4afa83d2fad422c97c078531a4f42df0b658cbc97ec91",
+  "summary": "Optional due dates: createTodo validates YYYY-MM-DD calendar dates, add --due stores them, list shows a third column, invalid dates exit 2 with an error line; tests, QA-003/QA-004 handlers, behavior doc (docs receipt rcpt_01M1VZSX9AJTBXNDH0S9MBBNT9) and R2 plan added",
+  "ticket_id": "TK-005",
+  "verifying_revision": 6,
+  "workspace_id": "checkout"
+}

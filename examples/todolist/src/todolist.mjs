@@ -2,16 +2,50 @@
 //
 // Invariants:
 // - functions never mutate their `todos` argument; they return new values;
-// - ids are unique non-empty strings; titles are non-empty trimmed strings.
+// - ids are unique non-empty strings; titles are non-empty trimmed strings;
+// - `due` is optional: when present it is a `YYYY-MM-DD` calendar-date
+//   string stored verbatim; undated todos carry no `due` field at all.
 
-export function createTodo(id, title) {
+const DUE_DATE_PATTERN = /^(\d{4})-(\d{2})-(\d{2})$/;
+
+function daysInMonth(year, month) {
+  if (month === 2) {
+    const leap = (year % 4 === 0 && year % 100 !== 0) || year % 400 === 0;
+    return leap ? 29 : 28;
+  }
+  return [4, 6, 9, 11].includes(month) ? 30 : 31;
+}
+
+// True when `value` is a `YYYY-MM-DD` string naming a real calendar date.
+// Pure string arithmetic: no Date parsing, so no timezone interpretation.
+function isCalendarDate(value) {
+  const match = typeof value === "string" ? DUE_DATE_PATTERN.exec(value) : null;
+  if (!match) return false;
+  const [year, month, day] = match.slice(1).map(Number);
+  return month >= 1 && month <= 12 && day >= 1 && day <= daysInMonth(year, month);
+}
+
+// `options.due`, when provided, must be a valid `YYYY-MM-DD` calendar date;
+// the returned todo then carries it verbatim. Without `due` the todo has no
+// `due` field (not `due: null`), so pre-due consumers see no change.
+export function createTodo(id, title, options = {}) {
   if (typeof id !== "string" || id.length === 0) {
     throw new TypeError("id must be a non-empty string");
   }
   if (typeof title !== "string" || title.trim().length === 0) {
     throw new TypeError("title must be a non-empty string");
   }
-  return { id, title: title.trim(), done: false };
+  if (options === null || typeof options !== "object") {
+    throw new TypeError("options must be an object");
+  }
+  const todo = { id, title: title.trim(), done: false };
+  if (options.due === undefined) {
+    return todo;
+  }
+  if (!isCalendarDate(options.due)) {
+    throw new TypeError("due must be a YYYY-MM-DD calendar date");
+  }
+  return { ...todo, due: options.due };
 }
 
 export function addTodo(todos, todo) {

@@ -54,6 +54,48 @@ async function runCase(caseId) {
         : `completeTodo returned ${JSON.stringify(result)}`,
     };
   }
+  if (caseId === "QA-003") {
+    const dated = todolist.createTodo("qa-3", "sample", { due: "2026-12-01" });
+    const undated = todolist.createTodo("qa-3-undated", "sample");
+    const input = [undated];
+    const inputSnapshot = JSON.stringify(input);
+    const next = todolist.addTodo(input, dated);
+    const stored = next.find((todo) => todo.id === "qa-3");
+    const ok =
+      dated.due === "2026-12-01" &&
+      dated.done === false &&
+      stored?.due === "2026-12-01" &&
+      !Object.hasOwn(undated, "due") &&
+      !Object.hasOwn(next[0], "due") &&
+      input.length === 1 &&
+      JSON.stringify(input) === inputSnapshot;
+    return {
+      ok,
+      observation: ok
+        ? "createTodo stored due 2026-12-01 verbatim, the undated sibling has no due field and the input list was not mutated"
+        : `createTodo/addTodo produced dated=${JSON.stringify(dated)} list=${JSON.stringify(next)} input=${JSON.stringify(input)}`,
+    };
+  }
+  if (caseId === "QA-004") {
+    const problems = [];
+    for (const [id, due] of [["qa-4", "12/01/2026"], ["qa-4b", "2026-02-30"]]) {
+      try {
+        const value = todolist.createTodo(id, "sample", { due });
+        problems.push(`due ${due} returned ${JSON.stringify(value)} instead of throwing`);
+      } catch (error) {
+        if (!(error instanceof TypeError)) {
+          problems.push(`due ${due} threw ${error.name} instead of TypeError`);
+        }
+      }
+    }
+    const ok = problems.length === 0;
+    return {
+      ok,
+      observation: ok
+        ? "createTodo threw TypeError for 12/01/2026 and 2026-02-30 without returning a todo"
+        : problems.join("; "),
+    };
+  }
   return null;
 }
 

@@ -31,9 +31,30 @@ async function saveTodos(todos) {
 
 function usage() {
   console.error(
-    "usage: node src/cli.mjs add <id> <title> | list | count | completed | done <id> | rename <id> <title> | remove <id>",
+    "usage: node src/cli.mjs add <id> <title> [--due <YYYY-MM-DD>] | list | count | completed | done <id> | rename <id> <title> | remove <id>",
   );
   process.exitCode = 2;
+}
+
+// Splits the `add` arguments into title words and an optional `--due`
+// value (`--due <date>` or `--due=<date>`, anywhere after the id). Without
+// the flag every word is title, exactly as before due dates existed.
+function parseAddArgs(args) {
+  const titleWords = [];
+  let due;
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+    if (arg === "--due") {
+      if (index + 1 >= args.length) return { error: "missing --due value" };
+      due = args[index + 1];
+      index += 1;
+    } else if (arg.startsWith("--due=")) {
+      due = arg.slice("--due=".length);
+    } else {
+      titleWords.push(arg);
+    }
+  }
+  return { titleWords, due };
 }
 
 const [command, id, ...rest] = process.argv.slice(2);
@@ -53,16 +74,31 @@ try {
 if (todos !== undefined) {
   switch (command) {
     case "add": {
-      if (!id || rest.length === 0) {
+      const { titleWords, due, error } = parseAddArgs(rest);
+      if (!id || error || titleWords.length === 0) {
         usage();
         break;
       }
-      await saveTodos(addTodo(todos, createTodo(id, rest.join(" "))));
+      let todo;
+      try {
+        todo = createTodo(id, titleWords.join(" "), due === undefined ? undefined : { due });
+      } catch (createError) {
+        // Only a bad --due is mapped to the error contract; undated adds keep
+        // their pre-due behavior untouched.
+        if (due !== undefined && createError instanceof TypeError) {
+          console.error(`error: ${createError.message}`);
+          process.exitCode = 2;
+          break;
+        }
+        throw createError;
+      }
+      await saveTodos(addTodo(todos, todo));
       break;
     }
     case "list": {
       for (const todo of pendingTodos(todos)) {
-        console.log(`${todo.id}\t${todo.title}`);
+        const line = `${todo.id}\t${todo.title}`;
+        console.log(todo.due == null ? line : `${line}\t${todo.due}`);
       }
       break;
     }

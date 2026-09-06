@@ -1,0 +1,18 @@
+{
+  "actor": {
+    "id": "runner:worker",
+    "kind": "agent"
+  },
+  "event_type": "note.recorded",
+  "id": "evt_01M1VZZAEB7YBNJSX6MFE1J6KX",
+  "occurred_at": "2026-09-06T18:33:58.987210Z",
+  "payload": {
+    "message": "harness: work handoff with a documentation_validation receipt id inside --proof times out on workgraph.lock (lock is free per flock probe; completion.rs holds WriteGuard then verify_receipt_under_fence re-acquires). Worker recorded docs receipt rcpt_01M1VZSX9AJTBXNDH0S9MBBNT9 for docs/product/todolist.md; handoff retried with the receipt only at top level or in the summary.",
+    "work_id": "TK-005"
+  },
+  "schema_version": 1,
+  "subject": {
+    "id": "TK-005",
+    "kind": "resource"
+  }
+}

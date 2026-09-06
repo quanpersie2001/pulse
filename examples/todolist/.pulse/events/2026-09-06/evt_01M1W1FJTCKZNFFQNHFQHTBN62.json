@@ -1,0 +1,24 @@
+{
+  "actor": {
+    "id": "agent:runner:reviewer",
+    "kind": "agent"
+  },
+  "event_type": "run.completed",
+  "id": "evt_01M1W1FJTCKZNFFQNHFQHTBN62",
+  "occurred_at": "2026-09-06T19:00:20.428145Z",
+  "payload": {
+    "artifacts": [],
+    "inconclusive_reason": null,
+    "lease_id": null,
+    "receipt_id": null,
+    "role": "reviewer",
+    "run_record": ".pulse/runtime/run/TK-005/reviewer-outcome.json",
+    "status": "passed",
+    "ticket_id": "TK-005"
+  },
+  "schema_version": 1,
+  "subject": {
+    "id": "TK-005",
+    "kind": "resource"
+  }
+}

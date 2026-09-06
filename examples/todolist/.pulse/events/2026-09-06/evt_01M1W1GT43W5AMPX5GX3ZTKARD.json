@@ -1,0 +1,37 @@
+{
+  "actor": {
+    "id": "quanpersie2001",
+    "kind": "human"
+  },
+  "event_type": "work.node.transitioned",
+  "id": "evt_01M1W1GT43W5AMPX5GX3ZTKARD",
+  "occurred_at": "2026-09-06T19:01:00.585479Z",
+  "payload": {
+    "expected_revision": 1,
+    "from": "draft",
+    "gate_coverage": [
+      "transition_direction",
+      "graph_integrity",
+      "gate_evaluation",
+      "authority",
+      "readiness_fingerprint"
+    ],
+    "gate_profile": "shaped",
+    "gate_status": "ready",
+    "graph_fingerprint_after": "sha256:29e669705c58e462bb5ce17a63288da1161cb1f0933533d1540551922eebbaed",
+    "graph_fingerprint_before": "sha256:c219a293c97a372b9e899590eb6f694353cb0a1b9ac040f0b78cd7251c4102e3",
+    "input_fingerprint": "sha256:de94adb0121e8f5bba1a9a7b6960702e6cee2113022188f66ebc234d865d3d1f",
+    "reason": {
+      "code": "shaped",
+      "summary": "story outcome and qa baseline fixed"
+    },
+    "target_requires_status_reason": false,
+    "to": "shaped"
+  },
+  "schema_version": 1,
+  "subject": {
+    "id": "ST-002",
+    "kind": "story",
+    "revision": 2
+  }
+}

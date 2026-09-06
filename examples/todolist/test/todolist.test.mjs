@@ -276,3 +276,162 @@ test("rename command reports NotFound without changing the state file", async (t
   assert.equal(result.stdout, "NotFound\n");
   assert.equal(await readFile(statePath, "utf8"), state);
 });
+
+// TK-005 AC-1 / QA-003
+test("createTodo stores a valid due date verbatim without mutating its inputs", () => {
+  const options = { due: "2026-12-01" };
+  const optionsSnapshot = structuredClone(options);
+  const dated = createTodo("t1", "  one  ", options);
+  assert.deepEqual(dated, { id: "t1", title: "one", done: false, due: "2026-12-01" });
+  assert.deepEqual(options, optionsSnapshot);
+
+  const undated = createTodo("t0", "zero");
+  const todos = [undated];
+  const snapshot = structuredClone(todos);
+  const next = addTodo(todos, dated);
+  assert.deepEqual(todos, snapshot);
+  assert.equal(todos.length, 1);
+  assert.equal(next.length, 2);
+  assert.equal(Object.hasOwn(next[0], "due"), false);
+  assert.equal(next[1].due, "2026-12-01");
+});
+
+// TK-005 AC-1
+test("createTodo accepts real calendar dates including leap days", () => {
+  assert.equal(createTodo("t1", "one", { due: "2024-02-29" }).due, "2024-02-29");
+  assert.equal(createTodo("t1", "one", { due: "2026-01-31" }).due, "2026-01-31");
+  assert.equal(createTodo("t1", "one", { due: "2026-12-31" }).due, "2026-12-31");
+});
+
+// TK-005 AC-2
+test("createTodo without a due leaves the field absent, not null", () => {
+  const plain = createTodo("t1", "one");
+  const emptyOptions = createTodo("t1", "one", {});
+  const undefinedDue = createTodo("t1", "one", { due: undefined });
+  for (const todo of [plain, emptyOptions, undefinedDue]) {
+    assert.deepEqual(todo, { id: "t1", title: "one", done: false });
+    assert.equal(Object.hasOwn(todo, "due"), false);
+  }
+});
+
+// TK-005 AC-3 / QA-004
+test("createTodo rejects wrong formats and nonexistent calendar dates with TypeError", () => {
+  const invalid = [
+    "12/01/2026", // wrong format
+    "2026-02-30", // nonexistent day
+    "2023-02-29", // not a leap year
+    "2026-04-31", // April has 30 days
+    "2026-13-01", // month out of range
+    "2026-00-10", // month zero
+    "2026-12-00", // day zero
+    "2026-1-1", // unpadded
+    "2026-12-01T00:00:00Z", // datetime, not a date
+    "", // empty string
+    null,
+    20261201,
+    new Date("2026-12-01"),
+  ];
+  for (const due of invalid) {
+    assert.throws(() => createTodo("t1", "one", { due }), TypeError, String(due));
+  }
+  assert.throws(() => createTodo("t1", "one", "2026-12-01"), TypeError);
+});
+
+// TK-005 AC-1
+test("add --due persists the date and list shows it as a third column", async (t) => {
+  const cwd = await mkdtemp(path.join(tmpdir(), "todolist-due-"));
+  t.after(() => rm(cwd, { recursive: true, force: true }));
+  const statePath = path.join(cwd, ".todolist.json");
+
+  let result = runCli(cwd, "add", "t1", "dated", "todo", "--due", "2026-12-01");
+  assert.equal(result.status, 0);
+  assert.equal(result.stdout, "");
+  assert.equal(result.stderr, "");
+  assert.deepEqual(JSON.parse(await readFile(statePath, "utf8")), [
+    { id: "t1", title: "dated todo", done: false, due: "2026-12-01" },
+  ]);
+
+  result = runCli(cwd, "add", "t2", "--due=2027-01-15", "flag", "first");
+  assert.equal(result.status, 0);
+  result = runCli(cwd, "add", "t3", "undated");
+  assert.equal(result.status, 0);
+
+  result = runCli(cwd, "list");
+  assert.equal(result.status, 0);
+  assert.equal(
+    result.stdout,
+    "t1\tdated todo\t2026-12-01\nt2\tflag first\t2027-01-15\nt3\tundated\n",
+  );
+
+  // The date survives a further save/load roundtrip through another command.
+  assert.equal(runCli(cwd, "done", "t3").status, 0);
+  result = runCli(cwd, "list");
+  assert.equal(result.stdout, "t1\tdated todo\t2026-12-01\nt2\tflag first\t2027-01-15\n");
+  assert.equal(JSON.parse(await readFile(statePath, "utf8"))[0].due, "2026-12-01");
+});
+
+// TK-005 AC-2
+test("undated add and pre-due state files behave byte-identically", async (t) => {
+  const cwd = await mkdtemp(path.join(tmpdir(), "todolist-undated-"));
+  t.after(() => rm(cwd, { recursive: true, force: true }));
+  const statePath = path.join(cwd, ".todolist.json");
+  const preDueState = [
+    { id: "t1", title: "one", done: false },
+    { id: "t2", title: "two", done: true },
+  ];
+  await writeFile(statePath, `${JSON.stringify(preDueState, null, 2)}\n`);
+
+  let result = runCli(cwd, "list");
+  assert.equal(result.status, 0);
+  assert.equal(result.stdout, "t1\tone\n");
+
+  result = runCli(cwd, "add", "t3", "three", "words", "here");
+  assert.equal(result.status, 0);
+  assert.equal(result.stdout, "");
+  assert.equal(result.stderr, "");
+  const expectedState = [...preDueState, { id: "t3", title: "three words here", done: false }];
+  assert.equal(
+    await readFile(statePath, "utf8"),
+    `${JSON.stringify(expectedState, null, 2)}\n`,
+  );
+  assert.equal(await readFile(statePath, "utf8").then((text) => text.includes("due")), false);
+
+  result = runCli(cwd, "list");
+  assert.equal(result.stdout, "t1\tone\nt3\tthree words here\n");
+  result = runCli(cwd, "completed");
+  assert.equal(result.stdout, "t2\ttwo\n");
+  result = runCli(cwd, "count");
+  assert.equal(result.stdout, "2\n");
+});
+
+// TK-005 AC-3
+test("add with an invalid --due prints one error line, exits 2 and writes nothing", async (t) => {
+  const cwd = await mkdtemp(path.join(tmpdir(), "todolist-bad-due-"));
+  t.after(() => rm(cwd, { recursive: true, force: true }));
+  const statePath = path.join(cwd, ".todolist.json");
+
+  for (const due of ["12/01/2026", "2026-02-30"]) {
+    const result = runCli(cwd, "add", "t1", "one", "--due", due);
+    assert.equal(result.status, 2, due);
+    assert.equal(result.stdout, "", due);
+    assert.match(result.stderr, /^error: [^\n]+\n$/, due);
+    await assert.rejects(readFile(statePath), { code: "ENOENT" }, due);
+  }
+
+  const state = `${JSON.stringify([createTodo("t0", "zero")], null, 2)}\n`;
+  await writeFile(statePath, state);
+  for (const due of ["12/01/2026", "2026-02-30"]) {
+    const result = runCli(cwd, "add", "t1", "one", "--due", due);
+    assert.equal(result.status, 2, due);
+    assert.equal(result.stdout, "", due);
+    assert.match(result.stderr, /^error: [^\n]+\n$/, due);
+    assert.equal(await readFile(statePath, "utf8"), state, due);
+  }
+
+  // A dangling --due is a usage error, also without any write.
+  const result = runCli(cwd, "add", "t1", "one", "--due");
+  assert.equal(result.status, 2);
+  assert.equal(result.stdout, "");
+  assert.match(result.stderr, /^usage: /);
+  assert.equal(await readFile(statePath, "utf8"), state);
+});

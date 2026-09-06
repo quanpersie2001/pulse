@@ -79,6 +79,33 @@ Feeds the v0.2 backlog (PRODUCT.md §11) after the round.
 - The rework finding shape worked exactly as designed once visible:
   check + owner + severity, worker fixed, reviewer re-ran the check.
   That half of the loop is solid.
+
+## 2026-09-07 (TK-005 R2 cycle)
+
+- Core bug (fixed in e27b5e4): `work handoff --evidence-receipt`
+  deadlocked against itself — the handoff holds the write fence while
+  receipt verification loads the docs registry, whose read also takes
+  the fence. The worker had to record the docs receipt WITHOUT
+  referencing it, and the next reviewer then rework'd on the missing
+  proof chain. Two defects chaining into a false-negative rework.
+- Worktree dispatch gap (the big one, unfixed): the run workspace
+  (worker-prompt.md, worker-input.json) is written only to the main
+  repo's runtime, so a worktree worker finds no prompt at its cwd and
+  wanders into the main checkout through packet absolute paths. TK-006
+  still succeeded (the fence bound the clean worktree), but the
+  isolation guarantee was accidental, not enforced. Fix needs
+  CLI-level worktree→main mapping (v0.2, ADR candidate 0015).
+- Cross-ticket poisoning via that gap: TK-006's worker wrote into the
+  shared checkout mid-flight and staled TK-007's proof fence, costing
+  a full release→re-run cycle of TK-007. Concurrent dispatch is only
+  as safe as the weakest path isolation.
+- Reviewer run records capture stderr_tail only — when a reviewer
+  fails its `work verify` call, the error text is lost and the operator
+  sees just `malformed_output`/`unproven_claim`. Bounded stdout tail in
+  the run record would have saved two diagnosis round-trips.
+- `close-story` requires a clean tree (`story_close_source_dirty`), so
+  the developer must commit Ticket work before closing the Story — but
+  the docs never sequence this. Learned by hitting it.
 - The dirty fence is tree-wide: I (the OPERATOR) edited
   `works/friction.md` — an unrelated tracked prose file — between
   reviewer verification and close, and close refused with
