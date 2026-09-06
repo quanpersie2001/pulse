@@ -1,0 +1,57 @@
+{
+  "acceptance_proofs": [
+    {
+      "acceptance_id": "AC-1",
+      "check_names": [
+        "verify"
+      ],
+      "evidence_receipt_ids": []
+    },
+    {
+      "acceptance_id": "AC-2",
+      "check_names": [
+        "verify"
+      ],
+      "evidence_receipt_ids": []
+    },
+    {
+      "acceptance_id": "AC-3",
+      "check_names": [
+        "verify"
+      ],
+      "evidence_receipt_ids": []
+    }
+  ],
+  "active_revision": 8,
+  "changed_paths": [
+    "docs/product/todolist.md",
+    "src/cli.mjs",
+    "src/todolist.mjs",
+    "test/todolist.test.mjs"
+  ],
+  "checks": [
+    {
+      "artifact_ids": [],
+      "command": "node scripts/verify.mjs",
+      "exit_code": 0,
+      "name": "verify"
+    }
+  ],
+  "evidence_receipt_ids": [],
+  "handoff_fingerprint": "sha256:1c1eb6868ab679394a2823d28ba7bf49e6890ecde8db10f78fcef59e32886de3",
+  "handoff_id": "handoff_6d5555e51658f40bad450c54c3",
+  "idempotency_key_hash": "sha256:6d5555e51658f40bad450c54c39bb463489c1aa6c1835bcdaacf79fb17d66f7d",
+  "lease_id": "lease_b29c577d715f80c4fae1945a5b_g000002",
+  "project_id": "TK-007",
+  "recorded_at": "2026-09-06T18:22:45.700856+00:00",
+  "recorded_by": "agent:runner:worker",
+  "repository_id": "repo_01M1RWXYDW6Q0WT9J0NMA466BH",
+  "schema_version": 1,
+  "session_id": "run:rsv_b29c577d715f80c4fae1945a5b_g000002",
+  "source_commit": "f2f2d7de0b8be4cf02f8a8dabd3e89b902099a36",
+  "source_dirty_hash": "sha256:41a85a6acc36142bec0edffed813807806d500a59bdb565cacc71e20826f6703",
+  "summary": "Added immutable todo renaming with CLI outcomes, coverage, and behavior documentation",
+  "ticket_id": "TK-007",
+  "verifying_revision": 9,
+  "workspace_id": "checkout"
+}

@@ -1,0 +1,15 @@
+{
+  "close_fingerprint": "sha256:d98cf3259968d2fb6fcb4464586c4678098decce5634a7d1aeba2209a29cb651",
+  "close_id": "close_7d00b084e1a446e88bef067e41",
+  "closed_by": "human:quanpersie2001",
+  "handoff_id": "handoff_6d5555e51658f40bad450c54c3",
+  "idempotency_key_hash": "sha256:7d00b084e1a446e88bef067e417ef08a28b74a8d3f7a13bb697740159ad5e482",
+  "lease_id": "lease_b29c577d715f80c4fae1945a5b_g000002",
+  "recorded_at": "2026-09-06T18:25:25.546176+00:00",
+  "resulting_revision": 10,
+  "schema_version": 1,
+  "source_commit": "f2f2d7de0b8be4cf02f8a8dabd3e89b902099a36",
+  "summary": "rename shipped after fence-stale recovery: claude worker re-handoff, claude reviewer passed with independent checks",
+  "ticket_id": "TK-007",
+  "verification_id": "verify_501969f1537cd4377adde05dd2"
+}

@@ -1,0 +1,21 @@
+{
+  "actor": {
+    "id": "runner:reviewer",
+    "kind": "agent"
+  },
+  "event_type": "evidence.receipt.recorded",
+  "id": "evt_01M1VZEHADBGAHR9ESDV01QGVR",
+  "occurred_at": "2026-09-06T18:24:48.973916Z",
+  "payload": {
+    "receipt_hash": "sha256:472a1c9bfe4f6648b9e861ae38ad442447933a66d247ba8a277dbe01d03c78dd",
+    "receipt_id": "rcpt_01M1VZEH81E3ZHPFNNPG9MFSJQ",
+    "receipt_kind": "documentation_validation",
+    "result": "passed",
+    "subject": "repo_01M1RWXYDW6Q0WT9J0NMA466BH"
+  },
+  "schema_version": 1,
+  "subject": {
+    "id": "rcpt_01M1VZEH81E3ZHPFNNPG9MFSJQ",
+    "kind": "receipt"
+  }
+}

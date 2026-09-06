@@ -11,6 +11,15 @@ User-visible behavior of the todolist CLI and domain module.
 - `node src/cli.mjs count` prints the number of pending todos as a plain
   integer on one line. An empty list prints `0`; done todos are not counted.
 - `node src/cli.mjs remove <id>` drops the todo with that id.
+- `node src/cli.mjs rename <id> <new title>` changes only the matched todo's
+  title, trimming the new title while preserving its id, done state, position,
+  and any other fields. It prints the stable outcome name `Renamed` and exits
+  0; for an unknown id it prints `NotFound`, exits 1, and leaves the state file
+  untouched. A blank title is rejected with `TypeError`.
+- The domain module exposes the same behavior as
+  `renameTodo(todos, id, title)`, which returns `{ outcome, todos }` and never
+  mutates its input. `RenameOutcome` exports the stable names `Renamed` and
+  `NotFound`.
 - If `.todolist.json` is not valid JSON, every command prints one error line
   beginning with `error:` and containing `state file`, then exits with code 1.
   The corrupt file is never changed automatically; recovery requires manually

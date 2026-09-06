@@ -1,0 +1,68 @@
+{
+  "acceptance_proofs": [
+    {
+      "acceptance_id": "AC-1",
+      "check_names": [
+        "cli-rename-roundtrip",
+        "verify"
+      ],
+      "evidence_receipt_ids": [
+        "rcpt_01M1VZEH81E3ZHPFNNPG9MFSJQ"
+      ]
+    },
+    {
+      "acceptance_id": "AC-2",
+      "check_names": [
+        "cli-rename-roundtrip",
+        "verify"
+      ],
+      "evidence_receipt_ids": [
+        "rcpt_01M1VZEH81E3ZHPFNNPG9MFSJQ"
+      ]
+    },
+    {
+      "acceptance_id": "AC-3",
+      "check_names": [
+        "verify"
+      ],
+      "evidence_receipt_ids": [
+        "rcpt_01M1VZEH81E3ZHPFNNPG9MFSJQ"
+      ]
+    }
+  ],
+  "checks": [
+    {
+      "artifact_ids": [],
+      "command": "node scripts/verify.mjs",
+      "exit_code": 0,
+      "name": "verify"
+    },
+    {
+      "artifact_ids": [],
+      "command": "node src/cli.mjs add/done/rename round trip in scratch dir",
+      "exit_code": 0,
+      "name": "cli-rename-roundtrip"
+    },
+    {
+      "artifact_ids": [],
+      "command": "pulse docs validate --record --actor agent:runner:reviewer --json",
+      "exit_code": 0,
+      "name": "docs-validate"
+    }
+  ],
+  "disposition": "passed",
+  "handoff_id": "handoff_6d5555e51658f40bad450c54c3",
+  "idempotency_key_hash": "sha256:501969f1537cd4377adde05dd26674b6fa64c8b37c0673c4a7880dd212b64a35",
+  "lease_id": "lease_b29c577d715f80c4fae1945a5b_g000002",
+  "recorded_at": "2026-09-06T18:25:04.171012+00:00",
+  "resulting_revision": 9,
+  "resulting_status": "verifying",
+  "schema_version": 1,
+  "source_commit": "f2f2d7de0b8be4cf02f8a8dabd3e89b902099a36",
+  "source_dirty_hash": "sha256:41a85a6acc36142bec0edffed813807806d500a59bdb565cacc71e20826f6703",
+  "summary": "Independent review of TK-007 at f2f2d7d. Tracked diff is limited to the four claimed paths (src/todolist.mjs, src/cli.mjs, test/todolist.test.mjs, docs/product/todolist.md); the only other working-tree changes are Pulse runtime state (.pulse events, workgraph node, handoff record), so the dirty fence holds. renameTodo follows the completeTodo pattern: frozen RenameOutcome {Renamed, NotFound}, blank/non-string title throws TypeError before any lookup, NotFound returns the input list untouched, Renamed returns a sliced copy with only the matched entry spread and its title trimmed (id/done/position/extra fields preserved, sibling objects shared by reference). Re-ran node scripts/verify.mjs: 20/20 pass, exit 0, matching the worker's claimed exit code; the five new tests cover AC-1 (domain + CLI persistence), AC-2 (domain + CLI state file byte-identical), AC-3 (TypeError, input snapshot unchanged in every outcome). Independent CLI round trip in a scratch dir: rename of a done todo printed Renamed, exit 0, state file shows trimmed title with done:true and position kept; rename of an unknown id printed NotFound, exit 1, state file byte-identical; rename without a title printed usage and exit 2; rename with an all-whitespace title propagates the TypeError uncaught with exit 1 and no state write, which is the same behavior as the existing add command and matches the contract's 'exactly like createTodo'. Behavior doc adds the rename command and outcome names under Managing todos as required. Handoff input carried no documentation_validation receipt for this required-docs ticket, so I ran pulse docs validate --record (valid, registry_revision 2, all four checks passed) and recorded rcpt_01M1VZEH81E3ZHPFNNPG9MFSJQ bound to docs/product/todolist.md at its current hash and to f2f2d7d, verification gate_eligible. QA posture is none, so no qa_checkpoint receipt is required. No new dependencies.",
+  "ticket_id": "TK-007",
+  "verification_fingerprint": "sha256:c856f618b1599cda623fa2c3baca7134ef51a2c901fede5ec7bfd0d5c91ae0c2",
+  "verification_id": "verify_501969f1537cd4377adde05dd2",
+  "verified_by": "agent:runner:reviewer"
+}

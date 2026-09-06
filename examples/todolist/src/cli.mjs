@@ -4,12 +4,14 @@ import { readFile, writeFile } from "node:fs/promises";
 import process from "node:process";
 import {
   CompleteOutcome,
+  RenameOutcome,
   addTodo,
   completeTodo,
   completedTodos,
   createTodo,
   pendingTodos,
   removeTodo,
+  renameTodo,
 } from "./todolist.mjs";
 
 const STATE_FILE = ".todolist.json";
@@ -29,7 +31,7 @@ async function saveTodos(todos) {
 
 function usage() {
   console.error(
-    "usage: node src/cli.mjs add <id> <title> | list | count | completed | done <id> | remove <id>",
+    "usage: node src/cli.mjs add <id> <title> | list | count | completed | done <id> | rename <id> <title> | remove <id>",
   );
   process.exitCode = 2;
 }
@@ -81,6 +83,20 @@ if (todos !== undefined) {
       }
       const result = completeTodo(todos, id);
       if (result.outcome === CompleteOutcome.Completed) {
+        await saveTodos(result.todos);
+      } else {
+        process.exitCode = 1;
+      }
+      console.log(result.outcome);
+      break;
+    }
+    case "rename": {
+      if (!id || rest.length === 0) {
+        usage();
+        break;
+      }
+      const result = renameTodo(todos, id, rest.join(" "));
+      if (result.outcome === RenameOutcome.Renamed) {
         await saveTodos(result.todos);
       } else {
         process.exitCode = 1;

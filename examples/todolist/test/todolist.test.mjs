@@ -7,6 +7,7 @@ import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import {
   CompleteOutcome,
+  RenameOutcome,
   addTodo,
   completeTodo,
   completedTodos,
@@ -14,6 +15,7 @@ import {
   findTodo,
   pendingTodos,
   removeTodo,
+  renameTodo,
 } from "../src/todolist.mjs";
 
 const cliPath = fileURLToPath(new URL("../src/cli.mjs", import.meta.url));
@@ -39,6 +41,7 @@ test("every command fails clearly without replacing a corrupt state file", async
     ["completed"],
     ["add", "t1", "one"],
     ["done", "t1"],
+    ["rename", "t1", "renamed"],
     ["remove", "t1"],
   ];
 
@@ -195,4 +198,81 @@ test("completeTodo only touches the matched todo", () => {
     ["t2", true],
   ]);
   assert.equal(todos[1].done, false);
+});
+
+// TK-007 AC-1, AC-3
+test("renameTodo trims the title while preserving fields and input order", () => {
+  const todos = [
+    { id: "t1", title: "one", done: false, priority: "high" },
+    { id: "t2", title: "two", done: true, priority: "low" },
+  ];
+  const snapshot = structuredClone(todos);
+  const result = renameTodo(todos, "t2", "  renamed todo  ");
+
+  assert.equal(result.outcome, "Renamed");
+  assert.equal(result.outcome, RenameOutcome.Renamed);
+  assert.deepEqual(result.todos, [
+    { id: "t1", title: "one", done: false, priority: "high" },
+    { id: "t2", title: "renamed todo", done: true, priority: "low" },
+  ]);
+  assert.deepEqual(todos, snapshot);
+  assert.notEqual(result.todos, todos);
+  assert.equal(result.todos[0], todos[0]);
+});
+
+// TK-007 AC-2, AC-3
+test("renameTodo returns NotFound without changing the input", () => {
+  const todos = [createTodo("t1", "one")];
+  const snapshot = structuredClone(todos);
+  const result = renameTodo(todos, "missing-id", "new title");
+
+  assert.equal(result.outcome, "NotFound");
+  assert.equal(result.outcome, RenameOutcome.NotFound);
+  assert.equal(result.todos, todos);
+  assert.deepEqual(todos, snapshot);
+});
+
+// TK-007 AC-3
+test("renameTodo rejects a blank title without mutating the input", () => {
+  const todos = [createTodo("t1", "one")];
+  const snapshot = structuredClone(todos);
+
+  assert.throws(() => renameTodo(todos, "t1", "   "), TypeError);
+  assert.deepEqual(todos, snapshot);
+});
+
+// TK-007 AC-1
+test("rename command persists a trimmed title and preserves done state and position", async (t) => {
+  const cwd = await mkdtemp(path.join(tmpdir(), "todolist-rename-"));
+  t.after(() => rm(cwd, { recursive: true, force: true }));
+  const statePath = path.join(cwd, ".todolist.json");
+  const todos = [
+    { id: "t1", title: "one", done: false },
+    { id: "t2", title: "two", done: true, priority: "high" },
+  ];
+  await writeFile(statePath, `${JSON.stringify(todos, null, 2)}\n`);
+
+  const result = runCli(cwd, "rename", "t2", "  renamed todo  ");
+
+  assert.equal(result.status, 0);
+  assert.equal(result.stdout, "Renamed\n");
+  assert.deepEqual(JSON.parse(await readFile(statePath, "utf8")), [
+    { id: "t1", title: "one", done: false },
+    { id: "t2", title: "renamed todo", done: true, priority: "high" },
+  ]);
+});
+
+// TK-007 AC-2
+test("rename command reports NotFound without changing the state file", async (t) => {
+  const cwd = await mkdtemp(path.join(tmpdir(), "todolist-rename-missing-"));
+  t.after(() => rm(cwd, { recursive: true, force: true }));
+  const statePath = path.join(cwd, ".todolist.json");
+  const state = `${JSON.stringify([createTodo("t1", "one")], null, 2)}\n`;
+  await writeFile(statePath, state);
+
+  const result = runCli(cwd, "rename", "missing-id", "new title");
+
+  assert.equal(result.status, 1);
+  assert.equal(result.stdout, "NotFound\n");
+  assert.equal(await readFile(statePath, "utf8"), state);
 });

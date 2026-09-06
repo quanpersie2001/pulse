@@ -56,3 +56,27 @@ export function completeTodo(todos, id) {
   next[index] = { ...todos[index], done: true };
   return { outcome: CompleteOutcome.Completed, todos: next };
 }
+
+// Stable public outcome names for renameTodo. Renaming is human-gated.
+export const RenameOutcome = Object.freeze({
+  Renamed: "Renamed",
+  NotFound: "NotFound",
+});
+
+// Returns `{ outcome, todos }`. On Renamed the returned list is a new array
+// with only the matched todo's title changed; on NotFound the input list is
+// returned untouched.
+export function renameTodo(todos, id, title) {
+  if (typeof title !== "string" || title.trim().length === 0) {
+    throw new TypeError("title must be a non-empty string");
+  }
+
+  const index = todos.findIndex((todo) => todo.id === id);
+  if (index === -1) {
+    return { outcome: RenameOutcome.NotFound, todos };
+  }
+
+  const next = todos.slice();
+  next[index] = { ...todos[index], title: title.trim() };
+  return { outcome: RenameOutcome.Renamed, todos: next };
+}
