@@ -406,7 +406,7 @@ fn work_packet_rejects_story_kind() {
 }
 
 #[test]
-fn work_packet_rejects_non_implementation_role() {
+fn work_packet_accepts_decision_work_role() {
     let repo = tempfile::tempdir().unwrap();
     let store = setup_repo(&repo);
     let node = store
@@ -423,10 +423,13 @@ fn work_packet_rejects_non_implementation_role() {
         .unwrap()
         .value;
 
+    // Role alone no longer refuses the packet: a decision_work Ticket is a
+    // dispatchable executable unit (PRODUCT §5.1). This draft Ticket fails
+    // later, on the readiness gate, exactly like an implementation Ticket.
     let output = run(&repo, &["work", "packet", &node.id, "--json"]);
     assert!(!output.status.success());
     let err: Value = serde_json::from_slice(&output.stderr).unwrap();
-    assert_eq!(err["code"], "work_packet_role_unsupported");
+    assert_eq!(err["code"], "work_packet_status_not_ready");
 }
 
 #[test]

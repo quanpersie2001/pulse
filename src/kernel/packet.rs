@@ -697,7 +697,10 @@ impl JsonGraphStore {
                 format!("subject {} is not a Ticket", node.id),
             ));
         }
-        if node.role != Some(TicketRole::Implementation) {
+        if !matches!(
+            node.role,
+            Some(TicketRole::Implementation) | Some(TicketRole::DecisionWork)
+        ) {
             return Err(PulseError::validation(
                 "work_packet_role_unsupported",
                 format!("subject {} role is not implementation", node.id),

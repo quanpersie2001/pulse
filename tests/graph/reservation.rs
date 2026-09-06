@@ -3,8 +3,8 @@ use pulse::evidence::model::{
     ReceiptPayload, ReceiptResult, SourceBinding, SubjectRef,
 };
 use pulse::execution::{
-    AcceptanceProof, CloseTicketArgs, CompleteVerificationArgs, SubmitHandoffArgs,
-    VerificationCheck, VerificationDisposition, VerificationReceipt,
+    AcceptanceProof, CloseTicketArgs, CompleteVerificationArgs, Finding, FindingSeverity,
+    SubmitHandoffArgs, VerificationCheck, VerificationDisposition, VerificationReceipt,
 };
 use pulse::graph::model::node::NodeStatus;
 use pulse::qa::{
@@ -1895,5 +1895,108 @@ fn close_anchor_is_deterministic_under_duplicate_passed_verifications() {
     assert_eq!(
         store.show_node(&ticket_id).unwrap().status,
         NodeStatus::Done
+    );
+}
+
+#[test]
+fn rework_dispatch_releases_stale_lease_and_rebuilds_packet_with_observations() {
+    // Dogfood regression (TK-004): after a reviewer returns rework, the next
+    // `pulse run worker` must release the previous assignment's lease,
+    // rebuild the packet with the rework observations and move the Ticket
+    // rework -> active. Re-running on the stale pre-rework packet silently
+    // hides the findings from the worker.
+    let repo = TestRepo::from_fixture("minimal-service");
+    let store = JsonGraphStore::new(repo.path());
+    bootstrap_repo(&repo, &store);
+    write_policy(repo.path(), &["work.assignment.release"]);
+    add_reviewer_policy(repo.path());
+    let ticket_id = setup_ready_ticket(repo.path(), &store);
+
+    let reserved = reserve(&store, &ticket_id, "reservation-rework-1");
+    let active = store
+        .activate_reservation(ActivateReservationArgs {
+            lease_id: reserved.reservation.lease_id,
+            actor: "agent:tester".to_string(),
+            runtime_binding: binding(),
+            acknowledgement: acknowledgement(&reserved.reservation.packet_fingerprint),
+        })
+        .unwrap();
+    let handoff = store
+        .submit_execution_handoff(SubmitHandoffArgs {
+            lease_id: active.lease_id.clone(),
+            actor: "agent:tester".to_string(),
+            session_id: "ses_test".to_string(),
+            source_commit: active.source.commit.clone(),
+            summary: "Ready for independent review.".to_string(),
+            changed_paths: vec![],
+            evidence_receipt_ids: vec![],
+            learning_usage: Vec::new(),
+            checks: vec![VerificationCheck {
+                name: "focused".to_string(),
+                command: "node scripts/verify.mjs".to_string(),
+                exit_code: 0,
+                artifact_ids: vec![],
+            }],
+            acceptance_proofs: acceptance_proofs("focused"),
+            idempotency_key: "handoff-rework".to_string(),
+        })
+        .unwrap();
+    let rework = store
+        .complete_execution_verification(CompleteVerificationArgs {
+            handoff_id: handoff.handoff_id,
+            actor: "human:reviewer".to_string(),
+            source_commit: handoff.source_commit.clone(),
+            disposition: VerificationDisposition::Rework,
+            summary: "The docs receipt is missing.".to_string(),
+            checks: vec![VerificationCheck {
+                name: "docs-receipt-missing".to_string(),
+                command: "grep -l missing docs/receipts".to_string(),
+                exit_code: 1,
+                artifact_ids: vec![],
+            }],
+            acceptance_proofs: Vec::new(),
+            findings: vec![Finding {
+                summary: "No documentation_validation receipt covers the updated doc.".to_string(),
+                owner: "docs/product/behavior.md".to_string(),
+                check: Some("docs-receipt-missing".to_string()),
+                severity: FindingSeverity::High,
+                acceptance_id: None,
+                case_id: None,
+                unverifiable: false,
+            }],
+            idempotency_key: "verification-rework".to_string(),
+        })
+        .unwrap();
+    assert_eq!(rework.disposition, VerificationDisposition::Rework);
+    assert_eq!(
+        store.show_node(&ticket_id).unwrap().status,
+        NodeStatus::Rework
+    );
+
+    // Fresh dispatch on the rework Ticket: new lease, packet carries the
+    // rework observations, Ticket returns to active.
+    let redispatch = reserve(&store, &ticket_id, "reservation-rework-2");
+    assert_ne!(redispatch.reservation.lease_id, active.lease_id.clone());
+    assert!(
+        !redispatch.packet.rework.is_empty(),
+        "fresh packet must embed the rework observations"
+    );
+    assert_eq!(
+        redispatch.packet.rework[0].summary,
+        "No documentation_validation receipt covers the updated doc."
+    );
+    assert_eq!(redispatch.packet.rework[0].actor, "human:reviewer");
+    let reactivated = store
+        .activate_reservation(ActivateReservationArgs {
+            lease_id: redispatch.reservation.lease_id,
+            actor: "agent:tester".to_string(),
+            runtime_binding: binding(),
+            acknowledgement: acknowledgement(&redispatch.reservation.packet_fingerprint),
+        })
+        .unwrap();
+    assert_eq!(reactivated.state, ReservationState::Active);
+    assert_eq!(
+        store.show_node(&ticket_id).unwrap().status,
+        NodeStatus::Active
     );
 }
