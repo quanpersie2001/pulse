@@ -1,0 +1,15 @@
+{
+  "cases": [
+    {
+      "id": "QA-001",
+      "status": "passed",
+      "observation": "completeTodo returned Completed and marked the todo done without mutating the input"
+    },
+    {
+      "id": "QA-002",
+      "status": "passed",
+      "observation": "completeTodo returned NotFound and left the list unchanged"
+    }
+  ],
+  "findings": []
+}

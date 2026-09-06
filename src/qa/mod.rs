@@ -19,6 +19,6 @@ pub use executor::{
     QaRunnerInput, QaRunnerOutput,
 };
 pub use receipt::{
-    validate_checkpoint_receipt, QaCaseObservation, QaCaseOutcome, QaCheckpointPayload,
-    QaExecutionScope, QaExecutor,
+    build_checkpoint_envelope, validate_checkpoint_receipt, QaCaseObservation, QaCaseOutcome,
+    QaCheckpointPayload, QaExecutionScope, QaExecutor,
 };

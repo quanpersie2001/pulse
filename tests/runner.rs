@@ -14,10 +14,17 @@ mod cli_run;
 mod common_bin;
 #[path = "runner/harness_learning.rs"]
 mod harness_learning;
+// The assignment fixture is shared by the story_close and qa_receipt
+// suites; included once at the crate root.
+#[allow(unused_imports, dead_code)]
+#[path = "graph/assignment_fixture.rs"]
+mod assignment_fixture;
 #[path = "runner/isolation.rs"]
 mod isolation;
 #[path = "runner/knowledge_usage.rs"]
 mod knowledge_usage;
+#[path = "runner/qa_receipt.rs"]
+mod qa_receipt;
 #[path = "runner/recovery.rs"]
 mod recovery;
 #[path = "runner/reviewer.rs"]

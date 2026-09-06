@@ -108,7 +108,9 @@ fn role_grants(class: &str) -> &'static [&'static str] {
             "work.assignment.release",
         ],
         "reviewer" => &["work.assignment.verify"],
-        "qa" => &["evidence.record"],
+        // Decision 0014: Pulse records the qa_checkpoint receipt itself, so
+        // the qa runner no longer needs `evidence.record`.
+        "qa" => &[],
         _ => &[],
     }
 }
@@ -222,6 +224,9 @@ pub struct RunOutcome {
     /// Artifacts declared in the final output and ingested into the evidence
     /// store, as `(role, digest)` bindings.
     pub artifacts: Vec<IngestedArtifact>,
+    /// `qa_checkpoint` receipt recorded by Pulse for a completed qa run.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub receipt_id: Option<String>,
     pub event_id: String,
 }
 
@@ -583,16 +588,39 @@ impl JsonGraphStore {
         // outside the repository, unreadable) demotes the run to inconclusive
         // instead of silently dropping evidence.
         let mut ingested: Vec<IngestedArtifact> = Vec::new();
-        if let Ok(outcome) = &execution {
-            if let Ok(value) = runner::parse_output_json(outcome) {
-                match self.ingest_declared_artifacts(&value) {
-                    Ok(artifacts) => ingested = artifacts,
-                    Err(error) => {
-                        run = RunClassification::inconclusive(
-                            "artifact_ingest_failed",
-                            Some(error.to_string()),
-                        );
-                    }
+        let output = execution
+            .as_ref()
+            .ok()
+            .and_then(|outcome| runner::parse_output_json(outcome).ok());
+        if let Some(value) = &output {
+            match self.ingest_declared_artifacts(value) {
+                Ok(artifacts) => ingested = artifacts,
+                Err(error) => {
+                    run = RunClassification::inconclusive(
+                        "artifact_ingest_failed",
+                        Some(error.to_string()),
+                    );
+                }
+            }
+        }
+
+        // Decision 0014: a clean qa run gets its `qa_checkpoint` receipt
+        // recorded by Pulse, from the input contract and the ingested
+        // artifacts — the runner only reports observations.
+        let mut receipt_id: Option<String> = None;
+        if class == "qa" && run.status == "completed" {
+            match self.record_qa_checkpoint(input_path, &output, &ingested) {
+                Ok(id) => receipt_id = Some(id),
+                Err(QaCheckpointError::Skip) => {}
+                Err(QaCheckpointError::BaselineDrift(id)) => {
+                    run = RunClassification::inconclusive("qa_baseline_drift", None);
+                    receipt_id = Some(id);
+                }
+                Err(QaCheckpointError::Invalid(error)) => {
+                    run = RunClassification::inconclusive(
+                        "qa_receipt_invalid",
+                        Some(error.to_string()),
+                    );
                 }
             }
         }
@@ -607,6 +635,7 @@ impl JsonGraphStore {
             summary: run.summary.clone(),
             stderr_tail,
             artifacts: ingested.clone(),
+            receipt_id: receipt_id.clone(),
             exit_code: run.exit_code,
             timed_out: run.timed_out,
             cancelled: run.cancelled,
@@ -626,6 +655,7 @@ impl JsonGraphStore {
             "lease_id": lease_id,
             "status": run.status,
             "inconclusive_reason": run.inconclusive_reason,
+            "receipt_id": receipt_id,
             "run_record": record_path.strip_prefix(&self.repo_root).ok().map(|p| p.to_string_lossy().to_string()),
             "artifacts": ingested.iter().map(|artifact| json!({
                 "role": artifact.role,
@@ -660,6 +690,7 @@ impl JsonGraphStore {
                 .map(|p| p.to_string_lossy().to_string())
                 .unwrap_or_else(|_| record_path.display().to_string()),
             artifacts: ingested,
+            receipt_id,
             event_id: event.id,
         })
     }
@@ -893,6 +924,7 @@ impl JsonGraphStore {
                     "schema_version": 1,
                     "ticket_id": ticket_id,
                     "story_id": resolution.as_ref().map(|r| r.owner_id.clone()),
+                    "qa_scope": "ticket_checkpoint",
                     "source_commit": crate::source::head_commit(&self.repo_root)?,
                     "baseline_revision": resolution.as_ref().map(|r| r.revision),
                     "baseline_content_hash": resolution.as_ref().map(|r| r.content_hash.clone()),
@@ -1279,6 +1311,122 @@ impl JsonGraphStore {
         }
     }
 
+    /// Record the `qa_checkpoint` receipt for a completed qa run: verify the
+    /// baseline has not drifted since the input was committed, then build the
+    /// envelope from the input contract plus the runner's final output and
+    /// record it. On drift the receipt is still recorded, but with every case
+    /// forced inconclusive and a `qa_baseline_drift` observation — the script
+    /// is not trusted (Decision 0014 §3).
+    fn record_qa_checkpoint(
+        &self,
+        input_path: &Path,
+        output: &Option<serde_json::Value>,
+        ingested: &[IngestedArtifact],
+    ) -> Result<String, QaCheckpointError> {
+        let input: serde_json::Value = serde_json::from_slice(
+            &fs::read(input_path)
+                .map_err(|error| QaCheckpointError::Invalid(PulseError::io(input_path, error)))?,
+        )
+        .map_err(|error| QaCheckpointError::Invalid(PulseError::json(input_path, error)))?;
+        let input_cases = input
+            .get("cases")
+            .and_then(|v| v.as_array())
+            .ok_or_else(|| {
+                QaCheckpointError::Invalid(PulseError::validation(
+                    "qa_receipt_invalid",
+                    "qa input cases must be an array",
+                ))
+            })?;
+        if input_cases.is_empty() {
+            // Nothing to qualify (e.g. a `none` QA posture run): the run
+            // stays completed, but no receipt — nothing is considered QA'd.
+            return Err(QaCheckpointError::Skip);
+        }
+        let story_id = input
+            .get("story_id")
+            .and_then(|v| v.as_str())
+            .filter(|v| !v.trim().is_empty())
+            .ok_or_else(|| {
+                QaCheckpointError::Invalid(PulseError::validation(
+                    "qa_receipt_invalid",
+                    "qa input is missing story_id",
+                ))
+            })?
+            .to_string();
+        let baseline_content_hash = input
+            .get("baseline_content_hash")
+            .and_then(|v| v.as_str())
+            .filter(|v| !v.trim().is_empty())
+            .ok_or_else(|| {
+                QaCheckpointError::Invalid(PulseError::validation(
+                    "qa_receipt_invalid",
+                    "qa input is missing baseline_content_hash",
+                ))
+            })?
+            .to_string();
+        let baseline_path = self.repo_root.join("works").join(&story_id).join("qa.md");
+        let current =
+            crate::canonical_json::hash_bytes(&fs::read(&baseline_path).map_err(|error| {
+                QaCheckpointError::Invalid(PulseError::io(&baseline_path, error))
+            })?);
+        let drifted = current != baseline_content_hash;
+
+        let reported = if drifted {
+            // Pulse decides the outcome: the baseline changed under the run,
+            // so the script's results are not evidence.
+            json!({
+                "cases": input_cases.iter().map(|case| json!({
+                    "id": case.get("id"),
+                    "status": "inconclusive",
+                    "observation": "qa_baseline_drift: current qa.md hash does not match the run input baseline hash",
+                })).collect::<Vec<_>>(),
+                "findings": [],
+            })
+        } else {
+            output.clone().ok_or_else(|| {
+                QaCheckpointError::Invalid(PulseError::validation(
+                    "qa_receipt_invalid",
+                    "qa output JSON is unavailable",
+                ))
+            })?
+        };
+        // The borrow of `input.cases` ends with `reported`; from here the
+        // contract can be amended for the drift receipt.
+        let mut contract = input;
+        if drifted {
+            // The receipt must bind the baseline bytes as they are now, so it
+            // stays verifiable at record time; the drift is visible in the
+            // forced-inconclusive cases and the observation above.
+            contract["baseline_content_hash"] = json!(current);
+        }
+
+        let repository_id = crate::evidence::manifest::load(&self.repo_root)
+            .map_err(QaCheckpointError::Invalid)?
+            .repository_id;
+        let source = crate::evidence::model::SourceBinding {
+            kind: "git_commit".to_string(),
+            commit: crate::source::head_commit(&self.repo_root)
+                .map_err(QaCheckpointError::Invalid)?,
+            repository_id,
+        };
+        let artifacts = ingested
+            .iter()
+            .map(|artifact| crate::evidence::model::ArtifactBinding {
+                sha256: artifact.sha256.clone(),
+                role: artifact.role.clone(),
+            })
+            .collect::<Vec<_>>();
+        let envelope =
+            crate::qa::build_checkpoint_envelope(&contract, &reported, &artifacts, source)
+                .map_err(QaCheckpointError::Invalid)?;
+        let outcome = crate::evidence::record_receipt_envelope(&self.repo_root, None, envelope)
+            .map_err(QaCheckpointError::Invalid)?;
+        if drifted {
+            return Err(QaCheckpointError::BaselineDrift(outcome.receipt.id));
+        }
+        Ok(outcome.receipt.id)
+    }
+
     /// Decide where this worker run executes. The checkout is the default;
     /// any foreign live lease refuses the run (`run_isolation_required`)
     /// unless the operator explicitly forced `--isolation worktree`. There is
@@ -1314,6 +1462,19 @@ struct RunClassification {
     cancelled: bool,
 }
 
+/// Outcome of the Pulse-side `qa_checkpoint` recording for a completed qa
+/// run (Decision 0014).
+enum QaCheckpointError {
+    /// The run carries no cases to qualify: stay completed, record nothing.
+    Skip,
+    /// The baseline drifted under the run; the inconclusive receipt id is
+    /// still returned because it was recorded.
+    BaselineDrift(String),
+    /// The input/output contract or the receipt itself was invalid; no
+    /// receipt is recorded.
+    Invalid(PulseError),
+}
+
 impl RunClassification {
     fn inconclusive(reason: &str, detail: Option<String>) -> Self {
         Self {
@@ -1343,6 +1504,9 @@ pub struct RunRecord {
     /// Run-declared artifacts ingested into the evidence store.
     #[serde(default)]
     pub artifacts: Vec<IngestedArtifact>,
+    /// `qa_checkpoint` receipt recorded by Pulse for a completed qa run.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub receipt_id: Option<String>,
     pub exit_code: Option<i32>,
     pub timed_out: bool,
     pub cancelled: bool,

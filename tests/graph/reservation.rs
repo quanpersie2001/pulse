@@ -319,6 +319,7 @@ fn record_qa_checkpoint(repo: &std::path::Path, ticket_id: &str, source_commit: 
                 capabilities: vec!["api".to_string()],
             },
             observations: vec!["Repeated reservation returned one stable identity.".to_string()],
+            findings: Vec::new(),
         }),
     };
     // Receipt input lands under the gitignored cache plane so recording the
@@ -402,6 +403,7 @@ fn record_story_qualification(
                 capabilities: vec!["api".to_string()],
             },
             observations: vec!["Full applicable Story baseline passed.".to_string()],
+            findings: Vec::new(),
         }),
     };
     std::fs::create_dir_all(repo.join(".pulse/cache")).unwrap();

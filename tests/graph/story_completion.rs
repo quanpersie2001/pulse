@@ -336,6 +336,7 @@ fn record_story_qualification(
                 capabilities: vec!["api".to_string()],
             },
             observations: vec!["Full integrated Story baseline passed.".to_string()],
+            findings: Vec::new(),
         }),
     };
     let input = repo.join("story-close-qualification.json");

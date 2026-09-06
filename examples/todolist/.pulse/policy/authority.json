@@ -1,9 +1,7 @@
 {
   "principals": [
     {
-      "grants": [
-        "evidence.record"
-      ],
+      "grants": [],
       "id": "runner:qa",
       "kind": "agent"
     },

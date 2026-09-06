@@ -9,17 +9,7 @@ use std::fs;
 
 use serde_json::Value;
 
-// The assignment fixture resolves its siblings through `super::`; re-export
-// them into this module's scope so the shared file compiles unchanged.
-#[allow(dead_code)]
-pub(crate) use crate::common_fixture_repo;
-pub(crate) use crate::common_git;
-
-#[allow(unused_imports, dead_code)]
-#[path = "../graph/assignment_fixture.rs"]
-mod assignment_fixture;
-
-use self::assignment_fixture::setup_ready_ticket_with_required_qa;
+use crate::assignment_fixture::setup_ready_ticket_with_required_qa;
 use crate::cli_run::{set_command, ACTOR};
 use crate::common_fixture_repo::TestRepo;
 use crate::common_git::commit_all;
@@ -45,7 +35,7 @@ set -e
 RUN_DIR="$(dirname "$1")"
 mkdir -p "$RUN_DIR/artifacts"
 cp "$1" "$RUN_DIR/artifacts/input-copy.json"
-echo '{"cases": []}'
+echo '{"cases": [{"id": "QA-001", "status": "passed", "observation": "echoed pass"}], "artifacts": [], "findings": []}'
 "#;
     fs::create_dir_all(repo.path().join("scripts")).unwrap();
     fs::write(repo.path().join("scripts/fake-qa.sh"), script).unwrap();
