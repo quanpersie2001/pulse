@@ -74,8 +74,19 @@ Feeds the v0.2 backlog (PRODUCT.md §11) after the round.
 - Whose job is the docs receipt? TK-003's reviewer ran
   `docs validate --record` itself and passed the worker; TK-004's
   reviewer rework'd the worker for missing it. Both defensible — the
-  contract is ambiguous. v0.2: assign the receipt in the packet handoff
-  protocol (worker records before handoff is the cleanest read).
+  contract is ambiguous. **CLOSED 2026-09-07 by Decision 0016.** The
+  ambiguity turned out to have three layers, not one: (1) the worker
+  prompt never mentioned the receipt while the reviewer prompt did;
+  (2) `handoff --evidence-receipt` was a dead end — the close gate reads
+  only the reviewer's proofs, so a worker doing it right still did not
+  satisfy close; (3) `reviewer-input.json` filtered docs receipts by
+  ticket id, but they are subject-bound to the docs registry, so that
+  list was empty for every Ticket ever run while 16 such receipts
+  existed. Fixed by giving the worker ownership, refusing the handoff
+  without the receipt (`handoff_documentation_receipt_missing`), and
+  filtering the reviewer's list by source commit. Cover:
+  `tests/graph/documentation_handoff.rs`,
+  `tests/runner/reviewer.rs::reviewer_input_lists_docs_receipts_bound_to_the_reviewed_commit`.
 - The rework finding shape worked exactly as designed once visible:
   check + owner + severity, worker fixed, reviewer re-ran the check.
   That half of the loop is solid.
@@ -88,17 +99,31 @@ Feeds the v0.2 backlog (PRODUCT.md §11) after the round.
   the fence. The worker had to record the docs receipt WITHOUT
   referencing it, and the next reviewer then rework'd on the missing
   proof chain. Two defects chaining into a false-negative rework.
-- Worktree dispatch gap (the big one, unfixed): the run workspace
-  (worker-prompt.md, worker-input.json) is written only to the main
-  repo's runtime, so a worktree worker finds no prompt at its cwd and
-  wanders into the main checkout through packet absolute paths. TK-006
-  still succeeded (the fence bound the clean worktree), but the
-  isolation guarantee was accidental, not enforced. Fix needs
-  CLI-level worktree→main mapping (v0.2, ADR candidate 0015).
-- Cross-ticket poisoning via that gap: TK-006's worker wrote into the
-  shared checkout mid-flight and staled TK-007's proof fence, costing
-  a full release→re-run cycle of TK-007. Concurrent dispatch is only
-  as safe as the weakest path isolation.
+- Worktree dispatch gap (the big one) — CLOSED 2026-09-07 by Decision
+  0015: the run workspace (worker-prompt.md, worker-input.json) was
+  written only to the main repo's runtime, so a worktree worker found no
+  prompt at its cwd and wandered into the main checkout through packet
+  absolute paths. TK-006 still succeeded (the fence bound the clean
+  worktree), but the isolation guarantee was accidental, not enforced.
+  Fixed by mirroring the run workspace into the worktree, embedding the
+  absolute workspace path in the prompt, and mapping worktree→main for
+  state planes at the CLI boundary (`.pulse-owned` marker plus Git
+  corroboration). Regression cover: `tests/runner/worktree_dispatch.rs`,
+  whose fake agent resolves everything from cwd and never passes
+  `--repo-root` — the exact shape that failed here.
+- Cross-ticket poisoning via that gap — CLOSED 2026-09-07 by the same
+  decision: TK-006's worker wrote into the shared checkout mid-flight and
+  staled TK-007's proof fence, costing a full release→re-run cycle of
+  TK-007. Concurrent dispatch is only as safe as the weakest path
+  isolation; `worker_finds_its_run_workspace_under_its_own_cwd` now
+  asserts the main checkout's dirty identity is unmoved by an isolated
+  run.
+- Reviewer reviewed a different tree than the worker handed off (found
+  while writing 0015, never hit in anger) — CLOSED 2026-09-07:
+  `decide_workspace` only applied to the worker, so reviewer and qa always
+  ran in the main checkout. Had the worktree gap above been fixed alone,
+  every isolated Ticket would have been reviewed against a tree without
+  the worker's changes.
 - Reviewer run records capture stderr_tail only — when a reviewer
   fails its `work verify` call, the error text is lost and the operator
   sees just `malformed_output`/`unproven_claim`. Bounded stdout tail in

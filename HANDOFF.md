@@ -47,24 +47,28 @@
 
 ## Việc tiếp theo (đề xuất, theo trọng lượng)
 
-1. **Gap worktree (to nhất, chưa sửa)**: run workspace (worker-prompt.md,
-   worker-input.json) chỉ được ghi vào runtime của repo chính nên worker
-   worktree không tự định vị được; TK-006 thành công là do accidentally
-   ghi vào main checkout. Sửa cần mapping CLI worktree→main (reservations
-   nằm ở main). Đây là ứng viên ADR **0015** kèm đề xuất gộp hai họ
-   receipt (`evidence/execution/*` vào envelope chung — PRODUCT §11).
-2. **Backlog v0.2 từ friction.md**: chụp stdout tail của reviewer vào run
-   record (2 vòng chẩn đoán đã mất vì mất text lỗi); phân công ai ghi docs
-   receipt (worker hay reviewer — hiện mơ hồ, gây 2/3 rework); `work
-   ready` không dispatch; actor syntax `kind:id` bị ngầm hoá; canonical
-   hoá `authority.json` không có lệnh; `docs validate --record` cần
-   `--actor` báo sau cùng.
-3. **Quyết định cần human**: có tính v0.2 ngay (MCP server, `pulse
+1. ~~**Gap worktree (to nhất, chưa sửa)**~~ — **XONG 2026-09-07**, Decision
+   0015 Accepted và implement: run workspace mirror vào worktree, prompt
+   nhúng path tuyệt đối, reviewer/qa kế thừa workspace của worker, mapping
+   worktree→main cho state plane ở biên CLI (marker `.pulse-owned` + đối
+   chứng Git). Cover: `tests/runner/worktree_dispatch.rs` (8 test). Việc
+   gộp hai họ receipt (`evidence/execution/*` vào envelope chung — PRODUCT
+   §11) **cố ý để lại**, cần ADR riêng khi `pulse doctor` phải đọc chung.
+2. ~~Phân công ai ghi docs receipt~~ — **XONG 2026-09-07**, Decision 0016:
+   worker sở hữu, handoff từ chối khi thiếu, reviewer input lọc docs
+   receipt theo source commit. Khoảng mơ hồ hoá ra có ba tầng, không phải
+   một; chi tiết trong ADR và `friction.md`.
+3. **Backlog v0.2 còn lại từ friction.md**: chụp stdout tail của reviewer
+   vào run record (2 vòng chẩn đoán đã mất vì mất text lỗi); `work ready`
+   không dispatch; actor syntax `kind:id` bị ngầm hoá; canonical hoá
+   `authority.json` không có lệnh; `docs validate --record` cần `--actor`
+   báo sau cùng; `close_source_stale` không nêu path vi phạm.
+4. **Quyết định cần human**: có tính v0.2 ngay (MCP server, `pulse
    doctor`) hay thêm một vòng Track B (7–10 Ticket nữa,并行 nhiều hơn) để
    giải mã sát hơn. PRODUCT §11 ưu tiên ma sát thật trước feature mới —
    friction.md hiện đã đủ nặng để làm doctor/ADR.
-4. Nếu có quyết định kiến trúc mới: ADR vào `docs/decisions/`, số tiếp
-   theo **0015**.
+5. Nếu có quyết định kiến trúc mới: ADR vào `docs/decisions/`, số tiếp
+   theo **0017**.
 
 ## Quy tắc (không đổi)
 

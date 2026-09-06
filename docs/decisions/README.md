@@ -18,7 +18,8 @@ Current decisions:
 - [0012 — Thang bằng chứng, reviewer là bằng chứng, lane độc lập và lead hoà giải](0012-evidence-ladder-independent-lanes.md)
 - [0013 — Bàn giao phiên theo ngưỡng của host](0013-session-handoff-host-threshold.md)
 - [0014 — Pulse ghi `qa_checkpoint`, runner chỉ in output](0014-pulse-records-qa-checkpoint.md)
-- [0015 — Worktree dispatch: workspace trong worktree, state về repo chính (Proposed)](0015-worktree-dispatch-workspace-state.md)
+- [0015 — Worktree dispatch: workspace trong worktree, state về repo chính](0015-worktree-dispatch-workspace-state.md)
+- [0016 — Worker sở hữu docs receipt, gate chặn tại handoff](0016-docs-receipt-ownership-at-handoff.md)
 
 Add or update a decision when:
 

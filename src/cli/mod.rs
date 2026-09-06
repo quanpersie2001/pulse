@@ -24,9 +24,14 @@ pub fn parse() -> Cli {
 }
 
 pub fn run(cli: Cli) -> Result<(), PulseError> {
-    let repo_root = cli
+    let workspace_root = cli
         .repo_root
         .unwrap_or_else(|| std::env::current_dir().expect("current dir"));
+    // Decision 0015: inside a Pulse-owned worktree every mutation plane
+    // belongs to the main repository, so the whole CLI converges on that
+    // root — and therefore on its single write lock. Anywhere else this is
+    // the identity mapping.
+    let repo_root = crate::source::state_repo_root(&workspace_root)?;
     #[cfg(any(test, debug_assertions))]
     let store = if cli.test_work_packet_after_first_fence {
         JsonGraphStore::with_work_packet_after_first_fence_failpoint(repo_root.clone())

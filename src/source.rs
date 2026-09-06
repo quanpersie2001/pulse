@@ -27,8 +27,15 @@ use std::process::{Child, Command, Stdio};
 use std::thread;
 
 const EVIDENCE_ONLY_PREFIXES: [&str; 2] = [".pulse/evidence/", ".pulse/events/"];
-const PULSE_RUNTIME_EXCLUDE_PATHS: [&str; 2] =
-    [":(exclude).pulse/runtime/**", ":(exclude).pulse/cache/**"];
+/// Pulse-owned paths that never count as source mutation. `.pulse-owned` is
+/// the worktree ownership marker (Decision 0015): Pulse writes it into a
+/// worktree it created, so counting it would make every isolated workspace
+/// read as dirty from birth.
+const PULSE_RUNTIME_EXCLUDE_PATHS: [&str; 3] = [
+    ":(exclude).pulse/runtime/**",
+    ":(exclude).pulse/cache/**",
+    ":(exclude).pulse-owned",
+];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SourceBindingStatus {
@@ -1947,6 +1954,157 @@ fn detect_worktree_kind(repo_root: &Path) -> Result<WorktreeRootKind> {
         Ok(WorktreeRootKind::PrimaryOrExistingWorktree)
     } else {
         Ok(WorktreeRootKind::LinkedWorktree)
+    }
+}
+
+/// Ownership marker Pulse writes into every worktree it creates.
+///
+/// Its presence is what separates a Pulse-owned worktree from one the
+/// developer made by hand: Pulse maps state planes only for the former, and
+/// cleanup only ever removes the former.
+pub const WORKTREE_MARKER: &str = ".pulse-owned";
+
+/// Current [`WorktreeMarker`] contract (Decision 0003: one baseline).
+pub const WORKTREE_MARKER_SCHEMA_VERSION: u32 = 1;
+
+/// Contents of a Pulse-owned worktree marker (Decision 0015).
+///
+/// `state_repo_root` is absolute and is the whole point of the file: the Pulse
+/// repository root can be a subdirectory of the enclosing Git repository
+/// (`examples/todolist` is the live case), so `git rev-parse --git-common-dir`
+/// alone cannot recover it. Git corroborates the marker; it does not replace
+/// it.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct WorktreeMarker {
+    pub schema_version: u32,
+    /// Absolute repository root owning every mutable state plane for runs
+    /// dispatched into this worktree.
+    pub state_repo_root: String,
+    /// Ticket the worktree was created for.
+    pub ticket_id: String,
+}
+
+/// Write the ownership marker into a freshly created Pulse-owned worktree.
+///
+/// # Errors
+///
+/// Returns an error when the marker cannot be serialized or written.
+pub fn write_worktree_marker(
+    worktree_root: &Path,
+    state_repo_root: &Path,
+    ticket_id: &str,
+) -> Result<()> {
+    let absolute = state_repo_root
+        .canonicalize()
+        .unwrap_or_else(|_| state_repo_root.to_path_buf());
+    let marker = WorktreeMarker {
+        schema_version: WORKTREE_MARKER_SCHEMA_VERSION,
+        state_repo_root: absolute.to_string_lossy().to_string(),
+        ticket_id: ticket_id.to_string(),
+    };
+    let path = worktree_root.join(WORKTREE_MARKER);
+    let bytes = crate::canonical_json::to_canonical_bytes(&marker)?;
+    fs::write(&path, &bytes).map_err(|error| PulseError::io(&path, error))
+}
+
+/// Read and validate the ownership marker of a candidate Pulse-owned worktree.
+///
+/// `Ok(None)` means "no marker here", which is the ordinary case for every
+/// checkout and for worktrees the developer created themselves.
+///
+/// # Errors
+///
+/// Returns `worktree_marker_invalid` when a marker exists but cannot be
+/// parsed or carries an unsupported contract. A corrupt marker is never
+/// downgraded to "not a worktree": that would silently route mutations into
+/// the worktree, which is exactly the failure this contract exists to remove.
+pub fn read_worktree_marker(workspace_root: &Path) -> Result<Option<WorktreeMarker>> {
+    let path = workspace_root.join(WORKTREE_MARKER);
+    let bytes = match fs::read(&path) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(PulseError::io(&path, error)),
+    };
+    let marker: WorktreeMarker = serde_json::from_slice(&bytes).map_err(|error| {
+        PulseError::validation(
+            "worktree_marker_invalid",
+            format!(
+                "{} is not a readable Pulse worktree marker: {error}",
+                path.display()
+            ),
+        )
+    })?;
+    if marker.schema_version != WORKTREE_MARKER_SCHEMA_VERSION {
+        return Err(PulseError::validation(
+            "worktree_marker_invalid",
+            format!(
+                "worktree marker schema {} is not the supported baseline {}",
+                marker.schema_version, WORKTREE_MARKER_SCHEMA_VERSION
+            ),
+        ));
+    }
+    Ok(Some(marker))
+}
+
+/// Resolve the repository root that owns mutable state for `workspace_root`.
+///
+/// Decision 0015: a Pulse-owned worktree is a *workspace* of the main
+/// repository, never a second Pulse repository. Every mutation plane
+/// (workgraph, evidence, events, knowledge, policy, config, runtime leases)
+/// belongs to the main root and is written under its single lock; the
+/// worktree owns only the source plane. This function is the one place that
+/// mapping happens, and it is applied at the CLI boundary so every command
+/// converges on the same lock.
+///
+/// The mapping applies only when all three hold:
+///
+/// 1. a valid `.pulse-owned` marker names an existing state root;
+/// 2. `workspace_root` really is a linked Git worktree;
+/// 3. it shares a common Git directory with the recorded state root.
+///
+/// A worktree the developer created themselves has no marker and is left
+/// alone; a marker copied somewhere else fails corroboration and is ignored.
+///
+/// # Errors
+///
+/// Propagates `worktree_marker_invalid` from [`read_worktree_marker`].
+pub fn state_repo_root(workspace_root: &Path) -> Result<std::path::PathBuf> {
+    let Some(marker) = read_worktree_marker(workspace_root)? else {
+        return Ok(workspace_root.to_path_buf());
+    };
+    let recorded = std::path::PathBuf::from(&marker.state_repo_root);
+    if !recorded.is_dir() {
+        return Ok(workspace_root.to_path_buf());
+    }
+    if !worktree_belongs_to(workspace_root, &recorded) {
+        return Ok(workspace_root.to_path_buf());
+    }
+    Ok(recorded)
+}
+
+/// Whether `workspace_root` is a linked worktree of the same Git repository
+/// as `state_root`. Git failures answer "no": an unreadable or non-Git
+/// directory is never mapped.
+fn worktree_belongs_to(workspace_root: &Path, state_root: &Path) -> bool {
+    if !matches!(
+        detect_worktree_kind(workspace_root),
+        Ok(WorktreeRootKind::LinkedWorktree)
+    ) {
+        return false;
+    }
+    let common = |root: &Path| {
+        packet_git(
+            root,
+            ["rev-parse", "--path-format=absolute", "--git-common-dir"],
+        )
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+    };
+    match (common(workspace_root), common(state_root)) {
+        (Some(left), Some(right)) => left == right,
+        _ => false,
     }
 }
 

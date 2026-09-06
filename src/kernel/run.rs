@@ -314,7 +314,10 @@ impl JsonGraphStore {
         // records the exact workspace the worker will run in.
         let workspace: Option<String> = match class {
             "worker" => self.decide_workspace(ticket_id, request.forced_worktree)?,
-            _ => None,
+            // Decision 0015 §4: assurance roles run in the same workspace the
+            // worker handed off from. Reviewing a different tree than the one
+            // under proof is not review.
+            _ => live_ticket_worktree(&self.repo_root, ticket_id)?,
         };
         let (lease_id, reservation) = match class {
             "worker" => {
@@ -341,12 +344,15 @@ impl JsonGraphStore {
                 (None, None)
             }
         };
-        // Worker command runs inside the ticket workspace; reviewer/qa run
-        // sequentially after the worker in the same checkout.
+        // Every role of a Ticket runs in the same workspace: the Pulse-owned
+        // worktree when the Ticket has one, the checkout otherwise.
         let command_dir = workspace
             .as_ref()
             .map(|relative| self.repo_root.join(relative))
             .unwrap_or_else(|| self.repo_root.clone());
+        // Prompts embed the workspace absolutely so the agent never has to
+        // infer it from cwd (Decision 0015 §3).
+        let workspace_display = absolute_display(&command_dir);
 
         // Commit the bounded input contract into the run workspace.
         let run_dir = self.repo_root.join(RUN_DIR).join(ticket_id);
@@ -378,6 +384,7 @@ impl JsonGraphStore {
                         .map(|binding| binding.session_id.as_str())
                         .unwrap_or_default(),
                     &reservation.source.commit,
+                    &workspace_display,
                     &harness_learnings_section(&self.repo_root),
                 ),
             )
@@ -402,24 +409,40 @@ impl JsonGraphStore {
             let prompt_path = run_dir.join("reviewer-prompt.md");
             fs::write(
                 &prompt_path,
-                reviewer_prompt(ticket_id, &crate::source::head_commit(&self.repo_root)?),
+                reviewer_prompt(
+                    ticket_id,
+                    &crate::source::head_commit(&self.repo_root)?,
+                    &workspace_display,
+                ),
             )
             .map_err(|error| PulseError::io(&prompt_path, error))?;
         }
+        // Decision 0015 §3: the agent looks for its workspace under its own
+        // cwd, so a worktree run needs the files there too. The main
+        // repository keeps the record; this copy is disposable and dies with
+        // the worktree.
+        let mirrored = mirror_run_workspace(&run_dir, &command_dir)?;
+        let input_name = input_path
+            .file_name()
+            .expect("run input path always has a file name");
+        let paths = match mirrored {
+            Some(mirror) => RunPaths {
+                agent_input: mirror.join(input_name),
+                agent_artifacts: mirror.join("artifacts"),
+                run_dir,
+                command_dir,
+            },
+            None => RunPaths {
+                agent_input: input_path,
+                agent_artifacts: artifact_dir,
+                run_dir,
+                command_dir,
+            },
+        };
 
         // Materialize argv and execute under the configured bounds.
         self.spawn_and_record(
-            role,
-            class,
-            ticket_id,
-            ticket_id,
-            lease_id,
-            &run_dir,
-            &artifact_dir,
-            &input_path,
-            &command_dir,
-            spec,
-            started,
+            role, class, ticket_id, ticket_id, lease_id, &paths, spec, started,
         )
     }
 
@@ -484,16 +507,22 @@ impl JsonGraphStore {
         }))?;
         fs::write(&input_path, &input_json).map_err(|error| PulseError::io(&input_path, error))?;
 
+        // Story-close qualification runs on the integrated checkout by
+        // design: it qualifies the Story after its Tickets merged, so there
+        // is no per-Ticket worktree to honour.
+        let paths = RunPaths {
+            run_dir,
+            agent_input: input_path,
+            agent_artifacts: artifact_dir,
+            command_dir: self.repo_root.clone(),
+        };
         self.spawn_and_record(
             role,
             "qa",
             &initiating,
             story_id,
             None,
-            &run_dir,
-            &artifact_dir,
-            &input_path,
-            &self.repo_root,
+            &paths,
             spec,
             started,
         )
@@ -537,25 +566,29 @@ impl JsonGraphStore {
         subject_ticket: &str,
         event_target: &str,
         lease_id: Option<String>,
-        run_dir: &Path,
-        artifact_dir: &Path,
-        input_path: &Path,
-        command_dir: &Path,
+        paths: &RunPaths,
         spec: &CommandSpec,
         started: chrono::DateTime<Utc>,
     ) -> PulseResult<RunOutcome> {
         let argv = runner::split_argv(&spec.command)?;
         let mut values = BTreeMap::new();
-        values.insert("input".to_string(), input_path.display().to_string());
+        values.insert("input".to_string(), paths.agent_input.display().to_string());
         values.insert("ticket".to_string(), subject_ticket.to_string());
-        values.insert("repo".to_string(), self.repo_root.display().to_string());
+        // `{repo}` is the workspace the role works in, which is the worktree
+        // for an isolated run (Decision 0015 §4); `{state_repo}` is the
+        // repository that owns the state planes.
+        values.insert("repo".to_string(), paths.command_dir.display().to_string());
+        values.insert(
+            "state_repo".to_string(),
+            self.repo_root.display().to_string(),
+        );
         values.insert(
             "artifact_dir".to_string(),
-            artifact_dir.display().to_string(),
+            paths.agent_artifacts.display().to_string(),
         );
         let argv = runner::materialize_argv(&argv, &values)?;
         let execution = runner::execute(
-            command_dir,
+            &paths.command_dir,
             &argv,
             Duration::from_secs(spec.timeout_seconds),
             spec.max_output_bytes,
@@ -593,7 +626,7 @@ impl JsonGraphStore {
             .ok()
             .and_then(|outcome| runner::parse_output_json(outcome).ok());
         if let Some(value) = &output {
-            match self.ingest_declared_artifacts(value) {
+            match self.ingest_declared_artifacts(value, &paths.command_dir) {
                 Ok(artifacts) => ingested = artifacts,
                 Err(error) => {
                     run = RunClassification::inconclusive(
@@ -609,7 +642,7 @@ impl JsonGraphStore {
         // artifacts — the runner only reports observations.
         let mut receipt_id: Option<String> = None;
         if class == "qa" && run.status == "completed" {
-            match self.record_qa_checkpoint(input_path, &output, &ingested) {
+            match self.record_qa_checkpoint(&paths.agent_input, &output, &ingested) {
                 Ok(id) => receipt_id = Some(id),
                 Err(QaCheckpointError::Skip) => {}
                 Err(QaCheckpointError::BaselineDrift(id)) => {
@@ -625,6 +658,18 @@ impl JsonGraphStore {
             }
         }
 
+        // Decision 0015 §5: a worktree checked out from an older commit is
+        // reported, never rebased. The tracked planes inside it are a
+        // read-only mirror, so a stale one is display drift, not lost truth.
+        let workspace_id = paths
+            .command_dir
+            .strip_prefix(&self.repo_root)
+            .ok()
+            .map(|relative| relative.to_string_lossy().to_string())
+            .filter(|relative| !relative.is_empty());
+        let graph_stale =
+            workspace_id.is_some() && worktree_graph_stale(&self.repo_root, &paths.command_dir);
+
         let run_record = RunRecord {
             schema_version: 1,
             role: role.to_string(),
@@ -636,13 +681,15 @@ impl JsonGraphStore {
             stderr_tail,
             artifacts: ingested.clone(),
             receipt_id: receipt_id.clone(),
+            workspace_id,
+            worktree_graph_stale: graph_stale,
             exit_code: run.exit_code,
             timed_out: run.timed_out,
             cancelled: run.cancelled,
             started_at: started.to_rfc3339(),
             finished_at: Utc::now().to_rfc3339(),
         };
-        let record_path = run_dir.join(format!("{role}-outcome.json"));
+        let record_path = paths.run_dir.join(format!("{role}-outcome.json"));
         fs::write(
             &record_path,
             crate::canonical_json::to_canonical_bytes(&run_record)?,
@@ -885,7 +932,9 @@ impl JsonGraphStore {
                 let acceptance_ids =
                     crate::kernel::completion::ticket_acceptance_ids(&self.repo_root, node)?;
                 let handoffs = verifying_handoffs(&self.repo_root, ticket_id, node.revision)?;
-                let proof_receipts = |kind: crate::evidence::model::ReceiptKind| {
+                let head_commit = crate::source::head_commit(&self.repo_root)?;
+                // Receipts whose subject is the Ticket itself (qa_checkpoint).
+                let subject_receipts = |kind: crate::evidence::model::ReceiptKind| {
                     crate::evidence::receipt::list_receipts(
                         &self.repo_root,
                         Some(kind),
@@ -900,10 +949,41 @@ impl JsonGraphStore {
                     })
                     .unwrap_or_default()
                 };
+                // Decision 0016: a documentation_validation receipt is
+                // subject-bound to the documentation registry, never to a
+                // Ticket, so filtering by ticket id can only ever return
+                // nothing. What makes one relevant to this review is its
+                // source binding: it proves the repository's required docs
+                // were current at the commit under review.
+                let documentation_receipts = crate::evidence::receipt::list_receipts(
+                    &self.repo_root,
+                    Some(crate::evidence::model::ReceiptKind::DocumentationValidation),
+                    None,
+                    Some(crate::evidence::model::ReceiptResult::Passed),
+                )
+                .map(|list| {
+                    list.receipts
+                        .iter()
+                        .filter(|receipt| {
+                            crate::evidence::receipt::load_receipt(&self.repo_root, &receipt.id)
+                                .ok()
+                                .and_then(|(envelope, _)| envelope.bindings.source)
+                                .is_some_and(|source| {
+                                    crate::source::same_source_state(
+                                        &self.repo_root,
+                                        &source.commit,
+                                        &head_commit,
+                                    )
+                                })
+                        })
+                        .map(|receipt| receipt.id.clone())
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
                 Ok(crate::canonical_json::to_canonical_bytes(&json!({
                     "schema_version": 1,
                     "ticket_id": ticket_id,
-                    "source_commit": crate::source::head_commit(&self.repo_root)?,
+                    "source_commit": head_commit,
                     "contract_revision": node.contract_revision,
                     "acceptance": acceptance_ids.into_iter().map(|id| json!({"id": id})).collect::<Vec<_>>(),
                     // Claims to verify, never prose to trust: no worker
@@ -917,8 +997,8 @@ impl JsonGraphStore {
                         "source_commit": handoff.source_commit,
                     })).collect::<Vec<_>>(),
                     "proof_receipts": {
-                        "qa_checkpoint": proof_receipts(crate::evidence::model::ReceiptKind::QaCheckpoint),
-                        "documentation_validation": proof_receipts(crate::evidence::model::ReceiptKind::DocumentationValidation),
+                        "qa_checkpoint": subject_receipts(crate::evidence::model::ReceiptKind::QaCheckpoint),
+                        "documentation_validation": documentation_receipts,
                     },
                     // The verification profile's `reviewers` requirement
                     // (Decision 0012 §5); strictest declared profile wins.
@@ -971,9 +1051,16 @@ impl JsonGraphStore {
     /// inside the repository; the content is hashed (SHA-256) and copied into
     /// the content-addressed evidence store. Shape errors and unsafe paths
     /// fail the whole ingest; the caller demotes the run to inconclusive.
+    /// Ingest the artifacts a run declared in its final output JSON.
+    ///
+    /// Relative paths resolve against `workspace`, the directory the role ran
+    /// in, so an isolated run's artifacts are read from its worktree. Every
+    /// resolved path must still land inside the main repository: Pulse-owned
+    /// worktrees live under it, so this stays one containment rule.
     fn ingest_declared_artifacts(
         &self,
         value: &serde_json::Value,
+        workspace: &Path,
     ) -> PulseResult<Vec<IngestedArtifact>> {
         let Some(declared) = value.get("artifacts") else {
             return Ok(Vec::new());
@@ -1007,7 +1094,7 @@ impl JsonGraphStore {
             let resolved = if declared_path.is_absolute() {
                 declared_path.to_path_buf()
             } else {
-                self.repo_root.join(declared_path)
+                workspace.join(declared_path)
             };
             let canonical = resolved
                 .canonicalize()
@@ -1526,6 +1613,14 @@ pub struct RunRecord {
     /// `qa_checkpoint` receipt recorded by Pulse for a completed qa run.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub receipt_id: Option<String>,
+    /// Repo-relative workspace the role ran in, when it was not the checkout
+    /// itself (Decision 0015).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace_id: Option<String>,
+    /// Whether an isolated workspace sits on an older commit than the main
+    /// repository. Reported, never repaired.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub worktree_graph_stale: bool,
     pub exit_code: Option<i32>,
     pub timed_out: bool,
     pub cancelled: bool,
@@ -1535,6 +1630,69 @@ pub struct RunRecord {
 
 /// Root of Pulse-owned per-Ticket worktrees (gitignored).
 pub const WORKTREES_DIR: &str = ".pulse/runtime/worktrees";
+
+/// Where one run's files live.
+///
+/// The main repository always holds the durable record; the `agent_*` paths
+/// are what the agent actually sees, and they differ only when the run is
+/// isolated in a Pulse-owned worktree (Decision 0015 §3). Keeping both in one
+/// value is what stops the two from drifting apart again: the record goes to
+/// `run_dir`, everything handed to the agent goes to the mirror.
+struct RunPaths {
+    /// Run directory in the main repository; the run record is written here.
+    run_dir: PathBuf,
+    /// Input contract path as the agent sees it.
+    agent_input: PathBuf,
+    /// Artifact directory as the agent sees it.
+    agent_artifacts: PathBuf,
+    /// Directory the command runs in, and the root relative artifact paths
+    /// resolve against.
+    command_dir: PathBuf,
+}
+
+/// Absolute display form of a workspace path, for prompts the agent reads.
+/// Falls back to the path as given when it cannot be canonicalized: a
+/// best-effort absolute path beats a relative one the agent must guess at.
+fn absolute_display(path: &Path) -> String {
+    path.canonicalize()
+        .unwrap_or_else(|_| path.to_path_buf())
+        .display()
+        .to_string()
+}
+
+/// Mirror the run workspace into an isolated command directory.
+///
+/// Returns the mirrored directory when one was written. When the command runs
+/// in the checkout itself, `run_dir` is already under the command directory
+/// and nothing is copied.
+fn mirror_run_workspace(run_dir: &Path, command_dir: &Path) -> PulseResult<Option<PathBuf>> {
+    if run_dir.starts_with(command_dir) {
+        return Ok(None);
+    }
+    let ticket_dir = run_dir.file_name().ok_or_else(|| {
+        PulseError::validation("run_workspace_invalid", "run directory has no name")
+    })?;
+    let target = command_dir.join(RUN_DIR).join(ticket_dir);
+    let artifacts = target.join("artifacts");
+    fs::create_dir_all(&artifacts).map_err(|error| PulseError::io(&artifacts, error))?;
+    let entries = fs::read_dir(run_dir).map_err(|error| PulseError::io(run_dir, error))?;
+    for entry in entries {
+        let path = entry
+            .map_err(|error| PulseError::io(run_dir, error))?
+            .path();
+        // Only the flat input contract travels; `artifacts/` is created empty
+        // because the agent fills it in the workspace it runs in.
+        if !path.is_file() {
+            continue;
+        }
+        let Some(name) = path.file_name() else {
+            continue;
+        };
+        let destination = target.join(name);
+        fs::copy(&path, &destination).map_err(|error| PulseError::io(&destination, error))?;
+    }
+    Ok(Some(target))
+}
 
 /// The first live lease held by a Ticket other than `ticket_id`, as
 /// `(ticket_id, lease state)`. Deterministic: the lowest ticket id wins.
@@ -1608,11 +1766,46 @@ fn ensure_ticket_worktree(repo_root: &Path, ticket_id: &str) -> PulseResult<Stri
         ));
     }
     // Ownership marker: only worktrees Pulse created (and marked) are ever
-    // removed by cleanup.
-    let marker = absolute.join(".pulse-owned");
-    fs::write(&marker, b"created by pulse run\n")
-        .map_err(|error| PulseError::io(&marker, error))?;
+    // removed by cleanup, and only they route their state planes back to the
+    // main repository (Decision 0015).
+    crate::source::write_worktree_marker(&absolute, repo_root, ticket_id)?;
     Ok(relative)
+}
+
+/// The Pulse-owned worktree currently serving `ticket_id`, as a repo-relative
+/// workspace id.
+///
+/// Reviewer and qa runs use this so they inspect the very tree the worker
+/// handed off from. A directory that is not registered with Git or carries no
+/// ownership marker is not ours and is never adopted.
+fn live_ticket_worktree(repo_root: &Path, ticket_id: &str) -> PulseResult<Option<String>> {
+    let relative = ticket_worktree_rel(ticket_id);
+    let absolute = repo_root.join(&relative);
+    if !absolute.exists() {
+        return Ok(None);
+    }
+    if crate::source::read_worktree_marker(&absolute)?.is_none() {
+        return Ok(None);
+    }
+    let registered = git_ok(repo_root, &["worktree", "list", "--porcelain"])?
+        .contains(&absolute.to_string_lossy().to_string());
+    Ok(registered.then_some(relative))
+}
+
+/// Whether a Pulse-owned worktree still sits on the main repository's HEAD.
+///
+/// The worktree is created detached at HEAD, so drift means the developer
+/// committed in the main checkout while the run was in flight. Pulse reports
+/// it and never rebases: the worktree is a source workspace, not a truth
+/// plane.
+fn worktree_graph_stale(repo_root: &Path, workspace: &Path) -> bool {
+    match (
+        crate::source::head_commit(repo_root),
+        crate::source::head_commit(workspace),
+    ) {
+        (Ok(main), Ok(local)) => main != local,
+        _ => false,
+    }
 }
 
 /// Remove a Pulse-owned worktree after its Ticket reached a terminal state.
@@ -1784,21 +1977,34 @@ fn worker_prompt(
     lease_id: &str,
     session_id: &str,
     source_commit: &str,
+    workspace: &str,
     harness_learnings: &str,
 ) -> String {
     format!(
         "# Pulse worker run — {ticket_id}\n\
-         You are `agent:runner:worker` implementing Ticket {ticket_id} in this\n\
-         repository. The process runs at the repository root; the `pulse` CLI\n\
-         is on PATH. Work only inside this Ticket's contract.\n\
+         You are `agent:runner:worker` implementing Ticket {ticket_id}. Your\n\
+         workspace is `{workspace}` and the process already starts there.\n\
+         Edit files only under that path — it may be an isolated worktree, and\n\
+         writing anywhere else corrupts another Ticket's proof. The `pulse`\n\
+         CLI is on PATH and routes state correctly from inside the workspace;\n\
+         never pass `--repo-root`. Work only inside this Ticket's contract.\n\
          \n\
-         1. Read `worker-input.json` in this directory. It is your complete\n\
-         work packet (contract prose, QA cases, docs, source fence).\n\
-         `worker-env` holds the same run facts as shell variables.\n\
+         1. Read `{workspace}/.pulse/runtime/run/{ticket_id}/worker-input.json`.\n\
+         It is your complete work packet (contract prose, QA cases, docs,\n\
+         source fence). `worker-env` beside it holds the same run facts as\n\
+         shell variables.\n\
          2. Read required docs with `pulse docs get <section-ref>`; do not guess.\n\
          3. Implement. Do not change acceptance criteria. Do not run\n\
          `git commit` — leave changes in the working tree; the developer\n\
          commits after close.\n\
+         3b. If the packet's `documentation.posture` is `required`, update\n\
+         the listed documents, then record the docs proof yourself — it is\n\
+         the worker's, not the reviewer's:\n\
+         \n\
+         pulse docs validate --record --actor agent:runner:worker --json\n\
+         \n\
+         Keep the receipt id and pass it as --evidence-receipt in step 4.\n\
+         Handoff refuses without it (`handoff_documentation_receipt_missing`).\n\
          4. When done, record the handoff proof (edit the summary, paths and\n\
          the attempt suffix; use -a1 the first time. If a handoff already\n\
          exists for this lease, e.g. the run was resumed after the tree\n\
@@ -1812,6 +2018,7 @@ fn worker_prompt(
            --source-commit {source_commit} \\\n\
            --summary \"<what changed, one line>\" \\\n\
            --changed-path src/example.ext \\\n\
+           --evidence-receipt <docs receipt id from step 3b> \\\n\
            --check \"<check name>=<the command you ran>=<exit code>\" \\\n\
            --proof \"<AC id>=<check names, comma-separated>=\" \\\n\
            --learning-used LRN-<n>=helpful|not_needed|misleading\n\
@@ -1881,15 +2088,19 @@ fn harness_learnings_section(repo_root: &Path) -> String {
 /// Bootstrap prompt for the independent reviewer agent. Like the worker
 /// prompt it carries workflow and identity only, plus the exact verify
 /// syntax with the run's facts filled in.
-fn reviewer_prompt(ticket_id: &str, source_commit: &str) -> String {
+fn reviewer_prompt(ticket_id: &str, source_commit: &str, workspace: &str) -> String {
     format!(
         "# Pulse reviewer run — {ticket_id}\n\
          You are `agent:runner:reviewer` independently reviewing the handoff\n\
-         of Ticket {ticket_id} in this repository. The process runs at the\n\
-         repository root; the `pulse` CLI is on PATH.\n\
+         of Ticket {ticket_id}. Your workspace is `{workspace}` and the\n\
+         process already starts there: it is the exact tree the worker handed\n\
+         off, so review it and nothing else. The `pulse` CLI is on PATH and\n\
+         routes state correctly from inside the workspace; never pass\n\
+         `--repo-root`.\n\
          \n\
-         1. Read `reviewer-input.json` in this directory: the acceptance\n\
-         ids, the handoff receipt(s) to review, and the artifact directory.\n\
+         1. Read `{workspace}/.pulse/runtime/run/{ticket_id}/reviewer-input.json`:\n\
+         the acceptance ids, the handoff receipt(s) to review, and the\n\
+         artifact directory.\n\
          2. Review independently. Inspect the working-tree changes\n\
          (`git status --porcelain`, `git diff`), re-read the Ticket contract\n\
          (`pulse work show {ticket_id} --json`), and re-run every command in\n\
@@ -1897,11 +2108,16 @@ fn reviewer_prompt(ticket_id: &str, source_commit: &str) -> String {
          claims, not evidence - run each `command` and compare with the\n\
          claimed `exit_code`.\n\
          3. Proof receipts are listed in the input under\n\
-         `proof_receipts` (you can also confirm with `pulse evidence\n\
-         receipt list`). A required-QA Ticket needs a passed\n\
-         qa_checkpoint receipt and a required-docs Ticket needs a\n\
-         documentation_validation receipt referenced in the proofs, or\n\
-         close will refuse.\n\
+         `proof_receipts`, already scoped to this review: `qa_checkpoint`\n\
+         for this Ticket and `documentation_validation` bound to the commit\n\
+         you are reviewing. Verify the ones you rely on, then reference\n\
+         them in step 4 — a required-QA Ticket needs a passed\n\
+         qa_checkpoint and a required-docs Ticket needs a\n\
+         documentation_validation, or close will refuse.\n\
+         The worker records its own docs receipt before handoff, so the\n\
+         list should already hold one; reuse it rather than recording a\n\
+         second. Record your own only if the docs genuinely changed under\n\
+         you, and say so in the summary.\n\
          4. Record the verdict — one --check per command you ran, exactly\n\
          one --proof per acceptance id mapping it to checks and/or the\n\
          required proof receipts from the input. Use -a1 in the\n\

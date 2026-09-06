@@ -136,6 +136,7 @@ impl JsonGraphStore {
                 "Ticket is not the exact active revision bound to the assignment",
             ));
         }
+        validate_documentation_handoff(&self.repo_root, &node, &args.evidence_receipt_ids)?;
         let active_revision = node.revision;
         node.status = NodeStatus::Verifying;
         node.status_reason = None;
@@ -1069,6 +1070,56 @@ fn validate_close_postures(node: &Node, actor: &str) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// Refuse a handoff that owes a documentation proof and does not carry one
+/// (Decision 0016).
+///
+/// The worker owns recording `documentation_validation`; this gate is what
+/// makes that ownership real. Without it the omission only surfaces at
+/// `close` — after the reviewer has already done its work — so every miss
+/// costs a full review cycle instead of one command. Three of six Tickets in
+/// Track B round 1 paid exactly that.
+///
+/// Only the receipt *kind* is checked here. Source binding, registry
+/// currency and document coverage stay with the close gate, which reads the
+/// reviewer's independent proofs; a worker's own receipt never satisfies
+/// close.
+///
+/// # Errors
+///
+/// Returns `handoff_documentation_receipt_missing` when the Ticket's
+/// documentation posture is `required` and no referenced receipt is a
+/// `documentation_validation`.
+fn validate_documentation_handoff(
+    repo_root: &Path,
+    node: &Node,
+    evidence_receipt_ids: &[String],
+) -> Result<()> {
+    if node.documentation_posture() != DocumentationImpactPosture::Required {
+        return Ok(());
+    }
+    for receipt_id in evidence_receipt_ids {
+        // `load_receipt` is a plain file read: safe under the handoff fence.
+        // `verify_receipt` is the one that takes the lock, and it already ran
+        // before the fence was acquired.
+        let (receipt, _) = crate::evidence::receipt::load_receipt(repo_root, receipt_id)?;
+        if matches!(
+            receipt.payload,
+            crate::evidence::model::ReceiptPayload::DocumentationValidation(_)
+        ) {
+            return Ok(());
+        }
+    }
+    Err(PulseError::validation(
+        "handoff_documentation_receipt_missing",
+        format!(
+            "Ticket {} declares required documentation impact, so its handoff must reference a \
+             documentation_validation receipt. Record one first: `pulse docs validate --record \
+             --actor <your actor>`, then repeat the handoff with `--evidence-receipt <id>`.",
+            node.id
+        ),
+    ))
 }
 
 fn validate_documentation_close(

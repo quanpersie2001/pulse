@@ -99,6 +99,20 @@ fn required_docs_close_fixture(mode: DocumentationReceiptMode) -> RequiredDocsCl
             acknowledgement: acknowledgement(&reserved.reservation.packet_fingerprint),
         })
         .unwrap();
+    // Decision 0016: the worker owns the docs proof, so a required-docs
+    // handoff must carry one. These fixtures exercise the *close* gate, which
+    // reads the reviewer's proofs — the worker receipt below only gets the
+    // handoff through, and never satisfies close on its own.
+    let worker_docs_receipt = pulse::kernel::documentation::run_documentation_validation(
+        repo.path(),
+        None,
+        Some("agent:tester"),
+    )
+    .unwrap()
+    .receipt
+    .unwrap()
+    .receipt
+    .id;
     let handoff = store
         .submit_execution_handoff(SubmitHandoffArgs {
             lease_id: active.lease_id,
@@ -107,7 +121,7 @@ fn required_docs_close_fixture(mode: DocumentationReceiptMode) -> RequiredDocsCl
             source_commit: active.source.commit,
             summary: "Required documentation is ready for validation.".to_string(),
             changed_paths: vec!["docs/domain/reservation.md".to_string()],
-            evidence_receipt_ids: vec![],
+            evidence_receipt_ids: vec![worker_docs_receipt],
             learning_usage: Vec::new(),
             checks: Vec::new(),
             acceptance_proofs: Vec::new(),

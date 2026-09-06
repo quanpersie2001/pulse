@@ -31,6 +31,8 @@ mod recovery;
 mod reviewer;
 #[path = "runner/story_close.rs"]
 mod story_close;
+#[path = "runner/worktree_dispatch.rs"]
+mod worktree_dispatch;
 // The shared fixture helpers cover several crates; the runner crate uses a
 // subset, so unused helpers are expected here.
 #[allow(dead_code)]

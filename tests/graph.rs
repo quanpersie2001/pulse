@@ -34,6 +34,8 @@ mod authority_policy;
 mod cli_lifecycle_contract;
 #[path = "graph/decision_acceptance.rs"]
 mod decision_acceptance;
+#[path = "graph/documentation_handoff.rs"]
+mod documentation_handoff;
 #[path = "graph/event_fingerprints.rs"]
 mod event_fingerprints;
 #[path = "graph/frontier.rs"]

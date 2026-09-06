@@ -460,7 +460,11 @@ không tự rebuild từ revision mới. Contract đổi giữa chừng tạo fi
 ```
 
 Role là tên tuỳ ý. Placeholder: `{input}` đường dẫn file input, `{ticket}`,
-`{repo}`, `{artifact_dir}`. Không shell interpolation; args parse bằng argv
+`{repo}` workspace mà role chạy trong đó (là worktree khi run bị cô lập),
+`{state_repo}` repo chính giữ state plane, `{artifact_dir}`. `{input}` và
+`{artifact_dir}` luôn trỏ vào workspace mà agent thấy, nên một lệnh viết
+đúng chạy y hệt trong checkout và trong worktree (Decision 0015).
+Không shell interpolation; args parse bằng argv
 parser, không qua `sh -c`. Lệnh agent nhận prompt positional trỏ tới
 bootstrap prompt Pulse viết sẵn; `--output-format text` giữ JSON cuối của
 agent là dòng stdout cuối (contract output của runner).
@@ -499,7 +503,21 @@ không tự đổi acceptance". Không copy Ticket, docs, QA, knowledge vào pro
   không theo worktree.
 - Worktree do Pulse tạo thì Pulse dọn khi Ticket terminal và không còn
   reference. Không xoá thứ Pulse không tạo.
-- Reviewer/QA trên cùng checkout chạy tuần tự sau worker xong.
+- **Worktree là workspace của repo chính, không phải repo Pulse thứ hai**
+  (Decision 0015). Worktree sở hữu **duy nhất** source plane; mọi mutation
+  plane (workgraph, evidence, event, knowledge, policy, config, runtime
+  lease) route về repo chính và ghi dưới đúng một lock của nó. Nhận diện
+  bằng marker `.pulse-owned` do Pulse ghi khi tạo, đối chứng bằng Git; worktree
+  developer tự tạo không có marker nên không bao giờ được map.
+- Run workspace được ghi vào **cả hai nơi**: bản record ở runtime repo chính,
+  và bản agent dùng tại `<workspace>/.pulse/runtime/run/<ticket>/`. Prompt
+  nhúng path tuyệt đối của workspace. Bản trong worktree là copy dùng một
+  lần, chết cùng worktree, không phải truth.
+- **Reviewer và QA chạy trong cùng workspace với worker.** Ticket có worktree
+  sống thì assurance role lấy cwd là worktree đó: review đúng cây đã handoff,
+  không phải một cây khác.
+- Worktree lệch commit so với repo chính được báo `worktree_graph_stale`
+  trong run record. Pulse báo, không tự rebase.
 
 #### Contract input/output theo role
 
@@ -563,11 +581,17 @@ show`, diff từ Git, và tự chạy lệnh verify.
   "acceptance": [{"id": "AC-1"}, {"id": "AC-2"}],
   "handoffs": [{"handoff_id": "01JX…H1", "changed_paths": ["src/auth/errors.ts"],
                 "recorded_by": "agent:runner:worker", "source_commit": "d4e5f6"}],
-  "proof_receipts": {"qa_checkpoint": ["01JX…Q1"], "documentation_validation": []},
+  "proof_receipts": {"qa_checkpoint": ["01JX…Q1"], "documentation_validation": ["01JX…D1"]},
   "reviewers_required": 1,
   "artifact_dir": "artifacts"
 }
 ```
+
+`proof_receipts` được lọc theo hai cách khác nhau vì hai loại receipt có
+subject khác nhau (Decision 0016): `qa_checkpoint` theo subject là Ticket;
+`documentation_validation` theo **source commit đang review**, vì nó
+subject-bound tới documentation registry của repo chứ không tới một Ticket.
+Lọc docs receipt theo ticket id không bao giờ khớp.
 
 Reviewer output:
 
@@ -761,7 +785,7 @@ Envelope: `id`, `kind`, `subject` (work id + contract_revision), `actor`,
 | `handoff` | worker | changed files, `checks[] {name, command, exit_code}`, `acceptance_proofs[] {acceptance_id, check_names, evidence_receipt_ids}`, summary một dòng, docs finding, learning candidate; binding lease, session, commit, `source_dirty_hash`, revision |
 | `verification` | reviewer khác worker | acceptance → check/receipt mapping, disposition pass/rework, findings |
 | `qa_checkpoint` | qa runner | case nào pass/fail trên baseline hash nào, artifact |
-| `docs_validation` | `docs validate --record` | document id + content hash pass mechanical checks |
+| `docs_validation` | **worker**, trước handoff (Decision 0016) | document id + content hash pass mechanical checks; subject là documentation registry của repo tại một commit, không phải một Ticket |
 | `decision_acceptance` | human có grant | Decision id + content hash được accept |
 | `close` | close gate | Ticket/Story đóng với receipt nào, graph fingerprint |
 
@@ -1136,6 +1160,12 @@ run` từ chối), không hard conflict trên write scope (cùng file), thứ t�
 rõ. `pulse run` cảnh báo overlap path giữa các Ticket active; overlap là
 advisory, developer quyết định.
 
+Isolation là thật, không phải quy ước: agent trong worktree tìm thấy run
+workspace ngay dưới cwd của nó và CLI route state về repo chính, nên nó không
+có lý do gì để đi vào checkout chung (Decision 0015). Mutation của mọi worker
+song song vẫn hội tụ về một lock duy nhất của repo chính; worktree chỉ mang
+source.
+
 Conductor là developer, hoặc một agent session dùng chính các lệnh Pulse để
 fan-out. Pulse không có orchestration loop riêng.
 
@@ -1399,6 +1429,19 @@ Gặp một dấu hiệu thì dừng feature liên quan, ghi Decision, sửa har
     ingest artifact rồi dựng receipt với `bindings.artifacts`; script không
     cần grant `evidence.record`; drift baseline hay run không sạch thì
     `inconclusive` không receipt. Decision 0014. Chốt 2026-09-06.
+11. **Worktree là workspace của repo chính.** Worktree sở hữu duy nhất
+    source plane; mutation route về repo chính dưới một lock, nhận diện bằng
+    marker `.pulse-owned` cộng đối chứng Git. Run workspace mirror vào
+    worktree; reviewer và qa chạy trong cùng workspace với worker; lệch
+    commit báo `worktree_graph_stale`, không tự rebase. Hai họ receipt chưa
+    gộp. Decision 0015. Chốt 2026-09-07.
+12. **Worker sở hữu docs receipt, gate chặn tại handoff.** Posture
+    `required` mà handoff không tham chiếu `documentation_validation` thì
+    fail với `handoff_documentation_receipt_missing` — lỗi lộ tại bước của
+    người sửa được, không phải sau một vòng review. Reviewer input liệt kê
+    docs receipt theo source commit (không theo ticket id, vốn không bao giờ
+    khớp) và reviewer dùng lại thay vì tự ghi. Close gate không đổi: vẫn chỉ
+    đọc proof của reviewer. Decision 0016. Chốt 2026-09-07.
 
 Còn mở, mặc định nếu không có ý kiến khác:
 

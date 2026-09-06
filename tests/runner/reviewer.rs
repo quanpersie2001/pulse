@@ -245,3 +245,78 @@ fn finding_without_owner_is_malformed_output() {
     assert_eq!(out["status"], "inconclusive");
     assert_eq!(out["inconclusive_reason"], "malformed_output");
 }
+
+/// Decision 0016 §3: `proof_receipts.documentation_validation` lists receipts
+/// bound to the commit under review.
+///
+/// The old filter matched `subject.id == ticket_id`, but a documentation
+/// receipt is subject-bound to the documentation registry and carries no work
+/// binding, so that list was empty for every Ticket that ever ran — while the
+/// reviewer prompt told the reviewer to find one there. That is what left
+/// three of six Track B Tickets rework'd on the same gap.
+#[test]
+fn reviewer_input_lists_docs_receipts_bound_to_the_reviewed_commit() {
+    let repo = TestRepo::from_fixture("minimal-service");
+    let ticket_id = setup_ready_ticket(&repo);
+    verify_fixture(
+        &repo,
+        &ticket_id,
+        r#"echo '{"disposition": "pass", "acceptance": {"AC-1": "ok"}, "findings": []}'"#,
+    );
+
+    // A registered, current document: without one there is nothing for a
+    // documentation receipt to bind. Registered after the handoff so the
+    // receipt binds the commit the reviewer is about to review, which is what
+    // a real worker run produces.
+    fs::create_dir_all(repo.path().join("docs/domain")).unwrap();
+    fs::write(
+        repo.path().join("docs/domain/tokens.md"),
+        b"# Token contract\n\nToken outcomes are stable.\n",
+    )
+    .unwrap();
+    pulse::docs::register(
+        repo.path(),
+        1,
+        pulse::docs::model::DocumentRecord {
+            tags: vec![],
+            id: "DOC-TOKEN-CONTRACT".to_string(),
+            revision: 1,
+            path: "docs/domain/tokens.md".to_string(),
+            kind: pulse::docs::model::DocumentKind::Domain,
+            status: pulse::docs::model::DocumentStatus::Approved,
+            owner: "team:platform".to_string(),
+            summary: "Token contract".to_string(),
+            scope: pulse::docs::model::DocumentScope::default(),
+            generated: None,
+            superseded_by: None,
+        },
+        "human:tester",
+    )
+    .unwrap();
+    repo.pulse_ok(&["docs", "index", "--json"]);
+    let run = pulse::kernel::documentation::run_documentation_validation(
+        repo.path(),
+        None,
+        Some("agent:runner:worker"),
+    )
+    .unwrap();
+    let recorded = run
+        .receipt
+        .clone()
+        .unwrap_or_else(|| panic!("no receipt: {:?}", run.validation))
+        .receipt
+        .id;
+
+    let _ = reviewer_outcome(&repo, &ticket_id);
+
+    let input = reviewer_input(&repo, &ticket_id);
+    let listed = input["proof_receipts"]["documentation_validation"]
+        .as_array()
+        .expect("documentation_validation must be an array");
+    assert!(
+        listed
+            .iter()
+            .any(|id| id == &Value::String(recorded.clone())),
+        "the worker's docs receipt must reach the reviewer: {listed:?}"
+    );
+}

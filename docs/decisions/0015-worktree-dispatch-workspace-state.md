@@ -2,9 +2,18 @@
 
 ## Status
 
-Proposed, 2026-09-07. Chờ review; chưa sửa code, chưa đổi PRODUCT.md.
-Đệ trình từ ma sát thật của Track B vòng 1 (TK-006/TK-007,
-`examples/todolist/`), ghi trong `examples/todolist/works/friction.md`.
+Accepted, 2026-09-07. Đệ trình từ ma sát thật của Track B vòng 1
+(TK-006/TK-007, `examples/todolist/`), ghi trong
+`examples/todolist/works/friction.md`.
+
+Một điều chỉnh khi implement so với bản Proposed: việc nhận diện repo chính
+**không** suy ra từ `git rev-parse --git-common-dir` một mình. `--git-common-dir`
+trả về toplevel của Git repo, còn repo-root của Pulse có thể là một thư mục
+con của repo đó (`examples/todolist` là ví dụ đang chạy), nên nó không khôi
+phục được state root. Marker `.pulse-owned` vì vậy mang luôn `state_repo_root`
+tuyệt đối, và `--git-common-dir` được dùng đúng vai trò ADR mô tả: đối chứng
+để không nhận nhầm một worktree người dùng tự tạo hay một marker bị chép đi
+nơi khác.
 
 ## Context
 
@@ -124,18 +133,43 @@ trong worktree nói chuyện với canonical state bằng cách nào.
   HEAD.
 - Guard hiện có (`tests/graph/architecture_guards.rs`) không đổi.
 
-## Thay đổi (chưa làm — chờ Accepted)
+## Thay đổi (đã làm 2026-09-07)
 
-- `src/kernel/run.rs`: mirror run workspace vào worktree; `decide_workspace`
-  trả workspace cho reviewer/qa khi ticket có worktree sống.
-- `src/cli/mod.rs`, `src/source.rs`: nhận diện Pulse-owned worktree, map
-  repo-root canonical về main cho state planes; source đọc local.
-- `src/storage/lock.rs`: không đổi — lock đã ở runtime của main, mapping
-  khiến mọi writer hội tụ về đúng một lock.
-- `PRODUCT.md` §5.3 (isolation rule), §5.7 (chạy song song), §13 (decision
-  list): cập nhật sau Accepted.
-- Đóng hai mục friction.md tương ứng (worktree gap, cross-ticket
-  poisoning).
+- `src/kernel/run.rs`: `mirror_run_workspace` chép input/prompt/env vào
+  `<workspace>/.pulse/runtime/run/<ticket>/`; `RunPaths` tách "bản ghi ở repo
+  chính" khỏi "bản agent thấy"; `live_ticket_worktree` cấp workspace của
+  worker cho reviewer/qa; prompt worker và reviewer nhúng path tuyệt đối của
+  workspace; run record thêm `workspace_id` và `worktree_graph_stale`;
+  artifact tương đối resolve theo workspace.
+- `src/source.rs`: `WorktreeMarker`, `write_worktree_marker`,
+  `read_worktree_marker`, `state_repo_root`; `.pulse-owned` vào
+  `PULSE_RUNTIME_EXCLUDE_PATHS` để marker không làm workspace bẩn từ lúc
+  sinh ra.
+- `src/cli/mod.rs`: áp mapping đúng một lần ở biên CLI.
+- `src/storage/lock.rs`: không đổi — đúng như dự đoán, mapping khiến mọi
+  writer hội tụ về một lock.
+- Placeholder `{repo}` đổi nghĩa thành workspace mà role chạy trong đó, thêm
+  `{state_repo}` cho repo chính. Không đổi nghĩa thì mục 4 không thực hiện
+  được: lệnh reviewer mẫu dùng `-C {repo}` vẫn sẽ ép về main.
+- Tests: `tests/runner/worktree_dispatch.rs` — 8 test, gồm cả bốn assert của
+  phần Kiểm chứng. Fake agent cố tình chỉ biết cwd của mình và không truyền
+  `--repo-root`.
+- `PRODUCT.md` §5.3 (isolation rule, placeholder), §5.7 (chạy song song),
+  §13 mục 11; `ARCHITECTURE.md` §2 và §5.
+- Đóng hai mục friction.md tương ứng, cộng một mục thứ ba phát hiện khi
+  viết ADR (reviewer review khác cây).
+
+### Thu hẹp có chủ ý
+
+Mục 5 nói cảnh báo `worktree_graph_stale` "trong packet/run record"; bản
+implement chỉ ghi vào **run record**. Packet được dựng từ repo chính (mapping
+đã đưa repo-root về đó), nên một cờ "worktree cũ" trong packet không có chủ
+thể rõ ràng. Hệ quả còn lại: `work packet` gọi từ trong worktree đọc HEAD và
+dirty state của repo chính, không phải của worktree. Điều đó nhất quán trong
+mọi trường hợp trừ khi developer commit vào main giữa lúc run đang chạy — và
+đúng trường hợp đó thì run record báo `worktree_graph_stale`. Nếu dogfood cho
+thấy khoảng này đau thật thì tách source root khỏi state root trong `JsonGraphStore`,
+việc đó cần ADR riêng vì chạm mọi call site.
 
 ## Consequences
 

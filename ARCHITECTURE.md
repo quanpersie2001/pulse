@@ -67,7 +67,12 @@ Modules sit bottom-up and never reach up the ladder. Guards:
   - `src/identity/` actor kinds/refs (re-exported neutrally by evidence).
   - `src/policy/` default-deny authority policy load/validate/authorize.
   - `src/event.rs` append-only event envelope + ids.
-  - `src/source.rs` git source identity (head commit, cleanliness).
+  - `src/source.rs` git source identity (head commit, cleanliness) plus the
+    Pulse-owned worktree contract: `write_worktree_marker`,
+    `read_worktree_marker` and `state_repo_root`, which maps a worktree to
+    the repository owning its state planes (Decision 0015). `src/cli/mod.rs`
+    applies that mapping once, at the CLI boundary, so every command inside a
+    worktree converges on the main repository's single write lock.
   - `src/execution.rs`, `src/reservation.rs`, `src/work_packet.rs`,
     `src/canonical_json.rs` — Core-owned proof/lease/packet contracts.
   - `src/storage/` — generic atomic write, file lock, safe paths and the
@@ -137,7 +142,7 @@ module pretends otherwise.
 
 | Capability | PRODUCT.md | Today |
 |---|---|---|
-| Runner (`pulse run <role>`) | §5.3 | Implemented and exercised on `examples/todolist/`: lease, run workspace, bootstrap prompt (with the `## Harness learnings` section), outcome classification (worker `handed_off`/`blocked`, reviewer `pass`/`rework` proven against recorded receipts), artifact ingest into `.pulse/evidence/artifacts/sha256/`, qa `--scope story_close`, drift-acknowledged resume, worktree reclaim. Isolation denies the run while another Ticket holds a live lease; `--isolation worktree` is the only way past it. The recovery saga beyond release is still ahead. |
+| Runner (`pulse run <role>`) | §5.3 | Implemented and exercised on `examples/todolist/`: lease, run workspace, bootstrap prompt (with the `## Harness learnings` section), outcome classification (worker `handed_off`/`blocked`, reviewer `pass`/`rework` proven against recorded receipts), artifact ingest into `.pulse/evidence/artifacts/sha256/`, qa `--scope story_close`, drift-acknowledged resume, worktree reclaim. Isolation denies the run while another Ticket holds a live lease; `--isolation worktree` is the only way past it. Decision 0015 makes that isolation real: the run workspace is mirrored into the worktree, prompts embed the workspace absolutely, reviewer and qa inherit the worker's workspace, and state planes route back to the main repository. The recovery saga beyond release is still ahead. |
 | Ratchet commands | §5.6 | Implemented: `capture`, `validate <id> --evidence`, `promote --document|--agents-md --insert-after [--dry-run]` (target must change: `promotion_target_unchanged`), `applicable --work --json` sharing the packet's bucket logic, `check`; packet injects required/recommended repository learnings; handoffs carry `knowledge_usage[]` and `knowledge show` aggregates usage. |
 | Events tail / notes | §5.7 | Implemented: append-only log, `pulse note` writes ticket-targeted events, `pulse events tail` streams with `--since`/`--ticket`/`--follow`; notes surface in the packet (latest 8). |
 | MCP server | §5.8 | stub removed with the daemon; CLI path comes first. |
