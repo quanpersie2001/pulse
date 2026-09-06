@@ -1,0 +1,18 @@
+{
+  "actor": {
+    "id": "quanpersie2001",
+    "kind": "human"
+  },
+  "event_type": "note.recorded",
+  "id": "evt_01M1W2QHAP9CDSMPQF7N6A4N9Y",
+  "occurred_at": "2026-09-06T19:22:09.623352Z",
+  "payload": {
+    "message": "Track B round 1 complete: TK-003..TK-008 done by receipts, ST-002 closed via close-story, LRN-002 promoted. Next session pointer: /HANDOFF.md at pulse repo root.",
+    "work_id": "ST-002"
+  },
+  "schema_version": 1,
+  "subject": {
+    "id": "ST-002",
+    "kind": "resource"
+  }
+}
