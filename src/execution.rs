@@ -29,6 +29,16 @@ pub struct HandoffReceipt {
     pub changed_paths: Vec<String>,
     #[serde(default)]
     pub evidence_receipt_ids: Vec<String>,
+    /// Worker-claimed verification checks (`name`, `command`, `exit_code`).
+    /// Claims, not evidence: the reviewer re-runs each command instead of
+    /// trusting the recorded exit code.
+    #[serde(default)]
+    pub checks: Vec<VerificationCheck>,
+    /// Worker-claimed acceptance coverage. Missing proofs for some acceptance
+    /// ids are allowed here; the close gate still demands full coverage from
+    /// the reviewer's verification.
+    #[serde(default)]
+    pub acceptance_proofs: Vec<AcceptanceProof>,
     /// Usage feedback for packet-injected learnings (empty for receipts
     /// recorded before the field existed).
     #[serde(default)]
@@ -118,6 +128,10 @@ pub struct SubmitHandoffArgs {
     pub summary: String,
     pub changed_paths: Vec<String>,
     pub evidence_receipt_ids: Vec<String>,
+    /// Worker-claimed checks, same shape as the reviewer's verification.
+    pub checks: Vec<VerificationCheck>,
+    /// Worker-claimed acceptance coverage, same shape as the reviewer's.
+    pub acceptance_proofs: Vec<AcceptanceProof>,
     /// How the worker used the learnings injected into its packet.
     pub learning_usage: Vec<KnowledgeUsageClaim>,
     pub idempotency_key: String,
@@ -234,6 +248,64 @@ pub struct CloseStoryArgs {
     pub source_commit: String,
     pub summary: String,
     pub idempotency_key: String,
+}
+
+/// Upper bound for the one-line handoff summary (Decision 0012: the AC
+/// mapping and check results live in `checks[]`/`acceptance_proofs[]`, not
+/// in prose).
+pub const MAX_HANDOFF_SUMMARY_CHARS: usize = 300;
+
+/// Validate the worker's machine-readable handoff claim.
+///
+/// Exit codes are claims — the reviewer re-runs each command — so they are
+/// not judged here, and missing proofs for some acceptance ids are allowed
+/// (the close gate demands coverage from the reviewer, not the worker).
+/// What must hold: check names and commands are non-empty, check names and
+/// acceptance ids are unique, and every proof references a declared check.
+pub fn validate_handoff_claim(
+    checks: &[VerificationCheck],
+    acceptance_proofs: &[AcceptanceProof],
+) -> Result<()> {
+    let mut names = std::collections::BTreeSet::new();
+    for check in checks {
+        if check.name.trim().is_empty() || check.command.trim().is_empty() {
+            return Err(PulseError::validation(
+                "verification_check_invalid",
+                "handoff check name and command must not be empty",
+            ));
+        }
+        if !names.insert(check.name.trim().to_string()) {
+            return Err(PulseError::validation(
+                "verification_check_duplicate",
+                format!("handoff check names must be unique: {}", check.name.trim()),
+            ));
+        }
+    }
+    let mut acceptance_ids = std::collections::BTreeSet::new();
+    for proof in acceptance_proofs {
+        let id = proof.acceptance_id.trim();
+        if id.is_empty() {
+            return Err(PulseError::validation(
+                "handoff_acceptance_proof_invalid",
+                "handoff acceptance proof must name an acceptance id",
+            ));
+        }
+        if !acceptance_ids.insert(id.to_string()) {
+            return Err(PulseError::validation(
+                "handoff_acceptance_proof_duplicate",
+                format!("handoff acceptance proofs must be unique: {id}"),
+            ));
+        }
+        for check_name in &proof.check_names {
+            if !names.contains(check_name.trim()) {
+                return Err(PulseError::validation(
+                    "verification_acceptance_check_missing",
+                    format!("acceptance {id} references unknown check {check_name}"),
+                ));
+            }
+        }
+    }
+    Ok(())
 }
 
 pub fn validate_checks(

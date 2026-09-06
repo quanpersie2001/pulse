@@ -231,6 +231,12 @@ pub(crate) enum WorkCommand {
         changed_paths: Vec<String>,
         #[arg(long = "evidence-receipt")]
         evidence_receipt_ids: Vec<String>,
+        /// Claimed check as `name=command=exit_code`; the reviewer re-runs it.
+        #[arg(long = "check", value_parser = parse_check)]
+        checks: Vec<VerificationCheck>,
+        /// Claimed acceptance coverage as `AC-ID=check1,check2=receipt1,receipt2`.
+        #[arg(long = "proof", value_parser = parse_proof)]
+        proofs: Vec<AcceptanceProof>,
         /// Learning usage feedback as `LRN-001=helpful|not_needed|misleading`.
         #[arg(long = "learning-used", value_parser = parse_learning_used)]
         learning_used: Vec<(String, crate::execution::KnowledgeUsageOutcome)>,
@@ -660,6 +666,8 @@ pub(crate) fn handle(
             summary,
             changed_paths,
             evidence_receipt_ids,
+            checks,
+            proofs,
             learning_used,
             json,
         } => {
@@ -671,6 +679,8 @@ pub(crate) fn handle(
                 summary,
                 changed_paths,
                 evidence_receipt_ids,
+                checks,
+                acceptance_proofs: proofs,
                 learning_usage: learning_used
                     .into_iter()
                     .map(

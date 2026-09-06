@@ -854,11 +854,15 @@ impl JsonGraphStore {
                     "schema_version": 1,
                     "ticket_id": ticket_id,
                     "source_commit": crate::source::head_commit(&self.repo_root)?,
+                    "contract_revision": node.contract_revision,
                     "acceptance": acceptance_ids.into_iter().map(|id| json!({"id": id})).collect::<Vec<_>>(),
+                    // Claims to verify, never prose to trust: no worker
+                    // summary reaches the reviewer input (Decision 0012 §2).
                     "handoffs": handoffs.iter().map(|handoff| json!({
                         "handoff_id": handoff.handoff_id,
-                        "summary": handoff.summary,
                         "changed_paths": handoff.changed_paths,
+                        "checks": handoff.checks,
+                        "acceptance_proofs": handoff.acceptance_proofs,
                         "recorded_by": handoff.recorded_by,
                         "source_commit": handoff.source_commit,
                     })).collect::<Vec<_>>(),
@@ -866,6 +870,9 @@ impl JsonGraphStore {
                         "qa_checkpoint": proof_receipts(crate::evidence::model::ReceiptKind::QaCheckpoint),
                         "documentation_validation": proof_receipts(crate::evidence::model::ReceiptKind::DocumentationValidation),
                     },
+                    // Fixed until the verification profile carries `reviewers`
+                    // (Decision 0012 §5).
+                    "reviewers_required": 1,
                     "artifact_dir": "artifacts",
                 }))?)
             }
@@ -1583,9 +1590,16 @@ fn worker_prompt(
            --lease {lease_id} \\\n\
            --session {session_id} \\\n\
            --source-commit {source_commit} \\\n\
-           --summary \"<what changed and how you verified it>\" \\\n\
+           --summary \"<what changed, one line>\" \\\n\
            --changed-path src/example.ext \\\n\
+           --check \"<check name>=<the command you ran>=<exit code>\" \\\n\
+           --proof \"<AC id>=<check names, comma-separated>=\" \\\n\
            --learning-used LRN-<n>=helpful|not_needed|misleading\n\
+         \n\
+         One --check per command you actually ran; one --proof per\n\
+         acceptance id, naming the checks that prove it. Missing proofs are\n\
+         recorded, but close later requires the reviewer to cover every\n\
+         acceptance id, so map them all now.\n\
          \n\
          5. Your last output line must be exactly one JSON object with\n\
          nothing after it (no code fence, no trailing prose):\n\
@@ -1650,9 +1664,10 @@ fn reviewer_prompt(ticket_id: &str, source_commit: &str) -> String {
          ids, the handoff receipt(s) to review, and the artifact directory.\n\
          2. Review independently. Inspect the working-tree changes\n\
          (`git status --porcelain`, `git diff`), re-read the Ticket contract\n\
-         (`pulse work show {ticket_id} --json`), and re-run this repository's\n\
-         verification command yourself (see its AGENTS.md). Do not trust the\n\
-         worker summary.\n\
+         (`pulse work show {ticket_id} --json`), and re-run every command in\n\
+         the input's `checks[]` yourself: those entries are the worker's\n\
+         claims, not evidence - run each `command` and compare with the\n\
+         claimed `exit_code`.\n\
          3. Proof receipts are listed in the input under\n\
          `proof_receipts` (you can also confirm with `pulse evidence\n\
          receipt list`). A required-QA Ticket needs a passed\n\

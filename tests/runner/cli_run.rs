@@ -480,10 +480,10 @@ echo '{"status": "handed_off", "summary": "done"}'
     let outcome = run_outcome(&repo, &ticket_id);
     assert_eq!(outcome["status"], "handed_off");
 
-    let handoff_files = fs::read_dir(repo.path().join(".pulse/evidence/execution/handoffs"))
+    let handoffs = fs::read_dir(repo.path().join(".pulse/evidence/execution/handoffs"))
         .unwrap()
         .count();
-    assert_eq!(handoff_files, 1);
+    assert_eq!(handoffs, 1);
 
     install_worker_script(
         &repo,
@@ -500,6 +500,8 @@ echo '{"status": "handed_off", "summary": "done"}'
     let input: Value =
         serde_json::from_slice(&fs::read(run_dir.join("reviewer-input.json")).unwrap()).unwrap();
     assert_eq!(input["ticket_id"], ticket_id.as_str());
+    assert!(input["contract_revision"].is_u64());
+    assert_eq!(input["reviewers_required"], 1);
     let handoffs = input["handoffs"].as_array().unwrap();
     assert_eq!(handoffs.len(), 1);
     assert!(handoffs[0]["handoff_id"]
@@ -508,10 +510,89 @@ echo '{"status": "handed_off", "summary": "done"}'
         .starts_with("handoff_"));
     assert_eq!(handoffs[0]["recorded_by"], "agent:runner:worker");
     assert_eq!(handoffs[0]["changed_paths"].as_array().unwrap().len(), 0);
+    // Claims travel even when this worker recorded none; prose never does.
+    assert!(handoffs[0]["checks"].is_array());
+    assert!(handoffs[0]["acceptance_proofs"].is_array());
+    assert!(handoffs[0].get("summary").is_none());
     assert!(!input["acceptance"].as_array().unwrap().is_empty());
 
     let prompt = fs::read_to_string(run_dir.join("reviewer-prompt.md")).unwrap();
     assert!(prompt.contains(&format!("verify:{ticket_id}:<handoff_id>-a1 work verify")));
     assert!(prompt.contains("--actor agent:runner:reviewer"));
     assert!(prompt.contains("--disposition passed"));
+    // There is no worker summary left to distrust (Decision 0012 §2).
+    assert!(!prompt.contains("Do not trust"));
+}
+
+/// Decision 0012: `work handoff --check/--proof` records the worker's claim
+/// as machine-readable fields. A proof referencing an acceptance id the
+/// contract does not define is still recorded — coverage is the reviewer's
+/// close-gate duty, not the worker's.
+#[test]
+fn handoff_records_claims_without_enforcing_acceptance_coverage() {
+    let repo = TestRepo::from_fixture("minimal-service");
+    let ticket_id = setup_ready_ticket(&repo);
+    install_worker_script(
+        &repo,
+        r#"
+RUN_DIR="$(dirname "$1")"
+. "$RUN_DIR/worker-env"
+"$PULSE" work handoff --lease "$LEASE_ID" --session "$SESSION_ID" \
+  --source-commit "$SOURCE_COMMIT" --summary "did the work" \
+  --check "focused=node scripts/verify.mjs=0" \
+  --proof "AC-DOES-NOT-EXIST=focused=" \
+  --idempotency-key handoff-1 --json
+echo '{"status": "handed_off", "summary": "done"}'
+"#,
+    );
+    set_worker_command(&repo, "sh scripts/fake-worker.sh {input}");
+
+    let outcome = run_outcome(&repo, &ticket_id);
+    assert_eq!(outcome["status"], "handed_off");
+
+    let mut entries = fs::read_dir(repo.path().join(".pulse/evidence/execution/handoffs")).unwrap();
+    let receipt: Value =
+        serde_json::from_slice(&fs::read(entries.next().unwrap().unwrap().path()).unwrap())
+            .unwrap();
+    assert_eq!(receipt["checks"][0]["name"], "focused");
+    assert_eq!(receipt["checks"][0]["exit_code"], 0);
+    assert_eq!(
+        receipt["acceptance_proofs"][0]["acceptance_id"],
+        "AC-DOES-NOT-EXIST"
+    );
+}
+
+/// The one-line summary cap pushes AC mapping and check results into the
+/// structured claim fields instead of prose.
+#[test]
+fn handoff_rejects_a_summary_longer_than_300_chars() {
+    let repo = TestRepo::from_fixture("minimal-service");
+    let ticket_id = setup_ready_ticket(&repo);
+    install_worker_script(
+        &repo,
+        r#"
+RUN_DIR="$(dirname "$1")"
+. "$RUN_DIR/worker-env"
+LONG=$(awk 'BEGIN{s="";for(i=0;i<301;i++)s=s "x";print s}')
+if "$PULSE" work handoff --lease "$LEASE_ID" --session "$SESSION_ID" \
+  --source-commit "$SOURCE_COMMIT" --summary "$LONG" \
+  --idempotency-key handoff-long --json 2>/dev/null; then
+  echo '{"status": "handed_off", "summary": "lied"}'
+  exit 0
+fi
+echo '{"status": "blocked", "reason": "summary rejected"}'
+"#,
+    );
+    set_worker_command(&repo, "sh scripts/fake-worker.sh {input}");
+
+    let outcome = run_outcome(&repo, &ticket_id);
+    assert_eq!(outcome["status"], "blocked");
+    assert_eq!(outcome["summary"], "summary rejected");
+    assert!(
+        !repo
+            .path()
+            .join(".pulse/evidence/execution/handoffs")
+            .exists(),
+        "the over-long summary must not produce a handoff receipt"
+    );
 }

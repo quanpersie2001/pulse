@@ -22,6 +22,8 @@ RUN_DIR="$(dirname "$1")"
 . "$RUN_DIR/worker-env"
 "$PULSE" work handoff --lease "$LEASE_ID" --session "$SESSION_ID" \
   --source-commit "$SOURCE_COMMIT" --summary "did the work" \
+  --check "focused=node scripts/verify.mjs=0" \
+  --proof "AC-1=focused=" \
   --idempotency-key handoff-1 --json
 echo '{"status": "handed_off", "summary": "done"}'
 "#;
@@ -52,6 +54,52 @@ fn reviewer_outcome(repo: &TestRepo, ticket_id: &str) -> Value {
         String::from_utf8_lossy(&output.stderr)
     );
     serde_json::from_slice(&output.stdout).unwrap()
+}
+
+fn reviewer_input(repo: &TestRepo, ticket_id: &str) -> Value {
+    let path = repo
+        .path()
+        .join(".pulse/runtime/run")
+        .join(ticket_id)
+        .join("reviewer-input.json");
+    serde_json::from_slice(&fs::read(path).unwrap()).unwrap()
+}
+
+/// Decision 0012 §2: the reviewer input carries the worker's machine-readable
+/// claims (checks, acceptance proofs) — never the worker's prose. A verdict
+/// must be proven by re-running the checks, not by trusting a summary.
+#[test]
+fn reviewer_input_carries_claims_and_no_worker_prose() {
+    let repo = TestRepo::from_fixture("minimal-service");
+    let ticket_id = setup_ready_ticket(&repo);
+    verify_fixture(
+        &repo,
+        &ticket_id,
+        r#"echo '{"disposition": "pass", "acceptance": {"AC-1": "re-ran the verify command"}, "findings": []}'"#,
+    );
+    let out = reviewer_outcome(&repo, &ticket_id);
+    // The claim is well-formed but no verification receipt was recorded, so
+    // the run stays inconclusive; the input contract is what this test reads.
+    assert_eq!(out["status"], "inconclusive");
+
+    let input = reviewer_input(&repo, &ticket_id);
+    assert!(input["contract_revision"].is_u64());
+    assert_eq!(input["reviewers_required"], 1);
+    let handoff = &input["handoffs"][0];
+    assert!(
+        handoff.get("summary").is_none(),
+        "worker prose must not reach the reviewer input: {handoff}"
+    );
+    assert_eq!(handoff["checks"][0]["name"], "focused");
+    assert_eq!(handoff["checks"][0]["command"], "node scripts/verify.mjs");
+    assert_eq!(handoff["checks"][0]["exit_code"], 0);
+    assert_eq!(handoff["acceptance_proofs"][0]["acceptance_id"], "AC-1");
+    assert_eq!(
+        handoff["acceptance_proofs"][0]["check_names"]
+            .as_array()
+            .unwrap(),
+        &["focused".to_string()]
+    );
 }
 
 #[test]

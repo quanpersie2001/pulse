@@ -8,9 +8,10 @@ use std::path::{Path, PathBuf};
 use crate::canonical_json::{hash_bytes, to_canonical_bytes};
 use crate::event::{new_event_id, EventEnvelope};
 use crate::execution::{
-    validate_checks, AcceptanceProof, CloseReceipt, CloseTicketArgs, CompleteVerificationArgs,
-    HandoffReceipt, KnowledgeUsage, KnowledgeUsageOutcome, SubmitHandoffArgs, VerificationCheck,
-    VerificationDisposition, VerificationReceipt,
+    validate_checks, validate_handoff_claim, AcceptanceProof, CloseReceipt, CloseTicketArgs,
+    CompleteVerificationArgs, HandoffReceipt, KnowledgeUsage, KnowledgeUsageOutcome,
+    SubmitHandoffArgs, VerificationCheck, VerificationDisposition, VerificationReceipt,
+    MAX_HANDOFF_SUMMARY_CHARS,
 };
 use crate::graph::model::contract::{QaImpactPosture, Risk};
 use crate::graph::model::lifecycle::TransitionReason;
@@ -41,6 +42,17 @@ impl JsonGraphStore {
                 "typed handoff requires a summary",
             ));
         }
+        if args.summary.trim().chars().count() > MAX_HANDOFF_SUMMARY_CHARS {
+            return Err(PulseError::validation(
+                "handoff_summary_too_long",
+                format!(
+                    "handoff summary is one line of at most {MAX_HANDOFF_SUMMARY_CHARS} characters; put check results and acceptance mapping in --check/--proof"
+                ),
+            ));
+        }
+        normalize_handoff_checks(&mut args.checks);
+        normalize_acceptance_proofs(&mut args.acceptance_proofs);
+        validate_handoff_claim(&args.checks, &args.acceptance_proofs)?;
         for path in &args.changed_paths {
             crate::storage::paths::validate_relative_path(Path::new(path)).map_err(|_| {
                 PulseError::validation(
@@ -135,6 +147,8 @@ impl JsonGraphStore {
             summary: args.summary.trim().to_string(),
             changed_paths: args.changed_paths,
             evidence_receipt_ids: args.evidence_receipt_ids,
+            checks: args.checks,
+            acceptance_proofs: args.acceptance_proofs,
             knowledge_usage: {
                 // `injected` is observed from the packet committed with this
                 // lease, not from the worker's claim.
@@ -743,6 +757,15 @@ fn normalize_acceptance_proofs(proofs: &mut [AcceptanceProof]) {
         normalize_strings(&mut proof.evidence_receipt_ids);
     }
     proofs.sort_by(|left, right| left.acceptance_id.cmp(&right.acceptance_id));
+}
+
+/// Trim handoff check claims in place; order is preserved so the receipt
+/// shows the checks the way the worker declared them.
+fn normalize_handoff_checks(checks: &mut [VerificationCheck]) {
+    for check in checks.iter_mut() {
+        check.name = check.name.trim().to_string();
+        check.command = check.command.trim().to_string();
+    }
 }
 
 /// The checkout directory a proof's dirty identity is computed against: the

@@ -109,6 +109,8 @@ fn required_docs_close_fixture(mode: DocumentationReceiptMode) -> RequiredDocsCl
             changed_paths: vec!["docs/domain/reservation.md".to_string()],
             evidence_receipt_ids: vec![],
             learning_usage: Vec::new(),
+            checks: Vec::new(),
+            acceptance_proofs: Vec::new(),
 
             idempotency_key: "handoff-required-docs".to_string(),
         })
@@ -440,6 +442,8 @@ fn required_qa_checkpoint_opens_proof_close_only_with_current_case_coverage() {
             changed_paths: vec![],
             evidence_receipt_ids: vec![],
             learning_usage: Vec::new(),
+            checks: Vec::new(),
+            acceptance_proofs: Vec::new(),
 
             idempotency_key: "handoff-required-qa".to_string(),
         })
@@ -544,6 +548,8 @@ fn story_qualification_opens_covered_ticket_close_on_the_same_source() {
             changed_paths: vec![],
             evidence_receipt_ids: vec![],
             learning_usage: Vec::new(),
+            checks: Vec::new(),
+            acceptance_proofs: Vec::new(),
 
             idempotency_key: "handoff-story-qa".to_string(),
         })
@@ -719,6 +725,8 @@ fn zero_exit_check_without_receipt_keeps_ticket_nonterminal() {
             changed_paths: vec![],
             evidence_receipt_ids: vec![],
             learning_usage: Vec::new(),
+            checks: Vec::new(),
+            acceptance_proofs: Vec::new(),
 
             idempotency_key: "handoff-happy".to_string(),
         })
@@ -834,6 +842,8 @@ fn medium_risk_ticket_closes_with_the_same_proof_gates() {
             changed_paths: vec![],
             evidence_receipt_ids: vec![],
             learning_usage: Vec::new(),
+            checks: Vec::new(),
+            acceptance_proofs: Vec::new(),
 
             idempotency_key: "handoff-medium-risk".to_string(),
         })
@@ -912,6 +922,8 @@ fn high_risk_ticket_requires_a_human_closing_actor() {
             changed_paths: vec![],
             evidence_receipt_ids: vec![],
             learning_usage: Vec::new(),
+            checks: Vec::new(),
+            acceptance_proofs: Vec::new(),
 
             idempotency_key: "handoff-high-risk".to_string(),
         })
@@ -1006,6 +1018,8 @@ fn unauthorized_handoff_does_not_recover_pending_transaction() {
         changed_paths: vec![],
         evidence_receipt_ids: vec![],
         learning_usage: Vec::new(),
+        checks: Vec::new(),
+        acceptance_proofs: Vec::new(),
         idempotency_key: "unauthorized-handoff-pending-key".to_string(),
     };
     let crashing =
@@ -1048,6 +1062,8 @@ fn unauthorized_verification_does_not_recover_pending_transaction() {
             changed_paths: vec![],
             evidence_receipt_ids: vec![],
             learning_usage: Vec::new(),
+            checks: Vec::new(),
+            acceptance_proofs: Vec::new(),
 
             idempotency_key: "unauthorized-verification-handoff".to_string(),
         })
