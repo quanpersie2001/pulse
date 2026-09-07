@@ -50,7 +50,7 @@ target with rotating worker/reviewer agents — tracked in `PRODUCT.md` §8.
 | Graph queries | `pulse graph edge add\|validate\|export\|neighborhood\|affected-by` | Deterministic edge IDs, cycle checks |
 | Docs | `pulse docs register\|tags\|list\|show\|applicable\|search\|get\|tree\|index\|validate` | Eight-field registry, controlled tags, path/tag applicability, section-level search |
 | Evidence | `pulse evidence receipt record\|show\|verify`, `artifact put\|verify` | Immutable content-hashed receipts |
-| QA baseline | `pulse qa baseline\|resolve` | Parses the `pulse-qa` block in `works/<story>/qa.md` |
+| QA baseline | `pulse qa baseline\|resolve` | Parses the conventional headings of `works/<story>/qa.md`, including the optional `pulse-check` block; content hash per file and per case |
 | Knowledge | `pulse knowledge create\|capture\|show\|list\|edit\|validate\|promote\|applicable\|check` | Capture from a run, validate against evidence, promote by inserting the learning into a doc or `AGENTS.md`, applicability buckets shared with the packet; learnings carry a `scope` (`repository` by path/tag, `harness` via the runner prompt) |
 | Runner | `pulse run <role> --ticket <id>` | Lease, bootstrap prompt, configured command, proven outcome classification, artifact ingest, inconclusive receipts, deny-unless-`--isolation worktree`, resume after kill, qa `--scope story_close` |
 | Communication | `pulse events tail`, `pulse note` | Append-only event log with `--since`/`--ticket`/`--follow`; ticket-targeted notes surface in packets |

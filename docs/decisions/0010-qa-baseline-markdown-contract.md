@@ -3,7 +3,30 @@
 ## Status
 
 Accepted, 2026-09-06. Thay thế đoạn "Baseline" trong PRODUCT.md §5.5 và QA
-input trong §5.3.
+input trong §5.3. Implement 2026-09-07.
+
+Bốn điều chỉnh khi implement so với bản Accepted:
+
+1. `baseline_content_hash` là hash **byte nguyên văn** của `qa.md`, không phải
+   một dạng "canonical". Receipt `qa_checkpoint` content-bind đúng path đó và
+   `content_source_binding_codes` băm lại file trên đĩa để xác định
+   currentness; một hash chuẩn hoá sẽ không bao giờ khớp. Chỉ `case_hash` mới
+   chuẩn hoá (xuống dòng, khoảng trắng cuối dòng) như §Revision và hash mô tả.
+2. Giữ gate `qa_coverage_incomplete` (mọi risk khai báo phải được ít nhất một
+   case tham chiếu). Bảng §Trường tài liệu không nhắc lại nó, nhưng quyết định
+   này không lật nó và bỏ một gate im lặng thì tệ hơn giữ.
+3. `qa-input.json` mang **hai** trường posture: `posture` là posture của
+   baseline theo quyết định này (`automated`…`not_applicable`), `qa_posture`
+   là QA impact posture của Ticket (`required`, `none`,
+   `covered_by_story_close`, `unknown`) mà runner vẫn cần để báo
+   `not_applicable`. Hai khái niệm khác nhau, không gộp.
+4. Trong dogfood target, case của `examples/todolist` là surface `api` thuần
+   nên `pulse-check` gọi `node scripts/qa-case.mjs <CASE-ID>`: assertion miền
+   nằm trong script của repo, còn `qa-run.mjs` trở thành executor block
+   `pulse-check` hoàn toàn không biết case nào. Đó là cách đọc đúng của §"Case
+   không có `check` … trả `inconclusive`": runner script không đoán, và cũng
+   không cần bỏ những assertion in-process vốn tốt hơn argv cho một module
+   thuần.
 
 ## Context
 
