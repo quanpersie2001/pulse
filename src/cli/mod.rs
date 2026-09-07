@@ -46,7 +46,11 @@ pub fn run(cli: Cli) -> Result<(), PulseError> {
 
     let explicit_key = cli.idempotency_key.as_deref();
     match cli.command {
-        args::Command::Init { actor, json } => init::handle(&repo_root, actor.as_deref(), json),
+        args::Command::Init {
+            actor,
+            refresh,
+            json,
+        } => init::handle(&repo_root, actor.as_deref(), refresh, json),
         args::Command::Work { command } => work::handle(&store, command, explicit_key),
         args::Command::Docs { command } => docs::handle(&store, command),
         args::Command::Graph { command } => graph::handle(&store, command),

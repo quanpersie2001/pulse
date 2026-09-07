@@ -31,6 +31,11 @@ pub(crate) enum Command {
         /// `human:alice`). Defaults to the repository's Git user.name.
         #[arg(long)]
         actor: Option<String>,
+        /// Re-render the Pulse block in `AGENTS.md` for this CLI version.
+        /// Content outside the markers is never touched, and a hand-edited
+        /// block is reported rather than overwritten.
+        #[arg(long)]
+        refresh: bool,
         #[arg(long)]
         json: bool,
     },

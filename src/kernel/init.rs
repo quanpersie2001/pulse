@@ -13,6 +13,7 @@ use std::process::Command;
 
 use serde::{Deserialize, Serialize};
 
+use crate::kernel::guidance::GuidanceOutcome;
 use crate::storage::transaction::recover_prepared_transactions;
 use crate::storage::WriteGuard;
 use crate::{PulseError, Result};
@@ -60,6 +61,11 @@ pub(crate) struct RepositoryInitReport {
     pub created: Vec<String>,
     pub preserved: Vec<String>,
     pub proposed_ignore_entries: Vec<String>,
+    /// Guidance files whose Pulse-owned region was hand-edited and therefore
+    /// left untouched by `--refresh` (Decision 0009 §1: report, never
+    /// overwrite). Empty on a normal init.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub guidance_conflicts: Vec<String>,
 }
 
 /// Enroll a target repository into all current local-first Core domains.
@@ -76,6 +82,7 @@ pub(crate) struct RepositoryInitReport {
 pub(crate) fn initialize_repository(
     repo_root: &Path,
     actor: Option<&str>,
+    refresh: bool,
 ) -> Result<RepositoryInitReport> {
     let repo_root = crate::storage::paths::canonicalize_existing_dir(repo_root)?;
     let principal = initial_principal(&repo_root, actor)?;
@@ -125,9 +132,38 @@ pub(crate) fn initialize_repository(
     created.extend(authority.created);
     preserved.extend(authority.preserved);
 
+    // Guidance last: it is prose in the source plane, and writing it only
+    // after every canonical domain has enrolled keeps a domain conflict from
+    // leaving instructions behind for a repository Pulse did not enrol.
+    let mut guidance_conflicts = Vec::new();
+    let mut guidance_changed = false;
+    for (relative, outcome) in [
+        (
+            "AGENTS.md",
+            crate::kernel::guidance::write_agents_block(&repo_root, refresh)?,
+        ),
+        (
+            "PULSE.md",
+            crate::kernel::guidance::write_pulse_md(&repo_root)?,
+        ),
+    ] {
+        let path = repo_root.join(relative);
+        match outcome {
+            GuidanceOutcome::Written | GuidanceOutcome::Refreshed => {
+                guidance_changed = true;
+                created.push(path);
+            }
+            GuidanceOutcome::Preserved | GuidanceOutcome::Unchanged => preserved.push(path),
+            GuidanceOutcome::Modified => {
+                preserved.push(path);
+                guidance_conflicts.push(relative.to_string());
+            }
+        }
+    }
+
     let created = stable_relative_paths(&repo_root, created)?;
     let preserved = stable_relative_paths(&repo_root, preserved)?;
-    let status = if created.is_empty() && !authority.changed {
+    let status = if created.is_empty() && !authority.changed && !guidance_changed {
         RepositoryInitStatus::Unchanged
     } else {
         RepositoryInitStatus::Initialized
@@ -145,6 +181,7 @@ pub(crate) fn initialize_repository(
             .iter()
             .map(|entry| (*entry).to_string())
             .collect(),
+        guidance_conflicts,
     })
 }
 
@@ -272,6 +309,8 @@ fn preflight_managed_paths(repo_root: &Path) -> Result<()> {
         ".pulse/knowledge/manifest.json",
         ".pulse/policy/authority.json",
         ".pulse/runtime/locks/workgraph.lock",
+        "AGENTS.md",
+        "PULSE.md",
     ] {
         let path = repo_root.join(relative);
         let metadata = match fs::symlink_metadata(&path) {

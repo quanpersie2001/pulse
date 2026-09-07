@@ -8,6 +8,7 @@ pub mod communication;
 pub mod completion;
 pub mod documentation;
 pub mod frontier;
+pub(crate) mod guidance;
 pub(crate) mod init;
 pub mod lifecycle;
 pub mod packet;
