@@ -7,6 +7,7 @@ use std::time::Duration;
 
 use crate::cli::output::render;
 use crate::event::{read_events, EventEnvelope};
+use crate::kernel::communication::NoteKind;
 use crate::{JsonGraphStore, PulseError};
 
 pub(crate) fn handle_note(
@@ -14,13 +15,19 @@ pub(crate) fn handle_note(
     ticket: &str,
     message: &str,
     from: &str,
+    kind: NoteKind,
     json: bool,
 ) -> Result<(), PulseError> {
-    let note = store.record_note(ticket, message, from)?;
+    let note = store.record_note(ticket, message, from, kind)?;
     render(
         json,
         &note,
-        format!("note recorded for {} by {}", note.work_id, note.recorded_by),
+        format!(
+            "{} recorded for {} by {}",
+            note.kind.as_str(),
+            note.work_id,
+            note.recorded_by
+        ),
     )
 }
 

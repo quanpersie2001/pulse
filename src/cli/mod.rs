@@ -12,7 +12,7 @@ mod work;
 
 use clap::Parser;
 
-use self::args::{IsolationArg, RunScopeArg};
+use self::args::{IsolationArg, NoteKindArg, RunScopeArg};
 
 pub use args::Cli;
 pub use output::print_error;
@@ -57,8 +57,19 @@ pub fn run(cli: Cli) -> Result<(), PulseError> {
             work,
             message,
             from,
+            kind,
             json,
-        } => events::handle_note(&store, &work, &message, &from, json),
+        } => events::handle_note(
+            &store,
+            &work,
+            &message,
+            &from,
+            match kind {
+                NoteKindArg::Note => crate::kernel::communication::NoteKind::Note,
+                NoteKindArg::Friction => crate::kernel::communication::NoteKind::Friction,
+            },
+            json,
+        ),
         args::Command::Events {
             command:
                 args::EventsCommand::Tail {

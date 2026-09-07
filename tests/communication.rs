@@ -400,3 +400,76 @@ fn note_accepts_work_flag_alias_and_non_ticket_nodes() {
         .iter()
         .all(|event| event["payload"]["work_id"] == decision_id.as_str()));
 }
+
+/// Decision 0009 §4: a note carries a kind, and `friction` is the kind the
+/// close gate turns into a harness learning candidate. The default kind keeps
+/// the pre-0009 spelling so existing callers and readers are unaffected.
+#[test]
+fn note_kind_defaults_to_note_and_records_friction_when_asked() {
+    let repo = TestRepo::from_fixture("minimal-service");
+    let ticket_id = setup_ready_ticket(&repo);
+
+    let plain = repo.pulse_ok(&[
+        "note",
+        "--work",
+        &ticket_id,
+        "--message",
+        "Reviewer picked up the contract change",
+        "--from",
+        ACTOR,
+        "--json",
+    ]);
+    assert_eq!(plain["kind"], "note");
+
+    let friction = repo.pulse_ok(&[
+        "note",
+        "--work",
+        &ticket_id,
+        "--message",
+        "pulse work packet needed three tries to name the story",
+        "--from",
+        ACTOR,
+        "--kind",
+        "friction",
+        "--json",
+    ]);
+    assert_eq!(friction["kind"], "friction");
+    assert_eq!(friction["code"], "note_recorded");
+
+    // The kind is persisted in the event payload, which is what the close
+    // gate reads.
+    let tail = repo.pulse_ok(&["events", "tail", "--ticket", &ticket_id, "--json"]);
+    let kinds: Vec<&Value> = tail
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|event| event["event_type"] == "note.recorded")
+        .map(|event| &event["payload"]["kind"])
+        .collect();
+    assert_eq!(kinds, vec!["note", "friction"]);
+
+    // Both kinds still reach the packet: friction is additional routing, not
+    // a separate channel.
+    let packet = repo.pulse_ok(&["work", "packet", &ticket_id, "--json"]);
+    assert_eq!(packet["notes"].as_array().unwrap().len(), 2);
+}
+
+/// An unknown kind is rejected by clap rather than silently recorded as a
+/// plain note, so a typo cannot quietly drop friction on the floor.
+#[test]
+fn note_rejects_an_unknown_kind() {
+    let repo = TestRepo::from_fixture("minimal-service");
+    let ticket_id = setup_ready_ticket(&repo);
+
+    let out = repo.pulse(&[
+        "note",
+        "--work",
+        &ticket_id,
+        "--message",
+        "typo in the kind",
+        "--kind",
+        "frictoin",
+        "--json",
+    ]);
+    assert!(!out.status.success());
+}
