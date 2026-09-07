@@ -65,6 +65,7 @@ fn handoff_args(
         changed_paths: vec!["docs/domain/reservation.md".to_string()],
         evidence_receipt_ids,
         learning_usage: Vec::new(),
+        frictions: Vec::new(),
         checks: Vec::new(),
         acceptance_proofs: Vec::new(),
         idempotency_key: key.to_string(),

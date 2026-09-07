@@ -293,6 +293,10 @@ pub(crate) enum WorkCommand {
         /// Learning usage feedback as `LRN-001=helpful|not_needed|misleading`.
         #[arg(long = "learning-used", value_parser = parse_learning_used)]
         learning_used: Vec<(String, crate::execution::KnowledgeUsageOutcome)>,
+        /// Harness friction hit while running this Ticket; the close gate
+        /// turns each into a learning candidate (Decision 0009 §4).
+        #[arg(long = "friction")]
+        frictions: Vec<String>,
         #[arg(long)]
         json: bool,
     },
@@ -727,6 +731,7 @@ pub(crate) fn handle(
             checks,
             proofs,
             learning_used,
+            frictions,
             json,
         } => {
             let out = store.submit_execution_handoff(crate::execution::SubmitHandoffArgs {
@@ -748,6 +753,7 @@ pub(crate) fn handle(
                         },
                     )
                     .collect(),
+                frictions,
                 idempotency_key: explicit_key.unwrap_or_default().to_string(),
             })?;
             render(

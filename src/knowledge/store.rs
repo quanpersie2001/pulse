@@ -144,6 +144,56 @@ impl KnowledgeStore {
         ctx: OperationContext,
     ) -> PulseResult<MutationOutcome<Learning>> {
         let _guard = WriteGuard::acquire(&self.repo_root)?;
+        self.create_unlocked(draft, ctx)
+    }
+
+    /// Every learning whose provenance derives from `work_id`, while the
+    /// caller already holds the repository write guard.
+    ///
+    /// Companion to [`Self::create_unlocked`] for callers inside the fence:
+    /// the close gate uses it to avoid deriving a second candidate for
+    /// friction it already recorded (Decision 0009 §4). Returns an empty list
+    /// when the knowledge plane has never been bootstrapped.
+    ///
+    /// # Errors
+    ///
+    /// Returns an I/O error when the knowledge plane exists but cannot be
+    /// read; a damaged record is an error here, never a silent omission.
+    pub fn learnings_derived_from_unlocked(&self, work_id: &str) -> PulseResult<Vec<Learning>> {
+        if !self.repo_root.join(".pulse/knowledge/entries").exists() {
+            return Ok(Vec::new());
+        }
+        let (entries, relations) = load_records(&self.repo_root)?;
+        let derived: std::collections::BTreeSet<&str> = relations
+            .values()
+            .filter(|relation| relation.relation_type == RelationType::DerivedFrom)
+            .filter(|relation| relation.to.kind == EndpointKind::Work && relation.to.id == work_id)
+            .map(|relation| relation.from.id.as_str())
+            .collect();
+        Ok(entries
+            .into_values()
+            .filter(|entry| derived.contains(entry.id.as_str()))
+            .collect())
+    }
+
+    /// Create a learning while the caller already holds the repository write
+    /// guard.
+    ///
+    /// The guard is a non-reentrant flock, so a caller inside the fence —
+    /// notably the close gate deriving friction candidates (Decision 0009 §4)
+    /// — must use this instead of [`Self::create`], which would deadlock the
+    /// process against itself. Same contract as `create` in every other
+    /// respect.
+    ///
+    /// # Errors
+    ///
+    /// Propagates validation, provenance and transaction failures exactly as
+    /// [`Self::create`] does.
+    pub fn create_unlocked(
+        &self,
+        draft: LearningDraft,
+        ctx: OperationContext,
+    ) -> PulseResult<MutationOutcome<Learning>> {
         let manifest = bootstrap_unlocked(&self.repo_root)?.manifest;
         recover_prepared_transactions(&self.repo_root)?;
         let (entries, mut relations) = load_records(&self.repo_root)?;

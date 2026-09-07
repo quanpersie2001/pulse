@@ -123,6 +123,7 @@ fn required_docs_close_fixture(mode: DocumentationReceiptMode) -> RequiredDocsCl
             changed_paths: vec!["docs/domain/reservation.md".to_string()],
             evidence_receipt_ids: vec![worker_docs_receipt],
             learning_usage: Vec::new(),
+            frictions: Vec::new(),
             checks: Vec::new(),
             acceptance_proofs: Vec::new(),
 
@@ -457,6 +458,7 @@ fn required_qa_checkpoint_opens_proof_close_only_with_current_case_coverage() {
             changed_paths: vec![],
             evidence_receipt_ids: vec![],
             learning_usage: Vec::new(),
+            frictions: Vec::new(),
             checks: Vec::new(),
             acceptance_proofs: Vec::new(),
 
@@ -564,6 +566,7 @@ fn story_qualification_opens_covered_ticket_close_on_the_same_source() {
             changed_paths: vec![],
             evidence_receipt_ids: vec![],
             learning_usage: Vec::new(),
+            frictions: Vec::new(),
             checks: Vec::new(),
             acceptance_proofs: Vec::new(),
 
@@ -742,6 +745,7 @@ fn zero_exit_check_without_receipt_keeps_ticket_nonterminal() {
             changed_paths: vec![],
             evidence_receipt_ids: vec![],
             learning_usage: Vec::new(),
+            frictions: Vec::new(),
             checks: Vec::new(),
             acceptance_proofs: Vec::new(),
 
@@ -861,6 +865,7 @@ fn medium_risk_ticket_closes_with_the_same_proof_gates() {
             changed_paths: vec![],
             evidence_receipt_ids: vec![],
             learning_usage: Vec::new(),
+            frictions: Vec::new(),
             checks: Vec::new(),
             acceptance_proofs: Vec::new(),
 
@@ -942,6 +947,7 @@ fn high_risk_ticket_requires_a_human_closing_actor() {
             changed_paths: vec![],
             evidence_receipt_ids: vec![],
             learning_usage: Vec::new(),
+            frictions: Vec::new(),
             checks: Vec::new(),
             acceptance_proofs: Vec::new(),
 
@@ -1039,6 +1045,7 @@ fn unauthorized_handoff_does_not_recover_pending_transaction() {
         changed_paths: vec![],
         evidence_receipt_ids: vec![],
         learning_usage: Vec::new(),
+        frictions: Vec::new(),
         checks: Vec::new(),
         acceptance_proofs: Vec::new(),
         idempotency_key: "unauthorized-handoff-pending-key".to_string(),
@@ -1083,6 +1090,7 @@ fn unauthorized_verification_does_not_recover_pending_transaction() {
             changed_paths: vec![],
             evidence_receipt_ids: vec![],
             learning_usage: Vec::new(),
+            frictions: Vec::new(),
             checks: Vec::new(),
             acceptance_proofs: Vec::new(),
 
@@ -1763,6 +1771,7 @@ fn close_gate_counts_distinct_reviewer_actors_from_the_profile() {
             changed_paths: vec![],
             evidence_receipt_ids: vec![],
             learning_usage: Vec::new(),
+            frictions: Vec::new(),
             checks: Vec::new(),
             acceptance_proofs: Vec::new(),
             idempotency_key: "handoff-two-reviewers".to_string(),
@@ -1866,6 +1875,7 @@ fn close_anchor_is_deterministic_under_duplicate_passed_verifications() {
             changed_paths: vec![],
             evidence_receipt_ids: vec![],
             learning_usage: Vec::new(),
+            frictions: Vec::new(),
             checks: Vec::new(),
             acceptance_proofs: Vec::new(),
             idempotency_key: "handoff-duplicate-verify".to_string(),
@@ -1945,6 +1955,7 @@ fn rework_dispatch_releases_stale_lease_and_rebuilds_packet_with_observations() 
             changed_paths: vec![],
             evidence_receipt_ids: vec![],
             learning_usage: Vec::new(),
+            frictions: Vec::new(),
             checks: vec![VerificationCheck {
                 name: "focused".to_string(),
                 command: "node scripts/verify.mjs".to_string(),
@@ -2013,4 +2024,225 @@ fn rework_dispatch_releases_stale_lease_and_rebuilds_packet_with_observations() 
         store.show_node(&ticket_id).unwrap().status,
         NodeStatus::Active
     );
+}
+
+/// Decision 0009 §4 fixture: run a Ticket to `done`, optionally reporting
+/// friction as notes (`pulse note --kind friction`) and as handoff receipt
+/// entries (`work handoff --friction`). Returns the store and Ticket so the
+/// caller can inspect what the close gate derived.
+struct FrictionCloseFixture {
+    _repo: TestRepo,
+    store: JsonGraphStore,
+    ticket_id: String,
+    source_commit: String,
+    verification_id: String,
+}
+
+fn close_with_friction(
+    key: &str,
+    notes: &[&str],
+    handoff_frictions: &[&str],
+) -> FrictionCloseFixture {
+    let repo = TestRepo::from_fixture("minimal-service");
+    let store = JsonGraphStore::new(repo.path());
+    bootstrap_repo(&repo, &store);
+    write_policy(repo.path(), &["work.assignment.release", "note"]);
+    add_reviewer_policy(repo.path());
+    let ticket_id = setup_ready_ticket(repo.path(), &store);
+
+    for note in notes {
+        store
+            .record_note(
+                &ticket_id,
+                note,
+                "human:tester",
+                pulse::kernel::communication::NoteKind::Friction,
+            )
+            .unwrap();
+    }
+
+    let reserved = reserve(&store, &ticket_id, &format!("reservation-{key}"));
+    let active = store
+        .activate_reservation(ActivateReservationArgs {
+            lease_id: reserved.reservation.lease_id,
+            actor: "agent:tester".to_string(),
+            runtime_binding: binding(),
+            acknowledgement: acknowledgement(&reserved.reservation.packet_fingerprint),
+        })
+        .unwrap();
+    let handoff = store
+        .submit_execution_handoff(SubmitHandoffArgs {
+            lease_id: active.lease_id,
+            actor: "agent:tester".to_string(),
+            session_id: "ses_test".to_string(),
+            source_commit: active.source.commit,
+            summary: "Handoff reporting harness friction.".to_string(),
+            changed_paths: vec![],
+            evidence_receipt_ids: vec![],
+            learning_usage: Vec::new(),
+            frictions: handoff_frictions.iter().map(|f| f.to_string()).collect(),
+            checks: Vec::new(),
+            acceptance_proofs: Vec::new(),
+            idempotency_key: format!("handoff-{key}"),
+        })
+        .unwrap();
+    let verification = store
+        .complete_execution_verification(CompleteVerificationArgs {
+            handoff_id: handoff.handoff_id,
+            actor: "human:reviewer".to_string(),
+            source_commit: handoff.source_commit.clone(),
+            disposition: VerificationDisposition::Passed,
+            summary: "Independent verification passed.".to_string(),
+            checks: vec![VerificationCheck {
+                name: "focused".to_string(),
+                command: "true".to_string(),
+                exit_code: 0,
+                artifact_ids: vec![],
+            }],
+            acceptance_proofs: acceptance_proofs("focused"),
+            findings: Vec::new(),
+            idempotency_key: format!("verification-{key}"),
+        })
+        .unwrap();
+    store
+        .close_execution_ticket_for_ticket(
+            &ticket_id,
+            "human:reviewer".to_string(),
+            handoff.source_commit.clone(),
+            "Close deriving friction candidates.".to_string(),
+            format!("close-{key}"),
+        )
+        .unwrap();
+
+    FrictionCloseFixture {
+        _repo: repo,
+        store,
+        ticket_id,
+        source_commit: handoff.source_commit,
+        verification_id: verification.verification_id,
+    }
+}
+
+fn derived_learnings(fixture: &FrictionCloseFixture) -> Vec<pulse::knowledge::model::Learning> {
+    let knowledge = pulse::knowledge::store::KnowledgeStore::new(fixture.store.repo_root());
+    let mut learnings = knowledge
+        .learnings_derived_from_unlocked(&fixture.ticket_id)
+        .unwrap();
+    learnings.sort_by(|left, right| left.id.cmp(&right.id));
+    learnings
+}
+
+#[test]
+fn close_turns_friction_notes_into_harness_learning_candidates() {
+    let fixture = close_with_friction(
+        "friction-notes",
+        &[
+            "pulse work packet needed three tries to name the story",
+            "the ready gate error code did not say which section was missing",
+        ],
+        &[],
+    );
+
+    assert_eq!(
+        fixture.store.show_node(&fixture.ticket_id).unwrap().status,
+        NodeStatus::Done
+    );
+
+    let learnings = derived_learnings(&fixture);
+    assert_eq!(learnings.len(), 2);
+    for learning in &learnings {
+        assert_eq!(
+            learning.status,
+            pulse::knowledge::model::LearningStatus::Candidate
+        );
+        assert_eq!(
+            learning.scope,
+            pulse::knowledge::model::LearningScope::Harness
+        );
+        // Ratchet is not usable for a derived candidate: it would require
+        // guidance.required_checks, which the close gate cannot invent.
+        assert_eq!(
+            learning.kind,
+            pulse::knowledge::model::LearningKind::ProcessInsight
+        );
+    }
+    let summaries: Vec<&str> = learnings.iter().map(|l| l.summary.as_str()).collect();
+    assert!(summaries.contains(&"pulse work packet needed three tries to name the story"));
+    assert!(summaries.contains(&"the ready gate error code did not say which section was missing"));
+}
+
+#[test]
+fn close_turns_handoff_friction_into_harness_learning_candidates() {
+    let fixture = close_with_friction(
+        "friction-handoff",
+        &[],
+        &["work handoff refused --check until the command was quoted twice"],
+    );
+
+    let learnings = derived_learnings(&fixture);
+    assert_eq!(learnings.len(), 1);
+    assert_eq!(
+        learnings[0].summary,
+        "work handoff refused --check until the command was quoted twice"
+    );
+    assert_eq!(
+        learnings[0].scope,
+        pulse::knowledge::model::LearningScope::Harness
+    );
+}
+
+#[test]
+fn close_without_friction_derives_no_learning() {
+    let fixture = close_with_friction("friction-none", &[], &[]);
+    assert!(derived_learnings(&fixture).is_empty());
+}
+
+/// The close gate derives candidates after its own transaction commits, so a
+/// replay must re-derive rather than skip — otherwise a derivation failure
+/// would be unrecoverable. Replay must also not duplicate.
+#[test]
+fn close_replay_does_not_duplicate_friction_candidates() {
+    let fixture = close_with_friction(
+        "friction-replay",
+        &["the packet omitted the story brief"],
+        &[],
+    );
+    assert_eq!(derived_learnings(&fixture).len(), 1);
+
+    // Same idempotency key and inputs: the replay path returns the existing
+    // receipt and re-runs derivation as a no-op.
+    let replayed = fixture
+        .store
+        .close_execution_ticket(CloseTicketArgs {
+            verification_id: fixture.verification_id.clone(),
+            actor: "human:reviewer".to_string(),
+            source_commit: fixture.source_commit.clone(),
+            summary: "Close deriving friction candidates.".to_string(),
+            idempotency_key: "close-friction-replay".to_string(),
+        })
+        .unwrap();
+    assert_eq!(replayed.ticket_id, fixture.ticket_id);
+    assert_eq!(derived_learnings(&fixture).len(), 1);
+}
+
+/// Notes and handoff friction are two surfaces onto one mechanism: the gate
+/// reads both, and a report that arrives twice is recorded once.
+#[test]
+fn close_unions_note_and_handoff_friction_without_duplicating() {
+    let fixture = close_with_friction(
+        "friction-union",
+        &["docs validate needed an explicit --record every run"],
+        &[
+            "docs validate needed an explicit --record every run",
+            "run reviewer could not find the qa baseline",
+        ],
+    );
+
+    let summaries: Vec<String> = derived_learnings(&fixture)
+        .into_iter()
+        .map(|learning| learning.summary)
+        .collect();
+    assert_eq!(summaries.len(), 2);
+    assert!(summaries.contains(&"docs validate needed an explicit --record every run".to_string()));
+    assert!(summaries.contains(&"run reviewer could not find the qa baseline".to_string()));
 }

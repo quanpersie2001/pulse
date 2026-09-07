@@ -18,6 +18,13 @@ use crate::graph::model::lifecycle::TransitionReason;
 use crate::graph::model::node::{DocumentationImpactPosture, Node, NodeStatus};
 use crate::graph::store::JsonGraphStore;
 use crate::identity::actor::ActorKind;
+use crate::kernel::communication::{list_friction_for_ticket, MAX_NOTE_CHARS};
+use crate::knowledge::model::{
+    Applicability, Guidance, LearningDraft, LearningKind, LearningScope, ProvenanceTargetDraft,
+    Severity,
+};
+use crate::knowledge::relation::{EndpointKind, RelationType};
+use crate::knowledge::store::{KnowledgeStore, OperationContext};
 use crate::reservation::ReservationState;
 use crate::storage::transaction::{
     commit_prepared_multi_target_transaction, new_transaction_id, prepare_multi_target_transaction,
@@ -59,6 +66,7 @@ impl JsonGraphStore {
             &mut args.acceptance_proofs,
         )?;
         validate_handoff_claim(&args.checks, &args.acceptance_proofs)?;
+        normalize_frictions(&self.repo_root, &mut args.frictions)?;
         for path in &args.changed_paths {
             crate::storage::paths::validate_relative_path(Path::new(path)).map_err(|_| {
                 PulseError::validation(
@@ -184,6 +192,7 @@ impl JsonGraphStore {
                     })
                     .collect()
             },
+            frictions: args.frictions,
             recorded_by: args.actor.clone(),
             recorded_at: Utc::now().to_rfc3339(),
             handoff_fingerprint: String::new(),
@@ -550,6 +559,12 @@ impl JsonGraphStore {
                     "close idempotency key was already used with different inputs",
                 ));
             }
+            // Self-heal: derivation runs after the close transaction commits,
+            // so a failure there would otherwise be unrecoverable — this
+            // replay path is the only way back in once the receipt exists.
+            // Derivation is idempotent, so a replay of a healthy close is a
+            // no-op.
+            self.derive_friction_candidates_unlocked(&existing, &args.actor)?;
             return Ok(existing);
         }
         let verification = load_verification(&self.repo_root, &args.verification_id)?;
@@ -700,6 +715,12 @@ impl JsonGraphStore {
             }),
             self.failpoint,
         )?;
+        // Decision 0009 §4: friction reported while running the Ticket
+        // becomes a harness learning candidate. This runs after the close
+        // transaction rather than inside it, so a derivation failure leaves
+        // the close durable; the replay path above re-derives on the next
+        // `work close` with the same key.
+        self.derive_friction_candidates_unlocked(&close, &args.actor)?;
         // Terminal Ticket: reclaim the Pulse-owned worktree, if any. The
         // guard only removes registered worktrees under the Pulse root.
         let _ = crate::kernel::run::cleanup_ticket_worktree(&self.repo_root, &close.ticket_id);
@@ -710,6 +731,126 @@ impl JsonGraphStore {
         self.release_reservation_under_lock(&close.lease_id, &args.actor, "ticket closed")?;
         Ok(close)
     }
+
+    /// Turn every friction report on a closed Ticket into a learning
+    /// `candidate` with scope `harness` (Decision 0009 §4).
+    ///
+    /// Friction arrives from two places: `pulse note --kind friction` events
+    /// and the `frictions` field of the handoff receipt (`work handoff
+    /// --friction`). Both are read here so the close gate has one behaviour
+    /// regardless of which surface the worker used.
+    ///
+    /// Idempotent: friction whose text already backs a learning derived from
+    /// this Ticket is skipped, so re-running a close never duplicates a
+    /// candidate. Callers must already hold the repository write guard.
+    ///
+    /// This stops at `candidate` by design. Promotion to `validated` requires
+    /// a later Ticket recording `knowledge_usage: helpful`, which is not this
+    /// gate's business.
+    ///
+    /// # Errors
+    ///
+    /// Propagates knowledge-store validation and transaction failures. The
+    /// caller has already committed the close, so an error here means the
+    /// Ticket is closed and the candidates are missing; re-running `work
+    /// close` with the same idempotency key re-derives them.
+    fn derive_friction_candidates_unlocked(&self, close: &CloseReceipt, actor: &str) -> Result<()> {
+        let mut frictions = list_friction_for_ticket(&self.repo_root, &close.ticket_id);
+        if let Ok(handoff) = load_handoff(&self.repo_root, &close.handoff_id) {
+            frictions.extend(handoff.frictions);
+        }
+        if frictions.is_empty() {
+            return Ok(());
+        }
+
+        let knowledge = KnowledgeStore::new(&self.repo_root);
+        // Seeded from what is already stored so a replay is a no-op, and
+        // extended as we go so one report reaching the gate through both a
+        // note and the handoff receipt still yields a single candidate.
+        let mut already_recorded: std::collections::BTreeSet<String> = knowledge
+            .learnings_derived_from_unlocked(&close.ticket_id)?
+            .into_iter()
+            .map(|entry| entry.summary)
+            .collect();
+
+        // Provenance pins the node revision the close produced. Validation
+        // requires the endpoint revision to match the node's current one, and
+        // `done` is terminal, so this stays true on the replay path too.
+        for friction in frictions {
+            if !already_recorded.insert(friction.clone()) {
+                continue;
+            }
+            knowledge.create_unlocked(
+                friction_draft(&close.ticket_id, close.resulting_revision, friction),
+                OperationContext {
+                    actor: actor.to_string(),
+                    now: Utc::now(),
+                },
+            )?;
+        }
+        Ok(())
+    }
+}
+
+/// Placeholder guidance for an automatically derived friction candidate.
+/// Deriving real guidance is the ratchet's job, not the close gate's.
+const FRICTION_GUIDANCE: &str =
+    "Triage this friction with pulse-ratchet: name the earliest gap, then make one intervention at its owner.";
+
+/// Shape one friction report into a harness learning candidate.
+///
+/// `kind` is `ProcessInsight` rather than `Ratchet` because a `Ratchet`
+/// learning must carry `guidance.required_checks` and an automatically
+/// derived report has no check to name. `applicability.signals` is
+/// load-bearing, not decoration: validation rejects a candidate without both a
+/// positive and a concrete applicability dimension, and `signals` is the only
+/// concrete one this gate can populate honestly.
+///
+/// Guidance is the one field this gate cannot infer — a friction report says
+/// what hurt, not what future work should do — but validation requires at
+/// least one item. It therefore states the candidate's real status: raw
+/// material awaiting `pulse-ratchet` triage. That text never reaches a worker
+/// prompt, because `candidate` learnings are not injected (PRODUCT §5).
+fn friction_draft(ticket_id: &str, revision: u64, friction: String) -> LearningDraft {
+    LearningDraft {
+        title: friction_title(&friction),
+        kind: LearningKind::ProcessInsight,
+        scope: Some(LearningScope::Harness),
+        severity: Severity::Low,
+        summary: friction.clone(),
+        guidance: Guidance {
+            r#do: vec![FRICTION_GUIDANCE.to_string()],
+            ..Guidance::default()
+        },
+        applicability: Applicability {
+            signals: vec!["harness_friction".to_string()],
+            ..Applicability::default()
+        },
+        provenance_targets: vec![ProvenanceTargetDraft {
+            relation: RelationType::DerivedFrom,
+            kind: EndpointKind::Work,
+            id: ticket_id.to_string(),
+            revision: Some(revision),
+            content_hash: None,
+        }],
+        source_commits: Vec::new(),
+        routing: None,
+        promotion: None,
+        freshness: None,
+        trust: None,
+        content: None,
+    }
+}
+
+/// First line of a friction report, bounded for use as a learning title.
+fn friction_title(friction: &str) -> String {
+    const MAX_TITLE_CHARS: usize = 120;
+    let first_line = friction.lines().next().unwrap_or(friction).trim();
+    if first_line.chars().count() <= MAX_TITLE_CHARS {
+        return first_line.to_string();
+    }
+    let truncated: String = first_line.chars().take(MAX_TITLE_CHARS - 1).collect();
+    format!("{truncated}…")
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1435,6 +1576,33 @@ fn authorize(repo_root: &Path, actor: &str, grant: &str) -> Result<()> {
     let report = crate::policy::load_authority_policy(repo_root)?;
     let principal = crate::policy::parse_actor(actor);
     crate::policy::authorize(&report, &principal, &[grant])
+}
+
+/// Trim, drop empties, redact and bound worker-reported friction.
+///
+/// Friction is tracked-plane text that reaches a learning summary, so it gets
+/// the same treatment `record_note` gives a note (Decision 0012 §4): in-repo
+/// absolute paths rewritten, secret-shaped strings refused, length bounded by
+/// [`MAX_NOTE_CHARS`]. Order is preserved and duplicates are kept — unlike
+/// `normalize_strings`, two workers reporting the same friction twice is a
+/// signal, not noise to collapse.
+///
+/// # Errors
+///
+/// Returns `handoff_friction_too_long` past [`MAX_NOTE_CHARS`], or the
+/// redaction error when the text looks like a secret.
+fn normalize_frictions(repo_root: &Path, frictions: &mut Vec<String>) -> Result<()> {
+    frictions.retain(|value| !value.trim().is_empty());
+    for friction in frictions.iter_mut() {
+        *friction = crate::evidence::redaction::clean_text(repo_root, "friction", friction.trim())?;
+        if friction.chars().count() > MAX_NOTE_CHARS {
+            return Err(PulseError::validation(
+                "handoff_friction_too_long",
+                format!("handoff friction must stay within {MAX_NOTE_CHARS} characters"),
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn normalize_strings(values: &mut Vec<String>) {

@@ -52,6 +52,18 @@ pub struct HandoffReceipt {
     /// Evolution note: omitted from canonical form when empty (see `checks`).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub knowledge_usage: Vec<KnowledgeUsage>,
+    /// Harness friction reported by the worker at handoff (Decision 0009 §4).
+    /// The close gate turns each entry into a learning `candidate` with scope
+    /// `harness`, exactly as it does for `--kind friction` notes.
+    ///
+    /// Friction rides in the receipt rather than the event log because the
+    /// handoff already holds the repository write guard: recording a note
+    /// would re-enter it through `show_node` and deadlock. The receipt also
+    /// makes friction atomic with the handoff and idempotent under replay.
+    ///
+    /// Evolution note: omitted from canonical form when empty (see `checks`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub frictions: Vec<String>,
     pub recorded_by: String,
     pub recorded_at: String,
     pub handoff_fingerprint: String,
@@ -211,6 +223,8 @@ pub struct SubmitHandoffArgs {
     pub acceptance_proofs: Vec<AcceptanceProof>,
     /// How the worker used the learnings injected into its packet.
     pub learning_usage: Vec<KnowledgeUsageClaim>,
+    /// Harness friction the worker hit while running this Ticket.
+    pub frictions: Vec<String>,
     pub idempotency_key: String,
 }
 
