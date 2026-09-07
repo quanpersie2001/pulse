@@ -7,7 +7,7 @@
   "id": "evt_01M1TQK1A0TGK1M7DJ5ZBGGVMZ",
   "occurred_at": "2026-09-06T06:48:13.376396Z",
   "payload": {
-    "receipt_hash": "sha256:46d18ab8057c03c933987e00876703081d2a37204847c8782f8ea4db8876cfc4",
+    "receipt_hash": "sha256:816313e2b3b02a34321fbf059aeb4e87f165b0d62118c39a2ceb18f41ccb3115",
     "receipt_id": "rcpt_01M1TQK18NY5JGP8DVBEDM20KT",
     "receipt_kind": "qa_checkpoint",
     "result": "passed",

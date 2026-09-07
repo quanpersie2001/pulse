@@ -13,7 +13,7 @@
     "content": [
       {
         "path": "works/ST-001/qa.md",
-        "sha256": "sha256:d4587c8546445c99c658e4869828bb131a72a146461341a1006dc2de0e976125"
+        "sha256": "sha256:06e7766f4b800ebd7426fd4fca2a5ff696aeb31a8cebd456381d4c70d08f6608"
       }
     ],
     "source": {
@@ -26,17 +26,16 @@
   "id": "rcpt_01M1TQK18NY5JGP8DVBEDM20KT",
   "kind": "qa_checkpoint",
   "payload": {
-    "baseline_content_hash": "sha256:d4587c8546445c99c658e4869828bb131a72a146461341a1006dc2de0e976125",
-    "baseline_revision": 1,
+    "baseline_content_hash": "sha256:06e7766f4b800ebd7426fd4fca2a5ff696aeb31a8cebd456381d4c70d08f6608",
     "cases": [
       {
+        "case_hash": "sha256:148d32a3d2b9c2249bfad3503ebb1d3d90707b1a77802c4391086cd52b98f6ea",
         "case_id": "QA-001",
-        "case_revision": 1,
         "outcome": "passed"
       },
       {
+        "case_hash": "sha256:4c42ca0af9beb11ad62497eaf34b21e6b7073db1e71d35e6013c31a880c96849",
         "case_id": "QA-002",
-        "case_revision": 1,
         "outcome": "passed"
       }
     ],
