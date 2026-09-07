@@ -33,13 +33,14 @@ The full product definition, target design and golden path are in
 ## Status
 
 v0.1.0. The golden path from `PRODUCT.md` §7 has run for real on
-`examples/todolist/`: two Tickets were closed on evidence receipts by real
+the Track B dogfood target (removed 2026-09-07, tag `dogfood/track-b-final`):
+two Tickets were closed on evidence receipts by real
 worker/reviewer agents, and the completion Story was closed on a
-`story_close` QA qualification; see `examples/todolist/works/ST-001/` for the
-run log.
+`story_close` QA qualification. The friction that round produced is in
+[`docs/dogfood-friction-track-b.md`](docs/dogfood-friction-track-b.md).
 
-Remaining pre-1.0 work is real-world hardening — more Tickets on the dogfood
-target with rotating worker/reviewer agents — tracked in `PRODUCT.md` §8.
+No dogfood target is checked in right now, so Pulse currently runs for real
+nowhere. Remaining pre-1.0 work is tracked in `PRODUCT.md` §8.
 
 ## What works today
 

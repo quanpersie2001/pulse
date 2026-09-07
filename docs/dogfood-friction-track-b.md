@@ -1,8 +1,38 @@
-# Friction log — Track B dogfood
+# Friction log — Track B dogfood (archived)
 
 Every entry is a real friction hit while running Tickets TK-003..TK-008
 through Pulse. One line each: what hurt, where, and what would fix it.
-Feeds the v0.2 backlog (PRODUCT.md §11) after the round.
+
+## What this file is, and is not
+
+This is **not** the `friction` mechanism Pulse designs. That one is
+`pulse note --kind friction`: a note in the target repo's `.pulse/events/`,
+which the close gate turns into a `harness`-scoped learning, promoted back
+into that repo's own `AGENTS.md` / `PULSE.md` / `runners.json`. It is a
+**repo-local** loop — nothing in it ever reaches Pulse the tool, and
+`PRODUCT.md` describes no channel that would. `--kind friction` is also still
+unimplemented (`PRODUCT.md` §8 row 5.7).
+
+This file was the hand-written stand-in for it, kept at
+`examples/todolist/works/friction.md` during Track B. Two consequences worth
+knowing before reading:
+
+1. **It mixes two kinds of entry.** Most are defects in Pulse core — `work
+   sync`, `list_receipts`, `close_source_stale`, CLI naming — fixable only by
+   changing Pulse, which is why the log lives in this repository now. A
+   minority are genuine harness friction of the dogfood target, fixable by a
+   line of guidance (`close-story` requires a clean tree but no doc sequences
+   it; the worker prompt never mentioned the docs receipt). Only the second
+   kind is what Pulse means by "friction".
+2. **Its location caused one of its own entries.** A tracked prose file under
+   the target's `works/` sits in the source plane, so it is inside the dirty
+   fence; `.pulse/events/` is not (`src/source.rs::is_pulse_metadata_path`).
+   Editing it between verification and close refused the close with
+   `close_source_stale`. The designed note mechanism would never have done
+   that.
+
+The dogfood target it came from was removed; recover it with
+`git checkout dogfood/track-b-final -- examples/todolist`.
 
 ## 2026-09-06 (shaping phase)
 

@@ -23,10 +23,15 @@ Do not add features until the golden path in `PRODUCT.md` §7 runs for real.
   `--repo-root .` here. The legacy Node-era `.pulse/workgraph/items.jsonl`,
   `schema.json` and `.pulse/docs/retrieval-evals/` at the root were deleted;
   a tracked `.pulse/` at the root is not evidence of self-hosting.
-- `examples/todolist/` is the **dogfood target**: a small app inside this Git
-  repository where Pulse is run for real. Its `.pulse/` and `works/` are
-  tracked; its `runtime/` and `cache/` are ignored. Run Pulse there with
-  `--repo-root examples/todolist`.
+- **There is currently no dogfood target.** `examples/todolist/` was removed
+  on 2026-09-07: every run it hosted exercised Pulse without the skill surface
+  Decision 0009 specifies, so its friction data mixed "a layer is missing"
+  with "the design is wrong". Recover it with
+  `git checkout dogfood/track-b-final -- examples/todolist`; its friction log
+  survives at [`docs/dogfood-friction-track-b.md`](docs/dogfood-friction-track-b.md).
+  Until a new target exists, Pulse runs for real nowhere, and the golden path
+  gate in `PRODUCT.md` §7 has no way to be satisfied — see the note there
+  before adding features.
 - `tests/fixtures/target-repos/<fixture>/` are **immutable test inputs**.
   Tests copy them out through `tests/common/fixture_repo.rs::TestRepo` and run
   Pulse against the temporary copy. Never run Pulse against a fixture in place

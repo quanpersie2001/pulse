@@ -1971,7 +1971,8 @@ pub const WORKTREE_MARKER_SCHEMA_VERSION: u32 = 1;
 ///
 /// `state_repo_root` is absolute and is the whole point of the file: the Pulse
 /// repository root can be a subdirectory of the enclosing Git repository
-/// (`examples/todolist` is the live case), so `git rev-parse --git-common-dir`
+/// (the Track B dogfood target was the live case), so
+/// `git rev-parse --git-common-dir`
 /// alone cannot recover it. Git corroborates the marker; it does not replace
 /// it.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

@@ -1,7 +1,0 @@
-{
-  "content_root": "../../knowledge/learnings",
-  "id_pattern": "^LRN-[0-9]{3,}$",
-  "projection_schema_version": 1,
-  "repository_id": "repo_01M1RWXYDW6Q0WT9J0NMA466BH",
-  "schema_version": 1
-}

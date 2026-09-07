@@ -12,7 +12,9 @@ agents. See [`PRODUCT.md`](PRODUCT.md) for scope and target design, and
 - `AGENTS.md`, `README.md`, this file: repository operating contracts. They
   describe only what has code and tests.
 - `design/archive/`: historical proposals and retired design. Not a contract.
-- `examples/todolist/`: dogfood target repository; Pulse runs there for real.
+- No dogfood target is checked in right now; `examples/todolist/` was removed
+  on 2026-09-07 (tag `dogfood/track-b-final`). Its friction log survives at
+  `docs/dogfood-friction-track-b.md`.
 
 ## Ownership and dependency direction
 
@@ -30,7 +32,8 @@ purpose.
 ## Target-repository boundary
 
 Never run Pulse mutations with `--repo-root .` at this repository's root.
-Run Pulse for real only against `examples/todolist/`. Integration tests copy a
+Run Pulse for real only against a dedicated target repository; there is none
+checked in at the moment, so real runs are on hold. Integration tests copy a
 tracked fixture through `tests/common/fixture_repo.rs::TestRepo::from_fixture`
 and run Pulse against the temporary copy.
 

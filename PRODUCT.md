@@ -1308,10 +1308,26 @@ Tiêu chí phụ: hai Ticket chạy song song bằng hai `pulse run`, Ticket th�
 vào worktree, không va nhau; Story đóng bằng `close-story` sau khi hai Ticket
 done và qualification pass.
 
-> **Đạt:** mục 1–7 đạt ngày 2026-09-05 trên `examples/todolist/`, HEAD
-> `845ff01`, hai Ticket (TK-001, TK-002) đóng bằng receipt với worker và
-> reviewer là agent thật; xem `examples/todolist/works/ST-001/`. Tiêu chí phụ
-> chưa đạt (còn `close-story` trên baseline thật).
+> **Đã đạt trên dogfood target Track B** (`examples/todolist/`, đã gỡ khỏi
+> working tree 2026-09-07; lấy lại bằng tag `dogfood/track-b-final`):
+>
+> - Mục 1–7: đạt 2026-09-05, HEAD `845ff01`. Hai Ticket (TK-001, TK-002) đóng
+>   bằng receipt, worker và reviewer là agent thật.
+> - Tiêu chí phụ, `close-story` trên baseline thật: **đạt**. ST-001 đóng
+>   2026-09-05, ST-002 đóng 2026-09-06, mỗi Story một qualification receipt
+>   passed, hai record trong `.pulse/evidence/execution/story-closes/`.
+> - Tổng bằng chứng để lại: 15 handoff của `agent:runner:worker` trên 13 source
+>   commit (hai trong worktree Pulse tạo), 13 verification, 23 receipt.
+>
+> **Chưa đạt:** tiêu chí phụ hai Ticket chạy song song không va nhau. TK-006 và
+> TK-007 đã chạy song song và **đã va** — worker của TK-006 ghi vào checkout
+> chung giữa chừng và stale proof fence của TK-007. Decision 0015 sửa nguyên
+> nhân, có cover ở `tests/runner/worktree_dispatch.rs`, nhưng **chưa chạy lại
+> thật lần nào** sau khi sửa.
+>
+> Mục này chỉ kiểm chứng được trên một dogfood target. Không còn target thì
+> cổng "chưa đạt thì không thêm feature" ở đầu §7 chưa có cách thoả mãn — cần
+> một quyết định về việc treo hay viết lại cổng đó trước khi thêm feature.
 
 ## 8. So với code hiện tại
 
@@ -1319,7 +1335,7 @@ done và qualification pass.
 |---|---|---|
 | 5.1 Work graph | Đã có spine | `pulse init` cấp Core grants; Ticket tạo `ticket.md`, `work sync` bind hash/metadata, ambiguity và ready gates hoạt động. Legacy JSON contract API vẫn tồn tại cho callers cũ. |
 | 5.2 Packet | Đã rút gọn | Packet có ticket prose, context, docs/QA/source/tags/handoff; không còn dispatch, capability, scope enforcement, assurance hay `not_installed`. |
-| 5.3 Runner | Chạy thật trên dogfood | `pulse run worker|reviewer|qa` đã chạy thật trên `examples/todolist/` với lease, resume sau kill, drift acknowledgment, inconclusive classification; isolation chuyển sang từ chối khi Ticket khác `active` (quyết định 13.2). Artifact ingest đang làm. Còn lại theo Decision 0012: `work handoff --check/--proof`, `HandoffReceipt.checks/acceptance_proofs`; `reviewer-input.json` bỏ `summary`, thêm `contract_revision`, `reviewers_required` và claim của handoff; `classify_reviewer` validate shape finding và cờ `unverifiable`. Decision 0014: `pulse run qa` tự dựng `qa_checkpoint` với artifact đã hash. Decision 0010: `qa-input.json` mang `baseline_path`, `posture`, `variables` và case nguyên văn kèm `case_hash`; `qa-run.mjs` chỉ chạy block `pulse-check`, không đọc `qa.md`. |
+| 5.3 Runner | Chạy thật trên dogfood | `pulse run worker|reviewer|qa` đã chạy thật trên dogfood target Track B (tag `dogfood/track-b-final`) với lease, resume sau kill, drift acknowledgment, inconclusive classification; isolation chuyển sang từ chối khi Ticket khác `active` (quyết định 13.2). Artifact ingest đang làm. Còn lại theo Decision 0012: `work handoff --check/--proof`, `HandoffReceipt.checks/acceptance_proofs`; `reviewer-input.json` bỏ `summary`, thêm `contract_revision`, `reviewers_required` và claim của handoff; `classify_reviewer` validate shape finding và cờ `unverifiable`. Decision 0014: `pulse run qa` tự dựng `qa_checkpoint` với artifact đã hash. Decision 0010: `qa-input.json` mang `baseline_path`, `posture`, `variables` và case nguyên văn kèm `case_hash`; `qa-run.mjs` chỉ chạy block `pulse-check`, không đọc `qa.md`. |
 | 5.4 Docs | Đã rút gọn | Registry tám trường, `tags.json`, `docs tags add/list`, tag filtering và path/tag applicability đã có. |
 | 5.5 Evidence/QA | Đã có spine | Close hỗ trợ mọi risk; high/critical yêu cầu actor human. `qa.md` là markdown heading, `qa-input.json` là JSON duy nhất, receipt `qa_checkpoint` bind `baseline_content_hash` và `case_hash` (Decision 0010). Decision 0012: `src/evidence/redaction.rs` cho plane tracked; trường `reviewers` trong profile và close gate đếm receipt theo actor. |
 | 5.6 Ratchet | `capture`–`applicable` đã chạy thật | `knowledge capture|validate|promote|applicable` đã chạy thật: LRN-001 được capture, promote và inject vào packet; scope `harness|repository` và promote tự sửa doc là việc còn lại (quyết định 13.3, 13.4). Decision 0012: `expected_signal` bắt buộc cho kind `ratchet`, `knowledge validate` đối chiếu nó; ba lane và luật lead sống trong skill `pulse-ratchet`, chưa có lệnh `ratchet bundle`. |
@@ -1348,7 +1364,7 @@ CONTRIBUTING.md       workflow đóng góp
 docs/decisions/       ADR; 0008 ghi quyết định thu hẹp phạm vi này
 docs/GLOSSARY.md      thuật ngữ theo PRODUCT.md
 design/archive/       proposals đã xong; assignment saga làm tham chiếu runner
-examples/todolist/    target repo dogfood
+(chưa có target repo dogfood; xem §13.1)
 ```
 
 ## 11. Later
@@ -1384,10 +1400,19 @@ Gặp một dấu hiệu thì dừng feature liên quan, ghi Decision, sửa har
 ## 13. Quyết định
 
 1. **Target repo để dogfood: `examples/todolist/`** trong repo Pulse, cùng Git
-   history, không nested `.git`. `.pulse/` và `works/` của nó tracked;
-   `runtime/` và `cache/` ignored. Lệnh cấm `--repo-root .` ở gốc Pulse vẫn
-   giữ. Việc đầu tiên: `src/source.rs` phải strip `git rev-parse --show-prefix`
-   khỏi path Git trả về khi repo-root là thư mục con. Chốt 2026-09-05.
+   history, không nested `.git`. `.pulse/` và `works/` của nó tracked. Lệnh cấm
+   `--repo-root .` ở gốc Pulse vẫn giữ. Việc đầu tiên: `src/source.rs` phải
+   strip `git rev-parse --show-prefix` khỏi path Git trả về khi repo-root là
+   thư mục con. Chốt 2026-09-05.
+
+   **Gỡ 2026-09-07** (tag `dogfood/track-b-final`). Lý do: Decision 0009 chưa
+   implement, nên mọi lần chạy đều thiếu lớp skill mà thiết kế đòi, và friction
+   thu được lẫn "thiếu một tầng" với "thiết kế sai". Dogfood nối lại trên một
+   target mới sau khi các quyết định đang mở được chốt. Hai đính chính từ lần
+   này: `runtime/` và `cache/` của target **không** thực sự ignored — pattern
+   `.pulse/runtime/` trong `.gitignore` neo ở gốc repo nên không khớp thư mục
+   con; và nhật ký friction viết tay đặt trong `works/` nằm trong dirty fence,
+   đó là lý do nó từng chặn một `close` (xem `docs/dogfood-friction-track-b.md`).
 2. **Isolation: từ chối thay vì auto-worktree.** Khi có Ticket khác đang
    `active` trong cùng repo-root, `pulse run` **từ chối** với
    `run_isolation_required` (kèm Ticket id và gợi ý `--isolation worktree`);

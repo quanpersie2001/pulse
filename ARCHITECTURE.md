@@ -124,7 +124,8 @@ are included per crate. `tests/public_api_contract.rs` is its own crate.
 
 Repositories under `tests/fixtures/target-repos/` are immutable inputs;
 tests copy them to a temp dir through `TestRepo` and never mutate the fixture
-in place. `examples/todolist/` is the tracked dogfood target where Pulse is
+in place. There is no tracked dogfood target at the moment; `examples/todolist/`
+was the one Pulse ran in
 run for real (never `--repo-root .` in this repository).
 
 Validation before claiming work done:
@@ -142,7 +143,7 @@ module pretends otherwise.
 
 | Capability | PRODUCT.md | Today |
 |---|---|---|
-| Runner (`pulse run <role>`) | §5.3 | Implemented and exercised on `examples/todolist/`: lease, run workspace, bootstrap prompt (with the `## Harness learnings` section), outcome classification (worker `handed_off`/`blocked`, reviewer `pass`/`rework` proven against recorded receipts), artifact ingest into `.pulse/evidence/artifacts/sha256/`, qa `--scope story_close`, drift-acknowledged resume, worktree reclaim. Isolation denies the run while another Ticket holds a live lease; `--isolation worktree` is the only way past it. Decision 0015 makes that isolation real: the run workspace is mirrored into the worktree, prompts embed the workspace absolutely, reviewer and qa inherit the worker's workspace, and state planes route back to the main repository. The recovery saga beyond release is still ahead. |
+| Runner (`pulse run <role>`) | §5.3 | Implemented and exercised on the Track B dogfood target (tag `dogfood/track-b-final`): lease, run workspace, bootstrap prompt (with the `## Harness learnings` section), outcome classification (worker `handed_off`/`blocked`, reviewer `pass`/`rework` proven against recorded receipts), artifact ingest into `.pulse/evidence/artifacts/sha256/`, qa `--scope story_close`, drift-acknowledged resume, worktree reclaim. Isolation denies the run while another Ticket holds a live lease; `--isolation worktree` is the only way past it. Decision 0015 makes that isolation real: the run workspace is mirrored into the worktree, prompts embed the workspace absolutely, reviewer and qa inherit the worker's workspace, and state planes route back to the main repository. The recovery saga beyond release is still ahead. |
 | Ratchet commands | §5.6 | Implemented: `capture`, `validate <id> --evidence`, `promote --document|--agents-md --insert-after [--dry-run]` (target must change: `promotion_target_unchanged`), `applicable --work --json` sharing the packet's bucket logic, `check`; packet injects required/recommended repository learnings; handoffs carry `knowledge_usage[]` and `knowledge show` aggregates usage. |
 | Events tail / notes | §5.7 | Implemented: append-only log, `pulse note` writes ticket-targeted events, `pulse events tail` streams with `--since`/`--ticket`/`--follow`; notes surface in the packet (latest 8). |
 | MCP server | §5.8 | stub removed with the daemon; CLI path comes first. |
