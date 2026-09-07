@@ -931,52 +931,61 @@ impl JsonGraphStore {
                 let handoffs = verifying_handoffs(&self.repo_root, ticket_id, node.revision)?;
                 let head_commit = crate::source::head_commit(&self.repo_root)?;
                 // Receipts whose subject is the Ticket itself (qa_checkpoint).
-                let subject_receipts = |kind: crate::evidence::model::ReceiptKind| {
-                    crate::evidence::receipt::list_receipts(
-                        &self.repo_root,
-                        Some(kind),
-                        Some(ticket_id.to_string()),
-                        Some(crate::evidence::model::ReceiptResult::Passed),
-                    )
-                    .map(|list| {
-                        list.receipts
+                // Errors propagate: a reviewer told "no qa_checkpoint exists"
+                // when Pulse simply failed to look reworks a worker who did
+                // everything right, which is the failure Decision 0016 closed.
+                let mut unreadable_receipts: Vec<crate::evidence::UnreadableReceipt> = Vec::new();
+                let mut subject_receipts =
+                    |kind: crate::evidence::model::ReceiptKind| -> PulseResult<Vec<String>> {
+                        let list = crate::evidence::receipt::list_receipts(
+                            &self.repo_root,
+                            Some(kind),
+                            Some(ticket_id.to_string()),
+                            Some(crate::evidence::model::ReceiptResult::Passed),
+                        )?;
+                        unreadable_receipts.extend(list.unreadable);
+                        Ok(list
+                            .receipts
                             .iter()
                             .map(|receipt| receipt.id.clone())
-                            .collect::<Vec<_>>()
-                    })
-                    .unwrap_or_default()
-                };
+                            .collect())
+                    };
+                let qa_receipts =
+                    subject_receipts(crate::evidence::model::ReceiptKind::QaCheckpoint)?;
                 // Decision 0016: a documentation_validation receipt is
                 // subject-bound to the documentation registry, never to a
                 // Ticket, so filtering by ticket id can only ever return
                 // nothing. What makes one relevant to this review is its
                 // source binding: it proves the repository's required docs
                 // were current at the commit under review.
-                let documentation_receipts = crate::evidence::receipt::list_receipts(
+                let documentation_list = crate::evidence::receipt::list_receipts(
                     &self.repo_root,
                     Some(crate::evidence::model::ReceiptKind::DocumentationValidation),
                     None,
                     Some(crate::evidence::model::ReceiptResult::Passed),
-                )
-                .map(|list| {
-                    list.receipts
-                        .iter()
-                        .filter(|receipt| {
-                            crate::evidence::receipt::load_receipt(&self.repo_root, &receipt.id)
-                                .ok()
-                                .and_then(|(envelope, _)| envelope.bindings.source)
-                                .is_some_and(|source| {
-                                    crate::source::same_source_state(
-                                        &self.repo_root,
-                                        &source.commit,
-                                        &head_commit,
-                                    )
-                                })
-                        })
-                        .map(|receipt| receipt.id.clone())
-                        .collect::<Vec<_>>()
-                })
-                .unwrap_or_default();
+                )?;
+                unreadable_receipts.extend(documentation_list.unreadable);
+                let documentation_receipts = documentation_list
+                    .receipts
+                    .iter()
+                    .filter(|receipt| {
+                        crate::evidence::receipt::load_receipt(&self.repo_root, &receipt.id)
+                            .ok()
+                            .and_then(|(envelope, _)| envelope.bindings.source)
+                            .is_some_and(|source| {
+                                crate::source::same_source_state(
+                                    &self.repo_root,
+                                    &source.commit,
+                                    &head_commit,
+                                )
+                            })
+                    })
+                    .map(|receipt| receipt.id.clone())
+                    .collect::<Vec<_>>();
+                // The same file can surface under both listings; the reviewer
+                // needs each one named once.
+                unreadable_receipts.sort_by(|left, right| left.id.cmp(&right.id));
+                unreadable_receipts.dedup_by(|left, right| left.id == right.id);
                 Ok(crate::canonical_json::to_canonical_bytes(&json!({
                     "schema_version": 1,
                     "ticket_id": ticket_id,
@@ -994,8 +1003,13 @@ impl JsonGraphStore {
                         "source_commit": handoff.source_commit,
                     })).collect::<Vec<_>>(),
                     "proof_receipts": {
-                        "qa_checkpoint": subject_receipts(crate::evidence::model::ReceiptKind::QaCheckpoint),
+                        "qa_checkpoint": qa_receipts,
                         "documentation_validation": documentation_receipts,
+                        // Evidence Pulse holds but cannot decode. An empty
+                        // proof list means "none exists" only when this is
+                        // empty too; the reviewer must not read a gap in the
+                        // store as a gap in the work.
+                        "unreadable": unreadable_receipts,
                     },
                     // The verification profile's `reviewers` requirement
                     // (Decision 0012 §5); strictest declared profile wins.
@@ -2124,6 +2138,11 @@ fn reviewer_prompt(ticket_id: &str, source_commit: &str, workspace: &str) -> Str
          list should already hold one; reuse it rather than recording a\n\
          second. Record your own only if the docs genuinely changed under\n\
          you, and say so in the summary.\n\
+         If `proof_receipts.unreadable` is non-empty, Pulse holds receipt\n\
+         files it could not decode: an empty proof list then means \"could\n\
+         not look\", not \"the worker recorded nothing\". Do not rework on a\n\
+         missing proof in that case - report it as a finding owned by the\n\
+         evidence store, naming the ids.\n\
          4. Record the verdict — one --check per command you ran, exactly\n\
          one --proof per acceptance id mapping it to checks and/or the\n\
          required proof receipts from the input. Use -a1 in the\n\

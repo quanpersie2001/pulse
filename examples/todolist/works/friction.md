@@ -150,3 +150,31 @@ Feeds the v0.2 backlog (PRODUCT.md §11) after the round.
   a `git status`-style hint ("works/friction.md changed since handoff")
   would have saved a revert dance. Deeper question for v0.2: should
   docs-alongside-code note files fence-block a close at all?
+
+## 2026-09-07 (Decision 0010 migration)
+
+- One receipt Pulse could not decode killed the whole listing.
+  `list_receipts` parses every file in `.pulse/evidence/receipts/` and
+  returned the first parse error, so the seven pre-0010 `qa_checkpoint`
+  receipts made `pulse evidence receipt list` fail for the entire
+  repository — no receipt of any kind was readable through the CLI.
+  Cost: the seven were found by accident while migrating, not by any
+  gate. Worse, both `list_receipts` callsites in `kernel/run.rs` wrapped
+  it in `unwrap_or_default()`, so the same condition made the reviewer's
+  `proof_receipts` **silently empty** instead of failing — a reviewer
+  would read "no qa_checkpoint exists" and rework a worker who recorded
+  one correctly. That is the identical shape Decision 0016 closed, where
+  an always-empty docs list cost three rework cycles.
+  **CLOSED 2026-09-07.** `list_receipts` now reports undecodable files in
+  `unreadable[] {id, path, reason}` and keeps listing the rest; filters
+  never hide them, because the kind and subject are exactly what cannot
+  be read. The reviewer input carries the same list under
+  `proof_receipts.unreadable` and the reviewer prompt says what it means:
+  an empty proof list is "none exists" only when `unreadable` is empty
+  too, otherwise report it as a finding owned by the evidence store
+  rather than reworking the worker. Real errors (an unreadable receipts
+  directory) now propagate instead of becoming an empty list. Cover:
+  `tests/runner/reviewer.rs::unreadable_receipt_reaches_the_reviewer_instead_of_emptying_its_proof_list`.
+  Open question for v0.2: a `pulse evidence receipt list` that succeeds
+  while naming unreadable files is right for a listing, but nothing yet
+  *fails* on a corrupt store. A `doctor`-style check probably owns that.

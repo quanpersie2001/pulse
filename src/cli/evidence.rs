@@ -176,7 +176,23 @@ pub(crate) fn handle(store: &JsonGraphStore, command: EvidenceCommand) -> Result
                     subject,
                     result.map(Into::into),
                 )?;
-                render(json, &out, format!("{} receipts", out.receipts.len()))
+                // An unreadable receipt is named, not swallowed: the listing
+                // stays usable while saying what it could not show.
+                let summary = if out.unreadable.is_empty() {
+                    format!("{} receipts", out.receipts.len())
+                } else {
+                    format!(
+                        "{} receipts, {} unreadable: {}",
+                        out.receipts.len(),
+                        out.unreadable.len(),
+                        out.unreadable
+                            .iter()
+                            .map(|entry| entry.id.as_str())
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    )
+                };
+                render(json, &out, summary)
             }
             ReceiptCommand::Verify {
                 id,

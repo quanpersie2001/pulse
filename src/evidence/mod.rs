@@ -9,5 +9,5 @@ pub use manifest::{bootstrap, load_existing, EvidenceBootstrapOutcome, EvidenceM
 pub use model::*;
 pub use receipt::{
     list_receipts, new_receipt_id, record_receipt, record_receipt_envelope, show_receipt,
-    validate_for_supersession, verify_receipt, ReceiptList, ReceiptOutcome,
+    validate_for_supersession, verify_receipt, ReceiptList, ReceiptOutcome, UnreadableReceipt,
 };

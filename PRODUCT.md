@@ -581,7 +581,8 @@ show`, diff từ Git, và tự chạy lệnh verify.
   "acceptance": [{"id": "AC-1"}, {"id": "AC-2"}],
   "handoffs": [{"handoff_id": "01JX…H1", "changed_paths": ["src/auth/errors.ts"],
                 "recorded_by": "agent:runner:worker", "source_commit": "d4e5f6"}],
-  "proof_receipts": {"qa_checkpoint": ["01JX…Q1"], "documentation_validation": ["01JX…D1"]},
+  "proof_receipts": {"qa_checkpoint": ["01JX…Q1"], "documentation_validation": ["01JX…D1"],
+                     "unreadable": []},
   "reviewers_required": 1,
   "artifact_dir": "artifacts"
 }
@@ -592,6 +593,12 @@ subject khác nhau (Decision 0016): `qa_checkpoint` theo subject là Ticket;
 `documentation_validation` theo **source commit đang review**, vì nó
 subject-bound tới documentation registry của repo chứ không tới một Ticket.
 Lọc docs receipt theo ticket id không bao giờ khớp.
+
+`unreadable` liệt kê receipt file Pulse giữ nhưng không decode được. Một
+proof list rỗng chỉ có nghĩa "không tồn tại" khi `unreadable` cũng rỗng;
+ngược lại reviewer phải báo finding thuộc về evidence store, không rework
+worker. Không có trường này thì một receipt hỏng biến thành lỗi im lặng của
+worker — đúng lớp lỗi Decision 0016 đóng.
 
 Reviewer output:
 

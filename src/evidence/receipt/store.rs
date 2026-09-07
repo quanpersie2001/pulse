@@ -52,6 +52,23 @@ pub struct ReceiptOutcome {
 pub struct ReceiptList {
     pub schema_version: u32,
     pub receipts: Vec<ReceiptSummary>,
+    /// Receipt files present in the store that could not be read or decoded.
+    ///
+    /// Always serialized, empty list included: a caller must be able to tell
+    /// "no receipt of this kind exists" from "a receipt exists and Pulse could
+    /// not read it". Those are opposite conclusions for a reviewer.
+    #[serde(default)]
+    pub unreadable: Vec<UnreadableReceipt>,
+}
+
+/// One receipt file the store holds but cannot present.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct UnreadableReceipt {
+    /// The receipt id taken from the file name, which stays legible even when
+    /// the contents do not decode.
+    pub id: String,
+    pub path: String,
+    pub reason: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -201,6 +218,20 @@ pub fn show_receipt(repo_root: &Path, id: &str) -> Result<ReceiptOutcome> {
     })
 }
 
+/// List the receipts in the store, reporting rather than propagating the ones
+/// that cannot be decoded.
+///
+/// A single undecodable file used to fail the whole listing, so one receipt
+/// left behind by a payload shape change took down every caller — the shape
+/// that broke `pulse evidence receipt list` for the whole repository after
+/// Decision 0010 moved the `qa_checkpoint` payload. Filters never hide an
+/// unreadable file: its kind and subject are exactly what cannot be read, so
+/// omitting it under a filter would recreate the silence.
+///
+/// # Errors
+///
+/// Returns an I/O error only when the receipts directory itself cannot be
+/// enumerated.
 pub fn list_receipts(
     repo_root: &Path,
     kind: Option<ReceiptKind>,
@@ -209,15 +240,40 @@ pub fn list_receipts(
 ) -> Result<ReceiptList> {
     let dir = repo_root.join(".pulse/evidence/receipts");
     let mut receipts = Vec::new();
+    let mut unreadable = Vec::new();
     if dir.exists() {
         for entry in fs::read_dir(&dir).map_err(|error| PulseError::io(&dir, error))? {
             let path = entry.map_err(|error| PulseError::io(&dir, error))?.path();
             if path.extension().and_then(|e| e.to_str()) != Some("json") {
                 continue;
             }
-            let bytes = fs::read(&path).map_err(|error| PulseError::io(&path, error))?;
-            let receipt: ReceiptEnvelope =
-                serde_json::from_slice(&bytes).map_err(|error| PulseError::json(&path, error))?;
+            let unreadable_here = |reason: String| UnreadableReceipt {
+                id: path
+                    .file_stem()
+                    .and_then(|stem| stem.to_str())
+                    .unwrap_or_default()
+                    .to_string(),
+                path: path
+                    .strip_prefix(repo_root)
+                    .unwrap_or(&path)
+                    .display()
+                    .to_string(),
+                reason,
+            };
+            let bytes = match fs::read(&path) {
+                Ok(bytes) => bytes,
+                Err(error) => {
+                    unreadable.push(unreadable_here(error.to_string()));
+                    continue;
+                }
+            };
+            let receipt: ReceiptEnvelope = match serde_json::from_slice(&bytes) {
+                Ok(receipt) => receipt,
+                Err(error) => {
+                    unreadable.push(unreadable_here(error.to_string()));
+                    continue;
+                }
+            };
             if kind.as_ref().is_some_and(|k| k != &receipt.kind) {
                 continue;
             }
@@ -238,9 +294,11 @@ pub fn list_receipts(
         }
     }
     receipts.sort_by(|a, b| a.recorded_at.cmp(&b.recorded_at).then(a.id.cmp(&b.id)));
+    unreadable.sort_by(|a, b| a.id.cmp(&b.id));
     Ok(ReceiptList {
         schema_version: 1,
         receipts,
+        unreadable,
     })
 }
 

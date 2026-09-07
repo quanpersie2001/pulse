@@ -320,3 +320,70 @@ fn reviewer_input_lists_docs_receipts_bound_to_the_reviewed_commit() {
         "the worker's docs receipt must reach the reviewer: {listed:?}"
     );
 }
+
+/// An undecodable receipt file must reach the reviewer as a named gap in the
+/// evidence store, never as an empty proof list.
+///
+/// `list_receipts` used to fail the whole listing on the first file it could
+/// not parse, and both callsites here swallowed that with
+/// `unwrap_or_default()`. One receipt left behind by a payload shape change
+/// therefore told the reviewer "no qa_checkpoint exists" — the same silence
+/// that reworked three of six Track B Tickets before Decision 0016, and the
+/// same class that broke `evidence receipt list` for the whole dogfood
+/// repository when Decision 0010 moved the qa_checkpoint payload.
+#[test]
+fn unreadable_receipt_reaches_the_reviewer_instead_of_emptying_its_proof_list() {
+    let repo = TestRepo::from_fixture("minimal-service");
+    let ticket_id = setup_ready_ticket(&repo);
+    verify_fixture(
+        &repo,
+        &ticket_id,
+        r#"echo '{"disposition": "pass", "acceptance": {"AC-1": "ok"}, "findings": []}'"#,
+    );
+
+    let corrupt = "rcpt_01J00000000000000000000099";
+    fs::create_dir_all(repo.path().join(".pulse/evidence/receipts")).unwrap();
+    fs::write(
+        repo.path()
+            .join(".pulse/evidence/receipts")
+            .join(format!("{corrupt}.json")),
+        br#"{"schema_version": 1, "kind": "qa_checkpoint", "payload": {"from": "a shape that no longer decodes"}}"#,
+    )
+    .unwrap();
+
+    // The listing still answers, and names what it could not show.
+    let listed = repo.pulse_ok(&["evidence", "receipt", "list", "--json"]);
+    let unreadable = listed["unreadable"]
+        .as_array()
+        .expect("receipt list must always carry an `unreadable` array");
+    assert_eq!(unreadable.len(), 1, "listed: {listed}");
+    assert_eq!(unreadable[0]["id"], corrupt);
+    assert!(!unreadable[0]["reason"].as_str().unwrap().is_empty());
+
+    // And the reviewer is told, rather than being handed a clean-looking gap.
+    let _ = reviewer_outcome(&repo, &ticket_id);
+    let input = reviewer_input(&repo, &ticket_id);
+    let reported = input["proof_receipts"]["unreadable"]
+        .as_array()
+        .expect("reviewer input must carry proof_receipts.unreadable");
+    assert_eq!(reported.len(), 1, "input: {input}");
+    assert_eq!(reported[0]["id"], corrupt);
+    assert!(
+        input["proof_receipts"]["qa_checkpoint"]
+            .as_array()
+            .unwrap()
+            .is_empty(),
+        "the corrupt file is not a usable proof: {input}"
+    );
+
+    // The prompt has to explain what that field means, or the reviewer will
+    // read the empty proof list as the worker's fault anyway.
+    let prompt = fs::read_to_string(
+        repo.path()
+            .join(".pulse/runtime/run")
+            .join(&ticket_id)
+            .join("reviewer-prompt.md"),
+    )
+    .unwrap();
+    assert!(prompt.contains("proof_receipts.unreadable"), "{prompt}");
+}
