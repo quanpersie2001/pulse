@@ -127,9 +127,10 @@ pub enum EvalProfile {
 #[derive(Debug, Clone)]
 pub struct QaCaseResolutionSnapshot {
     pub owner_id: String,
-    pub baseline_revision: u64,
     pub baseline_content_hash: String,
-    pub selected_cases: Vec<(String, u64)>,
+    /// `(case id, case section hash)` — currentness without a revision
+    /// (Decision 0010).
+    pub selected_cases: Vec<(String, String)>,
     pub error_code: Option<String>,
 }
 
@@ -655,7 +656,6 @@ fn fingerprint(inputs: &ReadinessInputs, profile: EvalProfile) -> PulseResult<St
             "qa_baseline".to_string(),
             json!({
                 "owner_id": resolution.owner_id,
-                "revision": resolution.baseline_revision,
                 "content_hash": resolution.baseline_content_hash,
                 "selected_cases": resolution.selected_cases,
                 "error_code": resolution.error_code,

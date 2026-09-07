@@ -266,29 +266,31 @@ fn write_required_qa_baseline(root: &std::path::Path, story_id: &str) {
     fs::write(
         path,
         format!(
-            r#"# Reservation behavioral QA
+            r#"# {story_id} Reservation behavioral QA
 
-```pulse-qa
-{{
-  "schema_version": 1,
-  "story_id": "{story_id}",
-  "revision": 1,
-  "scope": "Reservation behavior remains observable.",
-  "risks": ["RISK-DUPLICATE"],
-  "cases": [{{
-    "id": "QA-001",
-    "revision": 1,
-    "intent": "Reservation is not duplicated.",
-    "priority": "critical",
-    "risk_refs": ["RISK-DUPLICATE"],
-    "steps": ["reserve twice with one idempotency key"],
-    "expected": ["one stable reservation"],
-    "surface": "api",
-    "applicability": "required"
-  }}],
-  "exit_criteria": ["The required case passes on the candidate source."]
-}}
-```
+## Scope
+Reservation behavior remains observable.
+
+## Posture
+automated
+
+## Risks
+- RISK-DUPLICATE: a repeated reservation creates a second identity.
+
+## Exit criteria
+- The required case passes on the candidate source.
+
+## Cases
+
+### QA-001 Reservation is not duplicated
+- Intent: Reservation is not duplicated.
+- Surface: api
+- Priority: critical
+- Risks: RISK-DUPLICATE
+- Steps:
+  1. reserve twice with one idempotency key
+- Expected:
+  - one stable reservation
 "#,
         ),
     )

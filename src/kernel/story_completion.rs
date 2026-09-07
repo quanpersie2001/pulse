@@ -307,10 +307,7 @@ fn validate_story_qualification(
             "Story qualification lacks an exact source binding",
         )
     })?;
-    if source.commit != source_commit
-        || payload.baseline_revision != baseline.revision
-        || payload.baseline_content_hash != baseline.content_hash
-    {
+    if source.commit != source_commit || payload.baseline_content_hash != baseline.content_hash {
         return Err(PulseError::validation(
             "story_close_qualification_stale",
             "Story qualification does not bind the current source and baseline",
@@ -351,7 +348,7 @@ fn validate_story_qualification(
                 ),
             )
         })?;
-        if observation.case_revision != case.revision
+        if observation.case_hash != case.case_hash
             || observation.outcome != QaCaseOutcome::Passed
             || !covered.insert(observation.case_id.clone())
         {

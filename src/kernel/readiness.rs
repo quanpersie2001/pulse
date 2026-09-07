@@ -124,12 +124,11 @@ impl JsonGraphStore {
         match crate::qa::resolve_ticket_cases(&self.repo_root, node) {
             Ok(resolution) => Some(QaCaseResolutionSnapshot {
                 owner_id: resolution.owner_id,
-                baseline_revision: resolution.revision,
                 baseline_content_hash: resolution.content_hash,
                 selected_cases: resolution
                     .cases
                     .into_iter()
-                    .map(|case| (case.id, case.revision))
+                    .map(|case| (case.id, case.case_hash))
                     .collect(),
                 error_code: None,
             }),
@@ -139,7 +138,6 @@ impl JsonGraphStore {
                     .as_ref()
                     .and_then(|qa| qa.impact.behavioral_owner.clone())
                     .unwrap_or_default(),
-                baseline_revision: 0,
                 baseline_content_hash: String::new(),
                 selected_cases: Vec::new(),
                 error_code: Some(error.code().to_string()),

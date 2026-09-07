@@ -320,11 +320,10 @@ fn record_qa_checkpoint(repo: &std::path::Path, ticket_id: &str, source_commit: 
             qa_scope: QaExecutionScope::TicketCheckpoint,
             story_id: resolution.owner_id,
             ticket_id: ticket_id.to_string(),
-            baseline_revision: resolution.revision,
             baseline_content_hash: resolution.content_hash,
             cases: vec![QaCaseObservation {
-                case_id: "QA-001".to_string(),
-                case_revision: 1,
+                case_id: resolution.cases[0].id.clone(),
+                case_hash: resolution.cases[0].case_hash.clone(),
                 outcome: QaCaseOutcome::Passed,
             }],
             executor: QaExecutor {
@@ -370,7 +369,7 @@ fn record_story_qualification(
         .iter()
         .map(|case| QaCaseObservation {
             case_id: case.id.clone(),
-            case_revision: case.revision,
+            case_hash: case.case_hash.clone(),
             outcome: QaCaseOutcome::Passed,
         })
         .collect();
@@ -408,7 +407,6 @@ fn record_story_qualification(
             qa_scope: QaExecutionScope::StoryClose,
             story_id: resolution.owner_id,
             ticket_id: ticket_id.to_string(),
-            baseline_revision: resolution.revision,
             baseline_content_hash: resolution.content_hash,
             cases,
             executor: QaExecutor {
@@ -1363,29 +1361,31 @@ fn write_story_qa_baseline(root: &std::path::Path, story_id: &str) {
     fs::write(
         path,
         format!(
-            r#"# Reservation behavioral QA
+            r#"# {story_id} Reservation behavioral QA
 
-```pulse-qa
-{{
-  "schema_version": 1,
-  "story_id": "{story_id}",
-  "revision": 1,
-  "scope": "Reservation behavior remains observable.",
-  "risks": ["RISK-DUPLICATE"],
-  "cases": [{{
-    "id": "QA-001",
-    "revision": 1,
-    "intent": "Reservation is not duplicated.",
-    "priority": "critical",
-    "risk_refs": ["RISK-DUPLICATE"],
-    "steps": ["reserve twice with one idempotency key"],
-    "expected": ["one stable reservation"],
-    "surface": "api",
-    "applicability": "required"
-  }}],
-  "exit_criteria": ["The required case passes on the candidate source."]
-}}
-```
+## Scope
+Reservation behavior remains observable.
+
+## Posture
+automated
+
+## Risks
+- RISK-DUPLICATE: a repeated reservation creates a second identity.
+
+## Exit criteria
+- The required case passes on the candidate source.
+
+## Cases
+
+### QA-001 Reservation is not duplicated
+- Intent: Reservation is not duplicated.
+- Surface: api
+- Priority: critical
+- Risks: RISK-DUPLICATE
+- Steps:
+  1. reserve twice with one idempotency key
+- Expected:
+  - one stable reservation
 "#
         ),
     )

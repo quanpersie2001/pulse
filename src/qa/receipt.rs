@@ -21,7 +21,6 @@ pub struct QaCheckpointPayload {
     pub qa_scope: QaExecutionScope,
     pub story_id: String,
     pub ticket_id: String,
-    pub baseline_revision: u64,
     pub baseline_content_hash: String,
     pub cases: Vec<QaCaseObservation>,
     pub executor: QaExecutor,
@@ -44,7 +43,9 @@ pub enum QaExecutionScope {
 #[serde(deny_unknown_fields)]
 pub struct QaCaseObservation {
     pub case_id: String,
-    pub case_revision: u64,
+    /// SHA-256 of the case section the runner actually exercised (Decision
+    /// 0010): editing one case stales only that case's observations.
+    pub case_hash: String,
     pub outcome: QaCaseOutcome,
 }
 
@@ -85,7 +86,6 @@ pub fn validate_checkpoint_receipt(
         || payload.payload_version != QA_CHECKPOINT_PAYLOAD_VERSION
         || payload.story_id.trim().is_empty()
         || payload.ticket_id.trim().is_empty()
-        || payload.baseline_revision == 0
         || !is_sha256(&payload.baseline_content_hash)
         || payload.cases.is_empty()
         || payload.executor.name.trim().is_empty()
@@ -124,10 +124,13 @@ pub fn validate_checkpoint_receipt(
     }
     let mut ids = BTreeSet::new();
     for case in &payload.cases {
-        if !ids.insert(&case.case_id) || case.case_id.trim().is_empty() || case.case_revision == 0 {
+        if !ids.insert(&case.case_id)
+            || case.case_id.trim().is_empty()
+            || !is_sha256(&case.case_hash)
+        {
             return Err(PulseError::validation(
                 "qa_receipt_case_invalid",
-                "QA checkpoint cases must have unique IDs and positive revisions",
+                "QA checkpoint cases must have unique IDs and a SHA-256 case hash",
             ));
         }
     }
@@ -168,7 +171,8 @@ fn is_sha256(value: &str) -> bool {
 /// The runner's final output carries `cases[] {id, status, observation}`,
 /// optional `findings[] {case_id?, summary, owner, check?, severity}` and
 /// nothing else of consequence; statuses map onto typed outcomes and every
-/// reported case must exist in the input with the same revision. `result` is
+/// reported case must exist in the input, carrying that input's case hash so
+/// the observation is pinned to the exact section run (0010). `result` is
 /// `passed` only when every reported case passed, `failed` on a product or
 /// test failure, otherwise `inconclusive`.
 ///
@@ -197,24 +201,19 @@ pub fn build_checkpoint_envelope(
         str_field(input, "story_id").ok_or_else(|| invalid("input story_id is missing".into()))?;
     let ticket_id = str_field(input, "ticket_id")
         .ok_or_else(|| invalid("input ticket_id is missing".into()))?;
-    let baseline_revision = input
-        .get("baseline_revision")
-        .and_then(|v| v.as_u64())
-        .ok_or_else(|| invalid("input baseline_revision is missing".into()))?;
     let baseline_content_hash = str_field(input, "baseline_content_hash")
         .ok_or_else(|| invalid("input baseline_content_hash is missing".into()))?;
     let input_cases = input
         .get("cases")
         .and_then(|v| v.as_array())
         .ok_or_else(|| invalid("input cases must be an array".into()))?;
-    let mut baseline: std::collections::BTreeMap<String, u64> = std::collections::BTreeMap::new();
+    let mut baseline: std::collections::BTreeMap<String, String> =
+        std::collections::BTreeMap::new();
     for case in input_cases {
         let id = str_field(case, "id").ok_or_else(|| invalid("input case id is missing".into()))?;
-        let revision = case
-            .get("revision")
-            .and_then(|v| v.as_u64())
-            .ok_or_else(|| invalid("input case revision is missing".into()))?;
-        baseline.insert(id, revision);
+        let case_hash = str_field(case, "case_hash")
+            .ok_or_else(|| invalid(format!("input case {id} has no case_hash")))?;
+        baseline.insert(id, case_hash);
     }
 
     let output_cases = output
@@ -226,9 +225,9 @@ pub fn build_checkpoint_envelope(
     for case in output_cases {
         let id =
             str_field(case, "id").ok_or_else(|| invalid("output case id is missing".into()))?;
-        let revision = baseline
+        let case_hash = baseline
             .get(&id)
-            .copied()
+            .cloned()
             .ok_or_else(|| invalid(format!("case {id} is absent from the run input baseline")))?;
         let status = str_field(case, "status")
             .ok_or_else(|| invalid(format!("case {id} status is missing")))?;
@@ -249,7 +248,7 @@ pub fn build_checkpoint_envelope(
         observations.push(format!("{id}: {observation}"));
         cases.push(QaCaseObservation {
             case_id: id,
-            case_revision: revision,
+            case_hash,
             outcome,
         });
     }
@@ -346,7 +345,6 @@ pub fn build_checkpoint_envelope(
             qa_scope,
             story_id,
             ticket_id,
-            baseline_revision,
             baseline_content_hash,
             cases,
             executor: QaExecutor {

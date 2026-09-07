@@ -29,9 +29,10 @@ pub(crate) fn handle(store: &JsonGraphStore, command: QaCommand) -> Result<(), P
                 json,
                 &baseline,
                 format!(
-                    "{} baseline revision {}: {} cases",
+                    "{} baseline {} ({:?}): {} cases",
                     baseline.owner_id,
-                    baseline.revision,
+                    baseline.content_hash,
+                    baseline.posture,
                     baseline.cases.len()
                 ),
             )
@@ -43,10 +44,10 @@ pub(crate) fn handle(store: &JsonGraphStore, command: QaCommand) -> Result<(), P
                 json,
                 &resolution,
                 format!(
-                    "{} -> {} baseline revision {}: {} cases",
+                    "{} -> {} baseline {}: {} cases",
                     ticket_id,
                     resolution.owner_id,
-                    resolution.revision,
+                    resolution.content_hash,
                     resolution.cases.len()
                 ),
             )

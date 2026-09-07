@@ -95,18 +95,35 @@ fn story_close_qa_run_commits_full_baseline_input() {
     assert_eq!(input["ticket_id"], ticket_id);
     assert_eq!(input["qa_posture"], "required");
     assert_eq!(input["cases"][0]["id"], "QA-001");
-    assert_eq!(input["cases"][0]["revision"], 1);
+    // Decision 0010: currentness is the case section hash, not a revision.
+    assert!(input["cases"][0]["case_hash"]
+        .as_str()
+        .unwrap()
+        .starts_with("sha256:"));
     // Cases travel verbatim so the executor never resolves the baseline.
     assert!(!input["cases"][0]["intent"].as_str().unwrap().is_empty());
+    assert!(!input["cases"][0]["title"].as_str().unwrap().is_empty());
     assert!(!input["cases"][0]["steps"].as_array().unwrap().is_empty());
     assert!(!input["cases"][0]["expected"].as_array().unwrap().is_empty());
     assert_eq!(input["cases"][0]["surface"], "api");
+    assert_eq!(input["cases"][0]["priority"], "critical");
+    assert_eq!(input["cases"][0]["applicability"], "required");
     assert_eq!(input["cases"].as_array().unwrap().len(), 1);
-    assert_eq!(input["baseline_revision"], 1);
+    assert_eq!(input["posture"], "automated");
+    assert_eq!(input["baseline_path"], format!("works/{story_id}/qa.md"));
     assert!(input["baseline_content_hash"]
         .as_str()
         .unwrap()
         .starts_with("sha256:"));
+    // Runner input carries the pulse-check substitution variables.
+    assert!(input["variables"]["REPO"]
+        .as_str()
+        .unwrap()
+        .starts_with('/'));
+    assert_eq!(
+        input["variables"]["ARTIFACT_DIR"],
+        format!(".pulse/runtime/run/{story_id}/artifacts")
+    );
 }
 
 #[test]

@@ -6,7 +6,9 @@
 //! passed run records a passed receipt with artifact bindings, a failed
 //! product case records `failed`, a baseline drift under the run records an
 //! inconclusive receipt and demotes the run, and a bad artifact declaration
-//! leaves no receipt at all.
+//! leaves no receipt at all. The last case guards the shape move itself: a
+//! receipt sealed in the pre-0010 `revision` shape is rejected on its own
+//! terms and does not block unrelated work.
 
 use std::fs;
 
@@ -231,6 +233,67 @@ echo '{"cases": [{"id": "QA-UNKNOWN", "status": "passed", "observation": "invent
     assert_eq!(out["status"], "inconclusive", "outcome: {out}");
     assert_eq!(out["inconclusive_reason"], "qa_receipt_invalid");
     assert_eq!(count_receipts(&repo), 0);
+}
+
+/// Decision 0010 replaced the hand-written `baseline_revision`/`case_revision`
+/// pair with content hashes, and Decision 0003 forbids a decoder for the old
+/// shape. A receipt sealed before the change must therefore fail on its own
+/// terms — a typed validation error naming the receipt — and must not take
+/// unrelated work down with it, which is exactly what happened the last time a
+/// receipt shape moved (commit 074fabf: eight legacy receipts blocked every
+/// packet build).
+#[test]
+fn legacy_revision_shaped_receipt_is_rejected_without_blocking_unrelated_work() {
+    let repo = TestRepo::from_fixture("minimal-service");
+    let (ticket_id, story_id) = qa_fixture(
+        &repo,
+        r#"
+echo '{"cases": [{"id": "QA-001", "status": "passed", "observation": "ok"}], "artifacts": [], "findings": []}'
+"#,
+    );
+    let out = run_qa(&repo, &ticket_id);
+    assert_eq!(out["status"], "completed", "outcome: {out}");
+    let current = load_single_receipt(&repo);
+    assert!(current["payload"].get("baseline_revision").is_none());
+    assert!(current["payload"]["cases"][0]["case_hash"]
+        .as_str()
+        .unwrap()
+        .starts_with("sha256:"));
+
+    // A receipt in the shape Pulse sealed before 0010 landed.
+    let legacy_id = "rcpt_01J00000000000000000000077";
+    let mut legacy = current.clone();
+    legacy["id"] = legacy_id.into();
+    legacy["payload"]["baseline_revision"] = 1.into();
+    let case = &mut legacy["payload"]["cases"][0];
+    case.as_object_mut().unwrap().remove("case_hash");
+    case["case_revision"] = 1.into();
+    fs::write(
+        repo.path()
+            .join(".pulse/evidence/receipts")
+            .join(format!("{legacy_id}.json")),
+        serde_json::to_vec_pretty(&legacy).unwrap(),
+    )
+    .unwrap();
+
+    // Rejected on its own terms: a typed error, not a panic and not silence.
+    let output = repo.pulse(&["evidence", "receipt", "show", legacy_id, "--json"]);
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    assert!(
+        stderr.contains("baseline_revision") || stderr.contains(legacy_id),
+        "legacy receipt rejection must name what is wrong: {stderr}"
+    );
+
+    // An unrelated Ticket still builds its packet, and the Story baseline still
+    // resolves: one stale receipt is not a repository-wide outage.
+    let unrelated =
+        setup_ready_ticket_with_required_qa(repo.path(), &JsonGraphStore::new(repo.path()));
+    assert_ne!(unrelated, ticket_id);
+    let packet = repo.pulse_ok(&["work", "packet", &unrelated, "--json"]);
+    assert_eq!(packet["ticket"]["node"]["id"], unrelated.as_str());
+    let baseline = repo.pulse_ok(&["qa", "baseline", &story_id, "--json"]);
+    assert_eq!(baseline["owner_id"], story_id.as_str());
 }
 
 fn count_receipts(repo: &TestRepo) -> usize {

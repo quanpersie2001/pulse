@@ -1,18 +1,19 @@
 //! Core-owned behavioral QA contracts and deterministic Story baseline resolution.
 //!
-//! A Story owns `works/<STORY-ID>/qa.md`. The machine-readable contract is a
-//! single `pulse-qa` fenced JSON block inside that document; prose may explain
-//! intent, but readiness and close gates consume only the typed block and bind
-//! receipts to the hash of the complete file. This module performs no execution
-//! and has no daemon dependency.
+//! A Story owns `works/<STORY-ID>/qa.md`, a markdown document with conventional
+//! headings (Decision 0010). Prose explains intent; readiness and close gates
+//! consume the parsed contract, bind receipts to the hash of the complete file
+//! and each case to the hash of its own section. JSON exists only at the runner
+//! boundary. This module performs no execution and has no daemon dependency.
 
 mod baseline;
 mod executor;
 mod receipt;
 
 pub use baseline::{
-    load_story_baseline, resolve_story_cases, resolve_ticket_cases, QaBaseline,
-    QaBaselineResolution, QaCase, QaCaseApplicability, QaCasePriority,
+    baseline_template, load_story_baseline, parse_baseline, resolve_story_cases,
+    resolve_ticket_cases, QaAssertion, QaBaseline, QaBaselinePosture, QaBaselineResolution, QaCase,
+    QaCaseApplicability, QaCasePriority, QaCaseSurface, QaCheck, QaRisk,
 };
 pub use executor::{
     load_executor_manifest, validate_runner_output, QaExecutorManifest, QaRunnerArtifact,

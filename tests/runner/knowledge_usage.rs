@@ -72,9 +72,8 @@ fn handoff_records_usage_and_knowledge_show_aggregates_it() {
             "qa_scope": "ticket_checkpoint",
             "story_id": "ST-000",
             "ticket_id": ticket_id,
-            "baseline_revision": 1,
             "baseline_content_hash": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
-            "cases": [{"case_id": "QA-001", "case_revision": 1, "outcome": "passed"}],
+            "cases": [{"case_id": "QA-001", "case_hash": "sha256:0000000000000000000000000000000000000000000000000000000000000000", "outcome": "passed"}],
             "executor": {"name": "t", "version": "1"},
             "observations": ["observed"]
         }

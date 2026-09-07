@@ -1357,7 +1357,6 @@ fn validate_qa_close(
                 && payload.ticket_id != node.id)
             || receipt.subject.id != expected_subject
             || payload.story_id != baseline.owner_id
-            || payload.baseline_revision != baseline.revision
             || payload.baseline_content_hash != baseline.content_hash
         {
             return Err(PulseError::validation(
@@ -1380,7 +1379,7 @@ fn validate_qa_close(
                     ),
                 )
             })?;
-            if observation.case_revision != case.revision
+            if observation.case_hash != case.case_hash
                 || observation.outcome != crate::qa::QaCaseOutcome::Passed
             {
                 return Err(PulseError::validation(

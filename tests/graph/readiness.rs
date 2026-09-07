@@ -184,29 +184,31 @@ fn write_qa_baseline(repo: &std::path::Path, story_id: &str, case_id: &str) {
     fs::write(
         path,
         format!(
-            r#"# Behavioral QA
+            r#"# {story_id} Behavioral QA
 
-```pulse-qa
-{{
-  "schema_version": 1,
-  "story_id": "{story_id}",
-  "revision": 1,
-  "scope": "Authentication recovery remains observable and bounded.",
-  "risks": ["RISK-LOOP"],
-  "cases": [{{
-    "id": "{case_id}",
-    "revision": 1,
-    "intent": "Expired credentials recover without a loop.",
-    "priority": "critical",
-    "risk_refs": ["RISK-LOOP"],
-    "steps": ["invoke the protected operation"],
-    "expected": ["one refresh and a successful retry"],
-    "surface": "api",
-    "applicability": "required"
-  }}],
-  "exit_criteria": ["All required cases pass on the candidate source."]
-}}
-```
+## Scope
+Authentication recovery remains observable and bounded.
+
+## Posture
+automated
+
+## Risks
+- RISK-LOOP: expired credentials retry forever.
+
+## Exit criteria
+- All required cases pass on the candidate source.
+
+## Cases
+
+### {case_id} Expired credentials recover without a loop
+- Intent: Expired credentials recover without a loop.
+- Surface: api
+- Priority: critical
+- Risks: RISK-LOOP
+- Steps:
+  1. invoke the protected operation
+- Expected:
+  - one refresh and a successful retry
 "#,
         ),
     )
@@ -410,7 +412,7 @@ fn qa_unknown_blocks_ready_and_required_resolves_current_story_cases() {
         &node,
         Some(DOCS_NONE_SECTION),
         Some(&format!(
-            "## QA impact\n- Owner: {}\n- Posture: required\n- Cases: CASE-LOGIN-001\n- Reason: Behavioral checkpoint required.\n",
+            "## QA impact\n- Owner: {}\n- Posture: required\n- Cases: QA-001\n- Reason: Behavioral checkpoint required.\n",
             story.id
         )),
         None,
@@ -420,7 +422,7 @@ fn qa_unknown_blocks_ready_and_required_resolves_current_story_cases() {
     assert_eq!(qa.status, GateStatus::Failed);
     assert!(qa.reason_codes.contains(&"qa_baseline_missing".to_string()));
 
-    write_qa_baseline(repo, &story.id, "CASE-LOGIN-001");
+    write_qa_baseline(repo, &story.id, "QA-001");
     let report = store.readiness(&node.id).unwrap();
     assert_eq!(family(&report, "qa_impact").status, GateStatus::Passed);
 
@@ -431,7 +433,7 @@ fn qa_unknown_blocks_ready_and_required_resolves_current_story_cases() {
         &node,
         Some(DOCS_NONE_SECTION),
         Some(&format!(
-            "## QA impact\n- Owner: {}\n- Posture: required\n- Cases: CASE-MISSING\n- Reason: Changed case selection.\n",
+            "## QA impact\n- Owner: {}\n- Posture: required\n- Cases: QA-999\n- Reason: Changed case selection.\n",
             story.id
         )),
         None,

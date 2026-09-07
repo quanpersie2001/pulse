@@ -363,7 +363,8 @@ impl JsonGraphStore {
             "reviewer" => run_dir.join("reviewer-input.json"),
             _ => run_dir.join("qa-input.json"),
         };
-        let input_json = self.build_role_input(class, ticket_id, &node, &reservation)?;
+        let input_json =
+            self.build_role_input(class, ticket_id, &node, &reservation, &command_dir)?;
         fs::write(&input_path, &input_json).map_err(|error| PulseError::io(&input_path, error))?;
         if class == "worker" {
             let Some(reservation) = &reservation else {
@@ -490,19 +491,14 @@ impl JsonGraphStore {
             "ticket_id": initiating,
             "story_id": story_id,
             "source_commit": crate::source::head_commit(&self.repo_root)?,
-            "baseline_revision": baseline.revision,
+            "baseline_path": baseline.path,
             "baseline_content_hash": baseline.content_hash,
+            "posture": baseline.posture,
             "qa_posture": "required",
-            // Cases travel verbatim (intent, steps, expected) so the
-            // executor never has to resolve the baseline itself.
-            "cases": baseline.cases.iter().map(|case| json!({
-                "id": case.id,
-                "revision": case.revision,
-                "intent": case.intent,
-                "steps": case.steps,
-                "expected": case.expected,
-                "surface": case.surface,
-            })).collect::<Vec<_>>(),
+            "variables": qa_variables(&self.repo_root, story_id),
+            // Cases travel verbatim so the executor never has to resolve the
+            // baseline itself (Decision 0010 §Runner input).
+            "cases": baseline.cases,
             "artifact_dir": "artifacts",
         }))?;
         fs::write(&input_path, &input_json).map_err(|error| PulseError::io(&input_path, error))?;
@@ -895,6 +891,7 @@ impl JsonGraphStore {
         ticket_id: &str,
         node: &crate::graph::model::node::Node,
         reservation: &Option<CoreReservation>,
+        workspace: &Path,
     ) -> PulseResult<Vec<u8>> {
         match class {
             "worker" => {
@@ -1025,21 +1022,18 @@ impl JsonGraphStore {
                     "story_id": resolution.as_ref().map(|r| r.owner_id.clone()),
                     "qa_scope": "ticket_checkpoint",
                     "source_commit": crate::source::head_commit(&self.repo_root)?,
-                    "baseline_revision": resolution.as_ref().map(|r| r.revision),
+                    "baseline_path": resolution.as_ref().map(|r| r.path.clone()),
                     "baseline_content_hash": resolution.as_ref().map(|r| r.content_hash.clone()),
+                    // The Story's own posture (Decision 0010) next to the
+                    // Ticket's QA impact posture: the first says how the
+                    // baseline is meant to be exercised, the second whether
+                    // this Ticket owes a checkpoint at all.
+                    "posture": resolution.as_ref().map(|r| r.posture),
                     "qa_posture": qa_posture_str(posture),
-                    // Cases travel verbatim (intent, steps, expected) so
-                    // the executor never has to resolve the baseline itself.
-                    "cases": resolution.as_ref().map(|r| {
-                        r.cases.iter().map(|case| json!({
-                            "id": case.id,
-                            "revision": case.revision,
-                            "intent": case.intent,
-                            "steps": case.steps,
-                            "expected": case.expected,
-                            "surface": case.surface,
-                        })).collect::<Vec<_>>()
-                    }).unwrap_or_default(),
+                    "variables": qa_variables(workspace, ticket_id),
+                    // Cases travel verbatim so the executor never has to
+                    // resolve the baseline itself (Decision 0010 §Runner input).
+                    "cases": resolution.as_ref().map(|r| r.cases.clone()).unwrap_or_default(),
                     "artifact_dir": "artifacts",
                 }))?)
             }
@@ -1956,6 +1950,18 @@ fn verifying_handoffs(
     }
     handoffs.sort_by(|left, right| left.handoff_id.cmp(&right.handoff_id));
     Ok(handoffs)
+}
+
+/// The substitution variables a `pulse-check` block may reference (Decision
+/// 0010 §Block `pulse-check`). `REPO` is absolute because a role running in a
+/// Pulse-owned worktree resolves paths from a different cwd (Decision 0015 §3);
+/// the run-scoped paths stay workspace-relative so they read the same in both.
+fn qa_variables(workspace: &Path, subject_id: &str) -> serde_json::Value {
+    json!({
+        "REPO": absolute_display(workspace),
+        "ARTIFACT_DIR": format!("{RUN_DIR}/{subject_id}/artifacts"),
+        "STATE_FILE": format!("{RUN_DIR}/{subject_id}/qa-state.json"),
+    })
 }
 
 fn qa_posture_str(posture: crate::graph::model::contract::QaImpactPosture) -> &'static str {

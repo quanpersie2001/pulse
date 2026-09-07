@@ -35,9 +35,15 @@ pub struct QaRunnerInput {
     pub schema_version: u32,
     pub story_id: String,
     pub ticket_id: String,
+    pub qa_scope: super::QaExecutionScope,
     pub source_commit: String,
-    pub baseline_revision: u64,
+    pub baseline_path: String,
     pub baseline_content_hash: String,
+    pub posture: super::QaBaselinePosture,
+    /// `$REPO`, `$ARTIFACT_DIR`, `$STATE_FILE` and anything else a
+    /// `pulse-check` block may reference (Decision 0010 §Block `pulse-check`).
+    #[serde(default)]
+    pub variables: std::collections::BTreeMap<String, String>,
     pub cases: Vec<super::QaCase>,
 }
 
@@ -122,7 +128,7 @@ pub fn load_executor_manifest(
     Ok((manifest, executable, hash_bytes(&bytes)))
 }
 
-/// Validate that runner output covers exactly the resolved case revisions.
+/// Validate that runner output covers exactly the resolved case hashes.
 ///
 /// # Errors
 ///
@@ -157,9 +163,7 @@ pub fn validate_runner_output(
                 format!("QA runner returned unselected case {}", observation.case_id),
             )
         })?;
-        if !actual.insert(observation.case_id.as_str())
-            || observation.case_revision != case.revision
-        {
+        if !actual.insert(observation.case_id.as_str()) || observation.case_hash != case.case_hash {
             return Err(PulseError::validation(
                 "qa_runner_case_stale",
                 format!(
