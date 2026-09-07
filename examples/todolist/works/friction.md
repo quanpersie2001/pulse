@@ -11,7 +11,17 @@ Feeds the v0.2 backlog (PRODUCT.md §11) after the round.
   disposition rule, but the actual problem is the continuation line of a
   wrapped bullet. Cost: one failed sync per ticket (6/6 failed on first
   sync). Fix shape: parser should skip/merge continuation lines, or the
-  error should point at the offending line.
+  error should point at the offending line. **CLOSED 2026-09-07.** Both
+  halves done: a non-bullet line now continues the question above it, and
+  every open-question error quotes the offending line. Fixing only the
+  reported symptom would have left the same defect silent elsewhere —
+  `list_section`, `parse_acceptance` and `parse_key_values` all dropped
+  the second half of a wrapped bullet with no error at all, so a wrapped
+  `AC-1:` summary or `Rationale:` silently lost half its text. All three
+  now fold continuation lines. Cover:
+  `src/graph/model/brief.rs::tests::{a_wrapped_open_question_continues_the_bullet_above_it,
+  open_question_errors_name_the_offending_line,
+  wrapped_bullets_keep_their_second_half_in_every_list_section}`.
 - `work ready --profile` looks like it takes a PULSE.md verification
   profile (`module-change`); it actually wants a readiness profile and
   only `contract_readiness` exists. The flag collides with a documented

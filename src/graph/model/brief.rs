@@ -250,22 +250,46 @@ fn text_section(sections: &BTreeMap<String, String>, name: &str) -> Option<Strin
 fn list_section(sections: &BTreeMap<String, String>, name: &str) -> Vec<String> {
     sections
         .get(name)
-        .map(|body| body.lines().filter_map(list_item).collect())
+        .map(|body| list_items(body))
         .unwrap_or_default()
 }
 
-fn list_item(line: &str) -> Option<String> {
-    let value = line.trim().strip_prefix(['-', '*'])?.trim();
-    (!value.is_empty()).then(|| value.to_string())
+/// Fold a section body into logical list items.
+///
+/// A `-`/`*` line opens an item; every following non-bullet line joins it with
+/// a single space. Wrapping a long bullet is the most ordinary thing a human
+/// writes in Markdown, and reading the second line as its own item silently
+/// truncated the contract. Text before the first bullet is not a list item and
+/// is dropped, as it always was.
+fn list_items(body: &str) -> Vec<String> {
+    let mut items: Vec<String> = Vec::new();
+    for line in body.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        if let Some(value) = trimmed.strip_prefix(['-', '*']) {
+            let value = value.trim();
+            if !value.is_empty() {
+                items.push(value.to_string());
+            }
+            continue;
+        }
+        if let Some(item) = items.last_mut() {
+            item.push(' ');
+            item.push_str(trimmed);
+        }
+    }
+    items
 }
 
 fn parse_acceptance(sections: &BTreeMap<String, String>) -> Vec<AcceptanceItem> {
     sections
         .get("acceptance")
         .map(|body| {
-            body.lines()
-                .filter_map(|line| {
-                    let value = line.trim().strip_prefix(['-', '*'])?.trim();
+            list_items(body)
+                .into_iter()
+                .filter_map(|value| {
                     let (id, summary) = value.split_once(':')?;
                     let id = id.trim();
                     if !id.starts_with("AC-") || id.len() <= 3 || summary.trim().is_empty() {
@@ -285,23 +309,32 @@ fn parse_questions(sections: &BTreeMap<String, String>) -> PulseResult<Vec<OpenQ
     let Some(body) = sections.get("open questions") else {
         return Ok(Vec::new());
     };
-    let mut questions = Vec::new();
+    let mut questions: Vec<OpenQuestion> = Vec::new();
     for line in body.lines() {
         let trimmed = line.trim();
         if trimmed.is_empty() {
             continue;
         }
         let Some(value) = trimmed.strip_prefix(['-', '*']).map(str::trim) else {
-            return Err(invalid(
-                "ticket_brief_open_question_disposition_missing",
-                "every open question must be a list item with a disposition",
-            ));
+            // A wrapped bullet continues the question above it. Only text with
+            // no bullet to continue is a genuinely undispositioned question,
+            // and the error names the line so the author does not have to
+            // guess which one it meant.
+            let Some(question) = questions.last_mut() else {
+                return Err(invalid(
+                    "ticket_brief_open_question_disposition_missing",
+                    format!("open question must be a `- (disposition) text` list item: {trimmed}"),
+                ));
+            };
+            question.text.push(' ');
+            question.text.push_str(trimmed);
+            continue;
         };
         let Some((disposition, text)) = value.strip_prefix('(').and_then(|v| v.split_once(')'))
         else {
             return Err(invalid(
                 "ticket_brief_open_question_disposition_missing",
-                "every open question must declare a disposition",
+                format!("open question must declare a disposition in parentheses: {trimmed}"),
             ));
         };
         let disposition = match disposition.trim().to_ascii_lowercase().as_str() {
@@ -310,10 +343,10 @@ fn parse_questions(sections: &BTreeMap<String, String>) -> PulseResult<Vec<OpenQ
             "delegated" => OpenQuestionDisposition::Delegated,
             "deferred" => OpenQuestionDisposition::Deferred,
             "blocking" => OpenQuestionDisposition::Blocking,
-            _ => {
+            other => {
                 return Err(invalid(
                     "ticket_brief_open_question_disposition_missing",
-                    "open question disposition must be resolved, rejected, delegated, deferred, or blocking",
+                    format!("open question disposition {other:?} must be resolved, rejected, delegated, deferred, or blocking"),
                 ))
             }
         };
@@ -348,19 +381,36 @@ fn parse_freedom(sections: &BTreeMap<String, String>) -> ImplementationFreedom {
     ImplementationFreedom { mode, detail }
 }
 
+/// Parse a `Key: value` impact section, bulleted or not.
+///
+/// A line carrying a colon opens an entry; a line without one continues the
+/// value above it, so a wrapped rationale keeps its second half instead of
+/// being dropped on the floor.
 fn parse_key_values(sections: &BTreeMap<String, String>, name: &str) -> BTreeMap<String, String> {
-    sections
-        .get(name)
-        .map(|body| {
-            body.lines()
-                .filter_map(|line| {
-                    let line = line.trim().trim_start_matches(['-', '*']).trim();
-                    let (key, value) = line.split_once(':')?;
-                    Some((key.trim().to_ascii_lowercase(), value.trim().to_string()))
-                })
-                .collect()
-        })
-        .unwrap_or_default()
+    let mut values: BTreeMap<String, String> = BTreeMap::new();
+    let mut open: Option<String> = None;
+    for line in sections.get(name).into_iter().flat_map(|body| body.lines()) {
+        let line = line.trim().trim_start_matches(['-', '*']).trim();
+        if line.is_empty() {
+            continue;
+        }
+        match line.split_once(':') {
+            Some((key, value)) => {
+                let key = key.trim().to_ascii_lowercase();
+                values.insert(key.clone(), value.trim().to_string());
+                open = Some(key);
+            }
+            None => {
+                if let Some(value) = open.as_ref().and_then(|key| values.get_mut(key)) {
+                    if !value.is_empty() {
+                        value.push(' ');
+                    }
+                    value.push_str(line);
+                }
+            }
+        }
+    }
+    values
 }
 
 fn parse_documentation(sections: &BTreeMap<String, String>) -> Option<DocumentationImpactBrief> {
@@ -511,6 +561,68 @@ mod tests {
         assert_eq!(
             parse_ticket_brief(&text).unwrap_err().code(),
             "ticket_brief_open_question_disposition_missing"
+        );
+    }
+
+    #[test]
+    fn a_wrapped_open_question_continues_the_bullet_above_it() {
+        // Six of six Track B Tickets failed their first `work sync` on this:
+        // the continuation line of a wrapped bullet was read as a new,
+        // undispositioned question.
+        let text = format!(
+            "{R0}\n## Open questions\n- (delegated) Should the retry budget be\n  per request or per session?\n- (deferred) Metrics naming.\n"
+        );
+        let brief = parse_ticket_brief(&text).unwrap();
+        assert_eq!(brief.open_questions.len(), 2);
+        assert_eq!(
+            brief.open_questions[0].text,
+            "Should the retry budget be per request or per session?"
+        );
+        assert_eq!(
+            brief.open_questions[0].disposition,
+            OpenQuestionDisposition::Delegated
+        );
+    }
+
+    #[test]
+    fn open_question_errors_name_the_offending_line() {
+        // Prose with no bullet above it to continue is still a real error.
+        let stray = format!("{R0}\n## Open questions\nWhich API should we call?\n");
+        let error = parse_ticket_brief(&stray).unwrap_err();
+        assert_eq!(
+            error.code(),
+            "ticket_brief_open_question_disposition_missing"
+        );
+        assert!(
+            error.to_string().contains("Which API should we call?"),
+            "{error}"
+        );
+
+        let unknown = format!("{R0}\n## Open questions\n- (maybe) Which API?\n");
+        let error = parse_ticket_brief(&unknown).unwrap_err();
+        assert!(error.to_string().contains("maybe"), "{error}");
+    }
+
+    #[test]
+    fn wrapped_bullets_keep_their_second_half_in_every_list_section() {
+        let text = "# TK-002 Wrapped\n\n## Objective\nDo it.\n\n\
+             ## Code anchors\n- src/auth/session.rs, the branch that refreshes\n  an expired token\n\n\
+             ## Acceptance\n- AC-1: An expired token refreshes once and the\n  retry succeeds.\n\n\
+             ## Verify\n- cargo test --test graph -- lifecycle\n\n\
+             ## QA impact\n- Owner: ST-014\n- Posture: none\n- Cases:\n\
+             - Rationale: The change is internal and no observable\n  behavior moves.\n";
+        let brief = parse_ticket_brief(text).unwrap();
+        assert_eq!(
+            brief.code_anchors,
+            vec!["src/auth/session.rs, the branch that refreshes an expired token"]
+        );
+        assert_eq!(
+            brief.acceptance[0].summary,
+            "An expired token refreshes once and the retry succeeds."
+        );
+        assert_eq!(
+            brief.qa.as_ref().unwrap().reason.as_deref(),
+            Some("The change is internal and no observable behavior moves.")
         );
     }
 
