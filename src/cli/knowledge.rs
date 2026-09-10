@@ -38,9 +38,16 @@ pub(crate) enum KnowledgeCommand {
     /// validated (`knowledge validate <id> --evidence <receipt>`).
     Validate {
         learning_id: String,
-        /// Evidence receipt id that proves the learning.
+        /// Evidence receipt id that proves the learning. For kind `ratchet`
+        /// this is the handoff of the rerun that used it.
         #[arg(long)]
         evidence: String,
+        /// Confirm the learning's `expected_signal` actually appeared in that
+        /// receipt. Required for kind `ratchet`: Pulse checks the handoff
+        /// reported the learning helpful, but reading prose against prose is
+        /// the actor's judgement, recorded here as an attributed claim.
+        #[arg(long, default_value_t = false)]
+        signal_observed: bool,
         #[arg(long)]
         actor: String,
         #[arg(long)]
@@ -285,7 +292,7 @@ use crate::cli::output::render;
 use crate::knowledge::model::{LearningDraft, LearningPatch};
 use crate::knowledge::store::{
     KnowledgeStore, OperationContext as KnowledgeOperationContext, PromoteArgs, PromoteTarget,
-    RelationAdd,
+    RelationAdd, TransitionEvidence,
 };
 use crate::{JsonGraphStore, PulseError};
 
@@ -359,15 +366,18 @@ pub(crate) fn handle(store: &JsonGraphStore, command: KnowledgeCommand) -> Resul
         KnowledgeCommand::Validate {
             learning_id,
             evidence,
+            signal_observed,
             actor,
             json,
         } => {
             let out = knowledge.transition_status(
                 &learning_id,
                 LearningStatus::Validated,
-                Some(&evidence),
-                None,
-                None,
+                TransitionEvidence {
+                    evidence_receipt: Some(&evidence),
+                    signal_observed,
+                    ..TransitionEvidence::default()
+                },
                 KnowledgeOperationContext {
                     actor,
                     now: chrono::Utc::now(),

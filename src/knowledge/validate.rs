@@ -304,6 +304,22 @@ fn validate_learning(
             "ratchet learning requires required_checks",
         );
     }
+    // Decision 0012 §7: a ratchet learning claims the harness got better, and
+    // that claim is only checkable if it says up front what a rerun should
+    // show. Without it, `validated` would rest on a worker's own report.
+    if entry.kind == LearningKind::Ratchet
+        && entry
+            .expected_signal
+            .as_deref()
+            .map_or(true, |signal| signal.trim().is_empty())
+    {
+        report.push_error(
+            "learning_expected_signal_missing",
+            Some(entry.id.clone()),
+            "ratchet learning requires expected_signal: one line naming what the next \
+             run's handoff receipt must show",
+        );
+    }
     if let Some(content) = &entry.content {
         validate_content(repo_root, &entry.id, content, report);
     }

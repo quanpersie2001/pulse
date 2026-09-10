@@ -115,6 +115,7 @@ fn docs_evidence_knowledge_storage_and_identity_public_paths_compile() {
 
     let _learning = LearningDraft {
         scope: None,
+        expected_signal: None,
         title: "Use public paths intentionally".to_string(),
         kind: LearningKind::ContextRoutingInsight,
         severity: Severity::Low,

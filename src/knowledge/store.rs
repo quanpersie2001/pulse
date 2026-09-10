@@ -94,6 +94,26 @@ pub struct RelationAdd {
     pub expected_revision: u64,
 }
 
+/// What a status transition needs to justify itself.
+///
+/// Each target status draws on a different subset, which is why these travel
+/// together rather than as positional parameters: `validated` needs
+/// `evidence_receipt` (and, for kind `ratchet`, `signal_observed`), `promoted`
+/// needs `document_id`, and `retired`/`superseded` need only `rationale`.
+#[derive(Debug, Clone, Default)]
+pub struct TransitionEvidence<'a> {
+    /// Receipt proving the learning. For kind `ratchet`, the handoff of the
+    /// rerun that used it.
+    pub evidence_receipt: Option<&'a str>,
+    /// Registry document a promotion targets.
+    pub document_id: Option<&'a str>,
+    /// Free-text reason recorded with the transition.
+    pub rationale: Option<String>,
+    /// The actor confirms the learning's `expected_signal` appeared in
+    /// `evidence_receipt`. Required for kind `ratchet` (Decision 0012 §7).
+    pub signal_observed: bool,
+}
+
 #[derive(Debug, Clone)]
 pub struct OperationContext {
     pub actor: String,
@@ -435,20 +455,30 @@ impl KnowledgeStore {
 
     /// Ratchet lifecycle transition.
     ///
-    /// `candidate|reviewed -> validated` requires an evidence receipt id
-    /// that resolves in the evidence store. `validated -> promoted`
-    /// requires a registry document and records a `promoted_to` relation
-    /// bound to the document's current revision and content hash in the
-    /// same transaction.
+    /// `candidate|reviewed -> validated` requires an evidence receipt id that
+    /// resolves in the evidence store; for kind `ratchet` that receipt must be
+    /// a handoff reporting the learning helpful, plus a confirmed
+    /// `expected_signal` (Decision 0012 §7). `validated -> promoted` requires a
+    /// registry document and records a `promoted_to` relation bound to the
+    /// document's current revision and content hash in the same transaction.
+    ///
+    /// # Errors
+    /// Returns a validation error when the learning is absent, the transition
+    /// is not allowed from its current status, or the target status's evidence
+    /// requirements are unmet.
     pub fn transition_status(
         &self,
         id: &str,
         to: LearningStatus,
-        evidence_receipt: Option<&str>,
-        document_id: Option<&str>,
-        rationale: Option<String>,
+        evidence: TransitionEvidence<'_>,
         ctx: OperationContext,
     ) -> PulseResult<MutationOutcome<Learning>> {
+        let TransitionEvidence {
+            evidence_receipt,
+            document_id,
+            rationale,
+            signal_observed,
+        } = evidence;
         let _guard = WriteGuard::acquire(&self.repo_root)?;
         let manifest = bootstrap_unlocked(&self.repo_root)?.manifest;
         recover_prepared_transactions(&self.repo_root)?;
@@ -474,14 +504,26 @@ impl KnowledgeStore {
                         "validating a learning requires --evidence <receipt-id>",
                     )
                 })?;
-                crate::evidence::receipt::load_receipt(&self.repo_root, receipt_id).map_err(
-                    |error| {
-                        PulseError::validation(
-                            "knowledge_validate_evidence_missing",
-                            format!("evidence receipt does not resolve: {error}"),
-                        )
-                    },
-                )?;
+                let receipt_resolves =
+                    crate::evidence::receipt::load_receipt(&self.repo_root, receipt_id).is_ok();
+                // Decision 0012 §7: a ratchet learning is proved by a rerun,
+                // not by a receipt of any kind. Its evidence is the handoff
+                // that reported the learning helpful, which lives in the
+                // execution handoff family, not in `evidence/receipts/`.
+                if learning.kind == LearningKind::Ratchet {
+                    validate_ratchet_evidence(
+                        &self.repo_root,
+                        &learning,
+                        receipt_id,
+                        signal_observed,
+                    )?;
+                    learning.validation.signal_observed_at = Some(ctx.now);
+                } else if !receipt_resolves {
+                    return Err(PulseError::validation(
+                        "knowledge_validate_evidence_missing",
+                        format!("evidence receipt does not resolve: {receipt_id}"),
+                    ));
+                }
                 learning.validation.validated_by.push(ctx.actor.clone());
                 learning.validation.validated_at = Some(ctx.now);
                 if learning.validation.confidence == Confidence::Low {
@@ -1297,6 +1339,73 @@ fn has_pending_transaction(repo_root: &Path) -> PulseResult<bool> {
     Ok(false)
 }
 
+/// Gate a ratchet learning's move to `validated` (Decision 0012 §7).
+///
+/// Two halves, deliberately split by who can judge them. The mechanical half
+/// is Pulse's: the named handoff must exist and must report this learning
+/// `helpful`, which is a fact about bytes on disk. The semantic half — did the
+/// `expected_signal` actually show up in that receipt — is prose against
+/// prose, so principle 5 keeps Pulse out of it: the actor asserts it with
+/// `--signal-observed`, and the assertion is attributed and timestamped rather
+/// than assumed.
+///
+/// # Errors
+/// Returns a validation error when the handoff does not resolve, does not
+/// report the learning helpful, or the signal was not confirmed.
+fn validate_ratchet_evidence(
+    repo_root: &Path,
+    learning: &Learning,
+    handoff_id: &str,
+    signal_observed: bool,
+) -> PulseResult<()> {
+    if !signal_observed {
+        let signal = learning.expected_signal.as_deref().unwrap_or("");
+        return Err(PulseError::validation(
+            "knowledge_validate_signal_unconfirmed",
+            format!(
+                "ratchet learning {} needs --signal-observed: confirm this appeared in the \
+                 rerun's handoff receipt — {signal}",
+                learning.id
+            ),
+        ));
+    }
+    let path = repo_root
+        .join(".pulse/evidence/execution/handoffs")
+        .join(format!("{handoff_id}.json"));
+    let bytes = fs::read(&path).map_err(|_| {
+        PulseError::validation(
+            "knowledge_validate_evidence_missing",
+            format!(
+                "ratchet learning {} must be validated by a handoff receipt; {handoff_id} is not \
+                 one",
+                learning.id
+            ),
+        )
+    })?;
+    let value: serde_json::Value =
+        serde_json::from_slice(&bytes).map_err(|error| PulseError::json(&path, error))?;
+    let helpful = value
+        .get("knowledge_usage")
+        .and_then(|usage| usage.as_array())
+        .is_some_and(|usage| {
+            usage.iter().any(|claim| {
+                claim.get("learning_id").and_then(|id| id.as_str()) == Some(learning.id.as_str())
+                    && claim.get("outcome").and_then(|o| o.as_str()) == Some("helpful")
+            })
+        });
+    if !helpful {
+        return Err(PulseError::validation(
+            "knowledge_validate_usage_missing",
+            format!(
+                "handoff {handoff_id} does not report learning {} as helpful; a ratchet learning \
+                 is validated by a rerun that used it, not by assertion",
+                learning.id
+            ),
+        ));
+    }
+    Ok(())
+}
+
 fn apply_patch(learning: &mut Learning, patch: LearningPatch, now: DateTime<Utc>) -> Vec<String> {
     let mut changed = Vec::new();
     if let Some(v) = patch.title {
@@ -1323,6 +1432,14 @@ fn apply_patch(learning: &mut Learning, patch: LearningPatch, now: DateTime<Utc>
         if learning.summary != v {
             learning.summary = v;
             changed.push("summary".to_string());
+        }
+    }
+    if let Some(v) = patch.expected_signal {
+        let v = v.trim().to_string();
+        let v = (!v.is_empty()).then_some(v);
+        if learning.expected_signal != v {
+            learning.expected_signal = v;
+            changed.push("expected_signal".to_string());
         }
     }
     if let Some(v) = patch.guidance {

@@ -3,7 +3,7 @@ use pulse::graph::store::OperationContext as WorkCtx;
 use pulse::id::WorkKind;
 use pulse::knowledge::model::*;
 use pulse::knowledge::relation::EndpointKind;
-use pulse::knowledge::store::{KnowledgeStore, OperationContext};
+use pulse::knowledge::store::{KnowledgeStore, OperationContext, TransitionEvidence};
 use pulse::storage::transaction::{persist_intent, FileState, TransactionIntent};
 use pulse::JsonGraphStore;
 use serde_json::json;
@@ -34,6 +34,7 @@ fn setup() -> (Repo, JsonGraphStore, KnowledgeStore, String) {
 fn draft(work_id: &str) -> LearningDraft {
     LearningDraft {
         scope: None,
+        expected_signal: None,
         title: "Token rotation requires atomic mutation".to_string(),
         kind: LearningKind::FailurePattern,
         severity: Severity::High,
@@ -341,9 +342,10 @@ fn post_candidate_edits_carry_administrative_fields_like_scope() {
         .transition_status(
             &learning.id,
             LearningStatus::Validated,
-            Some("rcpt_01J00000000000000000000001"),
-            None,
-            None,
+            TransitionEvidence {
+                evidence_receipt: Some("rcpt_01J00000000000000000000001"),
+                ..TransitionEvidence::default()
+            },
             ctx(2),
         )
         .unwrap()
@@ -382,4 +384,177 @@ fn post_candidate_edits_carry_administrative_fields_like_scope() {
         )
         .unwrap_err();
     assert_eq!(error.code(), "learning_promotion_invalid");
+}
+
+// ---------------------------------------------------------------------------
+// Decision 0012 §7: a ratchet learning carries expected_signal
+// ---------------------------------------------------------------------------
+
+/// A ratchet draft with the required guidance and the signal a rerun must show.
+fn ratchet_draft(work_id: &str, expected_signal: Option<&str>) -> LearningDraft {
+    let mut draft = draft(work_id);
+    draft.title = "Reviewer skipped docs_validation on a docs-required Ticket".to_string();
+    draft.kind = LearningKind::Ratchet;
+    draft.expected_signal = expected_signal.map(str::to_string);
+    draft.guidance.required_checks = vec!["pulse docs validate --record".to_string()];
+    draft
+}
+
+/// Write a handoff receipt reporting `outcome` for `learning_id`, the shape
+/// `knowledge validate` reads for a ratchet learning.
+fn write_handoff(repo: &std::path::Path, handoff_id: &str, learning_id: &str, outcome: &str) {
+    let dir = repo.join(".pulse/evidence/execution/handoffs");
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(
+        dir.join(format!("{handoff_id}.json")),
+        serde_json::to_vec(&json!({
+            "handoff_id": handoff_id,
+            "knowledge_usage": [
+                {"learning_id": learning_id, "injected": true, "applied": true, "outcome": outcome}
+            ],
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+}
+
+/// A ratchet learning without `expected_signal` is refused at creation: its
+/// whole claim is that a rerun will show something, so it must say what.
+#[test]
+fn ratchet_learning_requires_an_expected_signal() {
+    let (repo, _graph, knowledge, work_id) = setup();
+    knowledge.bootstrap().unwrap();
+
+    let error = knowledge
+        .create(ratchet_draft(&work_id, None), ctx(1))
+        .unwrap_err();
+    assert_eq!(error.code(), "learning_expected_signal_missing");
+
+    // With the signal, the same draft is accepted and keeps it verbatim.
+    let signal = "The next docs-required handoff lists a documentation_validation receipt.";
+    let learning = knowledge
+        .create(ratchet_draft(&work_id, Some(signal)), ctx(1))
+        .unwrap()
+        .value;
+    assert_eq!(learning.expected_signal.as_deref(), Some(signal));
+    assert!(learning.validation.signal_observed_at.is_none());
+    let _ = repo;
+}
+
+/// Validation of a ratchet learning is gated on both halves: the handoff must
+/// mechanically report the learning helpful, and the actor must confirm the
+/// signal appeared. Neither half alone promotes it to `validated`.
+#[test]
+fn ratchet_validation_needs_a_helpful_handoff_and_a_confirmed_signal() {
+    let (repo, _graph, knowledge, work_id) = setup();
+    knowledge.bootstrap().unwrap();
+    let signal = "The next docs-required handoff lists a documentation_validation receipt.";
+    let learning = knowledge
+        .create(ratchet_draft(&work_id, Some(signal)), ctx(1))
+        .unwrap()
+        .value;
+    let id = learning.id.clone();
+
+    // Without --signal-observed the actor has asserted nothing.
+    write_handoff(repo.path(), "hoff_helpful", &id, "helpful");
+    let error = knowledge
+        .transition_status(
+            &id,
+            LearningStatus::Validated,
+            TransitionEvidence {
+                evidence_receipt: Some("hoff_helpful"),
+                signal_observed: false,
+                ..TransitionEvidence::default()
+            },
+            ctx(2),
+        )
+        .unwrap_err();
+    assert_eq!(error.code(), "knowledge_validate_signal_unconfirmed");
+    assert!(
+        error.to_string().contains(signal),
+        "the refusal must quote the signal being confirmed: {error}"
+    );
+
+    // A handoff that did not find the learning helpful is not evidence, even
+    // with the confirmation.
+    write_handoff(repo.path(), "hoff_not_needed", &id, "not_needed");
+    let error = knowledge
+        .transition_status(
+            &id,
+            LearningStatus::Validated,
+            TransitionEvidence {
+                evidence_receipt: Some("hoff_not_needed"),
+                signal_observed: true,
+                ..TransitionEvidence::default()
+            },
+            ctx(2),
+        )
+        .unwrap_err();
+    assert_eq!(error.code(), "knowledge_validate_usage_missing");
+
+    // A receipt that is not a handoff at all cannot prove a rerun happened.
+    let error = knowledge
+        .transition_status(
+            &id,
+            LearningStatus::Validated,
+            TransitionEvidence {
+                evidence_receipt: Some("rcpt_01J00000000000000000000001"),
+                signal_observed: true,
+                ..TransitionEvidence::default()
+            },
+            ctx(2),
+        )
+        .unwrap_err();
+    assert_eq!(error.code(), "knowledge_validate_evidence_missing");
+
+    // Both halves present: validated, with the confirmation timestamped and
+    // attributed to the confirming actor.
+    let validated = knowledge
+        .transition_status(
+            &id,
+            LearningStatus::Validated,
+            TransitionEvidence {
+                evidence_receipt: Some("hoff_helpful"),
+                signal_observed: true,
+                ..TransitionEvidence::default()
+            },
+            ctx(2),
+        )
+        .unwrap()
+        .value;
+    assert_eq!(validated.status, LearningStatus::Validated);
+    assert_eq!(
+        validated.validation.signal_observed_at,
+        Some(Utc.timestamp_opt(2, 0).unwrap())
+    );
+    assert_eq!(
+        validated.validation.validated_by.last().map(String::as_str),
+        Some("human:test")
+    );
+}
+
+/// A non-ratchet learning is unaffected: it still validates against any
+/// resolving evidence receipt and records no signal confirmation.
+#[test]
+fn non_ratchet_validation_is_unchanged_by_the_signal_gate() {
+    let (repo, _graph, knowledge, work_id) = setup();
+    knowledge.bootstrap().unwrap();
+    let learning = knowledge.create(draft(&work_id), ctx(1)).unwrap().value;
+    // A handoff is not a receipt; a non-ratchet learning must not be gated on
+    // one, so this must fail for the ordinary "receipt does not resolve"
+    // reason rather than a ratchet-specific code.
+    let error = knowledge
+        .transition_status(
+            &learning.id,
+            LearningStatus::Validated,
+            TransitionEvidence {
+                evidence_receipt: Some("rcpt_does_not_exist"),
+                signal_observed: false,
+                ..TransitionEvidence::default()
+            },
+            ctx(2),
+        )
+        .unwrap_err();
+    assert_eq!(error.code(), "knowledge_validate_evidence_missing");
+    let _ = repo;
 }

@@ -44,6 +44,7 @@ fn setup() -> (Repo, JsonGraphStore, KnowledgeStore, String) {
 fn draft(work_id: &str) -> LearningDraft {
     LearningDraft {
         scope: None,
+        expected_signal: None,
         title: "Token rotation requires atomic mutation".to_string(),
         kind: LearningKind::FailurePattern,
         severity: Severity::High,

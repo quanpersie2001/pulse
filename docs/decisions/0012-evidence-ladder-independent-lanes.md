@@ -342,6 +342,26 @@ Lead là session ratchet. Sau khi ba lane trả kết quả:
 `expected_signal` xuất hiện trong receipt của Ticket rerun. Không xuất hiện
 thì `not_needed` hoặc `misleading`, không `helpful`.
 
+**Implement 2026-09-11.** Hai nửa được tách theo *ai phán đoán được*:
+
+- Nửa máy là của Pulse. `--evidence` của learning `ratchet` phải là một
+  **handoff receipt** (`.pulse/evidence/execution/handoffs/`, không phải
+  `evidence/receipts/`) và receipt đó phải mang `knowledge_usage` với đúng
+  learning id và outcome `helpful`. Đây là sự thật về byte trên đĩa.
+- Nửa ngữ nghĩa không phải của Pulse. `expected_signal` là prose, receipt là
+  prose; so khớp chúng là phán đoán ngữ nghĩa, mà nguyên tắc 5 cấm. Nên actor
+  khẳng định bằng cờ `--signal-observed`, và khẳng định đó được **quy trách
+  nhiệm và đóng dấu thời gian** ở `validation.signal_observed_at` thay vì được
+  ngầm giả định. Thiếu cờ thì lỗi `knowledge_validate_signal_unconfirmed`, và
+  thông báo lỗi in nguyên văn signal cần xác nhận.
+
+Giữ nguyên ràng buộc `required_checks` không rỗng cho kind `ratchet` đã có từ
+trước; ADR này không nói gì về nó nên không đụng tới. Hệ quả: candidate sinh
+tự động từ friction (Decision 0009 phần C) vẫn dùng `ProcessInsight`, vì một
+báo cáo ma sát nói cái gì đau chứ không nói rerun phải thấy gì —
+`pulse-ratchet` mới là chỗ cấp signal khi phân loại candidate thành
+intervention.
+
 ## Thay đổi
 
 Code, cùng lượt với `run.rs` đang dở:

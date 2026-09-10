@@ -19,6 +19,17 @@ pub struct Learning {
     pub scope: LearningScope,
     pub severity: Severity,
     pub summary: String,
+    /// One line naming what a rerun's handoff receipt must show for this
+    /// learning to count as having worked (Decision 0012 §7). Required for
+    /// kind `ratchet`, whose whole point is that the next run proves the
+    /// change; optional elsewhere.
+    ///
+    /// Pulse never matches this prose against a receipt — principle 5 keeps
+    /// semantic judgement out of the mechanism. It is the text a developer or
+    /// the next ratchet session confirms against, and `knowledge validate`
+    /// records that confirmation as an attributed claim.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected_signal: Option<String>,
     pub guidance: Guidance,
     pub applicability: Applicability,
     pub provenance: LearningProvenance,
@@ -41,6 +52,9 @@ pub struct LearningDraft {
     pub scope: Option<LearningScope>,
     pub severity: Severity,
     pub summary: String,
+    /// See [`Learning::expected_signal`]. Required for kind `ratchet`.
+    #[serde(default)]
+    pub expected_signal: Option<String>,
     pub guidance: Guidance,
     pub applicability: Applicability,
     #[serde(default)]
@@ -62,6 +76,9 @@ pub struct LearningPatch {
     pub scope: Option<LearningScope>,
     pub severity: Option<Severity>,
     pub summary: Option<String>,
+    /// See [`Learning::expected_signal`].
+    #[serde(default)]
+    pub expected_signal: Option<String>,
     pub guidance: Option<Guidance>,
     pub applicability: Option<Applicability>,
     pub routing: Option<Routing>,
@@ -146,6 +163,12 @@ pub struct ValidationPosture {
     #[serde(default)]
     pub validated_by: Vec<String>,
     pub validated_at: Option<DateTime<Utc>>,
+    /// When an actor confirmed that the learning's `expected_signal` actually
+    /// appeared in the rerun's receipt (Decision 0012 §7). Set only through
+    /// `knowledge validate --signal-observed`; the confirming actor is the
+    /// last entry of `validated_by`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signal_observed_at: Option<DateTime<Utc>>,
     pub reproduction_count: u64,
     pub contradiction_status: ContradictionStatus,
 }
@@ -329,6 +352,7 @@ impl Default for ValidationPosture {
             confidence: Confidence::Low,
             validated_by: Vec::new(),
             validated_at: None,
+            signal_observed_at: None,
             reproduction_count: 1,
             contradiction_status: ContradictionStatus::None,
         }
@@ -412,6 +436,10 @@ impl LearningDraft {
             scope: self.scope.unwrap_or_default(),
             severity: self.severity,
             summary: self.summary.trim().to_string(),
+            expected_signal: self
+                .expected_signal
+                .map(|signal| signal.trim().to_string())
+                .filter(|signal| !signal.is_empty()),
             guidance: self.guidance,
             applicability: self.applicability,
             provenance: LearningProvenance {

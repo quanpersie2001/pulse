@@ -818,6 +818,10 @@ fn friction_draft(ticket_id: &str, revision: u64, friction: String) -> LearningD
         scope: Some(LearningScope::Harness),
         severity: Severity::Low,
         summary: friction.clone(),
+        // Not a ratchet learning: a friction report says what hurt, not what a
+        // rerun should show. `pulse-ratchet` supplies the signal when it
+        // triages this candidate into an intervention.
+        expected_signal: None,
         guidance: Guidance {
             r#do: vec![FRICTION_GUIDANCE.to_string()],
             ..Guidance::default()
