@@ -20,6 +20,7 @@ Current decisions:
 - [0014 — Pulse ghi `qa_checkpoint`, runner chỉ in output](0014-pulse-records-qa-checkpoint.md)
 - [0015 — Worktree dispatch: workspace trong worktree, state về repo chính](0015-worktree-dispatch-workspace-state.md)
 - [0016 — Worker sở hữu docs receipt, gate chặn tại handoff](0016-docs-receipt-ownership-at-handoff.md)
+- [0017 — Receipt không đọc được phải được báo, không được xoá khỏi danh sách](0017-unreadable-receipts-are-reported-not-erased.md)
 
 Add or update a decision when:
 

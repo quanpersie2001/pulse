@@ -2,7 +2,19 @@
 
 ## Status
 
-Accepted.
+Accepted. Narrowed by [Decision 0008](0008-narrow-scope-to-truth-layer.md) on
+2026-09: the daemon is gone, so every mention below of *daemon session
+prompts*, *daemon-owned Workspace and Session identities* and *a daemon session
+bootstrap* now reads as `pulse run`, which writes the bootstrap prompt to
+`.pulse/runtime/run/<ticket>/` for the agent to read.
+
+The substance stands and is implemented. The bootstrap prompt is an
+identity/workflow wrapper, never a second Ticket contract; the packet is the
+machine-readable execution contract; `pulse work packet <id> --lease <lease-id>`
+still resolves the immutable packet committed with the reservation rather than
+rebuilding from a newer revision; required docs load through `pulse docs get`
+and applicable learning through `pulse knowledge applicable`; and there is
+still no `pulse run context` command duplicating that responsibility.
 
 ## Context
 

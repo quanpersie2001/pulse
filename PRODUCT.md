@@ -598,7 +598,7 @@ Lọc docs receipt theo ticket id không bao giờ khớp.
 proof list rỗng chỉ có nghĩa "không tồn tại" khi `unreadable` cũng rỗng;
 ngược lại reviewer phải báo finding thuộc về evidence store, không rework
 worker. Không có trường này thì một receipt hỏng biến thành lỗi im lặng của
-worker — đúng lớp lỗi Decision 0016 đóng.
+worker — đúng lớp lỗi Decision 0016 đóng. Decision 0017.
 
 Reviewer output:
 
@@ -1474,6 +1474,11 @@ Gặp một dấu hiệu thì dừng feature liên quan, ghi Decision, sửa har
     docs receipt theo source commit (không theo ticket id, vốn không bao giờ
     khớp) và reviewer dùng lại thay vì tự ghi. Close gate không đổi: vẫn chỉ
     đọc proof của reviewer. Decision 0016. Chốt 2026-09-07.
+13. **Receipt không đọc được được báo, không bị xoá khỏi danh sách.**
+    `list_receipts` liệt kê tiếp và gom file hỏng vào `unreadable[]`; filter
+    không giấu chúng; `ReceiptList` luôn serialize trường đó kể cả khi rỗng.
+    "Không tồn tại" và "không nhìn được" là hai kết luận ngược nhau và không
+    được dùng chung một danh sách rỗng. Decision 0017. Chốt 2026-09-11.
 
 Còn mở, mặc định nếu không có ý kiến khác:
 
