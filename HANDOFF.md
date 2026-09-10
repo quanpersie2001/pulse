@@ -1,208 +1,162 @@
-# Handoff: Pulse — 0009 phần C đã xong, tiếp theo là phần A
+# Handoff: Pulse — nợ ADR đã trả hết, tiếp theo là skill surface
 
 ## Trạng thái bàn giao
 
 - Repo: `/Users/quannv.dev/Workspace/Personal/pulse`
 - Nhánh: `features/harness-experimental` (chưa push)
-- HEAD: `d2db8b5` feat(close): derive harness learning candidates from friction
-- Tag: `v0.1.0` ở `16a0ef3`; `dogfood/track-b-final` ở `7fb1dd7` — toàn bộ
-  dogfood target trước khi gỡ.
-- Working tree: **sạch** (trừ file này).
+- HEAD: `21f1756` docs: close the two ADR debts
+- Tag: `v0.1.0` ở `16a0ef3`; `dogfood/track-b-final` ở `7fb1dd7`
+- Working tree: **sạch**
 - Ba gate xanh tại HEAD: `cargo fmt --check`, `cargo clippy --all-targets
-  --quiet -- -D warnings`, `cargo test --all-targets` — **596 test** (trước là
-  589; thêm 7), default threading.
+  --quiet -- -D warnings`, `cargo test --all-targets` — **616 test** (trước là
+  596), default threading.
 
-Hai commit của phiên này:
+Bốn commit của phiên này:
 
 ```
-1f2bf28 feat(note): record a note kind and read friction back (0009 part C)
-d2db8b5 feat(close): derive harness learning candidates from friction (0009 part C)
+f903b6e feat(init): write the AGENTS.md block and PULSE.md (0009 part A)
+0776335 feat(events): one JSONL file per day (0011)
+03bd3c4 feat(knowledge): expected_signal gates a ratchet learning (0012)
+21f1756 docs: close the two ADR debts (0004 narrowed, 0017 written)
 ```
 
-Handoff trước xếp phần C thành bốn mục và yêu cầu mỗi mục một commit. Mục 1
-tách được thật nên đứng riêng. Mục 2 và 3 là một chuỗi phụ thuộc cứng — mục 3
-không compile nếu thiếu trường `frictions` của mục 2 — nên nằm chung một commit
-thay vì dựng ranh giới giả. Mục 4 (test) nằm trong chính hai commit đó.
+Thứ tự làm việc do người dùng chốt: **hoàn thành hết ADR đã accepted → dựng
+skill → instruction flow → rồi mới tạo example**. Ngược với handoff trước (định
+lấy dữ liệu dogfood rồi mới chốt phạm vi part B), nhưng nhất quán hơn với chính
+lý do `PRODUCT.md` §13.1 gỡ target cũ: chạy trên harness dở dang thì friction
+lẫn "thiếu một tầng" với "thiết kế sai".
 
 ---
 
-# ĐÃ LÀM: đường ống friction (0009 phần C)
+# ĐÃ LÀM
 
-Nửa **sản xuất** của vòng harness learning giờ đã chạy. Nửa tiêu thụ đã có sẵn
-từ trước (`run.rs` render `## Harness learnings`, `packet.rs` lọc khỏi
-injection).
+## Audit ADR: 16 → 17 record, nợ code còn đúng một mục
 
-## Hai quyết định thiết kế, đã chốt với người dùng
+Kết quả audit từng ADR đối chiếu code (đừng audit lại, trừ khi nghi ngờ):
 
-**1. `--friction` khi handoff ghi vào `HandoffReceipt`, không ghi note.**
-`HandoffReceipt` thêm `frictions: Vec<String>` với `#[serde(default,
-skip_serializing_if = "Vec::is_empty")]` — đúng khuôn `checks` /
-`acceptance_proofs` / `knowledge_usage` đã dùng, nên receipt cũ giữ nguyên
-fingerprint.
+| ADR | Trạng thái |
+|---|---|
+| 0010, 0014, 0015, 0016 | Landed từ trước |
+| 0011 | **Landed phiên này** |
+| 0012 | Landed, `expected_signal` **bổ sung phiên này** |
+| 0013 | `note --work`, `context_exhausted` có; `.pulse/runtime/handoff/<node>.md` và skill `pulse-handoff` thuộc part B |
+| 0009 | A ✅ (`f903b6e`), C ✅ (phiên trước), **B (skill) chưa** |
+| 0004 | Đánh dấu narrowed by 0008 |
+| 0017 | **Mới viết**, ghi lại thay đổi đã landed ở `7fb1dd7` |
 
-Lý do (đã ghi trong commit): gọi `record_note` ở đây sẽ chạm `show_node`, mà
-`show_node` lấy chính write guard handoff đang giữ (`nodes.rs:267` vs
-`completion.rs:88`) — đúng lớp bug `e27b5e4`. Ghi trước khi lấy guard thì an
-toàn về lock nhưng handoff là idempotent: retry cùng idempotency key sẽ append
-note trùng. Receipt vừa atomic vừa idempotent.
+Nợ ADR còn lại = **đúng skill surface**, tức việc kế tiếp theo kế hoạch.
 
-Đánh đổi đã chấp nhận: friction từ handoff **không** hiện trong `events tail`
-và không vào packet.
+## 0011 — event log JSONL theo ngày
 
-**2. Sinh candidate là recoverable, không phải best-effort.**
-`KnowledgeStore::create` tự lấy write guard nên close gate không gọi được.
-Thêm `create_unlocked` và `learnings_derived_from_unlocked`, theo tiền lệ
-`release_reservation_under_lock`.
+`.pulse/events/<date>.jsonl`, một event một dòng canonical compact, append
+fsync qua `storage::append_line_fsync`.
 
-Derivation chạy **sau** transaction close, nên lỗi ở đó không làm hỏng close.
-Vì close idempotent và retry thoát sớm ở replay path, derivation **cũng chạy
-trên replay path** — nếu không thì một lần lỗi là mất luôn, không có đường
-quay lại. Dedup seed từ learning đã lưu rồi mở rộng trong vòng lặp, nên replay
-là no-op và một report đến từ cả note lẫn receipt vẫn chỉ sinh một candidate.
+**Điều ADR không nói và tốn nhiều thời gian nhất:** danh sách "Thay đổi" của
+0011 bỏ sót `src/storage/transaction.rs`, nơi **phần lớn event thật sự được
+ghi**. Prepared transaction trước đây trả lời "event của tôi đã ghi chưa" bằng
+*sự tồn tại của file tại `event_path`*. Với day file dùng chung, câu đó phải
+hỏi về **một dòng**: `observed_event` tìm theo `event_id` (substring
+`"id":"evt_…"` để khỏi parse mọi dòng) rồi đối chiếu `event_hash`.
 
-## Ba ràng buộc của knowledge model — do test bắt được, không phải do đọc model
+Kéo theo ràng buộc mới, check ngay tại `prepared()`: `event_payload.id` phải
+bằng `event_id` của intent. Trước 0011 lệch nhau vô hại vì path mang danh tính;
+giờ lệch = recovery đọc thành "chưa ghi" và **append lần hai** — duplicate im
+lặng trong append-only log.
 
-Đây là phần dễ mất thời gian nhất nếu phải tìm lại:
+Điểm lệch có chủ ý so với ADR mục 5: `events_torn_tail` báo ra **stderr** dạng
+JSON, không chèn vào payload `tail`. One-shot `--json` của `tail` là một mảng
+event mà caller đã parse như vậy. Đã ghi vào ADR.
 
-- **`LearningKind::Ratchet` dùng không được.** `validate.rs:300` bắt buộc
-  `guidance.required_checks` không rỗng; derivation tự động không có check nào
-  để nêu. Dùng `ProcessInsight`.
-- **`Applicability` rỗng bị từ chối.** `validate_applicability`
-  (`validate.rs:378`) đòi **cả** một chiều positive **và** một chiều concrete
-  (`model.rs:465`, `481`). `signals: ["harness_friction"]` là chiều concrete
-  duy nhất gate này điền được một cách trung thực — nó load-bearing, đừng gỡ.
-- **`Guidance` rỗng cũng bị từ chối** (`validate.rs:343`). Đặt một câu nói đúng
-  trạng thái thật của candidate: nguyên liệu thô chờ `pulse-ratchet` phân loại
-  (hằng `FRICTION_GUIDANCE` trong `completion.rs`). Câu đó không bao giờ tới
-  prompt worker vì learning `candidate` không tự inject (`PRODUCT.md` dòng
-  1031).
+## 0012 — `expected_signal`
 
-`expected_signal` mà `PRODUCT.md` dòng 1089 mô tả cho kind `ratchet` **không
-tồn tại trong code**. Không có gì phụ thuộc vào nó.
+`Learning.expected_signal: Option<String>`, bắt buộc cho kind `ratchet`.
 
-## Bề mặt mới
+Gate `validate` **tách theo ai phán đoán được**:
 
-```text
-pulse note --work <id> --message "<text>" [--kind note|friction]
-pulse work handoff ... [--friction "<text>"]   # lặp lại được
-```
+- Nửa máy (Pulse kiểm): `--evidence` phải là **handoff receipt**
+  (`.pulse/evidence/execution/handoffs/`, **không** phải `evidence/receipts/`)
+  và mang `knowledge_usage` với đúng learning id + outcome `helpful`.
+- Nửa ngữ nghĩa (Pulse không kiểm): signal là prose, receipt là prose. Actor
+  khẳng định bằng `--signal-observed`; khẳng định được ghi ở
+  `validation.signal_observed_at` kèm actor. Nguyên tắc 5.
 
-`--kind` mặc định `note`, nên mọi caller cũ giữ nguyên hành vi và cả output
-người đọc. Kind lưu ở key `kind` của payload `note.recorded`; payload là JSON
-không typed nên note ghi trước thay đổi này đọc lại thành `note`, không cần
-migration.
+`transition_status` vượt ngưỡng arg của clippy → refactor thành
+`TransitionEvidence` thay vì `#[allow]`. Argument list vốn là union nhu cầu của
+ba transition khác nhau, nên đó là fix đúng chứ không phải né lint.
 
-`list_friction_for_ticket` (`communication.rs`) là reader của close gate. Khác
-`list_notes_for_ticket`, nó **không** truncate và **không** cap ở 8: packet là
-ngân sách context có giới hạn, còn ở đây bỏ rơi một report là mất bằng chứng.
-
-## Test đã thêm
-
-- `tests/communication.rs`: kind mặc định là `note`; `--kind friction` ghi đúng
-  payload; cả hai kind vẫn vào packet; kind sai bị clap từ chối (không im lặng
-  rơi về `note`).
-- `tests/graph/reservation.rs`: fixture `close_with_friction` chạy hết chuỗi
-  reserve → activate → handoff → verify → close. Phủ: note friction sinh
-  candidate scope `harness` status `candidate`; friction từ handoff cũng sinh;
-  không có friction thì không sinh gì; replay không nhân đôi; note và receipt
-  trùng nội dung chỉ sinh một.
+**Giữ nguyên** ràng buộc `required_checks` không rỗng cho kind `ratchet` — ADR
+0012 không nói gì về nó. Hệ quả: friction-derived candidate vẫn dùng
+`ProcessInsight`.
 
 ---
 
 # VIỆC CỦA PHIÊN SAU
 
-## Phần A — khối `AGENTS.md` + `PULSE.md` (0009 Quyết định 1)
+## 0009 part B — skill surface (bảy skill + `pulse-handoff`)
 
-Hiện **chưa có gì**: không `PULSE:BEGIN` ở đâu trong `src/`, không
-`assets/agents-block.md`. Đây là điều kiện cần để nối lại dogfood, và
-`0009 §Thứ tự` xếp nó ngay sau phần C.
+Điều kiện tiên quyết: gỡ guard `legacy_skill_surfaces_are_absent`
+(`tests/graph/architecture_guards.rs:104`) đang cấm `skills`, `dist`,
+`.codex-plugin`, `.claude-plugin`. Thay bằng **guard parse lệnh**: mọi lệnh
+`pulse …` trong `skills/**` và template khối AGENTS phải parse được bằng clap
+của crate (`PRODUCT.md` §5.8).
 
-- `pulse init` ghi khối `<!-- PULSE:BEGIN --> … <!-- PULSE:END -->` vào
-  `AGENTS.md` và tạo `PULSE.md`.
-- `pulse init --refresh` render lại theo version CLI, giữ nguyên nội dung
-  ngoài marker; phát hiện sửa tay trong marker thì **báo, không ghi đè**.
-- `assets/agents-block.md` là template dùng chung cho `init` và test.
-- Nội dung khối: đúng bảng route trong `0009 §Flow theo hình dạng yêu cầu`,
-  không hơn. Dòng friction giờ đã có lệnh thật đứng sau nó.
+Tám skill theo bảng `PRODUCT.md` §5.8: `wayfind`, `grill`, `spec`, `tickets`,
+`research`, `ratchet`, `onboard` (0009) + `handoff` (0013). Mỗi skill kết thúc
+ở một artifact và một trạng thái graph; skill là hướng dẫn, CLI là authority —
+không state riêng, không gate riêng.
 
-Sau đó: **dựng dogfood target mới** rồi chạy thật bằng agent tương tác. Rồi mới
-quyết phạm vi phần B (bảy skill) bằng dữ liệu — cần gỡ guard
-`legacy_skill_surfaces_are_absent` (`tests/graph/architecture_guards.rs:104`)
-đang cấm `skills`, `dist`, `.codex-plugin`, `.claude-plugin`.
+`pulse-handoff` mang theo phần 0013 còn thiếu:
+`.pulse/runtime/handoff/<node>.md` và hook mẫu cho Claude Code.
 
-## Đính chính về 0009 (giữ nguyên, đừng suy lại)
+Sau đó: instruction flow → dựng dogfood target mới → chạy thật.
 
-Handoff các phiên trước lặp lại: *"toàn bộ friction là ergonomics CLI, không
-mục nào là 'agent không biết làm gì tiếp' ⇒ 0009 có thể thừa"*. **Sai.**
+## Hai thứ chỉ kiểm chứng được khi chạy thật
 
-`0009 §Context`: *"Từ intent đến Ticket `ready` không có gì dẫn agent;
-developer làm tay."* Track B chỉ chạy TK-003..TK-008 — toàn Ticket đã shaped
-sẵn bằng tay. Nhật ký friction chỉ phủ giai đoạn **sau `ready`**. Giai đoạn
-trước `ready` chưa bao giờ giao cho agent nên không thể sinh mục friction nào.
-Nhật ký **im lặng** về nửa đó, không phải **phản đối** nó.
+1. **Hai Ticket song song không va nhau** — tiêu chí phụ §7 duy nhất còn
+   `chưa đạt`. TK-006/TK-007 đã va; 0015 sửa nguyên nhân, có
+   `tests/runner/worktree_dispatch.rs`, **chưa chạy lại thật lần nào**.
+2. **Khối `AGENTS.md` có dẫn được agent từ intent tới Ticket `ready` không.**
+   Track B chỉ chạy TK-003..TK-008 — toàn Ticket đã shaped tay. Nhật ký friction
+   **im lặng** về giai đoạn trước `ready`, không phải **phản đối** nó.
 
-## Hiểu đúng "friction" (đã trace từ code, đừng suy lại)
+## Bug đã biết, phải xử trước khi dựng target
 
-`friction` là cơ chế **của repo đích, không phải của Pulse**: `note --kind
-friction` → `.pulse/events/` của repo đó → close gate → learning scope
-`harness` → promote vào `AGENTS.md`/`PULSE.md`/`runners.json` **của repo đó**.
-Không mắt xích nào chảy ngược về Pulse.
-
-Hệ quả: `docs/dogfood-friction-track-b.md` **không phải** friction theo nghĩa
-đó. Phần lớn là defect của Pulse core (sửa bằng code). Header file ghi rõ rồi.
-
-## Trạng thái 0009 trong code
-
-| Phần | Có gì |
-|---|---|
-| Khối `AGENTS.md` + `PULSE.md` | Chưa gì cả |
-| `note --kind friction` + close gate → candidate | **Xong** (phiên này) |
-| Bảy skill | Chưa; guard còn cấm `skills/` |
-| Đích harness learning | Đã chạy — scope, prompt injection, packet filtering |
-| Learning lên `validated` qua rerun | Chưa; cố ý ngoài phạm vi phiên này |
-
-## Trạng thái §7 golden path
-
-| Tiêu chí | Thực tế |
-|---|---|
-| Mục 1–7 | Đạt 2026-09-05, HEAD `845ff01` |
-| `close-story` trên baseline thật | Đạt — ST-001 (09-05), ST-002 (09-06) |
-| Hai Ticket song song không va nhau | **Chưa** — TK-006/TK-007 đã va; 0015 sửa, có test, chưa chạy lại thật |
-
-Không còn dogfood target ⇒ mục cuối chưa kiểm chứng được. Đường thoả mãn là
-A → dựng target mới → chạy thật.
+`.gitignore` neo ở gốc repo: pattern `.pulse/runtime/` **không** khớp thư mục
+con. Target cũ đã vô tình track runtime state vì lỗi này. Xem `PRODUCT.md`
+§13.1.
 
 ## Hàng đợi quyết định còn mở
 
 | | Quyết định | Trạng thái |
 |---|---|---|
-| 0009 | Phạm vi phần B (bảy skill) | Chờ dữ liệu từ dogfood mới |
+| 0009 | Phạm vi part B | Người dùng chốt: làm đủ trước khi dogfood |
 | mới | Repo downstream phát hiện bug Pulse thì ghi vào đâu | Thiết kế không có cửa nào |
-| treo | `unreadable` trong `PRODUCT.md` §5.3 | Sửa contract mà chưa có ADR — viết ADR ngắn hay revert hunk |
-| 0011 | Event log `.jsonl` + compact | Accepted, chưa động dòng nào |
-| 0004 | Packet lease-bound | Nên đánh "Superseded in part by 0008" |
-| mới | `PRODUCT.md` dòng 1089 nói learning `ratchet` có `expected_signal` | Field không tồn tại; hoặc bỏ khỏi PRODUCT hoặc implement |
+| PRODUCT §13 | Bốn mục "còn mở" cuối file | Vẫn theo mặc định |
 
 ## Bẫy đã học, đừng dẫm lại
 
 - **Lock không reentrant.** `WriteGuard` là flock; lấy lần hai trong cùng
   process là `LockTimeout`. `show_node`, `KnowledgeStore::create`,
   `KnowledgeStore::list`, `verify_receipt` đều lấy nó. Trong fence chỉ dùng
-  biến thể `_unlocked` / `_under_lock`, hoặc làm việc đó trước khi lấy guard.
+  biến thể `_unlocked` / `_under_lock`, hoặc làm trước khi lấy guard.
+  `load_receipt` **không** lấy lock nên an toàn trong fence.
+- **Vòng lặp duyệt event bị copy bảy lần** — ba trong `src/`, bốn trong test.
+  Hai bản trong `src/` là bug chờ sẵn: `has_recording_event` chỉ descend vào
+  *thư mục* ngày, nên sau 0011 mọi receipt đọc ra `integrity: invalid`. Giờ tất
+  cả đi qua `event::read_event_log` và `tests/common/events.rs`. **Đừng viết
+  bản thứ tám.**
+- **`to_canonical_bytes` là pretty-print có newline cuối.** Dùng
+  `to_canonical_line_bytes` cho bất cứ thứ gì một-bản-ghi-một-dòng.
 - **`list_receipts`** trả `unreadable[]` thay vì fail cả listing. Đừng bọc
-  `unwrap_or_default()` quanh nó ở callsite mới — bug đã sửa ở `7fb1dd7`.
+  `unwrap_or_default()` quanh nó ở callsite mới — Decision 0017.
 - **Continuation `\` trong string literal Rust** nuốt cả indent dòng sau. Test
   data cho parser thụt lề phải dùng raw string.
 - **`cargo test --all-targets` sau `cargo clippy --all-targets`** phải build
   lại từ đầu (khác profile): tính **8–14 phút**, đừng đặt timeout 120s.
-- **`.gitignore` neo ở gốc:** `.pulse/runtime/` **không** khớp thư mục con.
-  Đã đính chính ở `PRODUCT.md` §13.1.
+- **`cmd | tail` nuốt exit code của cmd.** Một lần trong phiên này `clippy` fail
+  mà chuỗi `&& echo "CLIPPY OK"` vẫn in OK. Kiểm `PIPESTATUS` hoặc chạy riêng.
 - **`AGENTS.md` liệt kê 8 test crate, thực tế 10** — thiếu `tests/runner.rs` và
   `tests/communication.rs`. Chưa sửa.
-- **Bất thường chưa giải thích:** một phiên trước, `design/` (20 file tracked)
-  biến mất khỏi working tree mà không commit nào đụng tới. Đã
-  `git checkout -- design/`, khớp HEAD. Tái diễn thì nghi có tiến trình khác
-  ghi vào repo. Phiên này không thấy lại.
 
 ## Quy tắc (không đổi)
 
