@@ -151,26 +151,5 @@ fn required_update() -> DocumentationImpactUpdate {
 }
 
 fn count_events(repo: &std::path::Path, event_type: &str) -> usize {
-    let root = repo.join(".pulse/events");
-    if !root.exists() {
-        return 0;
-    }
-    let mut count = 0;
-    let mut stack = vec![root];
-    while let Some(path) = stack.pop() {
-        for entry in fs::read_dir(path).expect("read events dir") {
-            let entry = entry.expect("event entry");
-            if entry.file_type().expect("event file type").is_dir() {
-                stack.push(entry.path());
-            } else {
-                let bytes = fs::read(entry.path()).expect("read event");
-                let event: pulse::event::EventEnvelope =
-                    serde_json::from_slice(&bytes).expect("parse event");
-                if event.event_type == event_type {
-                    count += 1;
-                }
-            }
-        }
-    }
-    count
+    crate::common_events::events_of_type(repo, event_type).len()
 }

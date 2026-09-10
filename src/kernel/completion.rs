@@ -871,10 +871,7 @@ fn commit_proof_transition<T: serde::Serialize>(
     let proof_bytes = to_canonical_bytes(proof)?;
     let event_id = new_event_id();
     let now = Utc::now();
-    let event_path = repo_root
-        .join(".pulse/events")
-        .join(now.format("%Y-%m-%d").to_string())
-        .join(format!("{event_id}.json"));
+    let event_path = crate::event::day_file_path(repo_root, now);
     let event = EventEnvelope::new(event_id.clone(), operation, actor, ticket_id, payload, now);
     let before_node: Node = serde_json::from_slice(node_before_bytes).map_err(PulseError::from)?;
     let targets = vec![

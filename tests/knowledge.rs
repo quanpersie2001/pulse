@@ -10,6 +10,8 @@
 
 #[path = "common/bin.rs"]
 mod common_bin;
+#[path = "common/events.rs"]
+mod common_events;
 
 #[path = "knowledge/knowledge_boundary.rs"]
 mod knowledge_boundary;

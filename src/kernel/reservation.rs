@@ -323,7 +323,11 @@ impl JsonGraphStore {
         let reservation_before_bytes = to_canonical_bytes(&before)?;
         let reservation_after_bytes = to_canonical_bytes(&after)?;
         let event_id = new_event_id();
-        let event_path = event_path(&self.repo_root, &event_id, Utc::now());
+        // One timestamp for both: Decision 0011 §2 keys the day file on
+        // `occurred_at`, so a second `Utc::now()` here could file the event
+        // under the previous day across a midnight boundary.
+        let now = Utc::now();
+        let event_path = event_path(&self.repo_root, &event_id, now);
         let event = EventEnvelope::new(
             event_id.clone(),
             "work.assignment.activated",
@@ -337,7 +341,7 @@ impl JsonGraphStore {
                 "runtime_binding": args.runtime_binding,
                 "acknowledgement_id": args.acknowledgement.acknowledgement_id,
             }),
-            Utc::now(),
+            now,
         );
         let event_value = serde_json::to_value(&event)?;
         let targets = vec![
@@ -668,11 +672,8 @@ fn packet_path(repo_root: &Path, lease_id: &str) -> PathBuf {
     repo_root.join(PACKETS_DIR).join(format!("{lease_id}.json"))
 }
 
-fn event_path(repo_root: &Path, event_id: &str, now: DateTime<Utc>) -> PathBuf {
-    repo_root
-        .join(".pulse/events")
-        .join(now.format("%Y-%m-%d").to_string())
-        .join(format!("{event_id}.json"))
+fn event_path(repo_root: &Path, _event_id: &str, now: DateTime<Utc>) -> PathBuf {
+    crate::event::day_file_path(repo_root, now)
 }
 
 pub fn load_reservation(repo_root: &Path, lease_id: &str) -> Result<CoreReservation> {

@@ -57,23 +57,7 @@ fn git_head(repo: &Path) -> String {
 }
 
 fn event_count(repo: &TempDir) -> usize {
-    let events = repo.path().join(".pulse/events");
-    if !events.exists() {
-        return 0;
-    }
-    fs::read_dir(events)
-        .unwrap()
-        .flat_map(|date| fs::read_dir(date.unwrap().path()).unwrap())
-        .filter(|entry| {
-            entry
-                .as_ref()
-                .unwrap()
-                .path()
-                .extension()
-                .and_then(|s| s.to_str())
-                == Some("json")
-        })
-        .count()
+    crate::common_events::count_events(repo.path())
 }
 
 fn write_json(path: &Path, value: &impl serde::Serialize) {
@@ -85,27 +69,10 @@ fn write_json(path: &Path, value: &impl serde::Serialize) {
 }
 
 fn event_count_by_type_and_subject(repo: &TempDir, event_type: &str, subject: &str) -> usize {
-    let events = repo.path().join(".pulse/events");
-    if !events.exists() {
-        return 0;
-    }
-    let mut count = 0;
-    for date in fs::read_dir(events).unwrap() {
-        for entry in fs::read_dir(date.unwrap().path()).unwrap() {
-            let value: Value =
-                serde_json::from_slice(&fs::read(entry.unwrap().path()).unwrap()).unwrap();
-            if value.get("event_type").and_then(Value::as_str) == Some(event_type)
-                && value
-                    .get("subject")
-                    .and_then(|value| value.get("id"))
-                    .and_then(Value::as_str)
-                    == Some(subject)
-            {
-                count += 1;
-            }
-        }
-    }
-    count
+    crate::common_events::events_of_type(repo.path(), event_type)
+        .iter()
+        .filter(|event| event.subject.id == subject)
+        .count()
 }
 
 fn wait_for_transaction_intent(repo: &TempDir) {

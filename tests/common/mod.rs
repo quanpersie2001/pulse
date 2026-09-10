@@ -9,8 +9,8 @@
 //!
 //! - `fixture_repo` is declared here as a normal submodule and pulled in by
 //!   `tests/target_repo.rs` (which uses the whole `TestRepo` surface).
-//! - `bin.rs`, `git.rs` and `canon.rs` are standalone includable units (CLI
-//!   binary resolver, git plumbing, canonical-JSON writer) wired selectively
-//!   into the `graph`, `docs` and `knowledge` crates.
+//! - `bin.rs`, `git.rs`, `canon.rs` and `events.rs` are standalone includable
+//!   units (CLI binary resolver, git plumbing, canonical-JSON writer, event-log
+//!   reader) wired selectively into the `graph`, `docs` and `knowledge` crates.
 
 pub mod fixture_repo;

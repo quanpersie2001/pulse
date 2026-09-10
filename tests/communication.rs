@@ -473,3 +473,282 @@ fn note_rejects_an_unknown_kind() {
     ]);
     assert!(!out.status.success());
 }
+
+// ---------------------------------------------------------------------------
+// Decision 0011: one JSONL file per day
+// ---------------------------------------------------------------------------
+
+/// Every event of a day lands in one `<date>.jsonl` file, one record per line,
+/// and no per-event file or day directory is created.
+#[test]
+fn events_are_appended_as_one_line_per_day_file() {
+    let repo = TestRepo::from_fixture("minimal-service");
+    let ticket_id = setup_ready_ticket(&repo);
+    for message in ["first note", "second note", "third note"] {
+        repo.pulse_ok(&[
+            "note",
+            "--work",
+            &ticket_id,
+            "--message",
+            message,
+            "--from",
+            ACTOR,
+            "--json",
+        ]);
+    }
+
+    let root = repo.path().join(".pulse/events");
+    let mut day_files = Vec::new();
+    for entry in fs::read_dir(&root).unwrap() {
+        let path = entry.unwrap().path();
+        assert!(
+            !path.is_dir(),
+            "no day directory may remain: {}",
+            path.display()
+        );
+        assert_eq!(
+            path.extension().and_then(|ext| ext.to_str()),
+            Some("jsonl"),
+            "unexpected file in the event log: {}",
+            path.display()
+        );
+        day_files.push(path);
+    }
+    assert_eq!(day_files.len(), 1, "one day, one file");
+
+    let bytes = fs::read(&day_files[0]).unwrap();
+    assert_eq!(*bytes.last().unwrap(), b'\n', "the file ends on a record");
+    let lines: Vec<&[u8]> = bytes
+        .split(|byte| *byte == b'\n')
+        .filter(|line| !line.is_empty())
+        .collect();
+    assert!(lines.len() >= 3, "every event is one line");
+
+    let mut ids = Vec::new();
+    for line in &lines {
+        let event: Value = serde_json::from_slice(line).expect("each line parses alone");
+        // Compact, not pretty: a record must never span lines.
+        assert!(!line.contains(&b'\n'));
+        ids.push(event["id"].as_str().unwrap().to_string());
+    }
+    let mut sorted = ids.clone();
+    sorted.sort();
+    assert_eq!(
+        ids, sorted,
+        "line order is write order, which is ULID order"
+    );
+}
+
+/// A crash mid-append leaves at most one torn trailing line. Reads keep every
+/// complete record before it, and the next append truncates the torn line
+/// instead of burying it between two good ones.
+#[test]
+fn a_torn_trailing_line_is_reported_then_truncated_by_the_next_append() {
+    let repo = TestRepo::from_fixture("minimal-service");
+    let ticket_id = setup_ready_ticket(&repo);
+    repo.pulse_ok(&[
+        "note",
+        "--work",
+        &ticket_id,
+        "--message",
+        "before the crash",
+        "--from",
+        ACTOR,
+        "--json",
+    ]);
+
+    let day_file = fs::read_dir(repo.path().join(".pulse/events"))
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .find(|path| path.extension().and_then(|ext| ext.to_str()) == Some("jsonl"))
+        .expect("day file");
+    let intact = fs::read(&day_file).unwrap();
+    let complete_lines = intact.iter().filter(|byte| **byte == b'\n').count();
+
+    // Simulate the crash: a partial record with no terminator.
+    let mut torn = intact.clone();
+    torn.extend_from_slice(b"{\"schema_version\":1,\"id\":\"evt_tor");
+    fs::write(&day_file, &torn).unwrap();
+
+    // The reader keeps the records before the torn line and names the file.
+    let output = repo.pulse(&["events", "tail", "--json"]);
+    assert!(
+        output.status.success(),
+        "a torn tail must not fail the read"
+    );
+    let events: Vec<Value> = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(events.len(), complete_lines);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("events_torn_tail"),
+        "torn tail must be reported, got: {stderr}"
+    );
+
+    // The next append truncates the torn line rather than appending after it.
+    repo.pulse_ok(&[
+        "note",
+        "--work",
+        &ticket_id,
+        "--message",
+        "after the crash",
+        "--from",
+        ACTOR,
+        "--json",
+    ]);
+    let repaired = fs::read(&day_file).unwrap();
+    assert!(!repaired.windows(8).any(|w| w == b"evt_tor{"));
+    let output = repo.pulse(&["events", "tail", "--json"]);
+    let events: Vec<Value> = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(events.len(), complete_lines + 1);
+    assert!(
+        !String::from_utf8_lossy(&output.stderr).contains("events_torn_tail"),
+        "the torn line is gone once a writer has been through"
+    );
+    let messages: Vec<&str> = events
+        .iter()
+        .filter(|event| event["event_type"] == "note.recorded")
+        .map(|event| event["payload"]["message"].as_str().unwrap())
+        .collect();
+    assert_eq!(messages, vec!["before the crash", "after the crash"]);
+}
+
+/// The `--since` cursor is still a ULID and still selects strictly newer
+/// events, including across a day boundary where the events live in two files.
+#[test]
+fn the_since_cursor_crosses_a_day_boundary() {
+    let repo = TestRepo::from_fixture("minimal-service");
+    let ticket_id = setup_ready_ticket(&repo);
+    repo.pulse_ok(&[
+        "note",
+        "--work",
+        &ticket_id,
+        "--message",
+        "day one",
+        "--from",
+        ACTOR,
+        "--json",
+    ]);
+
+    let events_dir = repo.path().join(".pulse/events");
+    let today = fs::read_dir(&events_dir)
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .find(|path| path.extension().and_then(|ext| ext.to_str()) == Some("jsonl"))
+        .expect("day file");
+
+    // Move the whole day back one file name, so the next note opens a second
+    // file whose events are strictly newer by ULID.
+    let yesterday = events_dir.join("2000-01-01.jsonl");
+    fs::rename(&today, &yesterday).unwrap();
+    repo.pulse_ok(&[
+        "note",
+        "--work",
+        &ticket_id,
+        "--message",
+        "day two",
+        "--from",
+        ACTOR,
+        "--json",
+    ]);
+    assert!(yesterday.exists() && today.exists(), "two day files");
+
+    let all: Vec<Value> =
+        serde_json::from_value(repo.pulse_ok(&["events", "tail", "--json"])).unwrap();
+    let cursor = all
+        .iter()
+        .find(|event| event["payload"]["message"] == "day one")
+        .map(|event| event["id"].as_str().unwrap().to_string())
+        .expect("day one event");
+
+    let after: Vec<Value> =
+        serde_json::from_value(repo.pulse_ok(&["events", "tail", "--since", &cursor, "--json"]))
+            .unwrap();
+    assert!(
+        after
+            .iter()
+            .all(|event| event["id"].as_str().unwrap() > cursor.as_str()),
+        "the cursor is exclusive across files"
+    );
+    let messages: Vec<&str> = after
+        .iter()
+        .filter(|event| event["event_type"] == "note.recorded")
+        .map(|event| event["payload"]["message"].as_str().unwrap())
+        .collect();
+    assert_eq!(messages, vec!["day two"]);
+}
+
+/// `events compact` converts the legacy one-file-per-event layout once,
+/// preserving every event and their ULID order, and is a no-op afterwards.
+#[test]
+fn events_compact_converts_the_legacy_layout_once() {
+    let repo = TestRepo::from_fixture("minimal-service");
+    let ticket_id = setup_ready_ticket(&repo);
+    repo.pulse_ok(&[
+        "note",
+        "--work",
+        &ticket_id,
+        "--message",
+        "already compact",
+        "--from",
+        ACTOR,
+        "--json",
+    ]);
+
+    let events_dir = repo.path().join(".pulse/events");
+    let day_file = fs::read_dir(&events_dir)
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .find(|path| path.extension().and_then(|ext| ext.to_str()) == Some("jsonl"))
+        .expect("day file");
+    let day = day_file.file_stem().unwrap().to_str().unwrap().to_string();
+    let before: Vec<Value> =
+        serde_json::from_value(repo.pulse_ok(&["events", "tail", "--json"])).unwrap();
+
+    // Plant two legacy per-event files in the pre-0011 layout.
+    let legacy_dir = events_dir.join(&day);
+    fs::create_dir_all(&legacy_dir).unwrap();
+    let legacy_ids = [
+        "evt_00000000000000000000000001",
+        "evt_00000000000000000000000002",
+    ];
+    for id in legacy_ids {
+        let event = serde_json::json!({
+            "schema_version": 1,
+            "id": id,
+            "event_type": "note.recorded",
+            "occurred_at": format!("{day}T00:00:00Z"),
+            "actor": {"kind": "human", "id": "tester"},
+            "subject": {"kind": "ticket", "id": ticket_id},
+            "payload": {"message": format!("legacy {id}")},
+        });
+        fs::write(
+            legacy_dir.join(format!("{id}.json")),
+            pulse::canonical_json::to_canonical_bytes(&event).unwrap(),
+        )
+        .unwrap();
+    }
+
+    let report = repo.pulse_ok(&["events", "compact", "--json"]);
+    assert_eq!(report["events_converted"], 2);
+    assert_eq!(report["directories_removed"], 1);
+    assert!(!legacy_dir.exists(), "the legacy directory is removed");
+
+    let after: Vec<Value> =
+        serde_json::from_value(repo.pulse_ok(&["events", "tail", "--json"])).unwrap();
+    assert_eq!(after.len(), before.len() + 2, "no event is lost or doubled");
+    let ids: Vec<&str> = after.iter().map(|e| e["id"].as_str().unwrap()).collect();
+    let mut sorted = ids.clone();
+    sorted.sort_unstable();
+    assert_eq!(ids, sorted, "compaction writes ULID order");
+    for id in legacy_ids {
+        assert!(ids.contains(&id), "{id} survived compaction");
+    }
+
+    // Running again converts nothing.
+    let again = repo.pulse_ok(&["events", "compact", "--json"]);
+    assert_eq!(again["events_converted"], 0);
+    assert_eq!(again["directories_removed"], 0);
+    let final_events: Vec<Value> =
+        serde_json::from_value(repo.pulse_ok(&["events", "tail", "--json"])).unwrap();
+    assert_eq!(final_events.len(), after.len());
+}

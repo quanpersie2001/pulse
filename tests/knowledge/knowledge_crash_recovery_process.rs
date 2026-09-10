@@ -141,33 +141,10 @@ fn kill_spawned_after_event(
 }
 
 fn event_count_by_type_and_subject(repo: &TempDir, event_type: &str, subject: &str) -> usize {
-    let events = repo.path().join(".pulse/events");
-    if !events.exists() {
-        return 0;
-    }
-    let mut count = 0;
-    let mut stack = vec![events];
-    while let Some(path) = stack.pop() {
-        for entry in fs::read_dir(path).unwrap() {
-            let entry = entry.unwrap();
-            if entry.file_type().unwrap().is_dir() {
-                stack.push(entry.path());
-            } else if entry.path().extension().and_then(|s| s.to_str()) == Some("json") {
-                let value: Value =
-                    serde_json::from_slice(&fs::read(entry.path()).unwrap()).unwrap();
-                if value.get("event_type").and_then(Value::as_str) == Some(event_type)
-                    && value
-                        .get("subject")
-                        .and_then(|value| value.get("id"))
-                        .and_then(Value::as_str)
-                        == Some(subject)
-                {
-                    count += 1;
-                }
-            }
-        }
-    }
-    count
+    crate::common_events::events_of_type(repo.path(), event_type)
+        .iter()
+        .filter(|event| event.subject.id == subject)
+        .count()
 }
 
 fn setup_repo() -> (TempDir, String) {

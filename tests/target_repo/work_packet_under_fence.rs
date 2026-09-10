@@ -107,8 +107,10 @@ fn packet_identity_observation_does_not_recover_until_packet_fence() -> TestResu
             format!("{name}.test"),
             "test",
             vec![target],
-            root.join(format!(".pulse/events/packet-{name}.json")),
-            json!({"event": format!("packet-{name}")}),
+            // Decision 0011: every event of a day shares one file; the id
+            // distinguishes them, not the path.
+            root.join(".pulse/events/2026-01-01.jsonl"),
+            json!({"id": format!("evt_packet_{name}"), "event": format!("packet-{name}")}),
         )?;
         let intent_path = persist_multi_target_intent(root, &intent)?;
         pending.push(intent_path);

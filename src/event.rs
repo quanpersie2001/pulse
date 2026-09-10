@@ -6,7 +6,6 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::canonical_json::to_canonical_bytes;
 use crate::storage;
 use crate::PulseResult;
 
@@ -209,29 +208,70 @@ fn infer_subject_revision(event_type: &str, payload: &Value) -> Option<u64> {
         .and_then(Value::as_u64)
 }
 
-pub fn event_path(repo_root: &Path, event: &EventEnvelope) -> PathBuf {
-    repo_root
-        .join(".pulse/events")
-        .join(event.occurred_at.format("%Y-%m-%d").to_string())
-        .join(format!("{}.json", event.id))
+/// Directory holding the event log of a repository.
+fn events_root(repo_root: &Path) -> PathBuf {
+    repo_root.join(".pulse/events")
 }
 
+/// Day file covering `when`: `.pulse/events/<YYYY-MM-DD>.jsonl` in UTC.
+///
+/// Sole owner of the day-file naming rule. Callers that build a transaction
+/// intent know the timestamp before they have an envelope and come here; those
+/// holding an envelope use [`event_path`]. Both must agree, or a crash-recovery
+/// intent looks for the event in a file no writer targets.
+pub fn day_file_path(repo_root: &Path, when: DateTime<Utc>) -> PathBuf {
+    events_root(repo_root).join(format!("{}.jsonl", when.format("%Y-%m-%d")))
+}
+
+/// Day file an event belongs to, keyed on `occurred_at` in UTC so an event
+/// never lands in the wrong file (Decision 0011 §2).
+pub fn event_path(repo_root: &Path, event: &EventEnvelope) -> PathBuf {
+    day_file_path(repo_root, event.occurred_at)
+}
+
+/// Append one event to its day file.
+///
+/// Line order is write order; the ULID `id` remains the cursor. The append is
+/// fsynced, so a returned `Ok` means the event survives a crash.
+///
+/// # Errors
+/// Returns an error when the envelope cannot be serialised or the append
+/// fails.
 pub fn write_event(repo_root: &Path, event: &EventEnvelope) -> PulseResult<PathBuf> {
     let path = event_path(repo_root, event);
-    let bytes = to_canonical_bytes(event)?;
-    storage::create_new(&path, &bytes)?;
+    let bytes = crate::canonical_json::to_canonical_line_bytes(event)?;
+    storage::append_line_fsync(&path, &bytes)?;
     Ok(path)
 }
 
+/// Outcome of reading the event log.
+///
+/// `torn_tails` names day files whose final line did not parse — the shape a
+/// crash mid-append leaves behind (Decision 0011 §5). The events before it are
+/// intact and returned; the caller reports the file rather than treating the
+/// gap as absence of events.
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct EventLogRead {
+    pub events: Vec<EventEnvelope>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub torn_tails: Vec<String>,
+}
+
 /// Read every recorded event, sorted by id (ULID order == chronological
-/// order). Unparsable files are skipped so a truncated crash leftover cannot
-/// take down reads.
-pub fn read_events(repo_root: &Path) -> PulseResult<Vec<EventEnvelope>> {
-    let root = repo_root.join(".pulse/events");
+/// order), reporting any torn day-file tail.
+///
+/// Both layouts are read: `<date>.jsonl` written today, and the legacy
+/// `<date>/evt_<ulid>.json` files that `pulse events compact` converts. A
+/// repository that has not compacted yet still sees its whole history.
+///
+/// # Errors
+/// Returns an error when the event directory cannot be listed.
+pub fn read_event_log(repo_root: &Path) -> PulseResult<EventLogRead> {
+    let root = events_root(repo_root);
     if !root.exists() {
-        return Ok(Vec::new());
+        return Ok(EventLogRead::default());
     }
-    let mut events = Vec::new();
+    let mut read = EventLogRead::default();
     let mut stack = vec![root.clone()];
     while let Some(dir) = stack.pop() {
         let entries = fs::read_dir(&dir).map_err(|error| PulseError::io(&dir, error))?;
@@ -241,20 +281,149 @@ pub fn read_events(repo_root: &Path) -> PulseResult<Vec<EventEnvelope>> {
                 stack.push(path);
                 continue;
             }
-            if path.extension().and_then(|ext| ext.to_str()) != Some("json") {
-                continue;
-            }
-            let bytes = match fs::read(&path) {
-                Ok(bytes) => bytes,
-                Err(_) => continue,
-            };
-            if let Ok(event) = serde_json::from_slice::<EventEnvelope>(&bytes) {
-                events.push(event);
+            match path.extension().and_then(|ext| ext.to_str()) {
+                Some("jsonl") => read_day_file(&path, &mut read),
+                // Legacy one-file-per-event layout, pre-compaction.
+                Some("json") => {
+                    if let Ok(bytes) = fs::read(&path) {
+                        if let Ok(event) = serde_json::from_slice::<EventEnvelope>(&bytes) {
+                            read.events.push(event);
+                        }
+                    }
+                }
+                _ => continue,
             }
         }
     }
-    events.sort_by(|left, right| left.id.cmp(&right.id));
-    Ok(events)
+    read.events.sort_by(|left, right| left.id.cmp(&right.id));
+    read.torn_tails.sort();
+    Ok(read)
+}
+
+/// Parse one `<date>.jsonl` file into `read`.
+///
+/// An unreadable file is skipped rather than failing the whole read, matching
+/// the legacy behaviour. Only the final segment can be torn: every earlier
+/// line was followed by a `\n` that the writer fsynced.
+fn read_day_file(path: &Path, read: &mut EventLogRead) {
+    let Ok(bytes) = fs::read(path) else {
+        return;
+    };
+    if bytes.is_empty() {
+        return;
+    }
+    let terminated = bytes.last() == Some(&b'\n');
+    let mut lines: Vec<&[u8]> = bytes.split(|byte| *byte == b'\n').collect();
+    if terminated {
+        // The split after a trailing separator yields one empty tail.
+        lines.pop();
+    }
+    let last_index = lines.len().saturating_sub(1);
+    for (index, line) in lines.iter().enumerate() {
+        if line.is_empty() {
+            continue;
+        }
+        match serde_json::from_slice::<EventEnvelope>(line) {
+            Ok(event) => read.events.push(event),
+            Err(_) => {
+                if index == last_index && !terminated {
+                    read.torn_tails.push(path.display().to_string());
+                }
+            }
+        }
+    }
+}
+
+/// Read every recorded event, sorted by id. Torn tails are dropped silently;
+/// callers that report them use [`read_event_log`].
+///
+/// # Errors
+/// Returns an error when the event directory cannot be listed.
+pub fn read_events(repo_root: &Path) -> PulseResult<Vec<EventEnvelope>> {
+    Ok(read_event_log(repo_root)?.events)
+}
+
+/// Result of converting the legacy layout to day files.
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct CompactReport {
+    pub schema_version: u32,
+    /// Day files written or extended, in date order.
+    pub days: Vec<String>,
+    /// Legacy per-event files converted.
+    pub events_converted: usize,
+    /// Legacy directories removed.
+    pub directories_removed: usize,
+}
+
+/// Convert `<date>/evt_*.json` into `<date>.jsonl` once (Decision 0011 §7).
+///
+/// Legacy events are merged with any lines the day file already holds, sorted
+/// by ULID, and rewritten atomically; only then is the legacy directory
+/// removed, so a crash mid-compaction leaves the source intact and the command
+/// is safe to re-run. Callers must hold the repository write lock.
+///
+/// # Errors
+/// Returns an error when the log cannot be listed, a day file cannot be
+/// written, or a converted directory cannot be removed.
+pub fn compact_events(repo_root: &Path) -> PulseResult<CompactReport> {
+    let root = events_root(repo_root);
+    let mut report = CompactReport {
+        schema_version: 1,
+        ..CompactReport::default()
+    };
+    if !root.exists() {
+        return Ok(report);
+    }
+
+    let mut legacy_dirs = Vec::new();
+    for entry in fs::read_dir(&root).map_err(|error| PulseError::io(&root, error))? {
+        let path = entry.map_err(|error| PulseError::io(&root, error))?.path();
+        if path.is_dir() {
+            legacy_dirs.push(path);
+        }
+    }
+    legacy_dirs.sort();
+
+    for dir in legacy_dirs {
+        let Some(day) = dir.file_name().and_then(|name| name.to_str()) else {
+            continue;
+        };
+        let day = day.to_string();
+        let mut events = Vec::new();
+        for entry in fs::read_dir(&dir).map_err(|error| PulseError::io(&dir, error))? {
+            let path = entry.map_err(|error| PulseError::io(&dir, error))?.path();
+            if path.extension().and_then(|ext| ext.to_str()) != Some("json") {
+                continue;
+            }
+            let bytes = fs::read(&path).map_err(|error| PulseError::io(&path, error))?;
+            if let Ok(event) = serde_json::from_slice::<EventEnvelope>(&bytes) {
+                events.push(event);
+                report.events_converted += 1;
+            }
+        }
+
+        let day_path = root.join(format!("{day}.jsonl"));
+        let mut existing = EventLogRead::default();
+        if day_path.exists() {
+            read_day_file(&day_path, &mut existing);
+        }
+        events.extend(existing.events);
+        events.sort_by(|left, right| left.id.cmp(&right.id));
+        events.dedup_by(|left, right| left.id == right.id);
+
+        let mut bytes = Vec::new();
+        for event in &events {
+            bytes.extend_from_slice(&crate::canonical_json::to_canonical_line_bytes(event)?);
+            bytes.push(b'\n');
+        }
+        storage::atomic_write(&day_path, &bytes)?;
+
+        fs::remove_dir_all(&dir).map_err(|error| PulseError::io(&dir, error))?;
+        report.directories_removed += 1;
+        report.days.push(day);
+    }
+
+    Ok(report)
 }
 
 pub fn emit_event(

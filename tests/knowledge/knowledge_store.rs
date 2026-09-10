@@ -97,13 +97,13 @@ fn status_refuses_to_observe_while_transaction_recovery_is_pending() {
         "knowledge.test",
         "test",
         target,
-        repo.path().join(".pulse/events/test.json"),
+        repo.path().join(".pulse/events/2026-01-01.jsonl"),
         FileState::Absent,
         FileState::Present {
             hash: "sha256:test".to_string(),
             revision: 1,
         },
-        json!({"event": "pending"}),
+        json!({"id": "evt_status_pending", "event": "pending"}),
     )
     .unwrap();
     persist_intent(repo.path(), &intent).unwrap();

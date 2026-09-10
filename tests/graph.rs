@@ -18,6 +18,8 @@
 mod common_bin;
 #[path = "common/canon.rs"]
 mod common_canon;
+#[path = "common/events.rs"]
+mod common_events;
 #[allow(dead_code)]
 #[path = "common/fixture_repo.rs"]
 mod common_fixture_repo;

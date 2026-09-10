@@ -629,7 +629,10 @@ fn assignment_bytes(repo: &std::path::Path) -> Vec<(String, Vec<u8>)> {
                 let entry_path = entry.path();
                 if entry_path.is_dir() {
                     pending.push(entry_path);
-                } else if entry_path.extension().and_then(|ext| ext.to_str()) == Some("json") {
+                } else if matches!(
+                    entry_path.extension().and_then(|ext| ext.to_str()),
+                    Some("json") | Some("jsonl")
+                ) {
                     files.push((
                         entry_path
                             .strip_prefix(repo)
@@ -673,13 +676,9 @@ fn pulse_bytes(repo: &std::path::Path) -> Vec<(String, Vec<u8>)> {
 }
 
 fn event_count(repo: &std::path::Path, event_type: &str, lease_id: &str) -> usize {
-    assignment_bytes(repo)
-        .into_iter()
-        .filter(|(path, _bytes)| path.starts_with(".pulse/events/"))
-        .filter_map(|(_, bytes)| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
-        .filter(|event| {
-            event["event_type"] == event_type && event["payload"]["lease_id"] == lease_id
-        })
+    crate::common_events::events_of_type(repo, event_type)
+        .iter()
+        .filter(|event| event.payload["lease_id"] == lease_id)
         .count()
 }
 

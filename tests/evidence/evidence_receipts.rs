@@ -40,31 +40,10 @@ fn write_json(path: &std::path::Path, value: &impl serde::Serialize) {
 }
 
 fn event_count(repo: &std::path::Path, event_type: &str, subject: &str) -> usize {
-    let events = repo.join(".pulse/events");
-    if !events.exists() {
-        return 0;
-    }
-    let mut count = 0;
-    for day in fs::read_dir(events).unwrap() {
-        let day = day.unwrap().path();
-        if !day.is_dir() {
-            continue;
-        }
-        for entry in fs::read_dir(day).unwrap() {
-            let value: serde_json::Value =
-                serde_json::from_slice(&fs::read(entry.unwrap().path()).unwrap()).unwrap();
-            if value.get("event_type").and_then(|value| value.as_str()) == Some(event_type)
-                && value
-                    .get("subject")
-                    .and_then(|value| value.get("id"))
-                    .and_then(|value| value.as_str())
-                    == Some(subject)
-            {
-                count += 1;
-            }
-        }
-    }
-    count
+    crate::common_events::events_of_type(repo, event_type)
+        .iter()
+        .filter(|event| event.subject.id == subject)
+        .count()
 }
 
 fn tree_bytes(root: &std::path::Path) -> Vec<(String, Vec<u8>)> {

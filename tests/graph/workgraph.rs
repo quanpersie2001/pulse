@@ -791,19 +791,7 @@ fn cache_delete_rebuilds_equivalent_projection() {
 }
 
 fn event_count(root: &std::path::Path) -> usize {
-    let events = root.join(".pulse/events");
-    if !events.exists() {
-        return 0;
-    }
-    let mut count = 0;
-    for date in fs::read_dir(events).unwrap() {
-        for entry in fs::read_dir(date.unwrap().path()).unwrap() {
-            if entry.unwrap().path().extension().and_then(|s| s.to_str()) == Some("json") {
-                count += 1;
-            }
-        }
-    }
-    count
+    crate::common_events::count_events(root)
 }
 
 #[test]

@@ -401,31 +401,14 @@ fn receipt_path(repo_root: &Path, id: &str) -> PathBuf {
 }
 
 fn has_recording_event(repo_root: &Path, id: &str, hash: &str) -> Result<bool> {
-    let dir = repo_root.join(".pulse/events");
-    if !dir.exists() {
-        return Ok(false);
-    }
-    let mut count = 0;
-    for day in fs::read_dir(&dir).map_err(|error| PulseError::io(&dir, error))? {
-        let day = day.map_err(|error| PulseError::io(&dir, error))?.path();
-        if !day.is_dir() {
-            continue;
-        }
-        for entry in fs::read_dir(&day).map_err(|error| PulseError::io(&day, error))? {
-            let path = entry.map_err(|error| PulseError::io(&day, error))?.path();
-            let Ok(event): std::result::Result<crate::event::EventEnvelope, _> =
-                crate::storage::read_json(&path)
-            else {
-                continue;
-            };
-            if event.event_type == "evidence.receipt.recorded"
+    let count = crate::event::read_events(repo_root)?
+        .into_iter()
+        .filter(|event| {
+            event.event_type == "evidence.receipt.recorded"
                 && event.payload.get("receipt_id").and_then(|v| v.as_str()) == Some(id)
                 && event.payload.get("receipt_hash").and_then(|v| v.as_str()) == Some(hash)
-            {
-                count += 1;
-            }
-        }
-    }
+        })
+        .count();
     if count > 1 {
         return Err(PulseError::validation(
             "receipt_recording_event_ambiguous",

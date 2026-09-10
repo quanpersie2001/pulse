@@ -224,23 +224,10 @@ fn family<'a>(report: &'a ReadinessReport, name: &str) -> &'a GateFamilyReport {
 }
 
 fn collect_events(repo: &std::path::Path, event_type: &str) -> Vec<serde_json::Value> {
-    let events = repo.join(".pulse/events");
-    let mut out = Vec::new();
-    if let Ok(days) = fs::read_dir(&events) {
-        for day in days.flatten() {
-            if !day.path().is_dir() {
-                continue;
-            }
-            for entry in fs::read_dir(day.path()).unwrap().flatten() {
-                let v: serde_json::Value =
-                    serde_json::from_slice(&fs::read(entry.path()).unwrap()).unwrap();
-                if v.get("event_type").and_then(|v| v.as_str()) == Some(event_type) {
-                    out.push(v);
-                }
-            }
-        }
-    }
-    out
+    crate::common_events::events_of_type(repo, event_type)
+        .iter()
+        .map(|event| serde_json::to_value(event).unwrap())
+        .collect()
 }
 
 #[test]

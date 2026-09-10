@@ -31,24 +31,7 @@ fn run_ok(repo: &TempDir, args: &[&str]) -> Value {
 }
 
 fn event_count(repo: &TempDir, event_type: &str) -> usize {
-    let events = repo.path().join(".pulse/events");
-    if !events.exists() {
-        return 0;
-    }
-    let mut count = 0;
-    for date in fs::read_dir(events).unwrap() {
-        for entry in fs::read_dir(date.unwrap().path()).unwrap() {
-            let path = entry.unwrap().path();
-            if path.extension().and_then(|ext| ext.to_str()) != Some("json") {
-                continue;
-            }
-            let value: Value = serde_json::from_slice(&fs::read(path).unwrap()).unwrap();
-            if value["event_type"] == event_type {
-                count += 1;
-            }
-        }
-    }
-    count
+    crate::common_events::events_of_type(repo.path(), event_type).len()
 }
 
 fn transaction_count(repo: &TempDir) -> usize {

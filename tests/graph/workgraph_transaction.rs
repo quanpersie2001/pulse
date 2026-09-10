@@ -160,7 +160,7 @@ fn multi_target_recovery_rolls_forward_prefix_after_and_writes_event() {
         .join(format!("{}.json", edge.id));
     let edge_bytes = to_canonical_bytes(&edge).unwrap();
     let event_payload = serde_json::json!({"schema_version":1,"id":"evt_multi","event_type":"work.node.superseded","actor":"test","occurred_at":"1970-01-01T00:00:02Z","subject":"TK-001","payload":{"ok":true}});
-    let event_path = repo.join(".pulse/events/1970-01-01/evt_multi.json");
+    let event_path = repo.join(".pulse/events/1970-01-01.jsonl");
     let intent = MultiTargetTransactionIntent::prepared(
         "evt_multi",
         "work.node.superseded",
@@ -226,7 +226,7 @@ fn multi_target_recovery_stops_on_ambiguous_manual_edit() {
             TransactionTarget::new(first.clone(), FileState::Absent, FileState::Present { hash: hash_bytes(after), revision: 1 }, after),
             TransactionTarget::new(second, FileState::Absent, FileState::Present { hash: hash_bytes(after), revision: 1 }, after),
         ],
-        repo.join(".pulse/events/1970-01-01/evt_ambiguous.json"),
+        repo.join(".pulse/events/1970-01-01.jsonl"),
         serde_json::json!({"schema_version":1,"id":"evt_ambiguous","event_type":"work.node.superseded","actor":"test","occurred_at":"1970-01-01T00:00:01Z","subject":"TK-001","payload":{}}),
     ).unwrap();
     let intent_path = persist_multi_target_intent(repo, &intent).unwrap();
@@ -246,9 +246,13 @@ fn recovery_event_create_is_idempotent_for_matching_existing_event() {
     let after_bytes = to_canonical_bytes(&serde_json::json!({"id":"TK-001","revision":1})).unwrap();
     fs::write(&target, &after_bytes).unwrap();
     let event_payload = serde_json::json!({"schema_version":1,"id":"evt_idempotent","event_type":"test","actor":"test","occurred_at":"1970-01-01T00:00:01Z","subject":"TK-001","payload":{"ok":true}});
-    let event_path = repo.join(".pulse/events/1970-01-01/evt_idempotent.json");
+    // Decision 0011: the event already sits in its day file as one compact
+    // line, so recovery must see it as written and only clean the intent.
+    let event_path = repo.join(".pulse/events/1970-01-01.jsonl");
     fs::create_dir_all(event_path.parent().unwrap()).unwrap();
-    fs::write(&event_path, to_canonical_bytes(&event_payload).unwrap()).unwrap();
+    let mut line = pulse::canonical_json::to_canonical_line_bytes(&event_payload).unwrap();
+    line.push(b'\n');
+    fs::write(&event_path, &line).unwrap();
     let intent = TransactionIntent::prepared(
         "evt_idempotent",
         "test",
@@ -380,22 +384,5 @@ fn transaction_count(root: &std::path::Path) -> usize {
 }
 
 fn read_events(root: &std::path::Path) -> Vec<EventEnvelope> {
-    let events = root.join(".pulse/events");
-    if !events.exists() {
-        return vec![];
-    }
-    let mut paths = vec![];
-    for date in fs::read_dir(events).unwrap() {
-        for entry in fs::read_dir(date.unwrap().path()).unwrap() {
-            let path = entry.unwrap().path();
-            if path.extension().and_then(|ext| ext.to_str()) == Some("json") {
-                paths.push(path);
-            }
-        }
-    }
-    paths.sort();
-    paths
-        .into_iter()
-        .map(|path| serde_json::from_slice(&fs::read(path).unwrap()).unwrap())
-        .collect()
+    crate::common_events::read_events(root)
 }

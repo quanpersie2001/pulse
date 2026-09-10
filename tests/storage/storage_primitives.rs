@@ -113,13 +113,13 @@ fn transaction_recovery_rolls_back_when_target_before_and_event_absent() {
     let before_bytes = to_canonical_bytes(&json!({"id": "TK-001", "revision": 1})).unwrap();
     fs::write(&target, &before_bytes).unwrap();
     let after_bytes = to_canonical_bytes(&json!({"id": "TK-001", "revision": 2})).unwrap();
-    let event_payload = json!({"event": "node_updated", "id": "TK-001"});
+    let event_payload = json!({"id": "evt_test_rollback", "event": "node_updated"});
     let intent = TransactionIntent::prepared(
         "evt_test_rollback",
         "node.update",
         "test",
         target.clone(),
-        repo.join(".pulse/events/2026-01-01/evt_test_rollback.json"),
+        repo.join(".pulse/events/2026-01-01.jsonl"),
         FileState::Present {
             hash: hash_bytes(&before_bytes),
             revision: 1,
@@ -154,8 +154,8 @@ fn transaction_recovery_completes_event_when_target_after_and_event_absent() {
     let before_bytes = to_canonical_bytes(&json!({"id": "TK-001", "revision": 1})).unwrap();
     let after_bytes = to_canonical_bytes(&json!({"id": "TK-001", "revision": 2})).unwrap();
     fs::write(&target, &after_bytes).unwrap();
-    let event_payload = json!({"event": "node_updated", "id": "TK-001"});
-    let event_path = repo.join(".pulse/events/2026-01-01/evt_test_complete.json");
+    let event_payload = json!({"id": "evt_test_complete", "event": "node_updated"});
+    let event_path = repo.join(".pulse/events/2026-01-01.jsonl");
     let intent = TransactionIntent::prepared(
         "evt_test_complete",
         "node.update",
@@ -206,7 +206,7 @@ fn transaction_recovery_hard_fails_ambiguous_state() {
         "node.update",
         "test",
         target,
-        repo.join(".pulse/events/2026-01-01/evt_test_ambiguous.json"),
+        repo.join(".pulse/events/2026-01-01.jsonl"),
         FileState::Present {
             hash: hash_bytes(&before_bytes),
             revision: 1,
@@ -215,7 +215,7 @@ fn transaction_recovery_hard_fails_ambiguous_state() {
             hash: hash_bytes(&after_bytes),
             revision: 2,
         },
-        json!({"event": "node_updated", "id": "TK-001"}),
+        json!({"id": "evt_test_ambiguous", "event": "node_updated"}),
     )
     .unwrap();
     persist_intent(repo, &intent).unwrap();
@@ -234,7 +234,7 @@ fn transaction_recovery_hard_fails_event_mismatch() {
     let before_bytes = to_canonical_bytes(&json!({"id": "TK-001", "revision": 1})).unwrap();
     let after_bytes = to_canonical_bytes(&json!({"id": "TK-001", "revision": 2})).unwrap();
     fs::write(&target, &after_bytes).unwrap();
-    let event_path = repo.join(".pulse/events/2026-01-01/evt_test_mismatch.json");
+    let event_path = repo.join(".pulse/events/2026-01-01.jsonl");
     let intent = TransactionIntent::prepared(
         "evt_test_mismatch",
         "node.update",
@@ -249,16 +249,19 @@ fn transaction_recovery_hard_fails_event_mismatch() {
             hash: hash_bytes(&after_bytes),
             revision: 2,
         },
-        json!({"event": "node_updated", "id": "TK-001"}),
+        json!({"id": "evt_test_mismatch", "event": "node_updated"}),
     )
     .unwrap();
     persist_intent(repo, &intent).unwrap();
     fs::create_dir_all(event_path.parent().unwrap()).unwrap();
-    fs::write(
-        &event_path,
-        to_canonical_bytes(&json!({"event": "different"})).unwrap(),
+    // Decision 0011: the day file already carries this event id with other
+    // content. Identity matches, bytes do not, so recovery must refuse.
+    let mut line = pulse::canonical_json::to_canonical_line_bytes(
+        &json!({"id": "evt_test_mismatch", "event": "different"}),
     )
     .unwrap();
+    line.push(b'\n');
+    fs::write(&event_path, &line).unwrap();
 
     let error = recover_prepared_transactions(repo).unwrap_err();
     assert!(matches!(error, PulseError::EventMismatch { .. }));
@@ -281,7 +284,7 @@ fn transaction_recovery_cleans_after_event_before_intent_cleanup() {
         "node.update",
         "test",
         target,
-        repo.join(".pulse/events/2026-01-01/evt_test_clean.json"),
+        repo.join(".pulse/events/2026-01-01.jsonl"),
         FileState::Present {
             hash: hash_bytes(&before_bytes),
             revision: 1,
@@ -290,7 +293,7 @@ fn transaction_recovery_cleans_after_event_before_intent_cleanup() {
             hash: hash_bytes(&after_bytes),
             revision: 2,
         },
-        json!({"event": "node_updated", "id": "TK-001"}),
+        json!({"id": "evt_test_clean", "event": "node_updated"}),
     )
     .unwrap();
     let intent_path = persist_intent(repo, &intent).unwrap();
@@ -341,14 +344,14 @@ fn multi_target_recovery_rolls_back_when_all_targets_before_and_event_absent() {
             &ws_bytes,
         ),
     ];
-    let event_path = repo.join(".pulse/events/2026-01-01/mt_rollback.json");
+    let event_path = repo.join(".pulse/events/2026-01-01.jsonl");
     let intent = MultiTargetTransactionIntent::prepared(
         "evt_mt_rollback",
         "assignment.claim",
         "test",
         targets,
         event_path.clone(),
-        json!({"event": "claim", "id": "TK-001"}),
+        json!({"id": "evt_mt_rollback", "event": "claim"}),
     )
     .unwrap();
     let intent_path = persist_multi_target_intent(repo, &intent).unwrap();
@@ -404,14 +407,14 @@ fn multi_target_recovery_completes_first_target_written_rest_absent() {
             &bytes_b,
         ),
     ];
-    let event_path = repo.join(".pulse/events/2026-01-01/mt_partial_first.json");
+    let event_path = repo.join(".pulse/events/2026-01-01.jsonl");
     let intent = MultiTargetTransactionIntent::prepared(
         "evt_mt_partial_first",
         "test.multi",
         "test",
         targets,
         event_path.clone(),
-        json!({"event": "partial_first"}),
+        json!({"id": "evt_mt_partial_first", "event": "partial_first"}),
     )
     .unwrap();
     let intent_path = persist_multi_target_intent(repo, &intent).unwrap();
@@ -473,14 +476,14 @@ fn multi_target_recovery_completes_last_target_written_event_absent() {
             &bytes_b,
         ),
     ];
-    let event_path = repo.join(".pulse/events/2026-01-01/mt_last_written.json");
+    let event_path = repo.join(".pulse/events/2026-01-01.jsonl");
     let intent = MultiTargetTransactionIntent::prepared(
         "evt_mt_last_written",
         "test.multi",
         "test",
         targets,
         event_path.clone(),
-        json!({"event": "last_written"}),
+        json!({"id": "evt_mt_last_written", "event": "last_written"}),
     )
     .unwrap();
     let intent_path = persist_multi_target_intent(repo, &intent).unwrap();
@@ -535,14 +538,14 @@ fn multi_target_recovery_cleans_when_all_targets_and_event_present() {
             &bytes_b,
         ),
     ];
-    let event_path = repo.join(".pulse/events/2026-01-01/mt_clean.json");
+    let event_path = repo.join(".pulse/events/2026-01-01.jsonl");
     let intent = MultiTargetTransactionIntent::prepared(
         "evt_mt_clean",
         "test.multi",
         "test",
         targets,
         event_path.clone(),
-        json!({"event": "clean"}),
+        json!({"id": "evt_mt_clean", "event": "clean"}),
     )
     .unwrap();
     let intent_path = persist_multi_target_intent(repo, &intent).unwrap();
@@ -601,14 +604,14 @@ fn multi_target_recovery_with_remove_target_rolls_back_when_file_still_present()
             &tombstone_bytes,
         ),
     ];
-    let event_path = repo.join(".pulse/events/2026-01-01/mt_remove_rollback.json");
+    let event_path = repo.join(".pulse/events/2026-01-01.jsonl");
     let intent = MultiTargetTransactionIntent::prepared(
         "evt_mt_remove_rollback",
         "assignment.release",
         "test",
         targets,
         event_path,
-        json!({"event": "release"}),
+        json!({"id": "evt_mt_remove_rollback", "event": "release"}),
     )
     .unwrap();
     let intent_path = persist_multi_target_intent(repo, &intent).unwrap();
@@ -667,14 +670,14 @@ fn multi_target_recovery_with_remove_target_completes_when_file_removed() {
             &tombstone_bytes,
         ),
     ];
-    let event_path = repo.join(".pulse/events/2026-01-01/mt_remove_complete.json");
+    let event_path = repo.join(".pulse/events/2026-01-01.jsonl");
     let intent = MultiTargetTransactionIntent::prepared(
         "evt_mt_remove_complete",
         "assignment.release",
         "test",
         targets,
         event_path.clone(),
-        json!({"event": "release"}),
+        json!({"id": "evt_mt_remove_complete", "event": "release"}),
     )
     .unwrap();
     let intent_path = persist_multi_target_intent(repo, &intent).unwrap();
@@ -738,14 +741,14 @@ fn multi_target_recovery_with_remove_target_cleans_when_all_done() {
             &tombstone_bytes,
         ),
     ];
-    let event_path = repo.join(".pulse/events/2026-01-01/mt_remove_clean.json");
+    let event_path = repo.join(".pulse/events/2026-01-01.jsonl");
     let intent = MultiTargetTransactionIntent::prepared(
         "evt_mt_remove_clean",
         "assignment.release",
         "test",
         targets,
         event_path.clone(),
-        json!({"event": "release"}),
+        json!({"id": "evt_mt_remove_clean", "event": "release"}),
     )
     .unwrap();
     let intent_path = persist_multi_target_intent(repo, &intent).unwrap();
@@ -807,14 +810,14 @@ fn multi_target_recovery_mixed_create_and_replace_rolls_back() {
             &node_after,
         ),
     ];
-    let event_path = repo.join(".pulse/events/2026-01-01/mt_mixed_rollback.json");
+    let event_path = repo.join(".pulse/events/2026-01-01.jsonl");
     let intent = MultiTargetTransactionIntent::prepared(
         "evt_mt_mixed_rollback",
         "test.mixed",
         "test",
         targets,
         event_path,
-        json!({"event": "mixed_rollback"}),
+        json!({"id": "evt_mt_mixed_rollback", "event": "mixed_rollback"}),
     )
     .unwrap();
     let intent_path = persist_multi_target_intent(repo, &intent).unwrap();
@@ -872,14 +875,14 @@ fn multi_target_recovery_hard_fails_ambiguous_state() {
             &bytes_b,
         ),
     ];
-    let event_path = repo.join(".pulse/events/2026-01-01/mt_ambiguous.json");
+    let event_path = repo.join(".pulse/events/2026-01-01.jsonl");
     let intent = MultiTargetTransactionIntent::prepared(
         "evt_mt_ambiguous",
         "test.multi",
         "test",
         targets,
         event_path,
-        json!({"event": "ambiguous"}),
+        json!({"id": "evt_mt_ambiguous", "event": "ambiguous"}),
     )
     .unwrap();
     persist_multi_target_intent(repo, &intent).unwrap();
@@ -910,25 +913,26 @@ fn multi_target_recovery_hard_fails_event_mismatch() {
         },
         &bytes_a,
     )];
-    let event_path = repo.join(".pulse/events/2026-01-01/mt_event_mismatch.json");
+    let event_path = repo.join(".pulse/events/2026-01-01.jsonl");
     let intent = MultiTargetTransactionIntent::prepared(
         "evt_mt_event_mismatch",
         "test.multi",
         "test",
         targets,
         event_path.clone(),
-        json!({"event": "mismatch"}),
+        json!({"id": "evt_mt_event_mismatch", "event": "mismatch"}),
     )
     .unwrap();
     persist_multi_target_intent(repo, &intent).unwrap();
 
-    // Pre-write a different event file.
+    // Pre-write the same event id with different content.
     fs::create_dir_all(event_path.parent().unwrap()).unwrap();
-    fs::write(
-        &event_path,
-        to_canonical_bytes(&json!({"event": "different"})).unwrap(),
+    let mut line = pulse::canonical_json::to_canonical_line_bytes(
+        &json!({"id": "evt_mt_event_mismatch", "event": "different"}),
     )
     .unwrap();
+    line.push(b'\n');
+    fs::write(&event_path, &line).unwrap();
 
     // Event hash doesn't match → EventMismatch.
     let error = recover_prepared_transactions(repo).unwrap_err();
@@ -948,7 +952,7 @@ fn multi_target_recovery_rejects_empty_targets() {
         "test",
         vec![],
         repo.join(".pulse/events/empty.json"),
-        json!({"event": "empty"}),
+        json!({"id": "evt_empty", "event": "empty"}),
     )
     .unwrap_err();
     assert!(matches!(err, PulseError::InvalidTransaction { .. }));
@@ -990,7 +994,7 @@ fn multi_target_preparation_sorts_targets_and_rejects_duplicate_paths() {
             ),
         ],
         repo.join(".pulse/events/sorted.json"),
-        json!({"event": "sorted"}),
+        json!({"id": "evt_sorted", "event": "sorted"}),
     )
     .unwrap();
     assert_eq!(intent.targets[0].path, target_a);
@@ -1021,7 +1025,7 @@ fn multi_target_preparation_sorts_targets_and_rejects_duplicate_paths() {
             ),
         ],
         repo.join(".pulse/events/duplicate.json"),
-        json!({"event": "duplicate"}),
+        json!({"id": "evt_duplicate", "event": "duplicate"}),
     )
     .unwrap_err();
     assert!(matches!(err, PulseError::InvalidTransaction { .. }));
@@ -1050,7 +1054,7 @@ fn multi_target_prepare_rejects_hash_mismatch_and_remove_payload() {
             &bytes,
         )],
         repo.join(".pulse/events/hash_mismatch.json"),
-        json!({"event": "hash_mismatch"}),
+        json!({"id": "evt_hash_mismatch", "event": "hash_mismatch"}),
     )
     .unwrap_err();
     assert!(matches!(err, PulseError::InvalidTransaction { .. }));
@@ -1073,7 +1077,7 @@ fn multi_target_prepare_rejects_hash_mismatch_and_remove_payload() {
             )),
         }],
         repo.join(".pulse/events/remove_payload.json"),
-        json!({"event": "remove_payload"}),
+        json!({"id": "evt_remove_payload", "event": "remove_payload"}),
     )
     .unwrap_err();
     assert!(matches!(err, PulseError::InvalidTransaction { .. }));
@@ -1116,8 +1120,8 @@ fn multi_target_recovery_rejects_event_before_targets() {
                 &bytes_b,
             ),
         ],
-        repo.join(".pulse/events/2026-01-01/event_before_targets.json"),
-        json!({"event": "event_before_targets"}),
+        repo.join(".pulse/events/2026-01-01.jsonl"),
+        json!({"id": "evt_event_before_targets", "event": "event_before_targets"}),
     )
     .unwrap();
     persist_multi_target_intent(repo, &intent).unwrap();

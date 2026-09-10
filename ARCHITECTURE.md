@@ -93,7 +93,7 @@ domain, then creates each plane once.
 | `.pulse/docs/` | `docs` | `registry.json` (eight-field records) and `tags.json` vocabulary |
 | `.pulse/knowledge/` | `knowledge` | `manifest.json`, `entries/LRN-*.json`, `relations/` |
 | `.pulse/policy/` | `policy` | `authority.json` (default-deny grants) |
-| `.pulse/events/` | `event.rs` | `events/<date>/<id>.json` audit trail |
+| `.pulse/events/` | `event.rs` | `events/<date>.jsonl` audit trail, one canonical event per line (Decision 0011) |
 | `.pulse/runtime/` | `storage` | write locks and prepared-transaction intents; gitignored |
 | `.pulse/cache/` | `docs` | lexical index generations and pointers; gitignored |
 
@@ -102,6 +102,13 @@ mutations and `contract_revision` only moves when semantic contract input
 changes; evidence receipts are immutable content-hashed envelopes; mutations
 are atomic multi-file transactions (intent → prepared → committed) that
 recover on crash rather than guessing.
+
+The event log is the one exception to temp-and-rename: it appends a fsynced
+line through `storage::append_line_fsync`, because rewriting a whole day to add
+one event is what Decision 0011 set out to stop. Identity moved with it — the
+day file is shared, so a transaction intent finds its event by `event_id`
+rather than by path, and the intent constructors reject a payload whose `id`
+disagrees with the declared one.
 
 ## 4. Test layout
 

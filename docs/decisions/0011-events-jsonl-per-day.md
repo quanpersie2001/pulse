@@ -53,10 +53,28 @@ closes}` vào `evidence/receipts/` với `kind` tương ứng. Cùng bản chấ
 
 ## Thay đổi
 
-- `src/event.rs`: `event_path` trả `<date>.jsonl`; `write_event` append với
-  lock và fsync; `read_events` parse từng dòng, bỏ dòng cụt cuối.
-- `src/cli/events.rs`: `tail --since` theo ngày của ULID; lệnh `compact`.
-- `src/storage/`: helper append-with-fsync và kiểm tra byte cuối.
-- Test: ghi song song dưới lock, dòng cụt, cursor qua ranh giới ngày, compact
-  giữ đúng thứ tự và số event.
+- `src/event.rs`: `day_file_path` là chủ sở hữu duy nhất của luật đặt tên;
+  `write_event` append canonical một dòng; `read_event_log` parse từng dòng và
+  trả `torn_tails`; `compact_events` chuyển đổi legacy.
+- `src/cli/events.rs`: lệnh `compact`; `events_torn_tail` báo ra stderr.
+- `src/storage/append.rs`: `append_line_fsync` — cắt dòng cụt rồi append, fsync.
+- Test: dòng cụt, cursor qua ranh giới ngày, compact giữ đúng thứ tự và số
+  event, một day file một ngày.
 - PRODUCT.md §4 layout và §5.7.
+
+**Bổ sung khi implement (2026-09-11):** danh sách trên bỏ sót
+`src/storage/transaction.rs`, nơi phần lớn event thật sự được ghi. Prepared
+transaction trước đây trả lời "event của tôi đã ghi chưa" bằng *sự tồn tại của
+file tại `event_path`*; với day file dùng chung, câu hỏi đó phải hỏi về **một
+dòng**, nên `observed_event` tìm theo `event_id` rồi đối chiếu `event_hash`.
+Kéo theo một ràng buộc mới: `event_payload.id` phải bằng `event_id` của intent,
+kiểm tra ngay lúc `prepared()`. Trước 0011 hai giá trị này lệch nhau vô hại vì
+path mang danh tính; giờ lệch nghĩa là recovery đọc nhầm là "chưa ghi" và
+append lần hai. Bảy bản sao của vòng lặp duyệt `.pulse/events/<date>/` (ba
+trong `src/`, còn lại trong test) đều phải sửa; chúng giờ đi qua
+`read_event_log` và `tests/common/events.rs`.
+
+Một điểm lệch có chủ ý so với mục 5: `events_torn_tail` được báo ra **stderr**
+dạng JSON, không chèn vào payload của `tail`. One-shot `--json` của `tail` là
+một mảng event mà caller đã parse như vậy, và một mảnh vỡ do crash không phải
+là một event.

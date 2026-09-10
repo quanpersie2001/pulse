@@ -201,6 +201,14 @@ fn fsync_parent_dir(_parent: &Path) -> (bool, bool, Option<String>) {
     )
 }
 
+/// Best-effort fsync of a directory so a newly created name is durable.
+///
+/// Shared with [`super::append`], which creates files outside the temp-and-
+/// rename path but owes the same durability.
+pub(crate) fn fsync_dir(parent: &Path) {
+    let _ = fsync_parent_dir(parent);
+}
+
 fn unique_temp_path(target: &Path) -> PathBuf {
     let mut random = [0_u8; 8];
     rand::thread_rng().fill_bytes(&mut random);

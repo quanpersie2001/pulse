@@ -138,6 +138,11 @@ pub(crate) enum EventsCommand {
         #[arg(long)]
         json: bool,
     },
+    /// Convert the legacy one-file-per-event layout to `<date>.jsonl` once.
+    Compact {
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 /// Workspace isolation policy for `pulse run`.

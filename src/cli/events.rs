@@ -1,14 +1,38 @@
 //! Thin CLI adapter for the event-log communication surface (`pulse note`,
 //! `pulse events tail`).
 
+use std::collections::HashSet;
 use std::io::Write;
 use std::thread::sleep;
 use std::time::Duration;
 
 use crate::cli::output::render;
-use crate::event::{read_events, EventEnvelope};
+use crate::event::{compact_events, read_event_log, EventEnvelope};
 use crate::kernel::communication::NoteKind;
+use crate::storage::WriteGuard;
 use crate::{JsonGraphStore, PulseError};
+
+/// Report a day file whose last line did not parse (Decision 0011 §5).
+///
+/// The diagnostic goes to stderr rather than into the tail payload: one-shot
+/// `--json` is a bare array of events that callers already parse as one, and a
+/// crash artefact is not an event. Streaming mode is newline-delimited events
+/// for the same reason.
+fn report_torn_tails(paths: &[String]) {
+    for path in paths {
+        eprintln!(
+            "{}",
+            serde_json::json!({
+                "schema_version": 1,
+                "code": "events_torn_tail",
+                "path": path,
+                "message": "the last line of this day file did not parse; a crash \
+                            interrupted an append. Events before it are intact and the \
+                            next append truncates the torn line.",
+            })
+        );
+    }
+}
 
 pub(crate) fn handle_note(
     store: &JsonGraphStore,
@@ -39,10 +63,23 @@ pub(crate) fn handle_tail(
     json: bool,
 ) -> Result<(), PulseError> {
     let mut cursor = since.to_string();
-    let batch = |store: &JsonGraphStore, cursor: &mut String| -> Vec<EventEnvelope> {
-        let events = read_events(store.repo_root()).unwrap_or_default();
+    // Follow mode re-reads once a second; a torn tail stays torn until the
+    // next append, so report each file once rather than every poll.
+    let mut reported: HashSet<String> = HashSet::new();
+    let batch = |store: &JsonGraphStore,
+                 cursor: &mut String,
+                 reported: &mut HashSet<String>|
+     -> Vec<EventEnvelope> {
+        let read = read_event_log(store.repo_root()).unwrap_or_default();
+        let fresh: Vec<String> = read
+            .torn_tails
+            .iter()
+            .filter(|path| reported.insert((*path).clone()))
+            .cloned()
+            .collect();
+        report_torn_tails(&fresh);
         let mut matched = Vec::new();
-        for event in events {
+        for event in read.events {
             if event.id.as_str() <= cursor.as_str() {
                 continue;
             }
@@ -59,7 +96,7 @@ pub(crate) fn handle_tail(
         matched
     };
 
-    let matched = batch(store, &mut cursor);
+    let matched = batch(store, &mut cursor, &mut reported);
     if !follow {
         if json {
             // One-shot JSON reads return a single JSON array.
@@ -77,9 +114,32 @@ pub(crate) fn handle_tail(
     print_batch(&matched, json);
     loop {
         sleep(Duration::from_millis(1000));
-        let matched = batch(store, &mut cursor);
+        let matched = batch(store, &mut cursor, &mut reported);
         print_batch(&matched, json);
     }
+}
+
+/// Convert the legacy one-file-per-event layout to `<date>.jsonl`.
+///
+/// Runs under the repository write lock so no mutation appends to a day file
+/// while it is being rewritten. Re-running is safe and reports zero work.
+pub(crate) fn handle_compact(store: &JsonGraphStore, json: bool) -> Result<(), PulseError> {
+    let repo_root = store.repo_root().to_path_buf();
+    let guard = WriteGuard::acquire(&repo_root)?;
+    let report = compact_events(&repo_root);
+    drop(guard);
+    let report = report?;
+    let human = if report.directories_removed == 0 {
+        "event log already compact; nothing to convert".to_string()
+    } else {
+        format!(
+            "compacted {} event(s) from {} legacy director(ies) into {} day file(s)",
+            report.events_converted,
+            report.directories_removed,
+            report.days.len()
+        )
+    };
+    render(json, &report, human)
 }
 
 fn print_batch(events: &[EventEnvelope], json: bool) {

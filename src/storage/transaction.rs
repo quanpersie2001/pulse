@@ -169,12 +169,14 @@ impl TransactionIntent {
         after: FileState,
         event_payload: serde_json::Value,
     ) -> Result<Self> {
+        let event_id = event_id.into();
+        validate_event_identity(&event_id, &event_payload)?;
         let event_hash = canonical_json::hash_value(&event_payload)?;
         let now = Utc::now();
         Ok(Self {
             schema_version: TRANSACTION_INTENT_SCHEMA_VERSION,
             transaction_id: new_transaction_id(),
-            event_id: event_id.into(),
+            event_id,
             operation: operation.into(),
             actor: actor.into(),
             targets: vec![TransactionTarget {
@@ -271,12 +273,14 @@ impl MultiTargetTransactionIntent {
                 }
             }
         }
+        let event_id = event_id.into();
+        validate_event_identity(&event_id, &event_payload)?;
         let event_hash = canonical_json::hash_value(&event_payload)?;
         let now = Utc::now();
         Ok(Self {
             schema_version: TRANSACTION_INTENT_SCHEMA_VERSION,
             transaction_id: transaction_id.into(),
-            event_id: event_id.into(),
+            event_id,
             operation: operation.into(),
             actor: actor.into(),
             targets,
@@ -530,7 +534,8 @@ fn recover_one_multi_target(
             &target.after,
         )?);
     }
-    let event_state = observed_event_state(&intent.event_path, &intent.event_hash)?;
+    let event_state =
+        observed_event_state(&intent.event_path, &intent.event_id, &intent.event_hash)?;
 
     let after_prefix = observed
         .iter()
@@ -686,17 +691,8 @@ fn write_target_respecting_before(
     }
 }
 
-fn observed_event_state(path: &Path, expected_hash: &str) -> Result<ObservedEvent> {
-    if !path.exists() {
-        return Ok(ObservedEvent::Absent);
-    }
-    let bytes = fs::read(path).map_err(|error| PulseError::io(path, error))?;
-    let actual_hash = hash_bytes(&bytes);
-    if actual_hash == expected_hash {
-        Ok(ObservedEvent::Matching)
-    } else {
-        Ok(ObservedEvent::Mismatch { actual_hash })
-    }
+fn observed_event_state(path: &Path, event_id: &str, expected_hash: &str) -> Result<ObservedEvent> {
+    observed_event(path, event_id, expected_hash)
 }
 
 fn observed_hash_matches(observed_hash: Option<&str>, expected: &FileState) -> bool {
@@ -710,6 +706,7 @@ fn observed_hash_matches(observed_hash: Option<&str>, expected: &FileState) -> b
 pub fn write_event_create_new(intent: &TransactionIntent) -> Result<()> {
     write_event_create_new_parts(
         &intent.transaction_id,
+        &intent.event_id,
         &intent.event_path,
         &intent.event_hash,
         &intent.event_payload,
@@ -719,6 +716,7 @@ pub fn write_event_create_new(intent: &TransactionIntent) -> Result<()> {
 pub fn write_event_create_new_multi(intent: &MultiTargetTransactionIntent) -> Result<()> {
     write_event_create_new_parts(
         &intent.transaction_id,
+        &intent.event_id,
         &intent.event_path,
         &intent.event_hash,
         &intent.event_payload,
@@ -727,6 +725,7 @@ pub fn write_event_create_new_multi(intent: &MultiTargetTransactionIntent) -> Re
 
 fn write_event_create_new_parts(
     transaction_id: &str,
+    event_id: &str,
     event_path: &Path,
     event_hash: &str,
     event_payload: &serde_json::Value,
@@ -740,34 +739,99 @@ fn write_event_create_new_parts(
             ),
         });
     }
-    if let Some(parent) = event_path.parent() {
-        fs::create_dir_all(parent).map_err(|error| PulseError::io(parent, error))?;
-    }
-    if event_path.exists() {
-        // Recovery/idempotency fast path and genuine-corruption guard. A
-        // pre-existing event file must match the prepared hash. A mismatch is
-        // externally written corruption, not a torn write: the write below is
-        // atomic (temp + rename), so a crash can never leave a half-written
-        // event file at this path. Recovery therefore hard-fails instead of
-        // silently overwriting unexpected content.
-        if event_matches_parts(event_path, event_hash)? {
-            return Ok(());
+
+    // Recovery/idempotency fast path and genuine-corruption guard. Decision
+    // 0011 made the target a shared day file, so "already written" is a
+    // question about one line in it, not about the file: the event id selects
+    // the line and the prepared hash judges it.
+    validate_event_identity(event_id, event_payload)?;
+    match observed_event(event_path, event_id, event_hash)? {
+        ObservedEvent::Matching => return Ok(()),
+        ObservedEvent::Mismatch { actual_hash } => {
+            return Err(PulseError::EventMismatch {
+                transaction_id: transaction_id.to_string(),
+                message: format!(
+                    "event {event_id} already recorded in {} with hash {actual_hash}, not the \
+                     prepared {event_hash}",
+                    event_path.display()
+                ),
+            });
         }
-        return Err(PulseError::EventMismatch {
-            transaction_id: transaction_id.to_string(),
+        ObservedEvent::Absent => {}
+    }
+
+    // Crash-safe event write: append the canonical line and fsync it. A crash
+    // mid-append leaves at most a torn trailing line, which the next append
+    // truncates before writing, so recovery observes an absent event and
+    // (re)writes it rather than surfacing a half-written record.
+    let line = canonical_json::canonical_line_bytes(event_payload)?;
+    super::append::append_line_fsync(event_path, &line)
+}
+
+/// Reject an intent whose declared `event_id` is not the id its payload
+/// carries.
+///
+/// Before Decision 0011 the event path carried identity and the two could
+/// drift harmlessly. Now they cannot: recovery looks for `event_id` in a
+/// shared day file, so a payload written under a different id reads as absent
+/// and gets appended twice.
+fn validate_event_identity(event_id: &str, event_payload: &serde_json::Value) -> Result<()> {
+    let payload_id = event_payload.get("id").and_then(serde_json::Value::as_str);
+    match payload_id {
+        Some(id) if id == event_id => Ok(()),
+        Some(id) => Err(PulseError::InvalidTransaction {
             message: format!(
-                "event file already exists at {} with different content",
-                event_path.display()
+                "event payload id {id} does not match the intent's event id {event_id}"
             ),
+        }),
+        None => Err(PulseError::InvalidTransaction {
+            message: format!(
+                "event payload carries no id; the append-only event log needs one to tell \
+                 event {event_id} from every other line of its day file"
+            ),
+        }),
+    }
+}
+
+/// Whether the prepared event is already recorded in its day file.
+///
+/// The id is unique per event, so at most one line can be this event. That
+/// line is re-serialised to the pretty canonical form the intent hashed,
+/// keeping `event_hash` meaning the same thing it did before Decision 0011.
+fn observed_event(event_path: &Path, event_id: &str, event_hash: &str) -> Result<ObservedEvent> {
+    if !event_path.exists() {
+        return Ok(ObservedEvent::Absent);
+    }
+    let bytes = fs::read(event_path).map_err(|error| PulseError::io(event_path, error))?;
+    // Only a line naming this id can be this event; the substring test skips
+    // parsing every other line of the day.
+    let needle = format!("\"id\":\"{event_id}\"");
+    for line in bytes.split(|byte| *byte == b'\n') {
+        if line.is_empty() {
+            continue;
+        }
+        let Ok(text) = std::str::from_utf8(line) else {
+            continue;
+        };
+        if !text.contains(&needle) {
+            continue;
+        }
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(text) else {
+            // A torn final line naming this id means the append did not
+            // complete; the next append truncates it and rewrites.
+            continue;
+        };
+        if value.get("id").and_then(serde_json::Value::as_str) != Some(event_id) {
+            continue;
+        }
+        let actual_hash = hash_bytes(&canonical_json::to_canonical_bytes(&value)?);
+        return Ok(if actual_hash == event_hash {
+            ObservedEvent::Matching
+        } else {
+            ObservedEvent::Mismatch { actual_hash }
         });
     }
-    // Crash-safe event write: stage the canonical bytes in a sibling temp file,
-    // fsync it, then atomically rename it into the final event path. A crash
-    // before the rename leaves no file at `event_path` (only an orphan temp,
-    // swept by `cleanup_orphan_transaction_temps` on recovery), so recovery
-    // observes an absent event and (re)writes it rather than surfacing a torn,
-    // half-written file as an unrecoverable `EventMismatch`.
-    atomic::atomic_replace(event_path, &bytes).map(|_| ())
+    Ok(ObservedEvent::Absent)
 }
 
 fn cleanup_target_temp(target_path: &Path) -> Result<()> {
@@ -783,13 +847,9 @@ fn cleanup_orphan_transaction_temps(directory: &Path) -> Result<()> {
 }
 
 pub fn event_matches_intent(intent: &TransactionIntent) -> Result<bool> {
-    event_matches_parts(&intent.event_path, &intent.event_hash)
+    event_matches_parts(&intent.event_path, &intent.event_id, &intent.event_hash)
 }
 
-fn event_matches_parts(event_path: &Path, event_hash: &str) -> Result<bool> {
-    if !event_path.exists() {
-        return Ok(false);
-    }
-    let bytes = fs::read(event_path).map_err(|error| PulseError::io(event_path, error))?;
-    Ok(hash_bytes(&bytes) == event_hash)
+fn event_matches_parts(event_path: &Path, event_id: &str, event_hash: &str) -> Result<bool> {
+    Ok(observed_event(event_path, event_id, event_hash)? == ObservedEvent::Matching)
 }

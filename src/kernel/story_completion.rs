@@ -489,10 +489,7 @@ fn commit_story_close(
     let before: Node = serde_json::from_slice(story_before_bytes).map_err(PulseError::from)?;
     let event_id = new_event_id();
     let now = Utc::now();
-    let event_path = repo_root
-        .join(".pulse/events")
-        .join(now.format("%Y-%m-%d").to_string())
-        .join(format!("{event_id}.json"));
+    let event_path = crate::event::day_file_path(repo_root, now);
     let event = EventEnvelope::new(
         event_id.clone(),
         "work.story.closed",

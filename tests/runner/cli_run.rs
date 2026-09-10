@@ -246,21 +246,12 @@ echo '{"status": "handed_off", "summary": "done"}'
 }
 
 fn walk_events(dir: &Path) -> Vec<Value> {
-    let mut out = Vec::new();
-    let Ok(entries) = fs::read_dir(dir) else {
-        return out;
-    };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.is_dir() {
-            out.extend(walk_events(&path));
-        } else if let Ok(bytes) = fs::read(&path) {
-            if let Ok(value) = serde_json::from_slice::<Value>(&bytes) {
-                out.push(value);
-            }
-        }
-    }
-    out
+    // `dir` is always `<repo>/.pulse/events`; the shared reader owns the layout.
+    let repo_root = dir.parent().and_then(Path::parent).expect("events dir");
+    crate::common_events::read_events(repo_root)
+        .iter()
+        .map(|event| serde_json::to_value(event).expect("event to value"))
+        .collect()
 }
 
 // ---------------------------------------------------------------------------

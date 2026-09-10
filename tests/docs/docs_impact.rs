@@ -1,4 +1,3 @@
-use std::fs;
 use std::process::Command;
 
 use chrono::{TimeZone, Utc};
@@ -38,25 +37,7 @@ fn update(posture: DocumentationImpactPosture) -> DocumentationImpactUpdate {
 }
 
 fn events(repo_root: &std::path::Path) -> Vec<EventEnvelope> {
-    let root = repo_root.join(".pulse/events");
-    if !root.exists() {
-        return vec![];
-    }
-    let mut out: Vec<EventEnvelope> = vec![];
-    let mut stack = vec![root];
-    while let Some(path) = stack.pop() {
-        for entry in fs::read_dir(path).unwrap() {
-            let entry = entry.unwrap();
-            if entry.file_type().unwrap().is_dir() {
-                stack.push(entry.path());
-            } else {
-                let bytes = fs::read(entry.path()).unwrap();
-                out.push(serde_json::from_slice(&bytes).unwrap());
-            }
-        }
-    }
-    out.sort_by(|a, b| a.id.cmp(&b.id));
-    out
+    crate::common_events::read_events(repo_root)
 }
 
 #[test]

@@ -685,10 +685,6 @@ impl JsonGraphStore {
         target: &SupersessionTarget,
         assertion: &SupersessionAssertion,
     ) -> bool {
-        let events_dir = self.repo_root.join(".pulse/events");
-        let Ok(date_dirs) = fs::read_dir(events_dir) else {
-            return false;
-        };
         let target_value = match serde_json::to_value(target) {
             Ok(value) => value,
             Err(_) => return false,
@@ -697,27 +693,15 @@ impl JsonGraphStore {
             Ok(value) => value,
             Err(_) => return false,
         };
-        for date_dir in date_dirs.flatten() {
-            let Ok(entries) = fs::read_dir(date_dir.path()) else {
-                continue;
-            };
-            for entry in entries.flatten() {
-                if entry.path().extension().and_then(|ext| ext.to_str()) != Some("json") {
-                    continue;
-                }
-                let Ok(event) = storage::read_json::<EventEnvelope>(&entry.path()) else {
-                    continue;
-                };
-                if event.event_type == "work.node.superseded"
-                    && event.subject.id == old_id
-                    && event.payload.get("target") == Some(&target_value)
-                    && event.payload.get("assertion") == Some(&assertion_value)
-                {
-                    return true;
-                }
-            }
-        }
-        false
+        let Ok(events) = crate::event::read_events(&self.repo_root) else {
+            return false;
+        };
+        events.iter().any(|event| {
+            event.event_type == "work.node.superseded"
+                && event.subject.id == old_id
+                && event.payload.get("target") == Some(&target_value)
+                && event.payload.get("assertion") == Some(&assertion_value)
+        })
     }
 
     pub(super) fn same_supersession_receipt(
@@ -727,40 +711,25 @@ impl JsonGraphStore {
         receipt_id: &str,
         edges: &[Edge],
     ) -> PulseResult<Option<(Option<Edge>, crate::evidence::model::ReceiptReference)>> {
-        let events_dir = self.repo_root.join(".pulse/events");
-        let Ok(date_dirs) = fs::read_dir(events_dir) else {
-            return Ok(None);
-        };
         let target_value = serde_json::to_value(target)?;
-        for date_dir in date_dirs.flatten() {
-            let Ok(entries) = fs::read_dir(date_dir.path()) else {
+        for event in crate::event::read_events(&self.repo_root)? {
+            let Some(receipt_value) = event.payload.get("reconciliation_receipt") else {
                 continue;
             };
-            for entry in entries.flatten() {
-                if entry.path().extension().and_then(|ext| ext.to_str()) != Some("json") {
-                    continue;
-                }
-                let Ok(event) = storage::read_json::<EventEnvelope>(&entry.path()) else {
-                    continue;
+            if event.event_type == "work.node.superseded"
+                && event.subject.id == old_id
+                && event.payload.get("target") == Some(&target_value)
+                && receipt_value.get("id").and_then(|v| v.as_str()) == Some(receipt_id)
+            {
+                let receipt_ref: crate::evidence::model::ReceiptReference =
+                    serde_json::from_value(receipt_value.clone())?;
+                let edge = match target {
+                    SupersessionTarget::Replacement { .. } => {
+                        superseded_by_edges(edges, old_id).into_iter().next()
+                    }
+                    SupersessionTarget::Decision { .. } => None,
                 };
-                let Some(receipt_value) = event.payload.get("reconciliation_receipt") else {
-                    continue;
-                };
-                if event.event_type == "work.node.superseded"
-                    && event.subject.id == old_id
-                    && event.payload.get("target") == Some(&target_value)
-                    && receipt_value.get("id").and_then(|v| v.as_str()) == Some(receipt_id)
-                {
-                    let receipt_ref: crate::evidence::model::ReceiptReference =
-                        serde_json::from_value(receipt_value.clone())?;
-                    let edge = match target {
-                        SupersessionTarget::Replacement { .. } => {
-                            superseded_by_edges(edges, old_id).into_iter().next()
-                        }
-                        SupersessionTarget::Decision { .. } => None,
-                    };
-                    return Ok(Some((edge, receipt_ref)));
-                }
+                return Ok(Some((edge, receipt_ref)));
             }
         }
         Ok(None)

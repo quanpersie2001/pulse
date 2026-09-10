@@ -16,6 +16,8 @@
 
 #[path = "common/bin.rs"]
 mod common_bin;
+#[path = "common/events.rs"]
+mod common_events;
 
 #[path = "process/crash_recovery_process.rs"]
 mod crash_recovery_process;

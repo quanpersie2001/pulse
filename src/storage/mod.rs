@@ -6,6 +6,7 @@
 //! for compatibility with the historical `pulse::storage::{bootstrap,
 //! MANIFEST_JSON, ...}` path used by evidence, docs, knowledge and tests.
 
+pub mod append;
 pub mod atomic;
 pub mod lock;
 pub mod paths;
@@ -16,6 +17,7 @@ use serde::de::DeserializeOwned;
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 
+pub use append::append_line_fsync;
 pub use lock::WriteGuard;
 
 // Compatibility re-exports: workgraph bootstrap/schema ownership moved to the

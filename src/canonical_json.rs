@@ -42,6 +42,31 @@ pub fn to_canonical_bytes_from<T: Serialize>(value: &T) -> Result<Vec<u8>> {
     to_canonical_bytes(value)
 }
 
+/// Canonical bytes on a single line: sorted keys, no pretty-printing and no
+/// trailing newline.
+///
+/// The pretty form of [`canonical_value_bytes`] cannot be used where one
+/// record occupies one line, so the append-only event log (Decision 0011)
+/// serialises through here. Key order and float rejection are identical, so
+/// the two forms carry the same value.
+///
+/// # Errors
+/// Returns a validation error when the value contains a float, which has no
+/// canonical decimal spelling.
+pub fn canonical_line_bytes(value: &Value) -> Result<Vec<u8>> {
+    reject_float(value, "$")?;
+    Ok(serde_json::to_vec(value)?)
+}
+
+/// Canonical single-line bytes for any serialisable value.
+///
+/// # Errors
+/// Returns an error when the value cannot be serialised or contains a float.
+pub fn to_canonical_line_bytes<T: Serialize>(value: &T) -> Result<Vec<u8>> {
+    let json = to_value(value)?;
+    canonical_line_bytes(&to_canonical_value(&json)?)
+}
+
 pub fn canonical_value_bytes(value: &Value) -> Result<Vec<u8>> {
     reject_float(value, "$")?;
     let mut bytes = serde_json::to_vec_pretty(value)?;

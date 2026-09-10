@@ -7,7 +7,6 @@ use pulse::graph::store::{
 };
 use pulse::id::WorkKind;
 use pulse::JsonGraphStore;
-use std::fs;
 
 fn ctx(actor: &str, sec: i64) -> OperationContext {
     OperationContext {
@@ -35,25 +34,7 @@ fn assertion(source: String, reference: String) -> SupersessionAssertion {
 }
 
 fn events(root: &std::path::Path, event_type: &str) -> Vec<EventEnvelope> {
-    let events = root.join(".pulse/events");
-    if !events.exists() {
-        return vec![];
-    }
-    let mut paths = vec![];
-    for date in fs::read_dir(events).unwrap() {
-        for entry in fs::read_dir(date.unwrap().path()).unwrap() {
-            let path = entry.unwrap().path();
-            if path.extension().and_then(|ext| ext.to_str()) == Some("json") {
-                paths.push(path);
-            }
-        }
-    }
-    paths.sort();
-    paths
-        .into_iter()
-        .map(|path| serde_json::from_slice::<EventEnvelope>(&fs::read(path).unwrap()).unwrap())
-        .filter(|event| event.event_type == event_type)
-        .collect()
+    crate::common_events::events_of_type(root, event_type)
 }
 
 #[test]

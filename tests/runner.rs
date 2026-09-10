@@ -12,6 +12,8 @@ mod artifacts;
 mod cli_run;
 #[path = "common/bin.rs"]
 mod common_bin;
+#[path = "common/events.rs"]
+mod common_events;
 #[path = "runner/harness_learning.rs"]
 mod harness_learning;
 // The assignment fixture is shared by the story_close and qa_receipt
