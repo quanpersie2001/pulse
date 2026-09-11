@@ -10,7 +10,8 @@ event-log communication. It does not run agents, does not run tests, and has
 no daemon.
 
 Product definition and target design: [`PRODUCT.md`](PRODUCT.md). Current
-code architecture: [`ARCHITECTURE.md`](ARCHITECTURE.md). Scope decision:
+code architecture: [`ARCHITECTURE.md`](ARCHITECTURE.md). What is being built
+next and in what order: [`ROADMAP.md`](ROADMAP.md). Scope decision:
 [Decision 0008](docs/decisions/0008-narrow-scope-to-truth-layer.md).
 When this file, README or archived material disagrees with `PRODUCT.md`,
 `PRODUCT.md` wins.

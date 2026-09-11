@@ -1362,6 +1362,7 @@ ROADMAP.md            Now / Next / Later / Undecided; viết sau khi cắt code
 AGENTS.md             quy tắc vận hành, validation command, trỏ sang PRODUCT.md
 CONTRIBUTING.md       workflow đóng góp
 docs/decisions/       ADR; 0008 ghi quyết định thu hẹp phạm vi này
+docs/plans/           kế hoạch thực hiện cho một ADR; ADR chốt cái gì, plan nói thế nào
 docs/GLOSSARY.md      thuật ngữ theo PRODUCT.md
 design/archive/       proposals đã xong; assignment saga làm tham chiếu runner
 (chưa có target repo dogfood; xem §13.1)
