@@ -102,13 +102,14 @@ fn daemon_runtime_tree_is_absent() {
 }
 
 #[test]
-fn legacy_skill_surfaces_are_absent() {
-    for legacy in ["skills", "dist", ".codex-plugin", ".claude-plugin"] {
-        assert!(
-            !repo_root().join(legacy).exists(),
-            "legacy skill/plugin surface still exists at {legacy}"
-        );
-    }
+fn generated_and_router_surfaces_are_absent() {
+    // Decision 0009 lifted the ban on `skills/`: a guidance-only surface came
+    // back. What 0007 removed stays removed — a generated `dist/`, and any
+    // router or workflow engine competing with the CLI for lifecycle.
+    assert!(
+        !repo_root().join("dist").exists(),
+        "generated surface still exists at dist"
+    );
 
     for contract_doc in ["README.md", "CONTRIBUTING.md", "AGENTS.md"] {
         let body = source(contract_doc);
@@ -119,6 +120,185 @@ fn legacy_skill_surfaces_are_absent() {
             );
         }
     }
+}
+
+/// Every `pulse …` command written in guidance prose must exist in the CLI.
+///
+/// Decision 0009 §5: skills are guidance, the CLI is authority, so a command
+/// in a skill is a literal `pulse` command. Without this guard prose drifts
+/// silently — `pulse work list --status active` shipped in the AGENTS block
+/// while `--status` did not exist, so the one command an agent runs to recover
+/// a session failed.
+///
+/// The guard walks clap's real command tree rather than matching strings.
+/// It checks command *prefixes*, not whole lines: guidance necessarily writes
+/// `pulse work packet` without an id, because ids exist only at run time.
+#[test]
+fn guidance_prose_only_names_commands_the_cli_has() {
+    let mut checked = 0_usize;
+    for (path, body) in guidance_sources() {
+        for mention in pulse_command_mentions(&body) {
+            for candidate in expand_alternatives(&mention) {
+                verify_command(&candidate, &path);
+                checked += 1;
+            }
+        }
+    }
+    assert!(
+        checked >= 10,
+        "expected the guidance surface to name commands; only {checked} found. \
+         A guard that checks nothing passes for the wrong reason."
+    );
+}
+
+/// Markdown carrying guidance prose: the AGENTS block template plus every
+/// skill.
+fn guidance_sources() -> Vec<(String, String)> {
+    let mut sources = vec![(
+        "assets/agents-block.md".to_string(),
+        source("assets/agents-block.md"),
+    )];
+    let skills = repo_root().join("skills");
+    if skills.exists() {
+        let mut pending = vec![skills];
+        while let Some(dir) = pending.pop() {
+            for entry in fs::read_dir(&dir).expect("read skills dir") {
+                let path = entry.expect("skills entry").path();
+                if path.is_dir() {
+                    pending.push(path);
+                } else if path.extension().and_then(|e| e.to_str()) == Some("md") {
+                    let relative = path
+                        .strip_prefix(repo_root())
+                        .unwrap_or(&path)
+                        .display()
+                        .to_string();
+                    sources.push((relative, fs::read_to_string(&path).expect("read skill")));
+                }
+            }
+        }
+    }
+    sources
+}
+
+/// Every `pulse …` mention in `body`, each cut at the first separator that
+/// cannot be part of one command.
+fn pulse_command_mentions(body: &str) -> Vec<String> {
+    let mut mentions = Vec::new();
+    for (index, _) in body.match_indices("pulse ") {
+        // Only at a word boundary, so `pulse-grill` and `.pulse/` are skipped.
+        let preceded_by = body[..index].chars().next_back();
+        if preceded_by.is_some_and(|c| c.is_alphanumeric() || c == '-' || c == '/' || c == '.') {
+            continue;
+        }
+        let rest = &body[index..];
+        let end = rest
+            .find(['\n', ',', '|', ')', '`', ';', '"'])
+            .unwrap_or(rest.len());
+        let mention = rest[..end].trim().trim_end_matches('.').trim().to_string();
+        if mention.split_whitespace().count() > 1 {
+            mentions.push(mention);
+        }
+    }
+    mentions
+}
+
+/// Expand a `a/b/c` shorthand into one candidate command per alternative.
+///
+/// Guidance writes `pulse work list/show/packet` to name three read paths at
+/// once; each alternative must exist on its own.
+fn expand_alternatives(mention: &str) -> Vec<Vec<String>> {
+    let tokens: Vec<&str> = mention.split_whitespace().collect();
+    let mut candidates: Vec<Vec<String>> = vec![Vec::new()];
+    for token in tokens {
+        if token.contains('/')
+            && !token.starts_with("--")
+            && !token.contains('<')
+            && token.split('/').all(|part| {
+                !part.is_empty() && part.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
+            })
+        {
+            let mut expanded = Vec::new();
+            for candidate in &candidates {
+                for part in token.split('/') {
+                    let mut next = candidate.clone();
+                    next.push(part.to_string());
+                    expanded.push(next);
+                }
+            }
+            candidates = expanded;
+        } else {
+            for candidate in candidates.iter_mut() {
+                candidate.push(token.to_string());
+            }
+        }
+    }
+    candidates
+}
+
+/// Resolve `tokens` against clap's command tree and assert every subcommand
+/// and every long flag exists.
+fn verify_command(tokens: &[String], origin: &str) {
+    use clap::CommandFactory;
+    let root = pulse::cli::Cli::command();
+    let mut current = root.clone();
+    let mut path = vec!["pulse".to_string()];
+    let mut positional_reached = false;
+
+    for token in tokens.iter().skip(1) {
+        if token.starts_with("--") {
+            let flag = token
+                .trim_start_matches("--")
+                .split('=')
+                .next()
+                .unwrap_or("");
+            let known = command_has_long(&current, flag) || command_has_long(&root, flag);
+            assert!(
+                known,
+                "{origin}: `{}` uses --{flag}, which `{}` does not accept",
+                tokens.join(" "),
+                path.join(" ")
+            );
+            continue;
+        }
+        if positional_reached || token.starts_with('<') {
+            // A placeholder or an argument value: subcommand walking is done.
+            positional_reached = true;
+            continue;
+        }
+        let descend = current
+            .get_subcommands()
+            .find(|sub| sub.get_name() == token)
+            .cloned();
+        if let Some(sub) = descend {
+            current = sub;
+            path.push(token.clone());
+            continue;
+        }
+        // Not a subcommand. Clap's own structure says whether that is legal:
+        // a command that has subcommands requires one, so an unmatched token
+        // there is a typo, not a positional. A leaf command takes positionals,
+        // so the token is an argument value and walking is done.
+        assert!(
+            current.get_subcommands().next().is_none(),
+            "{origin}: `{}` names `{token}`, which is not a subcommand of `{}`. \
+             Available: {}",
+            tokens.join(" "),
+            path.join(" "),
+            current
+                .get_subcommands()
+                .map(clap::Command::get_name)
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+        positional_reached = true;
+    }
+}
+
+/// Whether `command` declares a long flag named `long`.
+fn command_has_long(command: &clap::Command, long: &str) -> bool {
+    command
+        .get_arguments()
+        .any(|arg| arg.get_long() == Some(long))
 }
 
 #[test]
