@@ -2,9 +2,20 @@
 
 ## Status
 
-Accepted. Narrowed by [Decision 0009](0009-skill-surface-over-cli.md) on
-2026-09-06: a guidance-only skill surface returns; the rule that no prose owns
-lifecycle or state stands.
+Accepted. Narrowed twice.
+
+By [Decision 0008](0008-narrow-scope-to-truth-layer.md) on 2026-09-05: the
+"Daemon owns host-local project, workspace, session, provider, process,
+timeline, effect, assignment, and recovery state" bullet no longer describes
+anything — the daemon was removed. The `pulse` executable being the only
+supported public surface is now literally true rather than true alongside a
+daemon.
+
+By [Decision 0009](0009-skill-surface-over-cli.md) on 2026-09-06: a
+guidance-only skill surface returns, so the requirement that `skills/` remain
+absent is lifted for it; generated `dist/` and plugin manifests stay absent.
+The rule that no prose owns lifecycle or state stands, and is what the
+skill surface is held to.
 
 ## Context
 

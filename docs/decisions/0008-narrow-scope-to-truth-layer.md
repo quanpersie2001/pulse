@@ -2,7 +2,12 @@
 
 ## Status
 
-Accepted, 2026-09-05.
+Accepted, 2026-09-05. One operating rule below was revised on 2026-09-06 by
+`PRODUCT.md` §13 decision 2: the runner does **not** create a worktree when a
+second Ticket runs concurrently. It refuses the run with
+`run_isolation_required`, naming the Ticket holding the lease, and a worktree
+is created only when `--isolation worktree` is passed explicitly. Worktree is
+opt-in per command, never automatic. The code follows the revision.
 
 ## Context
 
@@ -63,6 +68,8 @@ Operating rules:
   metadata and the file hash only.
 - The runner works in the checkout by default; a worktree is created only
   when a second Ticket runs concurrently or when explicitly requested.
+  *(Revised 2026-09-06 — see Status: a concurrent Ticket now makes the run
+  refuse, and `--isolation worktree` is the only thing that creates one.)*
 - Close is available for every risk level; `high` and `critical` add a human
   actor requirement rather than a missing code path.
 - Dogfood target is `examples/todolist/` inside this repository, sharing its

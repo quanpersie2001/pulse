@@ -2,7 +2,16 @@
 
 ## Status
 
-Accepted.
+Accepted; narrowed by [Decision 0008](0008-narrow-scope-to-truth-layer.md) on
+2026-09-05. Read "daemon-managed Worker session" as a `pulse run worker`
+process and "Orchestrator" as the developer or a conductor agent driving the
+same CLI: Pulse has no daemon and no orchestration loop of its own.
+
+The topology stands and is implemented. Worker self-verifies and hands off;
+the source snapshot is frozen at handoff and a later source change invalidates
+affected receipts; independent Reviewer and QA run against that snapshot;
+independence is risk-adaptive; and the close gate — not any agent — decides
+close, rework or block.
 
 ## Context
 

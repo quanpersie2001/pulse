@@ -2,7 +2,19 @@
 
 ## Status
 
-Accepted.
+**Superseded by [Decision 0008](0008-narrow-scope-to-truth-layer.md) on
+2026-09-05.** Pulse has no daemon. Every runtime concern below — Project
+Registry, Workspace Manager, Session Manager, Provider Registry, process
+ownership, timeline, live subscriptions, client transport, the assignment
+provisioning saga — was removed with the `daemon/` tree, and no code implements
+any of it.
+
+Kept as the record of why that boundary was drawn and what it cost, because the
+ownership split it argues for survived the daemon: Core still owns work truth,
+lifecycle, readiness, packet, authority, reservation and evidence, and the
+runtime side is now the vendor's agent invoked through `pulse run`. Read this
+for the reasoning, never as a description of the product. `PRODUCT.md` is the
+current definition.
 
 ## Context
 

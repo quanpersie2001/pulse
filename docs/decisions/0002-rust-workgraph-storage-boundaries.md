@@ -2,7 +2,14 @@
 
 ## Status
 
-Accepted for the current reboot baseline.
+Accepted for the current reboot baseline. One sentence below has since gone
+stale: "Runtime JSON Schema validation is not yet implemented" is still true of
+the **workgraph**, which validates by strict typed parsing plus exact drift
+comparison against the embedded templates, but no longer true repository-wide —
+`src/work_packet.rs` compiles the embedded work-packet schema with the
+`jsonschema` crate and validates every packet against it at runtime. The
+boundary that mattered is intact: canonical file ownership did not move when
+that engine arrived, exactly as this decision anticipated.
 
 ## Context
 

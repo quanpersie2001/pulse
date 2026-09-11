@@ -8,7 +8,7 @@ Current decisions:
 - [0002 — Rust workgraph storage boundaries](0002-rust-workgraph-storage-boundaries.md)
 - [0003 — Pre-release contract baselines](0003-pre-release-contract-baselines.md)
 - [0004 — CLI-mediated Agent context and workflow bootstrap](0004-cli-mediated-agent-context.md)
-- [0005 — Rust daemon runtime control plane](0005-rust-daemon-runtime-control-plane.md)
+- [0005 — Rust daemon runtime control plane](0005-rust-daemon-runtime-control-plane.md) — **superseded by 0008**; Pulse has no daemon
 - [0006 — Peer Worker, Reviewer, and QA task topology](0006-peer-agent-assurance-topology.md)
 - [0007 — Remove the legacy agent skill surface](0007-remove-legacy-agent-skill-surface.md)
 - [0008 — Narrow Pulse to a vendor-neutral truth layer](0008-narrow-scope-to-truth-layer.md)

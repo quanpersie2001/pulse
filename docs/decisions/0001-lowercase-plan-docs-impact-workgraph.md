@@ -4,7 +4,23 @@ Date: 2026-05-25
 
 ## Status
 
-Accepted; legacy router mechanism superseded
+Accepted for its principle; the artifact contract below is superseded by
+[Decision 0008](0008-narrow-scope-to-truth-layer.md) and `PRODUCT.md` §5.1/§5.4.
+The legacy router mechanism was superseded earlier.
+
+What still holds: planning writes a lowercase `plan.md`; the artifact contract
+does not depend on any conversational router; documentation impact is declared
+rather than left implicit; and approved workgraph items are changed only through
+`pulse work` / `pulse graph`, never by hand-editing canonical storage.
+
+What changed:
+
+- `plan.md` lives under the owning **Ticket** (`works/TK-xxx/plan.md`), not the
+  story directory, and is required only at materialization R2 or above.
+- Documentation impact is a posture (`required` / `none` / `deferred`) against
+  document ids in the docs registry, not a fixed checklist of four surfaces.
+  Two of those four surfaces — `docs/ARCHITECTURE.md` and `docs/product/` — do
+  not exist in this repository; architecture lives at the root.
 
 ## Context
 
