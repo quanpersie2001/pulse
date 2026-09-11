@@ -21,6 +21,7 @@ Current decisions:
 - [0015 — Worktree dispatch: workspace trong worktree, state về repo chính](0015-worktree-dispatch-workspace-state.md)
 - [0016 — Worker sở hữu docs receipt, gate chặn tại handoff](0016-docs-receipt-ownership-at-handoff.md)
 - [0017 — Receipt không đọc được phải được báo, không được xoá khỏi danh sách](0017-unreadable-receipts-are-reported-not-erased.md)
+- [0018 — Knowledge plane: đường ra của vòng đời và retrieval có corpus riêng](0018-knowledge-plane-retrieval-and-lifecycle-exits.md)
 
 Add or update a decision when:
 
