@@ -404,3 +404,56 @@ fn public_agents_block_commands_parse_with_the_real_cli() {
 fn trim_command_word(word: &str) -> &str {
     word.trim_matches(|c: char| matches!(c, ',' | '.' | ';' | ':' | '`' | '(' | ')' | '|'))
 }
+
+/// The seeded `PULSE.md` must be readable by the parser that consumes it.
+///
+/// It was not: the seed wrote `## Verification` while
+/// `policy::profile` reads `Verification Profiles`, so an operator who
+/// declared a profile where the seed invited one got zero profiles parsed and
+/// a silent `reviewers_required` of 1. Decision 0012 §5's `reviewers: 2` was
+/// unreachable in any freshly initialised repository, with no error to say so.
+///
+/// This pins the seed and the parser to each other rather than to a literal
+/// heading, so renaming one without the other fails here.
+#[test]
+fn seeded_pulse_md_declares_profiles_the_parser_can_read() {
+    let repo = TestRepo::from_fixture("minimal-service");
+    fs::remove_file(repo.path().join("PULSE.md")).unwrap();
+    repo.pulse_ok(&["init", "--actor", "human:Pulse Test", "--json"]);
+
+    let profiles = pulse::policy::profile::load_verification_profiles(repo.path())
+        .expect("the seeded PULSE.md must parse");
+    assert!(
+        !profiles.is_empty(),
+        "the seed must declare at least one profile the parser finds; \
+         an empty parse is the silent failure this test exists to catch"
+    );
+
+    // The seed must not raise the floor for everyone. There is no per-Ticket
+    // profile binding yet, so the strictest declared number applies to every
+    // close; a seeded `reviewers: 2` would demand two reviewers of a fresh
+    // repository that never asked for them.
+    assert_eq!(
+        pulse::policy::profile::reviewers_required(repo.path()).unwrap(),
+        1,
+        "the seed must leave the assurance floor where an operator expects it"
+    );
+
+    // The syntax for raising it has to be discoverable from the file itself,
+    // or the operator has no path from the seed to Decision 0012 §5.
+    let seeded = fs::read_to_string(repo.path().join("PULSE.md")).unwrap();
+    assert!(
+        seeded.contains("reviewers: 2"),
+        "the seed must show how to require a second reviewer"
+    );
+
+    // And the mechanism must actually work from the seeded file: appending a
+    // profile the way the seed describes has to change the requirement.
+    let raised = format!("{seeded}- `security`: run the audit, reviewers: 2\n");
+    fs::write(repo.path().join("PULSE.md"), raised).unwrap();
+    assert_eq!(
+        pulse::policy::profile::reviewers_required(repo.path()).unwrap(),
+        2,
+        "a profile appended under the seeded heading must take effect"
+    );
+}

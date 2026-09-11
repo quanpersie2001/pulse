@@ -49,9 +49,20 @@ Pulse creates this file once and never rewrites it. Everything below is yours.
 
 <!-- What must an agent never do in this repository without asking? -->
 
-## Verification
+## Verification Profiles
 
-<!-- Which commands prove a change is sound here? -->
+Pulse reads this section. One bullet per profile, named in backticks, followed
+by the checks that prove a change of that shape is sound here. Replace the
+bullet below; add one profile per shape of change this repository makes.
+
+Append `, reviewers: 2` to a profile that needs independent triangulation.
+That is the number of distinct actors, each different from the worker, who
+must each record a passed verification receipt before close; it defaults to 1.
+Until Pulse binds a profile per Ticket, the strictest number declared here
+applies to every close, so raise it only where the risk is real. Which model
+plays the second reviewer is `runners.json`'s business, not this file's.
+
+- `default`: the checks that prove an ordinary change here
 ";
 
 const BEGIN_PREFIX: &str = "<!-- PULSE:BEGIN";
