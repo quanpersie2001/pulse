@@ -3,6 +3,44 @@ use crate::graph::model::contract::{
     Materialization, QaImpact, QaImpactPosture, QaMetadata, Risk, TicketRole,
 };
 
+/// Which work nodes `list_nodes` returns.
+///
+/// Every set field must match; an unset field does not constrain. Filters
+/// travel together rather than as positional arguments because PRODUCT §5.1
+/// declares four of them and callers use different subsets.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct NodeFilter {
+    pub kind: Option<WorkKind>,
+    pub status: Option<NodeStatus>,
+    /// Ticket role. Nodes that are not Tickets carry no role, so a set role
+    /// excludes Epics, Stories and Decisions rather than matching them.
+    pub role: Option<TicketRole>,
+    /// One tag from the controlled vocabulary; matches when the node carries
+    /// it.
+    pub tag: Option<String>,
+}
+
+impl NodeFilter {
+    /// Whether `node` satisfies every set field.
+    pub fn matches(&self, node: &Node) -> bool {
+        if self.kind.is_some_and(|kind| node.kind != kind) {
+            return false;
+        }
+        if self.status.is_some_and(|status| node.status != status) {
+            return false;
+        }
+        if self.role.is_some_and(|role| node.role != Some(role)) {
+            return false;
+        }
+        if let Some(tag) = &self.tag {
+            if !node.tags.iter().any(|candidate| candidate == tag) {
+                return false;
+            }
+        }
+        true
+    }
+}
+
 impl JsonGraphStore {
     fn write_ticket_template(&self, node: &mut Node) -> PulseResult<()> {
         if node.kind != WorkKind::Ticket {
@@ -276,14 +314,22 @@ impl JsonGraphStore {
         storage::read_json(&path)
     }
 
-    pub fn list_nodes(&self, kind: Option<WorkKind>) -> PulseResult<ListOutcome<Node>> {
+    /// List work nodes, newest filter wins nothing — every set filter must
+    /// match (AND), and an unset one does not constrain.
+    ///
+    /// `pulse work list` is the query surface that exists so agents never grep
+    /// the graph files (PRODUCT §5.1). A caller narrowing by status is the
+    /// new-session recovery path: "what is still active or shaped here?"
+    ///
+    /// # Errors
+    /// Returns an error when the lock cannot be taken or a node file cannot be
+    /// read.
+    pub fn list_nodes(&self, filter: &NodeFilter) -> PulseResult<ListOutcome<Node>> {
         let _guard = WriteGuard::acquire(&self.repo_root)?;
         self.bootstrap_unlocked()?;
         recover_prepared_transactions(&self.repo_root)?;
         let mut nodes: Vec<_> = self.load_nodes()?.into_values().collect();
-        if let Some(kind) = kind {
-            nodes.retain(|n| n.kind == kind);
-        }
+        nodes.retain(|node| filter.matches(node));
         nodes.sort_by(|a, b| a.id.cmp(&b.id));
         Ok(ListOutcome {
             schema_version: 1,

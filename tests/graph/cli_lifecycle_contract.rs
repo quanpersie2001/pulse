@@ -388,3 +388,150 @@ fn public_cli_rejects_classification_flags_for_non_tickets() {
     );
     assert_eq!(err["code"], "work_classification_not_allowed");
 }
+
+/// `pulse work list` is the query surface that exists so an agent never greps
+/// the graph files (PRODUCT §5.1). Every filter it documents must work, and
+/// they must compose: the new-session recovery path asks "what is active
+/// here?", and an unknown flag would send the agent back to grepping.
+#[test]
+fn work_list_filters_by_status_role_and_tag() {
+    let repo = tempfile::tempdir().unwrap();
+    run_ok(&repo, &["init", "--actor", "human:tester", "--json"]);
+
+    let ticket = run_ok(
+        &repo,
+        &[
+            "work",
+            "create",
+            "--kind",
+            "ticket",
+            "--title",
+            "Implementation ticket",
+            "--role",
+            "implementation",
+            "--risk",
+            "low",
+            "--tag",
+            "security",
+            "--json",
+        ],
+    )["value"]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let spike = run_ok(
+        &repo,
+        &[
+            "work",
+            "create",
+            "--kind",
+            "ticket",
+            "--title",
+            "Decision work ticket",
+            "--role",
+            "decision_work",
+            "--risk",
+            "low",
+            "--json",
+        ],
+    )["value"]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let story = run_ok(
+        &repo,
+        &[
+            "work", "create", "--kind", "story", "--title", "A story", "--json",
+        ],
+    )["value"]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let ids = |value: &Value| -> Vec<String> {
+        value["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|item| item["id"].as_str().unwrap().to_string())
+            .collect()
+    };
+
+    // No filter: everything.
+    let all = ids(&run_ok(&repo, &["work", "list", "--json"]));
+    assert_eq!(all.len(), 3, "unfiltered list returns every node: {all:?}");
+
+    // Status: all three are draft, none is active. An empty result is a real
+    // answer here, not an error.
+    let draft = ids(&run_ok(
+        &repo,
+        &["work", "list", "--status", "draft", "--json"],
+    ));
+    assert_eq!(draft.len(), 3);
+    let active = ids(&run_ok(
+        &repo,
+        &["work", "list", "--status", "active", "--json"],
+    ));
+    assert!(active.is_empty(), "nothing is active yet: {active:?}");
+
+    // Role: a set role excludes nodes that carry none, the Story included.
+    let implementation = ids(&run_ok(
+        &repo,
+        &["work", "list", "--role", "implementation", "--json"],
+    ));
+    assert_eq!(implementation, vec![ticket.clone()]);
+    let decision_work = ids(&run_ok(
+        &repo,
+        &["work", "list", "--role", "decision_work", "--json"],
+    ));
+    assert_eq!(decision_work, vec![spike.clone()]);
+    assert!(!implementation.contains(&story) && !decision_work.contains(&story));
+
+    // Tag.
+    let tagged = ids(&run_ok(
+        &repo,
+        &["work", "list", "--tag", "security", "--json"],
+    ));
+    assert_eq!(tagged, vec![ticket.clone()]);
+
+    // Filters compose with AND, and a contradiction yields an empty list.
+    let composed = ids(&run_ok(
+        &repo,
+        &[
+            "work",
+            "list",
+            "--kind",
+            "ticket",
+            "--status",
+            "draft",
+            "--role",
+            "implementation",
+            "--tag",
+            "security",
+            "--json",
+        ],
+    ));
+    assert_eq!(composed, vec![ticket]);
+    let contradiction = ids(&run_ok(
+        &repo,
+        &[
+            "work",
+            "list",
+            "--role",
+            "decision_work",
+            "--tag",
+            "security",
+            "--json",
+        ],
+    ));
+    assert!(contradiction.is_empty(), "{contradiction:?}");
+
+    // An unknown tag is an empty answer, not a failure.
+    let unknown = ids(&run_ok(
+        &repo,
+        &["work", "list", "--tag", "no-such-tag", "--json"],
+    ));
+    assert!(unknown.is_empty());
+}

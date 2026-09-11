@@ -167,6 +167,16 @@ pub(crate) enum WorkCommand {
     List {
         #[arg(long)]
         kind: Option<KindArg>,
+        /// Only nodes in this lifecycle status.
+        #[arg(long)]
+        status: Option<StatusArg>,
+        /// Only Tickets with this role. Epics, Stories and Decisions carry no
+        /// role, so setting this excludes them.
+        #[arg(long)]
+        role: Option<TicketRoleArg>,
+        /// Only nodes carrying this tag.
+        #[arg(long)]
+        tag: Option<String>,
         #[arg(long)]
         json: bool,
     },
@@ -482,7 +492,7 @@ use serde_json::json;
 use crate::cli::output::render;
 use crate::graph::model::contract::PublicCreateClassification;
 use crate::graph::model::lifecycle::TransitionReason;
-use crate::graph::store::SupersessionTarget;
+use crate::graph::store::{NodeFilter, SupersessionTarget};
 use crate::{JsonGraphStore, PulseError};
 
 pub(crate) fn handle(
@@ -546,8 +556,19 @@ pub(crate) fn handle(
                 human,
             )
         }
-        WorkCommand::List { kind, json } => {
-            let out = store.list_nodes(kind.map(Into::into))?;
+        WorkCommand::List {
+            kind,
+            status,
+            role,
+            tag,
+            json,
+        } => {
+            let out = store.list_nodes(&NodeFilter {
+                kind: kind.map(Into::into),
+                status: status.map(Into::into),
+                role: role.map(Into::into),
+                tag,
+            })?;
             render(json, &out, format!("{} work items", out.items.len()))
         }
         WorkCommand::Edit {

@@ -421,7 +421,7 @@ fn read_only_domain_entrypoints_remain_store_methods_backed_by_pure_modules() {
     let store = graph_store_facade_sources();
     for method in [
         "pub fn show_node(&self, id: &str)",
-        "pub fn list_nodes(&self, kind: Option<WorkKind>)",
+        "pub fn list_nodes(&self, filter: &NodeFilter)",
         "pub fn validate(&self)",
         "pub fn export(&self)",
         "pub fn executability(&self, id: &str)",
