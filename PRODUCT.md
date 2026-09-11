@@ -1333,15 +1333,15 @@ done và qualification pass.
 
 | Tính năng | Hiện trạng | Việc cần làm |
 |---|---|---|
-| 5.1 Work graph | Đã có spine | `pulse init` cấp Core grants; Ticket tạo `ticket.md`, `work sync` bind hash/metadata, ambiguity và ready gates hoạt động. Legacy JSON contract API vẫn tồn tại cho callers cũ. |
+| 5.1 Work graph | Đã có spine | `pulse init` cấp Core grants; Ticket tạo `ticket.md`, `work sync` bind hash/metadata, ambiguity và ready gates hoạt động. Legacy JSON contract API đã gỡ; `ticket.md` là nguồn contract duy nhất. |
 | 5.2 Packet | Đã rút gọn | Packet có ticket prose, context, docs/QA/source/tags/handoff; không còn dispatch, capability, scope enforcement, assurance hay `not_installed`. |
 | 5.3 Runner | Chạy thật trên dogfood | `pulse run worker|reviewer|qa` đã chạy thật trên dogfood target Track B (tag `dogfood/track-b-final`) với lease, resume sau kill, drift acknowledgment, inconclusive classification; isolation chuyển sang từ chối khi Ticket khác `active` (quyết định 13.2). Artifact ingest đang làm. Còn lại theo Decision 0012: `work handoff --check/--proof`, `HandoffReceipt.checks/acceptance_proofs`; `reviewer-input.json` bỏ `summary`, thêm `contract_revision`, `reviewers_required` và claim của handoff; `classify_reviewer` validate shape finding và cờ `unverifiable`. Decision 0014: `pulse run qa` tự dựng `qa_checkpoint` với artifact đã hash. Decision 0010: `qa-input.json` mang `baseline_path`, `posture`, `variables` và case nguyên văn kèm `case_hash`; `qa-run.mjs` chỉ chạy block `pulse-check`, không đọc `qa.md`. |
 | 5.4 Docs | Đã rút gọn | Registry tám trường, `tags.json`, `docs tags add/list`, tag filtering và path/tag applicability đã có. |
 | 5.5 Evidence/QA | Đã có spine | Close hỗ trợ mọi risk; high/critical yêu cầu actor human. `qa.md` là markdown heading, `qa-input.json` là JSON duy nhất, receipt `qa_checkpoint` bind `baseline_content_hash` và `case_hash` (Decision 0010). Decision 0012: `src/evidence/redaction.rs` cho plane tracked; trường `reviewers` trong profile và close gate đếm receipt theo actor. |
-| 5.6 Ratchet | `capture`–`applicable` đã chạy thật | `knowledge capture|validate|promote|applicable` đã chạy thật: LRN-001 được capture, promote và inject vào packet; scope `harness|repository` và promote tự sửa doc là việc còn lại (quyết định 13.3, 13.4). Decision 0012 `expected_signal` đã implement: bắt buộc cho kind `ratchet` tại `knowledge validate` (schema), và `candidate -> validated` của learning `ratchet` đòi **hai nửa** — handoff receipt phải ghi `knowledge_usage: helpful` cho learning đó (Pulse kiểm bằng máy), và actor phải khẳng định signal đã xuất hiện bằng `--signal-observed` (Pulse không so prose với prose, theo nguyên tắc 5); khẳng định được ghi lại ở `validation.signal_observed_at` kèm actor. Ba lane và luật lead sống trong skill `pulse-ratchet`, chưa có lệnh `ratchet bundle`. |
+| 5.6 Ratchet | `capture`–`applicable` đã chạy thật | `knowledge capture|validate|promote|applicable` đã chạy thật: LRN-001 được capture, promote và inject vào packet. Quyết định 13.3 và 13.4 đã implement: `LearningScope::{Harness, Repository}` với harness learning vào bootstrap prompt thay vì inject theo path, và `knowledge promote --document|--agents-md --insert-after` tự chèn rồi từ chối bằng `promotion_target_unchanged` khi đích không đổi. Decision 0012 `expected_signal` đã implement: bắt buộc cho kind `ratchet` tại `knowledge validate` (schema), và `candidate -> validated` của learning `ratchet` đòi **hai nửa** — handoff receipt phải ghi `knowledge_usage: helpful` cho learning đó (Pulse kiểm bằng máy), và actor phải khẳng định signal đã xuất hiện bằng `--signal-observed` (Pulse không so prose với prose, theo nguyên tắc 5); khẳng định được ghi lại ở `validation.signal_observed_at` kèm actor. Ba lane và luật lead sống trong skill `pulse-ratchet`, chưa có lệnh `ratchet bundle`. |
 | 5.7 Giao tiếp | Đã có và chạy thật | Event log append-only; `pulse note` ghi note vào Ticket, `pulse events tail` đọc với `--since`/`--ticket`/`--follow`; note hiện trong packet (giới hạn 8 note mới nhất, mỗi note cắt 500 ký tự). Decision 0011 đã implement: `.pulse/events/<date>.jsonl` một event một dòng, append fsync qua `storage::append_line_fsync`, torn tail báo `events_torn_tail` rồi bị writer sau cắt, `pulse events compact` chuyển đổi legacy một lần. Transaction intent tìm event theo `event_id` trong day file, không theo path. `--kind friction` đã có (Decision 0009 phần C); `session_ref` chưa có. Decision 0013: cờ `--work` đã có (`--ticket` là alias); skill `pulse-handoff` và hook mẫu chưa; `--kind handoff` và `work resume` là Later. |
-| 5.8 Bề mặt hướng dẫn | Chưa có | Khối AGENTS có marker, `DOC-GLOSSARY`, template `brief.md` năm mục, bảy skill của Decision 0009 cộng `pulse-handoff` của 0013, đổi guard test cấm `skills/` thành guard parse lệnh. |
-| 5.8 MCP | Stub không bind | Server thật, sau CLI |
+| 5.8 Bề mặt hướng dẫn | Phần A và C xong | `pulse init` ghi khối `<!-- PULSE:BEGIN -->` vào `AGENTS.md` và seed `PULSE.md` (kèm section `Verification Profiles` mà `policy::profile` đọc được); `--refresh` render lại và báo `guidance_conflicts` khi có sửa tay. `note --kind friction` và close gate sinh learning candidate đã chạy. **Còn lại (phần B):** tám skill (bảy của 0009 cộng `pulse-handoff` của 0013), `DOC-GLOSSARY`, template `brief.md` năm mục, hook mẫu của 0013, và đổi guard `legacy_skill_surfaces_are_absent` thành guard parse lệnh. |
+| 5.8 MCP | Không có | Stub đã gỡ cùng daemon (0008). Server thật làm sau khi CLI path chạy thật. |
 
 ## 9. Triage code
 
@@ -1480,12 +1480,29 @@ Gặp một dấu hiệu thì dừng feature liên quan, ghi Decision, sửa har
     "Không tồn tại" và "không nhìn được" là hai kết luận ngược nhau và không
     được dùng chung một danh sách rỗng. Decision 0017. Chốt 2026-09-11.
 
-Còn mở, mặc định nếu không có ý kiến khác:
+Đã chốt từ danh sách "còn mở" cũ, giữ lại để không bị hỏi lại:
 
-1. **Agent runner đầu tiên.** Mặc định Claude Code headless.
-2. **Thời điểm xoá `daemon/`.** Mặc định xoá ngay trong bước cắt code.
-3. **Cách parse ticket.md.** Mặc định heading quy ước, không fenced block.
-4. **Gộp `evidence/execution/*` vào `evidence/receipts/`.** Mặc định chưa gộp.
+1. **Agent runner đầu tiên.** Câu hỏi tan biến chứ không được trả lời: runner
+   là một dòng trong `runners.json` của repo đích, không phải lựa chọn của
+   Pulse. Track B chạy Claude Code làm worker và Codex làm reviewer.
+2. **Thời điểm xoá `daemon/`.** Đã xoá trong bước cắt code (0008): không còn
+   `src/daemon/`, `src/cli/daemon.rs`, `windows-sys`, hay shim re-export nào
+   dưới `src/graph/`.
+3. **Cách parse ticket.md.** Heading quy ước, không fenced block —
+   `graph::model::brief::parse_ticket_brief`.
+
+Còn mở thật, mặc định nếu không có ý kiến khác:
+
+1. **Gộp `evidence/execution/*` vào `evidence/receipts/`.** Mặc định chưa gộp.
+   Hai họ receipt vẫn tách: `handoff`/`verification`/`close` ở
+   `evidence/execution/`, phần còn lại ở `evidence/receipts/`. Decision 0011
+   và 0017 đều chạm vào ranh giới này mà không gộp; gộp khi `doctor` cần đọc
+   chung (§11).
+2. **Thang bằng chứng `present|wired|exercised|outcome_supported` chưa có code
+   nào.** Decision 0012 §1 định nghĩa từ vựng; hai người tiêu thụ duy nhất là
+   `pulse doctor` (Later, §11) và lane `harness` của `pulse-ratchet` (phần B).
+   Cần quyết khi làm phần B: lane tự tính bậc bằng prose, hay Pulse cấp một
+   lệnh tính deterministic như 0012 §1 mô tả.
 
 ## 14. Nguồn tham khảo đã hấp thụ
 

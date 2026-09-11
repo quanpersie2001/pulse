@@ -5,6 +5,28 @@
 Accepted, 2026-09-06. Thu hẹp Decision 0007: trả lại lớp hướng dẫn, giữ
 nguyên nguyên tắc "không prose nào sở hữu lifecycle".
 
+Implement từng phần (kiểm 2026-09-11):
+
+- **Phần A landed 2026-09-07.** `pulse init` ghi khối
+  `<!-- PULSE:BEGIN --> … <!-- PULSE:END -->` vào `AGENTS.md` và seed
+  `PULSE.md`; `--refresh` render lại theo version CLI và báo
+  `guidance_conflicts` thay vì ghi đè khi có sửa tay trong marker. Template ở
+  `assets/agents-block.md`, include lúc compile.
+- **Phần C landed 2026-09-07.** `pulse note --kind friction` ghi ma sát, và
+  close gate biến mỗi friction của Ticket thành learning candidate scope
+  `harness`.
+- **Phần B chưa làm.** Tám skill (bảy ở đây cộng `pulse-handoff` của Decision
+  0013), `DOC-GLOSSARY`, template `brief.md` năm mục, hook mẫu của 0013, và
+  việc đổi guard `legacy_skill_surfaces_are_absent` — hiện đang cấm thư mục
+  `skills/` tồn tại — thành guard parse lệnh. Đây là nợ chức năng cuối cùng
+  còn lại trong toàn bộ tập ADR.
+
+Một ràng buộc phát hiện khi đo, cần cho phần B: guard parse lệnh **không thể**
+parse nguyên văn từng dòng của khối AGENTS. Khối chứa `pulse work packet` và
+`pulse work close` không kèm id, và không thể kèm, vì id chỉ tồn tại lúc chạy.
+Guard phải parse *tiền tố lệnh* (đường subcommand cộng các flag xuất hiện),
+không phải cả dòng.
+
 ## Context
 
 Sau golden path (TK-001, TK-002 đóng thật), lớp hướng dẫn hiện tại chỉ phủ hai

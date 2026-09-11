@@ -8,6 +8,21 @@ vòng ratchet), §5.8 (skill `pulse-spec`, `pulse-ratchet`), §11 (Later). Thu
 hẹp mục `pulse-ratchet` của Decision 0009: bước 1–4 ở đó được thay bằng ba
 lane bằng chứng và luật lead dưới đây; bước 5 (fresh rerun) giữ nguyên.
 
+Implement từng phần (kiểm 2026-09-11):
+
+- Mục 2, 3, 4, 5 đã landed cùng đợt runner (`reviewer-input.json` không mang
+  `summary`, `unverifiable` trong `Finding`, `src/evidence/redaction.rs`,
+  `reviewers` trong close gate).
+- Mục 7 (`expected_signal`) landed 2026-09-11 — xem "Implement 2026-09-11"
+  trong mục `expected_signal` dưới đây.
+- **Mục 1 chưa có dòng code nào.** Thang
+  `present|wired|exercised|outcome_supported` là từ vựng chưa có người tiêu
+  thụ nào được implement: `pulse doctor` là Later theo mục 8, và lane
+  `harness` tính bậc đó thuộc phần B của Decision 0009. Mục 6 sống trong cùng
+  skill nên cũng chưa. Khi làm phần B phải chốt: lane tự tính bậc bằng prose,
+  hay Pulse cấp một lệnh tính deterministic như mục 1 mô tả.
+- Mục 8 và 9 là Later / không làm theo đúng định nghĩa của chúng.
+
 ## Context
 
 `references/better-harness` (QoderAI, commit `7cd26e9`, 2026-09-04) là một

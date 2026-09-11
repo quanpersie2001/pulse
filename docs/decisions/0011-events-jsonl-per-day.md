@@ -2,7 +2,8 @@
 
 ## Status
 
-Accepted, 2026-09-06.
+Accepted, 2026-09-06. Implement 2026-09-11; xem "Bổ sung khi implement" dưới
+mục Thay đổi cho phần ADR này bỏ sót.
 
 ## Context
 
