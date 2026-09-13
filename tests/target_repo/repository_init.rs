@@ -457,3 +457,60 @@ fn seeded_pulse_md_declares_profiles_the_parser_can_read() {
         "a profile appended under the seeded heading must take effect"
     );
 }
+
+/// `pulse init` seeds the glossary `pulse-grill` writes into, and registers it
+/// so the skill can reach it with `pulse docs` rather than a bare path.
+///
+/// Decision 0009 gives grill one instruction about vocabulary: record a
+/// settled term immediately. Without a destination that already exists and is
+/// routable, the skill's first act would be to invent a location, and every
+/// repository would invent a different one.
+#[test]
+fn public_init_seeds_and_registers_the_domain_glossary() {
+    let repo = TestRepo::from_fixture("minimal-service");
+    let report = repo.pulse_ok(&["init", "--actor", "human:Pulse Test", "--json"]);
+    let created: Vec<&str> = report["created"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|value| value.as_str().unwrap())
+        .collect();
+    assert!(
+        created.contains(&"docs/domain/glossary.md"),
+        "the glossary file must exist before grill needs it: {created:?}"
+    );
+
+    // Registered, so `docs get`/`docs search` route to it like any other doc.
+    let shown = repo.pulse_ok(&["docs", "show", "DOC-GLOSSARY", "--json"]);
+    let document = shown.get("document").unwrap_or(&shown);
+    assert_eq!(document["path"], "docs/domain/glossary.md");
+    assert_eq!(document["kind"], "domain");
+    assert_eq!(document["status"], "approved");
+
+    // Idempotent: a second init neither rewrites the file nor duplicates the
+    // record, so a repository that has started writing terms keeps them.
+    let glossary = repo.path().join("docs/domain/glossary.md");
+    fs::write(
+        &glossary,
+        "# Glossary\n\n- Ticket: the unit one agent executes.\n",
+    )
+    .unwrap();
+    let again = repo.pulse_ok(&["init", "--actor", "human:Pulse Test", "--json"]);
+    assert_eq!(again["status"], "unchanged");
+    assert_eq!(
+        fs::read_to_string(&glossary).unwrap(),
+        "# Glossary\n\n- Ticket: the unit one agent executes.\n",
+        "an existing glossary belongs to the repository"
+    );
+    let listed = repo.pulse_ok(&["docs", "list", "--json"]);
+    let glossary_records = listed["documents"]
+        .as_array()
+        .map(|items| {
+            items
+                .iter()
+                .filter(|item| item["id"] == "DOC-GLOSSARY")
+                .count()
+        })
+        .unwrap_or(0);
+    assert_eq!(glossary_records, 1, "no duplicate registry record");
+}

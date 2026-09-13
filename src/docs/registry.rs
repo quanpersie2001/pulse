@@ -108,10 +108,31 @@ impl DocsRegistryStore {
     pub fn register(
         &self,
         expected_registry_revision: u64,
-        mut document: DocumentRecord,
+        document: DocumentRecord,
         ctx: OperationContext,
     ) -> PulseResult<MutationOutcome<DocumentRecord>> {
         let _guard = WriteGuard::acquire(&self.repo_root)?;
+        self.register_unlocked(expected_registry_revision, document, ctx)
+    }
+
+    /// Register a document while the caller already holds the repository write
+    /// guard.
+    ///
+    /// The guard is a non-reentrant flock, so a caller inside the fence — such
+    /// as `pulse init` seeding `DOC-GLOSSARY` — must use this instead of
+    /// [`Self::register`], which would deadlock the process against itself.
+    /// Same contract in every other respect.
+    ///
+    /// # Errors
+    ///
+    /// Propagates revision, duplicate-id, tag and validation failures exactly
+    /// as [`Self::register`] does.
+    pub fn register_unlocked(
+        &self,
+        expected_registry_revision: u64,
+        mut document: DocumentRecord,
+        ctx: OperationContext,
+    ) -> PulseResult<MutationOutcome<DocumentRecord>> {
         let repository_id = bootstrap_unlocked(&self.repo_root)?.registry.repository_id;
         recover_prepared_transactions(&self.repo_root)?;
         let mut registry = load_existing_registry(&self.repo_root, &repository_id)?;

@@ -10,20 +10,33 @@ fn write_record(repo: &TestRepo, name: &str, record: &Value) -> String {
     path.to_string_lossy().into_owned()
 }
 
-fn register(repo: &TestRepo, record: &Value, expected_revision: u64) {
+/// Register a document at whatever revision the registry is currently on.
+///
+/// The revision is read rather than assumed: `pulse init` registers
+/// `DOC-GLOSSARY`, so a fresh repository does not start at revision 1, and a
+/// hard-coded number breaks again the next time init seeds anything.
+fn register(repo: &TestRepo, record: &Value) {
     let file = write_record(repo, "document-record.json", record);
+    let revision = registry_revision(repo);
     repo.pulse_ok(&[
         "docs",
         "register",
         "--file",
         &file,
         "--expected-registry-revision",
-        &expected_revision.to_string(),
+        &revision.to_string(),
         "--actor",
         "human:test",
         "--json",
     ]);
     fs::remove_file(file).unwrap();
+}
+
+/// Current docs-registry revision.
+fn registry_revision(repo: &TestRepo) -> u64 {
+    repo.pulse_ok(&["docs", "status", "--json"])["registry"]["revision"]
+        .as_u64()
+        .expect("registry revision")
 }
 
 fn authored_record() -> Value {
@@ -92,11 +105,10 @@ fn set_generated_check(registry: &mut Value, command: String) {
 fn docs_validate_checks_declared_freshness_links_and_navigation_on_fixture_copy() {
     let repo = TestRepo::from_fixture("minimal-service");
     repo.pulse_ok(&["init", "--json"]);
-    register(&repo, &authored_record(), 1);
+    register(&repo, &authored_record());
     register(
         &repo,
         &generated_record(nested_pulse_show("DOC-ARCH-GENERATED")),
-        2,
     );
     repo.pulse_ok(&["docs", "index", "--json"]);
 
@@ -105,7 +117,8 @@ fn docs_validate_checks_declared_freshness_links_and_navigation_on_fixture_copy(
     assert_eq!(
         valid["checks"],
         json!([
-            {"kind": "registry", "result": "passed", "checked": 2},
+            // Two registered here plus DOC-GLOSSARY, which init seeds.
+            {"kind": "registry", "result": "passed", "checked": 3},
             {"kind": "internal_links", "result": "passed", "checked": 0},
             {"kind": "generated_freshness", "result": "passed", "checked": 1},
             {"kind": "navigation_projections", "result": "passed", "checked": 1}

@@ -274,9 +274,14 @@ fn reviewer_input_lists_docs_receipts_bound_to_the_reviewed_commit() {
         b"# Token contract\n\nToken outcomes are stable.\n",
     )
     .unwrap();
+    // Read the current registry revision rather than assuming 1: `pulse init`
+    // registers DOC-GLOSSARY, so a fresh repository does not start at 1.
+    let registry_revision = pulse::docs::registry::load_registry(repo.path())
+        .expect("registry")
+        .revision;
     pulse::docs::register(
         repo.path(),
-        1,
+        registry_revision,
         pulse::docs::model::DocumentRecord {
             tags: vec![],
             id: "DOC-TOKEN-CONTRACT".to_string(),

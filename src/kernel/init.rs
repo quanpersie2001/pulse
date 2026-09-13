@@ -124,6 +124,13 @@ pub(crate) fn initialize_repository(
     created.extend(docs.created);
     preserved.extend(docs.preserved);
 
+    let owner_actor = match principal.kind {
+        crate::identity::actor::ActorKind::Human => format!("human:{}", principal.id),
+        crate::identity::actor::ActorKind::Agent => format!("agent:{}", principal.id),
+        crate::identity::actor::ActorKind::System => format!("system:{}", principal.id),
+    };
+    ensure_glossary(&repo_root, &owner_actor, &mut created, &mut preserved)?;
+
     let knowledge = crate::knowledge::manifest::bootstrap_unlocked(&repo_root)?;
     created.extend(knowledge.created);
     preserved.extend(knowledge.preserved);
@@ -387,6 +394,82 @@ fn ensure_runner_roles_config(
     }
     fs::write(&path, DEFAULT_RUNNER_ROLES_JSON).map_err(|error| PulseError::io(&path, error))?;
     created.push(path);
+    Ok(())
+}
+
+/// Seed content for the domain glossary `pulse-grill` writes into.
+const GLOSSARY_SEED: &str = "\
+# Glossary
+
+Terms this repository uses with a fixed meaning. Vocabulary only: what a word
+denotes here, not how anything works. Rules, state machines and error
+taxonomies are separate documents.
+
+`pulse-grill` writes a term here the moment it is settled, so the next
+conversation does not relitigate it.
+";
+
+/// Create `docs/domain/glossary.md` and register it as `DOC-GLOSSARY`.
+///
+/// Decision 0009 gives `pulse-grill` one instruction about vocabulary: record
+/// a settled term immediately. That needs a destination that exists and is
+/// routable before the first conversation, or the skill's first act is to
+/// invent a location and every repository invents a different one.
+///
+/// Both halves are idempotent and never overwrite: an existing file or an
+/// existing `DOC-GLOSSARY` record is preserved as the repository's own.
+///
+/// # Errors
+/// Returns an error when the file cannot be written or the registry cannot be
+/// read or updated for a reason other than the record already existing.
+fn ensure_glossary(
+    repo_root: &Path,
+    principal: &str,
+    created: &mut Vec<PathBuf>,
+    preserved: &mut Vec<PathBuf>,
+) -> Result<()> {
+    let relative = "docs/domain/glossary.md";
+    let path = repo_root.join(relative);
+    if path.exists() {
+        preserved.push(path.clone());
+    } else {
+        let parent = path.parent().expect("glossary path has a parent");
+        fs::create_dir_all(parent).map_err(|error| PulseError::io(parent, error))?;
+        fs::write(&path, GLOSSARY_SEED).map_err(|error| PulseError::io(&path, error))?;
+        created.push(path.clone());
+    }
+
+    // Inside the init fence: the write guard is a non-reentrant flock, so both
+    // the read and the write use the unlocked variants.
+    let registry = crate::docs::manifest::bootstrap_unlocked(repo_root)?.registry;
+    if registry
+        .documents
+        .iter()
+        .any(|document| document.id == "DOC-GLOSSARY" || document.path == relative)
+    {
+        return Ok(());
+    }
+    let record = crate::docs::model::DocumentRecord {
+        id: "DOC-GLOSSARY".to_string(),
+        revision: 1,
+        path: relative.to_string(),
+        summary: "Terms this repository uses with a fixed meaning.".to_string(),
+        owner: principal.to_string(),
+        kind: crate::docs::model::DocumentKind::Domain,
+        status: crate::docs::model::DocumentStatus::Approved,
+        scope: crate::docs::model::DocumentScope::default(),
+        tags: Vec::new(),
+        generated: None,
+        superseded_by: None,
+    };
+    crate::docs::registry::DocsRegistryStore::new(repo_root).register_unlocked(
+        registry.revision,
+        record,
+        crate::docs::registry::OperationContext {
+            actor: principal.to_string(),
+            now: chrono::Utc::now(),
+        },
+    )?;
     Ok(())
 }
 
