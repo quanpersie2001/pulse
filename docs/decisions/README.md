@@ -22,6 +22,7 @@ Current decisions:
 - [0016 — Worker sở hữu docs receipt, gate chặn tại handoff](0016-docs-receipt-ownership-at-handoff.md)
 - [0017 — Receipt không đọc được phải được báo, không được xoá khỏi danh sách](0017-unreadable-receipts-are-reported-not-erased.md)
 - [0018 — Knowledge plane: đường ra của vòng đời và retrieval có corpus riêng](0018-knowledge-plane-retrieval-and-lifecycle-exits.md)
+- [0019 — Ba tầng hướng dẫn, và đúng một skill sở hữu việc tạo node](0019-guidance-layers-and-single-node-owner.md)
 
 Add or update a decision when:
 
