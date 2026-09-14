@@ -2,7 +2,14 @@
 
 ## Status
 
-Accepted, 2026-09-13.
+Accepted, 2026-09-13. Guidance layers narrowed by
+[Decision 0020](0020-collapse-guidance-into-agents.md): the AGENTS block now
+owns the common/R0 workflow and `docs/pulse-workflow.md` is removed. Skill order
+amended by [Decision 0021](0021-prose-before-graph-and-one-planning-entry.md):
+the chain is `wayfind → grill → spec → planning`, `pulse-planning` is entered
+once per delivery chain instead of twice at two altitudes, and `grill`/`spec`
+write prose to `works/_drafts/<slug>/` before any node exists. The
+single-node-owner and product-contract decisions below remain current.
 
 **Thu hẹp [Decision 0009](0009-skill-surface-over-cli.md)**: khối `AGENTS.md`
 không còn vừa route vừa dạy; `pulse-wayfind` không còn tạo node; `pulse-tickets`
@@ -162,6 +169,13 @@ Ticket sang `ready` — mỗi skill chuyển đúng cái gate nó gác.
 
 `planning` được gọi **hai lần ở hai tầm** — sau `wayfind` ra Epic/Story, sau
 `spec` ra Ticket. Cùng một kỷ luật cắt, viết **một lần**.
+
+> **Sửa bởi [0021](0021-prose-before-graph-and-one-planning-entry.md):** không
+> còn hai lần. `grill` và `spec` ghi prose vào `works/_drafts/<slug>/` trước khi
+> có node, nên `planning` vào một lần ở cuối chuỗi và dựng Epic, Story, Ticket
+> một lượt. Bảng trên cũng đổi theo: `grill` ra
+> `works/_drafts/<slug>/story.md`, `spec` ra `approach.md`/`qa.md` cùng chỗ, và
+> `planning` thêm việc nhận nuôi prose vào `works/<id>/`.
 
 ### `wayfind` không tạo Epic
 

@@ -18,13 +18,14 @@ small change, direction clear (R0)
   -> pulse run worker, pulse run reviewer, pulse work close
 
 public behavior, several Tickets, or risk >= medium (R1-R3)
-  -> pulse-grill (Story shaped) -> pulse-spec (approach.md, qa.md)
-     -> pulse-tickets (Ticket ready, blocked_by)
+  -> pulse-grill (meaning settled) -> pulse-spec (approach.md, qa.md)
+     -> pulse-planning (Epic, Story, Ticket ready, blocked_by)
   -> pulse run worker | reviewer | qa, pulse docs validate --record,
      pulse work close, pulse work close-story
 
 larger than one session, the path is not yet visible
-  -> pulse-wayfind first (Epic + decision_work Ticket + Decision), then grill
+  -> pulse-wayfind first (docs/product contract + decision frontier),
+     then grill
 
 open product ambiguity (objective, acceptance, invariant, public contract)
   -> stop before mutating; record the question under ## Open questions with

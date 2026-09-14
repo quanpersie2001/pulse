@@ -1,7 +1,7 @@
 # Pulse — Product Definition
 
-> Trạng thái: chốt ngày 2026-09-05, cập nhật 2026-09-06 theo Decision 0009,
-> 0010, 0011, 0012, 0013, 0014. Đây là nguồn sự thật về sản phẩm và thiết kế
+> Trạng thái: chốt ngày 2026-09-05, cập nhật đến 2026-09-15 theo các Decision
+> 0009–0020. Đây là nguồn sự thật về sản phẩm và thiết kế
 > mục tiêu. Nó thay thế toàn bộ `pulse-reboot/` (đã xoá, còn trong Git history
 > trước commit này). Khi README, AGENTS.md hay `proposals/` mâu thuẫn với file
 > này, file này thắng cho đến khi có ADR thay thế.
@@ -81,7 +81,7 @@ engine, agent framework, QA platform, orchestration engine.
 | Plane | Trả lời câu hỏi | Writable truth |
 |---|---|---|
 | Durable docs | Repo hiện được hiểu như thế nào? | `docs/`, `AGENTS.md`, `PULSE.md` |
-| Work prose | Thay đổi nào đang được đề xuất/thực hiện? | `works/<id>/` |
+| Work prose | Thay đổi nào đang được đề xuất/thực hiện? | `works/<id>/`, `works/_drafts/<slug>/` |
 | Work graph | Work item, relation, lifecycle ở trạng thái nào? | `.pulse/workgraph/` |
 | Evidence | Điều gì đã được chứng minh trên snapshot nào? | `.pulse/evidence/` |
 | Knowledge | Future work nên biết gì khi trigger tương tự xuất hiện? | `.pulse/knowledge/` |
@@ -106,6 +106,7 @@ docs/
   _index.md                    # generated navigation, không phải truth
 
 works/
+  _drafts/<slug>/  story.md approach.md qa.md research/<topic>.md   # prose trước graph (0021); planning nhận nuôi rồi xoá
   EP-001/  brief.md design.md              # brief.md là map: Destination, Notes, Decisions so far, Not yet specified, Out of scope
   ST-014/  story.md approach.md qa.md research/<topic>.md
   TK-031/  ticket.md plan.md validation.md research/<topic>.md   # research/ khi decision_work
@@ -136,6 +137,14 @@ Git ownership: `workgraph`, `docs/registry.json`, `tags.json`, `events`,
 `evidence/receipts`, `knowledge`, `policy`, `config` là tracked. `works/` và
 `docs/` là tracked. `runtime/`, `cache/` gitignored. Artifact lớn theo retention
 policy.
+
+`works/_drafts/<slug>/` là prose trước graph (Decision 0021): `grill` và `spec`
+ghi vào đó khi chưa có node, `planning` nhận nuôi vào `works/<id>/` rồi xoá
+draft. Cùng plane work prose và cùng tracked, nên không thêm quy tắc git nào.
+Tiền tố `_` không đụng id pattern; không node nào được trỏ `content_dir` vào đây,
+và `graph validate` chỉ ràng buộc `content_dir` của node nên không coi nó là
+node. Draft không đăng ký được vào docs registry — `works/` bị cấm ở đó, giống
+`works/<id>/`.
 
 ## 5. Tính năng
 
@@ -1201,48 +1210,62 @@ MCP server mỏng khoảng 10 tool (`next_ready`, `packet`, `claim`, `handoff`,
 `verify`, `close`, `docs_search`, `docs_get`, `knowledge_applicable`, `note`),
 làm sau khi CLI path chạy thật.
 
-#### Bề mặt hướng dẫn (Decision 0009)
+#### Bề mặt hướng dẫn (Decisions 0009, 0019, 0020)
 
-Quy trình sống trong repo đích, không trong Pulse: `pulse init` ghi khối
-`<!-- PULSE:BEGIN --> … <!-- PULSE:END -->` vào `AGENTS.md` và tạo
-`PULSE.md`; `pulse init --refresh` render lại khối theo version CLI, giữ
+Quy trình sống trong repo đích. `pulse init` ghi khối
+`<!-- PULSE:BEGIN --> … <!-- PULSE:END -->` vào `AGENTS.md` và seed
+`PULSE.md`; `pulse init --refresh` render lại block theo version CLI, giữ
 nguyên ngoài marker, phát hiện sửa tay trong marker thì báo, không ghi đè.
-Khối route theo hình dạng yêu cầu, không theo chuỗi bước cố định:
+
+Guidance có hai tầng:
+
+1. Khối AGENTS khoảng 35–45 dòng, luôn được nạp: authority, bốn câu hỏi chẩn
+   đoán, luồng R0 đầy đủ, completion standard và route R1–R3 sang skill.
+2. `skills/**`, chỉ nạp khi đúng tình huống: nghi thức wayfind, grill, planning,
+   spec, research, ratchet, onboard và handoff.
+
+Không có `docs/pulse-workflow.md`. R0 phải làm được chỉ từ khối AGENTS; chi tiết
+R1–R3 không được copy ngược vào block. Bốn câu hỏi trước mutation:
 
 ```text
-chỉ đọc                 -> work show/packet, docs search/get; không mutation
-nhỏ, hướng rõ, R0       -> work create --risk low, ticket.md tối thiểu, work ready, run
-public behavior / nhiều Ticket / risk >= medium
-                        -> pulse-grill -> pulse-spec -> pulse-tickets -> run
-lớn hơn một phiên, đường đi chưa thấy
-                        -> pulse-wayfind trước, rồi grill
-mơ hồ sản phẩm còn mở   -> dừng trước mutation; Open question (blocking) hoặc Decision;
-                           hỏi một câu kèm câu trả lời gợi ý
-ma sát với harness      -> note --kind friction; không tự sửa AGENTS/PULSE/runners trong Ticket
-sau work close          -> pulse-ratchet
-context sắp đầy         -> pulse-handoff: flush, doc runtime, note, in lệnh mở, dừng
-phiên mới               -> work list --status active|shaped, events tail, đọc doc handoff
-                           (pulse work resume khi có)
+1. Có mutation không? Không -> đọc, trả lời có dẫn chứng, dừng.
+2. Hình dạng nào? R0 đi thẳng; R1-R3 sang skill; chưa thấy đường -> wayfind.
+3. Gate sẽ đòi bằng chứng gì? Đọc từ risk và posture, không đoán.
+4. Còn mơ hồ đổi acceptance/invariant/public contract? Dừng trước mutation.
 ```
 
-Skill là hướng dẫn, CLI là authority: mọi mutation trong skill là lệnh `pulse`
-nguyên văn, không state riêng, không gate riêng. Mỗi skill kết thúc ở một
-artifact và một trạng thái graph:
+`docs/product/` là product contract do wayfind ghi và đăng ký: Requirement
+Overview, Business Rules `BR-*`, Exception Scenarios `E-*`, Open Questions.
+ID ổn định append-only; R2/R3 acceptance trích ngược `BR-*`/`E-*`, R0/R1 không
+chịu thêm nghi lễ.
 
-| Skill | Kết thúc ở | Gate human |
+Skill là hướng dẫn, CLI là authority: không skill nào có state hoặc gate riêng.
+`pulse-planning` là chủ sở hữu duy nhất của quyết định graph shape và các lệnh
+tạo node/edge.
+
+Chuỗi giao hàng là `wayfind → grill → spec → planning → run` (Decision 0021).
+`grill` và `spec` ghi prose vào `works/_drafts/<slug>/` khi chưa có node, nên
+`planning` vào **một lần** với nghĩa đã chốt và cách làm đã chốt, dựng cả cây
+một lượt rồi nhận nuôi prose. Nhận nuôi là copy, `work sync`, `qa baseline`, rồi
+mới xoá draft — draft là nguồn sự thật cho tới khi graph bind xong, nên chạy lại
+sau khi vỡ là idempotent. `decision_work` cho decision frontier cũng qua
+`planning`, nhưng đó là work item khác, không phải lần thứ hai trên cùng Story.
+
+| Skill | Kết thúc ở | Invocation / gate human |
 |---|---|---|
-| `pulse-wayfind` (user-invoked, on-ramp) | Epic với `brief.md` là map; `decision_work` Ticket là câu hỏi; Decision node là câu trả lời; `blocked_by` là frontier; một ticket một phiên; map xong thì bàn giao, không build | Destination; Decision accepted |
-| `pulse-grill` (implicit khi mơ hồ) | Story `shaped`; term chốt ghi ngay `docs/domain/glossary.md`; Decision node chỉ khi khó đảo ngược, khó hiểu nếu thiếu context, có trade-off | xác nhận hiểu chung |
-| `pulse-spec` (user-invoked) | `approach.md` (solution, seam, implementation và testing decisions, out of scope), `qa.md`; không phỏng vấn lại; Story R2+ và Decision R3 qua hai đến ba reviewer cùng prompt read-only, mỗi reviewer `note --kind review`, `decision_acceptance` liệt kê note đã đọc | seam, hỏi một lần |
-| `pulse-tickets` (user-invoked) | Ticket `ready`, `blocked_by`; tracer bullet, blocker tạo trước | breakdown; ready gate |
-| `pulse-research` (model-invoked) | `works/<id>/research/<topic>.md`, subagent nền, nguồn sơ cấp; packet liệt kê dạng ref | không |
-| `pulse-ratchet` (explicit) | ba lane `execution`/`harness`/`knowledge` độc lập, lead hoà giải, learning có `expected_signal`, một intervention theo track, chờ rerun | không |
-| `pulse-onboard` (explicit) | pass read-only và đề xuất; pass hai `init`, `docs register` | approve trước khi ghi |
-| `pulse-handoff` (user-invoked, không model-invoked) | flush về plane qua lệnh `pulse`; doc live thread tại `.pulse/runtime/handoff/<node>.md`; một `note --work` con trỏ; in lệnh mở phiên mới rồi dừng | không |
+| `pulse-wayfind` | `docs/product/` và decision frontier; không tạo node, không build | model-invoked; Destination và current rules |
+| `pulse-grill` | `works/_drafts/<slug>/story.md`, glossary; nghĩa đã chốt | model-invoked; xác nhận hiểu chung |
+| `pulse-spec` | `works/_drafts/<slug>/{approach.md,qa.md}`; không phỏng vấn lại | model-invoked; seam, hỏi một lần |
+| `pulse-planning` | Epic/Story/Ticket/Decision/`decision_work`, `blocked_by`, nhận nuôi draft, Ticket `ready` | model-invoked; breakdown trước create, ready gate |
+| `pulse-research` | `research/<topic>.md` dưới Ticket chủ, hoặc dưới draft khi chưa có node | model-invoked; không |
+| `pulse-ratchet` | learning, một intervention theo track, chờ rerun | model-invoked; không |
+| `pulse-onboard` | pass read-only và đề xuất; pass hai `init`, `docs register` | human-only; approve trước khi ghi |
+| `pulse-handoff` | flush durable state, live-thread doc và note con trỏ rồi dừng | host hook / human; không |
 
 Executing và reviewing không phải skill: bootstrap prompt của `pulse run` là
 contract. Guard test: mọi lệnh `pulse …` trong `skills/**` và template khối
-AGENTS phải parse được bằng clap của crate.
+AGENTS phải parse được bằng clap của crate; ngoài `pulse-planning`, skill không
+được chứa lệnh tạo node hay dependency edge.
 
 #### Authority
 
@@ -1340,7 +1363,7 @@ done và qualification pass.
 | 5.5 Evidence/QA | Đã có spine | Close hỗ trợ mọi risk; high/critical yêu cầu actor human. `qa.md` là markdown heading, `qa-input.json` là JSON duy nhất, receipt `qa_checkpoint` bind `baseline_content_hash` và `case_hash` (Decision 0010). Decision 0012: `src/evidence/redaction.rs` cho plane tracked; trường `reviewers` trong profile và close gate đếm receipt theo actor. |
 | 5.6 Ratchet | `capture`–`applicable` đã chạy thật | `knowledge capture|validate|promote|applicable` đã chạy thật: LRN-001 được capture, promote và inject vào packet. Quyết định 13.3 và 13.4 đã implement: `LearningScope::{Harness, Repository}` với harness learning vào bootstrap prompt thay vì inject theo path, và `knowledge promote --document|--agents-md --insert-after` tự chèn rồi từ chối bằng `promotion_target_unchanged` khi đích không đổi. Decision 0012 `expected_signal` đã implement: bắt buộc cho kind `ratchet` tại `knowledge validate` (schema), và `candidate -> validated` của learning `ratchet` đòi **hai nửa** — handoff receipt phải ghi `knowledge_usage: helpful` cho learning đó (Pulse kiểm bằng máy), và actor phải khẳng định signal đã xuất hiện bằng `--signal-observed` (Pulse không so prose với prose, theo nguyên tắc 5); khẳng định được ghi lại ở `validation.signal_observed_at` kèm actor. Ba lane và luật lead sống trong skill `pulse-ratchet`, chưa có lệnh `ratchet bundle`. |
 | 5.7 Giao tiếp | Đã có và chạy thật | Event log append-only; `pulse note` ghi note vào Ticket, `pulse events tail` đọc với `--since`/`--ticket`/`--follow`; note hiện trong packet (giới hạn 8 note mới nhất, mỗi note cắt 500 ký tự). Decision 0011 đã implement: `.pulse/events/<date>.jsonl` một event một dòng, append fsync qua `storage::append_line_fsync`, torn tail báo `events_torn_tail` rồi bị writer sau cắt, `pulse events compact` chuyển đổi legacy một lần. Transaction intent tìm event theo `event_id` trong day file, không theo path. `--kind friction` đã có (Decision 0009 phần C); `session_ref` chưa có. Decision 0013: cờ `--work` đã có (`--ticket` là alias); skill `pulse-handoff` và hook mẫu chưa; `--kind handoff` và `work resume` là Later. |
-| 5.8 Bề mặt hướng dẫn | Phần A và C xong | `pulse init` ghi khối `<!-- PULSE:BEGIN -->` vào `AGENTS.md` và seed `PULSE.md` (kèm section `Verification Profiles` mà `policy::profile` đọc được); `--refresh` render lại và báo `guidance_conflicts` khi có sửa tay. `note --kind friction` và close gate sinh learning candidate đã chạy. **Còn lại (phần B):** tám skill (bảy của 0009 cộng `pulse-handoff` của 0013), `DOC-GLOSSARY`, template `brief.md` năm mục, hook mẫu của 0013, và đổi guard `legacy_skill_surfaces_are_absent` thành guard parse lệnh. |
+| 5.8 Bề mặt hướng dẫn | Đang làm phần B | `pulse init` quản block AGENTS và seed `PULSE.md`; friction capture đã chạy. Decision 0020 chốt hai tầng, không có `docs/pulse-workflow.md`. Command-parsing guard, planning-only graph-shape guard, `DOC-GLOSSARY` và draft `pulse-wayfind`/`pulse-planning` đã có trong working tree. Còn lại: review/validate planning, sáu skill còn lại, co block AGENTS thành R0 flow 35–45 dòng và hook mẫu của 0013. |
 | 5.8 MCP | Không có | Stub đã gỡ cùng daemon (0008). Server thật làm sau khi CLI path chạy thật. |
 
 ## 9. Triage code

@@ -1,174 +1,165 @@
-# Plan: Ba tầng hướng dẫn và tám skill (Decision 0019)
+# Plan: Hai tầng hướng dẫn và tám skill (Decisions 0019, 0020)
 
-> Kế hoạch thực hiện cho [Decision 0019](../decisions/0019-guidance-layers-and-single-node-owner.md).
+> Kế hoạch thực hiện cho
+> [Decision 0019](../decisions/0019-guidance-layers-and-single-node-owner.md),
+> được thu hẹp bởi
+> [Decision 0020](../decisions/0020-collapse-guidance-into-agents.md).
 > ADR chốt **cái gì và vì sao**; file này nói **làm thế nào và theo thứ tự nào**.
-> Mâu thuẫn thì ADR thắng.
+> Mâu thuẫn thì ADR mới hơn thắng.
 >
-> Trạng thái: chưa bắt đầu.
+> Trạng thái: đang thực hiện. Command-parsing guard, planning-only guard,
+> `DOC-GLOSSARY` và draft `pulse-wayfind` đã có trong working tree ngày
+> 2026-09-15.
 
 ## Nguyên tắc xếp thứ tự
 
-1. **Cơ chế trước nội dung.** Tầng 2 cần `guidance.rs` quản được hai file trước
-   khi có gì để viết vào.
-2. **Guard trước prose nó gác.** Guard chủ sở hữu node phải tồn tại trước khi
-   viết tám skill, bằng không luật chỉ là lời dặn.
-3. **Skill nào có phụ thuộc cứng thì đi sau phụ thuộc đó.** `ratchet` cần
-   `knowledge retire` (0018 G1) — guard parse lệnh sẽ **từ chối**
-   `pulse knowledge retire` vì subcommand chưa tồn tại.
+1. **Guard trước prose nó gác.** Single-owner phải được kiểm bằng máy trước khi
+   có nhiều skill.
+2. **Skill upstream trước downstream, theo thứ tự chuỗi thật.** Decision 0021
+   đặt chuỗi là `wayfind → grill → spec → planning`, nên `grill` và `spec` đi
+   trước `planning`: chúng định nghĩa hợp đồng `works/_drafts/<slug>/` mà
+   planning nhận nuôi.
+3. **Instruction flow sau skill.** Chỉ quảng cáo skill trong block AGENTS khi
+   skill đó tồn tại; tránh route tới path chết trong giai đoạn làm dở.
+4. **Dependency cứng đi trước skill.** `ratchet` cần `knowledge retire` và
+   `knowledge supersede` của 0018 G1.
 
 ---
 
-## Giai đoạn 1 — Cơ chế tầng 2
+## Giai đoạn 1 — Guards và bootstrap destinations
 
-**Kích thước:** nhỏ. **Phụ thuộc:** không.
+**Trạng thái:** phần chính đã landed hoặc có trong working tree.
 
-### 1.1 `guidance.rs` quản N file
-
-Hiện hard-code hai đường: khối `AGENTS.md` (marker, refresh, drift) và seed
-`PULSE.md` (ghi một lần, không bao giờ ghi lại). Cần một đường thứ ba:
-**file Pulse sở hữu hoàn toàn, có marker, refresh được** — giống khối AGENTS
-nhưng chiếm cả file.
-
-Chốt khi implement: dùng lại `write_agents_block` tổng quát hoá, hay tách một
-`ManagedFile { path, template, marker_style }`. Nghiêng phương án hai vì hai loại
-sở hữu khác nhau (một khối trong file của repo, một file trọn của Pulse).
-
-### 1.2 `init` ghi file thứ hai
-
-`docs/pulse-workflow.md`. `--refresh` render lại; sửa tay trong marker → vào
-`guidance_conflicts`, không ghi đè.
-
-### 1.3 Guard parse mở rộng
-
-`guidance_sources()` trong `tests/graph/architecture_guards.rs` thêm
-`assets/pulse-workflow.md`.
+- Guard parse literal `pulse …` bằng clap thật trong `assets/agents-block.md` và
+  `skills/**`.
+- Guard cấm `pulse work create` và `pulse graph edge add` ngoài
+  `skills/pulse-planning/`.
+- Negative proof: tạm thêm command tạo node vào skill khác, test phải đỏ, rồi
+  bỏ probe.
+- `pulse init` seed và đăng ký `DOC-GLOSSARY` mà không overwrite nội dung có
+  sẵn.
 
 ### Ra khỏi giai đoạn 1 khi
 
-`pulse init` trên fixture ghi hai file; `--refresh` render lại cả hai; sửa tay
-một file thì đúng file đó vào `guidance_conflicts`; guard parse phủ cả hai.
+Hai guard xanh, negative proof đã chạy, init glossary idempotent và không có
+`docs/pulse-workflow.md` trong source hoặc output init.
 
 ---
 
-## Giai đoạn 2 — Guard chủ sở hữu node
+## Giai đoạn 2 — Tám skill
 
-**Kích thước:** nhỏ. **Phụ thuộc:** không. **Phải xong trước giai đoạn 4.**
+Khuôn chung: frontmatter có cả “dùng khi nào” và “không dùng khi nào” →
+`Establish Authority` → các bước đánh số → `Report`.
 
-Guard: `skills/**` không chứa `pulse work create` hay `pulse graph edge add`
-ngoài `skills/pulse-planning/`.
-
-**Kiểm bằng cách phá:** thêm `pulse work create` vào một skill khác, khẳng định
-guard đỏ, rồi bỏ ra. Guard chưa từng đỏ thì chưa chứng minh được gì.
-
-Cân nhắc khi implement: `work transition` **được phép** ở skill khác (ADR phân
-biệt tạo node với transition), nên guard chỉ cấm `create` và `edge add`.
-
-### Ra khỏi giai đoạn 2 khi
-
-Guard bắt được vi phạm ở một file skill thật, và cho `pulse-planning` đi qua.
-
----
-
-## Giai đoạn 3 — Nội dung tầng 1 và tầng 2
-
-**Kích thước:** trung bình. **Phụ thuộc:** giai đoạn 1.
-
-### 3.1 Co `assets/agents-block.md` xuống ~20 dòng
-
-Giữ: Pulse là gì, luật authority khi mâu thuẫn, bảng route, trỏ sang tầng 2.
-Chuyển phần còn lại xuống tầng 2.
-
-### 3.2 Viết `assets/pulse-workflow.md` (~70 dòng)
-
-Map sáu plane; bốn câu hỏi chẩn đoán; luồng R0 **đầy đủ**; completion standard.
-R1–R3 chỉ trỏ skill.
-
-**Áp luật chi phối khi viết:** mỗi câu phải trả lời được "câu này nói gate sẽ hỏi
-gì, hay chép lại luật gate đã ép?" Loại vế sau.
-
-### Ra khỏi giai đoạn 3 khi
-
-Một agent chỉ đọc hai file này làm được trọn một Ticket R0, không cần skill nào.
-
----
-
-## Giai đoạn 4 — Tám skill
-
-**Kích thước:** lớn nhất. **Phụ thuộc:** giai đoạn 2 và 3.
-
-Khuôn chung: frontmatter (**có nửa "không dùng khi nào"**) → Establish Authority
-→ bước đánh số → Report.
-
-Thứ tự viết, theo phụ thuộc chứ không theo độ khó:
-
-| | Skill | Ghi chú |
+| Thứ tự | Skill | Contract chính |
 |---|---|---|
-| 4.1 | `planning` | Viết **trước tiên**: nó là chủ sở hữu node, và kỷ luật cắt mà bảy skill kia trỏ tới |
-| 4.2 | `grill` | Primitive dùng ở hai tầm — trong `wayfind` và đứng riêng |
-| 4.3 | `research` | `spec` phụ thuộc nó; viết trước `spec` để không có con trỏ chết |
-| 4.4 | `spec` | |
-| 4.5 | `wayfind` | Gọi `grill` và `research`; ghi `docs/product/` |
-| 4.6 | `onboard` | `disable-model-invocation: true` |
-| 4.7 | `handoff` | Cùng hook mẫu `context-guard.sh` cho `docs/operations/` |
-| 4.8 | `ratchet` | **Chặn bởi 0018 G1** — xem dưới |
+| 2.1 | `wayfind` | `docs/product/` và decision frontier; không tạo node |
+| 2.2 | `grill` | nghĩa đã chốt, `works/_drafts/<slug>/story.md`, glossary |
+| 2.3 | `research` | primary-source file thuộc Ticket chủ, hoặc dưới draft khi chưa có node |
+| 2.4 | `spec` | `approach.md`, `qa.md` cùng draft; không phỏng vấn lại |
+| 2.5 | `planning` | chủ sở hữu duy nhất của node/edge; cắt Ticket, nhận nuôi draft, ready |
+| 2.6 | `onboard` | human-only; read-only pass trước mutation |
+| 2.7 | `handoff` | host/human invoked; flush, live-thread doc, note, stop |
+| 2.8 | `ratchet` | ba lane, one intervention, expected signal, fresh rerun |
+
+`wayfind` và `planning` đã draft và eval trong working tree. `planning` được
+viết theo hai-mode của 0019 nên phải cắt lại theo 0021 sau khi `grill` và `spec`
+chốt hợp đồng draft — kèm chạy lại eval.
+
+### `planning` vào một lần (Decision 0021)
+
+Đầu vào là một draft đã có `story.md`, `approach.md` và `qa.md`. Đầu ra là Epic,
+Story và implementation Ticket dựng một lượt, prose được nhận nuôi vào
+`works/<id>/`, Ticket đủ gate thì `ready`.
+
+Vẫn giữ từ 0019: propose breakdown cho human trước mutation, reuse node hiện có,
+tạo blocker trước và wire edge ở pass thứ hai, fog không thành node, R0 không tự
+động gọi planning.
+
+Nhận nuôi theo thứ tự copy → `work sync` → `qa baseline` → xoá draft, để chạy
+lại sau khi vỡ là idempotent. Không thêm lệnh CLI cho việc này.
 
 ### Ràng buộc cứng với `ratchet`
 
-Bước 5 của nó là *"`misleading` hai lần thì retire và gỡ"*. Guard parse lệnh
-(`484c935`) sẽ **từ chối** `pulse knowledge retire` vì subcommand đó chưa tồn
-tại. Nên **0018 G1 phải landed trước 4.8**, hoặc `ratchet` viết thiếu bước cuối
-và phải sửa lại sau — chọn cái thứ nhất.
+Trước 2.8, implement 0018 G1:
 
-0018 G1 nhỏ: hai nhánh trong `transition_status` + hai subcommand.
+- `pulse knowledge retire <id> --reason <text>`;
+- `pulse knowledge supersede <id> --by <id>`;
+- lifecycle/relation transaction và test tương ứng.
 
-### Ra khỏi giai đoạn 4 khi
+Guard parse sẽ từ chối command chưa tồn tại, nên không viết ratchet thiếu bước
+rồi hứa sửa sau.
 
-Tám skill tồn tại, guard parse xanh, guard chủ sở hữu node xanh, ba gate xanh.
+### Ra khỏi giai đoạn 2 khi
 
----
-
-## Giai đoạn 5 — Dọn văn bản
-
-Làm **sau cùng**, khi hình dạng đã đúng, để không sửa hai lần.
-
-- `0009`: Status ghi "Narrowed by 0019" — `wayfind` không tạo node, `tickets` →
-  `planning`.
-- `0013`: Status ghi "Amended by 0019"; §2 bước 1 bỏ `work create`, `edge add`.
-- `PRODUCT.md` §5.4 (`docs/product/` có hợp đồng), §5.6 (ratchet đề xuất chứ
-  không tạo), §5.8 (ba tầng, bảng tám skill, invocation).
-- `ROADMAP.md`: Now cập nhật theo thứ tự thật.
+Tám skill tồn tại; mỗi skill có eval source; command guard và planning-only
+guard xanh; `quick_validate.py` xanh cho từng skill.
 
 ---
 
-## Thứ tự tổng, và điểm dừng an toàn
+## Giai đoạn 3 — Khối AGENTS hoàn chỉnh
+
+**Phụ thuộc:** skill được block quảng cáo đã tồn tại.
+
+Sửa `assets/agents-block.md` thành khoảng 35–45 dòng. Giữ đúng năm phần:
+
+1. Pulse là truth layer; prose route, CLI quyết định.
+2. Authority khi accepted Decision, approved product docs, code/test và receipt
+   mâu thuẫn.
+3. Bốn câu hỏi chẩn đoán trước mutation.
+4. Luồng R0 đầy đủ ở mức command và artifact.
+5. Completion standard cùng route các flow đặc biệt sang skill đã cài.
+
+Không tạo `assets/pulse-workflow.md`, không seed `docs/pulse-workflow.md`, không
+mở rộng `kernel/guidance.rs` thành N managed files.
+
+**Luật review từng câu:** câu này nói gate sẽ hỏi gì/cách cung cấp đầu vào, hay
+chép lại luật gate đã ép? Xoá vế thứ hai.
+
+### Ra khỏi giai đoạn 3 khi
+
+- Một agent chỉ đọc AGENTS block làm được trọn Ticket R0.
+- Read-only request dừng mà không mutation.
+- R1–R3 route tới skill có thật.
+- `pulse init --refresh` vẫn giữ nội dung ngoài marker và báo
+  `guidance_conflicts` khi block bị sửa tay.
+- Init không tạo hoặc trỏ `docs/pulse-workflow.md`.
+
+---
+
+## Giai đoạn 4 — Hook handoff
+
+Cùng `pulse-handoff`, thêm template `context-guard.sh` trong
+`docs/operations/` khi user yêu cầu qua option init đã chốt ở Decision 0013.
+Mặc định init không tự gắn hook host.
+
+Kiểm Stop hook chống loop bằng `stop_hook_active`, threshold bytes cấu hình được
+và reason bắt agent chạy handoff rồi dừng.
+
+---
+
+## Giai đoạn 5 — Dọn văn bản và dogfood
+
+- `0009`: ghi narrowed by 0019; bỏ mô tả wayfind tạo Epic và tên `tickets` cũ.
+- `0013`: ghi amended by 0019; handoff không tạo node/edge.
+- `0019`: đã ghi guidance layers narrowed by 0020.
+- `PRODUCT.md`: giữ hai tầng, product contract, single-node-owner và invocation.
+- `ROADMAP.md`: cập nhật theo thứ tự thật.
+- Dựng target mới chỉ sau khi guidance surface hoàn chỉnh; chạy golden path từ
+  intent tới ready bằng agent tương tác, không gõ lệnh hộ.
+
+---
+
+## Thứ tự tổng và điểm dừng an toàn
 
 ```text
-G1 cơ chế ──► G3 nội dung tầng 1+2 ──► G4 tám skill ──► G5 dọn văn bản
-G2 guard ────────────────────────────┘
-                     0018 G1 ────────► 4.8 ratchet
+G1 guards/bootstrap
+  -> G2 wayfind -> planning -> grill -> research -> spec -> onboard -> handoff
+                                      0018 G1 -----------------------> ratchet
+  -> G3 AGENTS block
+  -> G4 hook
+  -> G5 docs cleanup + new dogfood target
 ```
 
-**Điểm dừng an toàn:** sau G3 cho một sản phẩm nhất quán — hai tầng hướng dẫn
-chạy, R0 làm được, skill chưa có thì R1–R3 vẫn làm tay như hôm nay.
-
-G4 dừng giữa chừng cũng được: skill nào viết xong thì dùng được, chưa viết thì
-route trỏ vào khoảng trống — chấp nhận được **nếu** khối AGENTS không quảng cáo
-skill chưa tồn tại. Kiểm điều này khi viết 3.1.
-
----
-
-## Chưa chốt, để lại cho lúc implement
-
-1. Tổng quát hoá `guidance.rs` theo hướng nào (§1.1).
-2. Guard chủ sở hữu node có cấm `pulse work supersede` không, hay chỉ `create` và
-   `edge add` (§2).
-3. Tầng 2 có nhắc tên tám skill không, hay chỉ trỏ "xem skill" — nhắc tên thì
-   phải đồng bộ khi thêm/bớt skill (§3.2).
-
-Cả ba là quyết định implementation, không đổi contract, nên không cần ADR mới —
-nhưng ghi lựa chọn và lý do vào commit tương ứng.
-
-## Quan hệ với 0018
-
-0018 G1 (`knowledge retire`/`supersede`) là **điều kiện cần của 4.8**. Phần còn
-lại của 0018 (G2–G5) độc lập, làm sau dogfood.
+Dừng giữa G2 được nếu AGENTS block hiện tại chưa quảng cáo skill chưa tồn tại.
+Không có file tầng giữa hoặc route chết cần giữ để biểu diễn tiến độ.

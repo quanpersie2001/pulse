@@ -22,7 +22,9 @@ Current decisions:
 - [0016 — Worker sở hữu docs receipt, gate chặn tại handoff](0016-docs-receipt-ownership-at-handoff.md)
 - [0017 — Receipt không đọc được phải được báo, không được xoá khỏi danh sách](0017-unreadable-receipts-are-reported-not-erased.md)
 - [0018 — Knowledge plane: đường ra của vòng đời và retrieval có corpus riêng](0018-knowledge-plane-retrieval-and-lifecycle-exits.md)
-- [0019 — Ba tầng hướng dẫn, và đúng một skill sở hữu việc tạo node](0019-guidance-layers-and-single-node-owner.md)
+- [0019 — Ba tầng hướng dẫn, và đúng một skill sở hữu việc tạo node](0019-guidance-layers-and-single-node-owner.md) — **guidance layers narrowed by 0020**; **skill order amended by 0021**
+- [0020 — Gộp workflow thường ngày vào khối AGENTS](0020-collapse-guidance-into-agents.md)
+- [0021 — Prose trước graph, và planning vào một lần](0021-prose-before-graph-and-one-planning-entry.md)
 
 Add or update a decision when:
 

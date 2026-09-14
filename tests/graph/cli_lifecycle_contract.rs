@@ -535,3 +535,154 @@ fn work_list_filters_by_status_role_and_tag() {
     ));
     assert!(unknown.is_empty());
 }
+
+/// A pre-graph prose draft under `works/_drafts/<slug>/` is invisible to the
+/// graph (Decision 0021).
+///
+/// `grill` and `spec` write there before any node exists, so `graph validate`
+/// and `work list` must keep treating the directory as ordinary prose: the
+/// `works/<id>` content_dir rule constrains a node's own directory, not what
+/// else may live beside it.
+#[test]
+fn a_pre_graph_prose_draft_is_not_a_node_and_does_not_fail_validation() {
+    let repo = tempfile::tempdir().unwrap();
+    let created = run_ok(
+        &repo,
+        &[
+            "work",
+            "create",
+            "--kind",
+            "ticket",
+            "--title",
+            "Adopted later",
+            "--role",
+            "implementation",
+            "--risk",
+            "low",
+            "--materialization",
+            "R0",
+            "--json",
+        ],
+    );
+    let ticket = created["value"]["id"].as_str().unwrap().to_string();
+
+    let draft = repo
+        .path()
+        .join("works")
+        .join("_drafts")
+        .join("schedule-crud");
+    std::fs::create_dir_all(draft.join("research")).unwrap();
+    for (name, body) in [
+        ("story.md", "# Story\n\nAdmins manage export schedules.\n"),
+        ("approach.md", "# Approach\n\nReuse the SecretStore seam.\n"),
+        ("qa.md", "# QA\n\n### QA-011 Admin creates a schedule\n"),
+    ] {
+        std::fs::write(draft.join(name), body).unwrap();
+    }
+    std::fs::write(
+        draft.join("research").join("size-ceiling.md"),
+        "# Finding\n",
+    )
+    .unwrap();
+
+    let report = run_ok(&repo, &["graph", "validate", "--json"]);
+    assert_eq!(
+        report["valid"], true,
+        "a prose draft beside works/<id> must not invalidate the graph: {report}"
+    );
+
+    let listed = run_ok(&repo, &["work", "list", "--json"]);
+    let listed: Vec<String> = listed["items"]
+        .as_array()
+        .expect("items array")
+        .iter()
+        .map(|item| item["id"].as_str().expect("id").to_string())
+        .collect();
+    assert_eq!(
+        listed,
+        vec![ticket],
+        "the draft directory must not appear as a work item"
+    );
+
+    // The draft survives graph reads untouched: adoption is the only thing that
+    // moves it, and it must stay readable until `work sync` has bound the prose.
+    assert!(draft.join("story.md").exists());
+}
+
+/// `qa baseline` resolves only after the draft has been adopted (Decision 0021).
+///
+/// This is what forces adoption to be copy-then-sync-then-baseline rather than
+/// any other order: the baseline loader reads `works/<story-id>/qa.md`, so a
+/// `qa.md` still sitting in the draft is not a baseline yet.
+#[test]
+fn qa_baseline_resolves_only_after_the_draft_qa_is_adopted() {
+    let repo = tempfile::tempdir().unwrap();
+    let created = run_ok(
+        &repo,
+        &[
+            "work",
+            "create",
+            "--kind",
+            "story",
+            "--title",
+            "Admins manage schedules",
+            "--json",
+        ],
+    );
+    let story = created["value"]["id"].as_str().unwrap().to_string();
+
+    let baseline = format!(
+        r#"# {story} Schedule management QA
+
+## Scope
+Schedule management stays observable to an admin.
+
+## Posture
+automated
+
+## Risks
+- RISK-LIMIT: a fourth active schedule slips past the limit.
+
+## Exit criteria
+- The required case passes on the candidate source.
+
+## Cases
+
+### QA-011 Admin creates a schedule
+- Intent: A created schedule appears in the list.
+- Surface: api
+- Priority: critical
+- Risks: RISK-LIMIT
+- Steps:
+  1. create a schedule as an admin
+- Expected:
+  - the schedule appears in the list
+"#
+    );
+
+    // Still in the draft: the Story owns no baseline yet.
+    let draft = repo
+        .path()
+        .join("works")
+        .join("_drafts")
+        .join("schedule-crud");
+    std::fs::create_dir_all(&draft).unwrap();
+    std::fs::write(draft.join("qa.md"), &baseline).unwrap();
+    let error = run_err(&repo, &["qa", "baseline", &story, "--json"]);
+    assert!(
+        error["code"].is_string(),
+        "a draft-only baseline must fail with a coded error: {error}"
+    );
+
+    // Adopted to the node path: the same bytes now resolve.
+    let adopted = repo.path().join("works").join(&story);
+    std::fs::create_dir_all(&adopted).unwrap();
+    std::fs::write(adopted.join("qa.md"), &baseline).unwrap();
+    let report = run_ok(&repo, &["qa", "baseline", &story, "--json"]);
+    assert_eq!(report["owner_id"], story);
+    assert_eq!(
+        report["cases"].as_array().expect("cases").len(),
+        1,
+        "adopted baseline must expose its case: {report}"
+    );
+}
