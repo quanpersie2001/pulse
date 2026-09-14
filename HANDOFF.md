@@ -31,11 +31,9 @@ là `exploring → planning → validating`, với `exploring` chạy trước v
 
 - Repo: `/Users/quannv.dev/Workspace/Personal/pulse`
 - Branch: `features/harness-experimental`
-- HEAD: `8967a0c` — **mọi thứ dưới đây chưa commit**
-- Modified: `HANDOFF.md`, `PRODUCT.md`, `assets/agents-block.md`,
-  `docs/decisions/0019-*`, `docs/decisions/README.md`, `docs/plans/0019-*`,
-  `tests/graph/architecture_guards.rs`, `tests/graph/cli_lifecycle_contract.rs`
-- Untracked: `docs/decisions/0020-*`, `docs/decisions/0021-*`, `skills/`
+- HEAD: `9afbbc4`, working tree sạch, chưa push
+  - `cb32e05` — 0020 và 0021 cùng PRODUCT/plan/agents-block và hai test draft
+  - `9afbbc4` — `skills/pulse-{wayfind,planning}/` và guard chủ sở hữu node
 - Không có dogfood target. Không chạy Pulse against repo root hoặc immutable
   fixture tại chỗ.
 
@@ -54,7 +52,7 @@ là `exploring → planning → validating`, với `exploring` chạy trước v
 - `docs/plans/0019`: giai đoạn 2 đổi thứ tự — `grill` (2.2), `research` (2.3),
   `spec` (2.4), `planning` (2.5).
 
-### `pulse-planning` (xong, chưa commit)
+### `pulse-planning` (xong, đã commit)
 
 `skills/pulse-planning/` gồm `SKILL.md`, `references/graph-breakdown.md`,
 `references/tracer-bullets.md`, `evals/evals.json` và ba fixture. Một lần gọi,
@@ -63,10 +61,17 @@ bước nhận nuôi copy → `work sync` → `qa baseline` → xoá draft sau c
 
 Eval iteration 5: **với skill 97.5%, baseline 48.0%, delta +0.49** trên năm case
 (thiếu draft, draft→graph, từ chối hẹp, clear-R0 near miss, frontier đã confirm).
-Iteration 6 chạy lại riêng eval 2 sau khi chuyển kiểm `qa.md` từ bước 4 lên bước
-1 — **đọc kết quả đó trước khi coi planning là xong**.
+Iteration 6 chạy lại riêng eval 2 (hai run có skill) sau khi chuyển kiểm `qa.md`
+từ bước 4 lên bước 1: **cả hai run đều thực hiện kiểm** ngay sau mục Input và
+kết luận đúng, trong khi trước đó không run nào làm. 7/8 và 8/8 — chỗ lệch duy
+nhất là assertion trích `BR-*` vào từng Ticket, variance giữa hai lần chạy chứ
+không phải lỗ hệ thống. `pulse-planning` coi như xong.
 
-### `pulse-wayfind` (xong, chưa commit)
+Workspace eval nằm trong scratchpad của phiên cũ, **không còn đọc được**. Số
+liệu ở trên là bản ghi duy nhất; nguồn eval vẫn nằm trong
+`skills/pulse-planning/evals/`.
+
+### `pulse-wayfind` (xong, đã commit)
 
 Bàn giao sang `grill` thay vì `planning`; frontier vẫn sang `planning` vì đó là
 chủ sở hữu node.
@@ -158,10 +163,9 @@ Guard chủ sở hữu node đã kiểm bằng cách phá: tạo skill vi phạm
 
 ## Next action
 
-1. Đọc kết quả iteration 6 (eval 2) trước khi chốt `pulse-planning`.
-2. Đọc 0021, 0019, `grill-with-docs`, `exploring`, skill-creator.
-3. Viết `skills/pulse-grill/` — draft, guard, quick validate, rồi eval.
-4. Sau grill: `research` → `spec` → `onboard` → `handoff` → `ratchet`
+1. Đọc 0021, 0019, `grill-with-docs`, `exploring`, skill-creator.
+2. Viết `skills/pulse-grill/` — draft, guard, quick validate, rồi eval.
+3. Sau grill: `research` → `spec` → `onboard` → `handoff` → `ratchet`
    (`ratchet` bị chặn bởi 0018 G1 vì guard parse từ chối
    `pulse knowledge retire` khi subcommand chưa tồn tại).
-5. Commit chỉ khi user yêu cầu.
+4. Commit chỉ khi user yêu cầu.
