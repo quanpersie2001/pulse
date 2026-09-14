@@ -1,0 +1,44 @@
+{
+  "skill_name": "pulse-wayfind",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "We are starting an Offline Release Hub for regulated teams. It probably spans many sessions, but we have not decided who can publish, whether signing is mandatory, how rollback should work, or whether the first release is local-only or hosted. Use Pulse to decide what should happen next. This is an evaluation: do not modify the repository or run Pulse commands; write the response you would give before receiving any follow-up answer.",
+      "expected_output": "Recognize a valid wayfinding case, establish authority, ask one destination question with a recommended answer, and avoid drafting contracts, graph work, or implementation before destination confirmation.",
+      "files": [],
+      "expectations": [
+        "The response explicitly identifies both wayfinding fit criteria: more than one useful session and an unclear route.",
+        "The response asks exactly one product-decision question, aimed at confirming the destination, and includes a concrete recommended answer.",
+        "The response does not draft a product contract, propose graph nodes, or begin implementation before the destination is confirmed.",
+        "The response distinguishes facts that should be researched from product decisions that require the human."
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "Continue the existing wayfinding effort described in the attached product contract. Classify what is a sharp decision question versus fog, propose the next decision frontier and session action, and report what should happen in Pulse. This is an evaluation: do not modify files or run commands; return a proposed response only.",
+      "expected_output": "Load the map at low resolution, keep the vague enterprise-policy item as fog, identify the admin-approval and keychain questions as sharp, preserve one-decision-per-session discipline, and delegate graph shape to pulse-planning.",
+      "files": [
+        "evals/fixtures/offline-release-hub.md"
+      ],
+      "expectations": [
+        "The response classifies the administrator-approval and keychain questions as sharp while keeping enterprise-policy support as fog.",
+        "The response proposes readable frontier entries with type, driver, expected output, and dependency information.",
+        "The response delegates node creation and dependency wiring to pulse-planning and does not prescribe direct graph-creation commands.",
+        "The response chooses at most one non-research decision for the session and permits research only after it has an owning Ticket.",
+        "The response uses the skill's Destination, Product contracts, Decision frontier, Authority, and Next report structure."
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "The `pulse docs search` help text says 'retreive'. Please fix that typo and run the focused test; the change is obvious and should fit in a few minutes. Should we wayfind this first? This is an evaluation: do not modify files or run commands; answer with the correct workflow route.",
+      "expected_output": "Decline wayfinding because this is a clear R0 bounded change, route to the normal R0 workflow, and avoid product contracts or a decision frontier.",
+      "files": [],
+      "expectations": [
+        "The response clearly declines wayfinding because the change fits one session and its route is already clear.",
+        "The response routes to the ordinary R0 bounded-change workflow rather than pulse-grill, pulse-spec, or a decision frontier.",
+        "The response does not propose a product contract, product discovery questions, or graph decomposition.",
+        "The response respects the evaluation constraint and does not claim to have edited files or run tests."
+      ]
+    }
+  ]
+}

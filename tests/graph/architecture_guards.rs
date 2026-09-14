@@ -158,26 +158,61 @@ fn guidance_sources() -> Vec<(String, String)> {
         "assets/agents-block.md".to_string(),
         source("assets/agents-block.md"),
     )];
+    sources.extend(skill_markdown_sources());
+    sources
+}
+
+fn skill_markdown_sources() -> Vec<(String, String)> {
     let skills = repo_root().join("skills");
-    if skills.exists() {
-        let mut pending = vec![skills];
-        while let Some(dir) = pending.pop() {
-            for entry in fs::read_dir(&dir).expect("read skills dir") {
-                let path = entry.expect("skills entry").path();
-                if path.is_dir() {
-                    pending.push(path);
-                } else if path.extension().and_then(|e| e.to_str()) == Some("md") {
-                    let relative = path
-                        .strip_prefix(repo_root())
-                        .unwrap_or(&path)
-                        .display()
-                        .to_string();
-                    sources.push((relative, fs::read_to_string(&path).expect("read skill")));
-                }
+    if !skills.exists() {
+        return Vec::new();
+    }
+
+    let mut pending = vec![skills];
+    let mut sources = Vec::new();
+    while let Some(dir) = pending.pop() {
+        for entry in fs::read_dir(&dir).expect("read skills dir") {
+            let path = entry.expect("skills entry").path();
+            if path.is_dir() {
+                pending.push(path);
+            } else if path.extension().and_then(|e| e.to_str()) == Some("md") {
+                let relative = path
+                    .strip_prefix(repo_root())
+                    .unwrap_or(&path)
+                    .display()
+                    .to_string();
+                sources.push((relative, fs::read_to_string(&path).expect("read skill")));
             }
         }
     }
+    sources.sort_by(|left, right| left.0.cmp(&right.0));
     sources
+}
+
+/// `pulse-planning` is the single owner of graph shape decisions.
+///
+/// Decision 0019 allows other skills to transition the state they gate, but
+/// creating nodes or dependency edges elsewhere would duplicate the planning
+/// discipline and let it drift between guidance files.
+#[test]
+fn only_planning_skill_can_name_node_creation_commands() {
+    let sources = skill_markdown_sources();
+    assert!(
+        !sources.is_empty(),
+        "expected the skill surface to contain Markdown"
+    );
+
+    for (path, body) in sources {
+        if path.starts_with("skills/pulse-planning/") {
+            continue;
+        }
+        for forbidden in ["pulse work create", "pulse graph edge add"] {
+            assert!(
+                !body.contains(forbidden),
+                "{path} names `{forbidden}`; only pulse-planning may own graph shape"
+            );
+        }
+    }
 }
 
 /// Every `pulse …` mention in `body`, each cut at the first separator that

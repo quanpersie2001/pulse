@@ -1,166 +1,167 @@
-# Handoff: Pulse — nợ ADR đã trả hết, tiếp theo là skill surface
+# Handoff: viết `pulse-grill`
 
-## Trạng thái bàn giao
+## Task
+
+Viết skill `skills/pulse-grill/` theo Decision 0019 và **Decision 0021**. Đây là
+skill kế tiếp trong chuỗi, và là skill **đầu tiên chịu hợp đồng draft** mà 0021
+vừa chốt — nó định nghĩa `works/_drafts/<slug>/story.md` mà `pulse-spec` và
+`pulse-planning` sẽ đọc.
+
+Không implement feature Pulse ngoài guard hoặc fixture tối thiểu cần để skill có
+contract kiểm được. Không chạy Pulse mutation với `--repo-root .` tại repo này.
+
+## Context: chuỗi đã đổi
+
+Decision 0021 (accepted 2026-09-15) sửa thứ tự của 0019:
+
+```text
+wayfind → grill → spec → planning → run
+```
+
+`planning` vào **một lần** ở cuối, không còn hai lần ở hai tầm. Lý do: `grill`
+và `spec` ghi prose vào `works/_drafts/<slug>/` khi chưa có node, nên hai mốc
+tạo node (trước đây bị `spec` chen vào giữa) gộp được làm một.
+
+Hai nguồn tham chiếu đều đặt hiểu trước hình dạng: Matt là
+`wayfinder → grill-with-docs → to-spec → to-tickets`; Khuym (`references/skills`)
+là `exploring → planning → validating`, với `exploring` chạy trước và
+`CONTEXT.md` ở địa chỉ theo slug.
+
+## Current repository state
 
 - Repo: `/Users/quannv.dev/Workspace/Personal/pulse`
-- Nhánh: `features/harness-experimental` (chưa push)
-- HEAD: `21f1756` docs: close the two ADR debts
-- Tag: `v0.1.0` ở `16a0ef3`; `dogfood/track-b-final` ở `7fb1dd7`
-- Working tree: **sạch**
-- Ba gate xanh tại HEAD: `cargo fmt --check`, `cargo clippy --all-targets
-  --quiet -- -D warnings`, `cargo test --all-targets` — **616 test** (trước là
-  596), default threading.
+- Branch: `features/harness-experimental`
+- HEAD: `8967a0c` — **mọi thứ dưới đây chưa commit**
+- Modified: `HANDOFF.md`, `PRODUCT.md`, `assets/agents-block.md`,
+  `docs/decisions/0019-*`, `docs/decisions/README.md`, `docs/plans/0019-*`,
+  `tests/graph/architecture_guards.rs`, `tests/graph/cli_lifecycle_contract.rs`
+- Untracked: `docs/decisions/0020-*`, `docs/decisions/0021-*`, `skills/`
+- Không có dogfood target. Không chạy Pulse against repo root hoặc immutable
+  fixture tại chỗ.
 
-Bốn commit của phiên này:
+## Work completed
 
+### Decision 0021 và các văn bản theo sau
+
+- `docs/decisions/0021-prose-before-graph-and-one-planning-entry.md` — accepted.
+- `PRODUCT.md`: `works/_drafts/<slug>/` vào bảng plane §4 và vào layout, kèm lý
+  do nó cùng plane work prose; §5.8 bảng skill đổi thứ tự và mô tả một-lần-gọi.
+- `assets/agents-block.md`: route R1–R3 thành
+  `pulse-grill → pulse-spec → pulse-planning`. (Nó đang ghi `pulse-tickets`, tên
+  0019 đã bỏ — con trỏ chết đã sửa luôn.)
+- `docs/decisions/0019`: Status ghi amended by 0021, và đoạn "planning gọi hai
+  lần" có block sửa ngay tại chỗ để thân bài không mâu thuẫn với status.
+- `docs/plans/0019`: giai đoạn 2 đổi thứ tự — `grill` (2.2), `research` (2.3),
+  `spec` (2.4), `planning` (2.5).
+
+### `pulse-planning` (xong, chưa commit)
+
+`skills/pulse-planning/` gồm `SKILL.md`, `references/graph-breakdown.md`,
+`references/tracer-bullets.md`, `evals/evals.json` và ba fixture. Một lần gọi,
+hai input (draft giao hàng; frontier đã confirm — cái sau là transcription),
+bước nhận nuôi copy → `work sync` → `qa baseline` → xoá draft sau cùng.
+
+Eval iteration 5: **với skill 97.5%, baseline 48.0%, delta +0.49** trên năm case
+(thiếu draft, draft→graph, từ chối hẹp, clear-R0 near miss, frontier đã confirm).
+Iteration 6 chạy lại riêng eval 2 sau khi chuyển kiểm `qa.md` từ bước 4 lên bước
+1 — **đọc kết quả đó trước khi coi planning là xong**.
+
+### `pulse-wayfind` (xong, chưa commit)
+
+Bàn giao sang `grill` thay vì `planning`; frontier vẫn sang `planning` vì đó là
+chủ sở hữu node.
+
+### Test mới (`tests/graph/cli_lifecycle_contract.rs`)
+
+- `a_pre_graph_prose_draft_is_not_a_node_and_does_not_fail_validation`
+- `qa_baseline_resolves_only_after_the_draft_qa_is_adopted`
+
+Cái thứ hai ép thứ tự nhận nuôi: cùng một `qa.md`, ở draft thì fail có code, ở
+node path thì resolve ra case.
+
+## Required behavior of `pulse-grill`
+
+### Đầu ra
+
+1. `works/_drafts/<slug>/story.md` — Outcome, success signals, scope boundary,
+   `## Open questions` với disposition theo bảng ambiguity gate `PRODUCT.md`
+   §5.1 (`resolved`/`rejected`/`delegated`/`deferred`/`blocking`).
+2. Thuật ngữ đã chốt vào `docs/domain/glossary.md` (`DOC-GLOSSARY` đã được seed
+   và đăng ký ở commit `8775c35`).
+3. Decision node **chỉ khi** đủ ba điều kiện: khó đảo ngược, khó hiểu nếu thiếu
+   context, có trade-off thật. Không đủ thì ghi `(resolved)` trong
+   `## Open questions`.
+
+### Primitive giữ từ Matt và Khuym
+
+Một câu hỏi mỗi lượt, kèm câu trả lời gợi ý. Fact tự tra bằng
+`pulse docs search`/`get` và code; chỉ hỏi người về intent, preference,
+authority, trade-off. Không hành động tới khi người xác nhận. Khuym `exploring`
+gán ID ổn định cho mỗi quyết định (`D1`, `D2`…) và liệt kê anti-pattern: bundled
+questions, deep implementation analysis, architecture proposals, tạo node, code.
+
+### Hai ràng buộc cứng
+
+1. **Không tạo node.** 0009 dòng 237 nói grill kết thúc bằng
+   `pulse work create --kind story` — **0019 đã bãi**. Guard
+   `only_planning_skill_can_name_node_creation_commands` sẽ làm test đỏ nếu
+   `skills/pulse-grill/` chứa `pulse work create` hoặc `pulse graph edge add`.
+   Grill ghi prose vào vùng draft; Story do `planning` tạo sau.
+2. **Gate `shaped` hiện không kiểm gì với Story.** Profile `shaped` chỉ chạy một
+   family `ticket_ambiguity` (`src/graph/read/readiness.rs:298`), và family đó
+   mở đầu bằng `if role != Some(TicketRole::Implementation) { NotApplicable }`
+   (dòng 451) — Story không có role. Nên kỷ luật shaping ở tầm Story **chỉ sống
+   trong prose của grill**, khác `planning` vốn trỏ được vào ready gate. Cân
+   nhắc ADR thêm family `story_ambiguity`; chưa quyết.
+
+## Relevant files
+
+- `docs/decisions/0021-*` — hợp đồng draft, thứ tự chuỗi, ba điểm để ngỏ.
+- `docs/decisions/0019-*` — single-node-owner, khuôn skill, invocation policy.
+- `docs/decisions/0009-*` §`pulse-grill` (dòng 226–239) — nguồn hành vi; đọc qua
+  lăng kính 0019/0021, **không copy bước tạo Story**.
+- `PRODUCT.md` §5.1 ambiguity gate; §4 layout; §5.8 bảng skill.
+- `references/mattpocock/skills/skills/engineering/grill-with-docs/SKILL.md`
+- `references/skills/plugins/khuym/skills/exploring/SKILL.md` — Socratic
+  locking, `CONTEXT.md` theo slug, anti-pattern.
+- `skills/pulse-planning/SKILL.md` — downstream consumer; hợp đồng draft phải
+  khớp bước 1 và bước 4 của nó.
+- `skills/pulse-wayfind/SKILL.md` — upstream, bàn giao sang grill.
+- `src/graph/read/readiness.rs` — gate `shaped` thật sự kiểm gì.
+- `src/qa/baseline.rs` — posture hợp lệ **không có** `required`.
+- `/Users/quannv.dev/.pi/agent/skills/skill-creator/SKILL.md` — bắt buộc đọc.
+
+## Validation
+
+```bash
+cargo fmt --check
+cargo clippy --all-targets --quiet -- -D warnings
+cargo test --all-targets          # 623 passed lần chạy gần nhất
+cargo test --test graph -- architecture_guards
+python3 -m scripts.quick_validate skills/pulse-grill
 ```
-f903b6e feat(init): write the AGENTS.md block and PULSE.md (0009 part A)
-0776335 feat(events): one JSONL file per day (0011)
-03bd3c4 feat(knowledge): expected_signal gates a ratchet learning (0012)
-21f1756 docs: close the two ADR debts (0004 narrowed, 0017 written)
-```
 
-Thứ tự làm việc do người dùng chốt: **hoàn thành hết ADR đã accepted → dựng
-skill → instruction flow → rồi mới tạo example**. Ngược với handoff trước (định
-lấy dữ liệu dogfood rồi mới chốt phạm vi part B), nhưng nhất quán hơn với chính
-lý do `PRODUCT.md` §13.1 gỡ target cũ: chạy trên harness dở dang thì friction
-lẫn "thiếu một tầng" với "thiết kế sai".
+Guard chủ sở hữu node đã kiểm bằng cách phá: tạo skill vi phạm → đỏ với
+`only pulse-planning may own graph shape` → xoá probe.
 
----
+## Bài học từ việc dựng eval
 
-# ĐÃ LÀM
+- Fixture để trong cây skill thì baseline agent đọc được `SKILL.md` → baseline
+  ảo cao. Copy fixture ra ngoài, cấm đọc `skills/` **và** cấm `semble`.
+- Runner phải bị cấm spawn subagent: một fork đã ghi đè output của agent chính.
+- Aggregate script cần layout `eval-*/<config>/run-*/grading.json`; viewer chỉ
+  cần `<config>/outputs/`. Ghi grading.json cả hai chỗ.
+- `python` không tồn tại; dùng `python3`.
+- Assertion gộp hai sự thật vào một câu sẽ lật qua lật lại giữa các lần chạy.
+- Fixture phải được kiểm bằng CLI thật: bản `qa.md` đầu tiên dùng
+  `Posture: required`, không hợp lệ, và dạy sai cả skill lẫn eval.
 
-## Audit ADR: 16 → 17 record, nợ code còn đúng một mục
+## Next action
 
-Kết quả audit từng ADR đối chiếu code (đừng audit lại, trừ khi nghi ngờ):
-
-| ADR | Trạng thái |
-|---|---|
-| 0010, 0014, 0015, 0016 | Landed từ trước |
-| 0011 | **Landed phiên này** |
-| 0012 | Landed, `expected_signal` **bổ sung phiên này** |
-| 0013 | `note --work`, `context_exhausted` có; `.pulse/runtime/handoff/<node>.md` và skill `pulse-handoff` thuộc part B |
-| 0009 | A ✅ (`f903b6e`), C ✅ (phiên trước), **B (skill) chưa** |
-| 0004 | Đánh dấu narrowed by 0008 |
-| 0017 | **Mới viết**, ghi lại thay đổi đã landed ở `7fb1dd7` |
-
-Nợ ADR còn lại = **đúng skill surface**, tức việc kế tiếp theo kế hoạch.
-
-## 0011 — event log JSONL theo ngày
-
-`.pulse/events/<date>.jsonl`, một event một dòng canonical compact, append
-fsync qua `storage::append_line_fsync`.
-
-**Điều ADR không nói và tốn nhiều thời gian nhất:** danh sách "Thay đổi" của
-0011 bỏ sót `src/storage/transaction.rs`, nơi **phần lớn event thật sự được
-ghi**. Prepared transaction trước đây trả lời "event của tôi đã ghi chưa" bằng
-*sự tồn tại của file tại `event_path`*. Với day file dùng chung, câu đó phải
-hỏi về **một dòng**: `observed_event` tìm theo `event_id` (substring
-`"id":"evt_…"` để khỏi parse mọi dòng) rồi đối chiếu `event_hash`.
-
-Kéo theo ràng buộc mới, check ngay tại `prepared()`: `event_payload.id` phải
-bằng `event_id` của intent. Trước 0011 lệch nhau vô hại vì path mang danh tính;
-giờ lệch = recovery đọc thành "chưa ghi" và **append lần hai** — duplicate im
-lặng trong append-only log.
-
-Điểm lệch có chủ ý so với ADR mục 5: `events_torn_tail` báo ra **stderr** dạng
-JSON, không chèn vào payload `tail`. One-shot `--json` của `tail` là một mảng
-event mà caller đã parse như vậy. Đã ghi vào ADR.
-
-## 0012 — `expected_signal`
-
-`Learning.expected_signal: Option<String>`, bắt buộc cho kind `ratchet`.
-
-Gate `validate` **tách theo ai phán đoán được**:
-
-- Nửa máy (Pulse kiểm): `--evidence` phải là **handoff receipt**
-  (`.pulse/evidence/execution/handoffs/`, **không** phải `evidence/receipts/`)
-  và mang `knowledge_usage` với đúng learning id + outcome `helpful`.
-- Nửa ngữ nghĩa (Pulse không kiểm): signal là prose, receipt là prose. Actor
-  khẳng định bằng `--signal-observed`; khẳng định được ghi ở
-  `validation.signal_observed_at` kèm actor. Nguyên tắc 5.
-
-`transition_status` vượt ngưỡng arg của clippy → refactor thành
-`TransitionEvidence` thay vì `#[allow]`. Argument list vốn là union nhu cầu của
-ba transition khác nhau, nên đó là fix đúng chứ không phải né lint.
-
-**Giữ nguyên** ràng buộc `required_checks` không rỗng cho kind `ratchet` — ADR
-0012 không nói gì về nó. Hệ quả: friction-derived candidate vẫn dùng
-`ProcessInsight`.
-
----
-
-# VIỆC CỦA PHIÊN SAU
-
-## 0009 part B — skill surface (bảy skill + `pulse-handoff`)
-
-Điều kiện tiên quyết: gỡ guard `legacy_skill_surfaces_are_absent`
-(`tests/graph/architecture_guards.rs:104`) đang cấm `skills`, `dist`,
-`.codex-plugin`, `.claude-plugin`. Thay bằng **guard parse lệnh**: mọi lệnh
-`pulse …` trong `skills/**` và template khối AGENTS phải parse được bằng clap
-của crate (`PRODUCT.md` §5.8).
-
-Tám skill theo bảng `PRODUCT.md` §5.8: `wayfind`, `grill`, `spec`, `tickets`,
-`research`, `ratchet`, `onboard` (0009) + `handoff` (0013). Mỗi skill kết thúc
-ở một artifact và một trạng thái graph; skill là hướng dẫn, CLI là authority —
-không state riêng, không gate riêng.
-
-`pulse-handoff` mang theo phần 0013 còn thiếu:
-`.pulse/runtime/handoff/<node>.md` và hook mẫu cho Claude Code.
-
-Sau đó: instruction flow → dựng dogfood target mới → chạy thật.
-
-## Hai thứ chỉ kiểm chứng được khi chạy thật
-
-1. **Hai Ticket song song không va nhau** — tiêu chí phụ §7 duy nhất còn
-   `chưa đạt`. TK-006/TK-007 đã va; 0015 sửa nguyên nhân, có
-   `tests/runner/worktree_dispatch.rs`, **chưa chạy lại thật lần nào**.
-2. **Khối `AGENTS.md` có dẫn được agent từ intent tới Ticket `ready` không.**
-   Track B chỉ chạy TK-003..TK-008 — toàn Ticket đã shaped tay. Nhật ký friction
-   **im lặng** về giai đoạn trước `ready`, không phải **phản đối** nó.
-
-## Bug đã biết, phải xử trước khi dựng target
-
-`.gitignore` neo ở gốc repo: pattern `.pulse/runtime/` **không** khớp thư mục
-con. Target cũ đã vô tình track runtime state vì lỗi này. Xem `PRODUCT.md`
-§13.1.
-
-## Hàng đợi quyết định còn mở
-
-| | Quyết định | Trạng thái |
-|---|---|---|
-| 0009 | Phạm vi part B | Người dùng chốt: làm đủ trước khi dogfood |
-| mới | Repo downstream phát hiện bug Pulse thì ghi vào đâu | Thiết kế không có cửa nào |
-| PRODUCT §13 | Bốn mục "còn mở" cuối file | Vẫn theo mặc định |
-
-## Bẫy đã học, đừng dẫm lại
-
-- **Lock không reentrant.** `WriteGuard` là flock; lấy lần hai trong cùng
-  process là `LockTimeout`. `show_node`, `KnowledgeStore::create`,
-  `KnowledgeStore::list`, `verify_receipt` đều lấy nó. Trong fence chỉ dùng
-  biến thể `_unlocked` / `_under_lock`, hoặc làm trước khi lấy guard.
-  `load_receipt` **không** lấy lock nên an toàn trong fence.
-- **Vòng lặp duyệt event bị copy bảy lần** — ba trong `src/`, bốn trong test.
-  Hai bản trong `src/` là bug chờ sẵn: `has_recording_event` chỉ descend vào
-  *thư mục* ngày, nên sau 0011 mọi receipt đọc ra `integrity: invalid`. Giờ tất
-  cả đi qua `event::read_event_log` và `tests/common/events.rs`. **Đừng viết
-  bản thứ tám.**
-- **`to_canonical_bytes` là pretty-print có newline cuối.** Dùng
-  `to_canonical_line_bytes` cho bất cứ thứ gì một-bản-ghi-một-dòng.
-- **`list_receipts`** trả `unreadable[]` thay vì fail cả listing. Đừng bọc
-  `unwrap_or_default()` quanh nó ở callsite mới — Decision 0017.
-- **Continuation `\` trong string literal Rust** nuốt cả indent dòng sau. Test
-  data cho parser thụt lề phải dùng raw string.
-- **`cargo test --all-targets` sau `cargo clippy --all-targets`** phải build
-  lại từ đầu (khác profile): tính **8–14 phút**, đừng đặt timeout 120s.
-- **`cmd | tail` nuốt exit code của cmd.** Một lần trong phiên này `clippy` fail
-  mà chuỗi `&& echo "CLIPPY OK"` vẫn in OK. Kiểm `PIPESTATUS` hoặc chạy riêng.
-- **`AGENTS.md` liệt kê 8 test crate, thực tế 10** — thiếu `tests/runner.rs` và
-  `tests/communication.rs`. Chưa sửa.
-
-## Quy tắc (không đổi)
-
-Đọc `AGENTS.md`, `PRODUCT.md`, `ARCHITECTURE.md` trước khi sửa. Mỗi mục một
-commit, có test, ba gate xanh. Không chạy Pulse với `--repo-root .` ở gốc;
-hiện **không có target nào** để chạy thật. Sửa core chỉ khi ma sát bắt buộc;
-mỗi fix có test hồi quy. Không đổi `PRODUCT.md` khi chưa có ADR.
+1. Đọc kết quả iteration 6 (eval 2) trước khi chốt `pulse-planning`.
+2. Đọc 0021, 0019, `grill-with-docs`, `exploring`, skill-creator.
+3. Viết `skills/pulse-grill/` — draft, guard, quick validate, rồi eval.
+4. Sau grill: `research` → `spec` → `onboard` → `handoff` → `ratchet`
+   (`ratchet` bị chặn bởi 0018 G1 vì guard parse từ chối
+   `pulse knowledge retire` khi subcommand chưa tồn tại).
+5. Commit chỉ khi user yêu cầu.
