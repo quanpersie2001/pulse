@@ -1,5 +1,10 @@
 # Pulse — Product Definition
 
+> **v3 đang xây theo [`docs/plans/0022-thin-harness.md`](docs/plans/0022-thin-harness.md)
+> và [Decision 0022](docs/decisions/0022-thin-harness.md).** Nội dung dưới đây
+> mô tả **v2** và chỉ còn giá trị lịch sử cho tới khi `SPEC.md` (P3.4 của plan
+> 0022) thay thế nó. Khi file này mâu thuẫn với plan 0022, plan 0022 thắng.
+
 > Trạng thái: chốt ngày 2026-09-05, cập nhật đến 2026-09-15 theo các Decision
 > 0009–0020. Đây là nguồn sự thật về sản phẩm và thiết kế
 > mục tiêu. Nó thay thế toàn bộ `pulse-reboot/` (đã xoá, còn trong Git history
