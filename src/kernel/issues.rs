@@ -369,7 +369,7 @@ fn manual_transition_allowed(from: &str, to: &str) -> bool {
 /// report, transition `draft -> ready`.
 ///
 /// # Errors
-/// `ready_gate_failed` carrying every violation when the gate does not pass;
+/// `gate_failed` carrying every violation when the gate does not pass;
 /// nothing is written in that case.
 pub fn ready(repo_root: &Path, actor: &ActorRef, id: &str) -> Result<Value> {
     authorize(actor, Action::MutateGraph)?;
@@ -391,7 +391,7 @@ pub fn ready(repo_root: &Path, actor: &ActorRef, id: &str) -> Result<Value> {
                 .map(|violation| format!("{}: {}", violation.code, violation.message))
                 .collect();
             return Err(PulseError::kernel(
-                "ready_gate_failed",
+                "gate_failed",
                 format!("{id} is not ready: {}", messages.join("; ")),
                 "fix every violation listed; the ready gate reports all of them at once",
             ));

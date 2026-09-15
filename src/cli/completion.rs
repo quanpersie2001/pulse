@@ -18,7 +18,7 @@ pub(crate) fn handle_handoff(
     let bytes = std::fs::read(from).map_err(|error| PulseError::io(from, error))?;
     let input: HandoffInput = serde_json::from_slice(&bytes).map_err(|error| {
         PulseError::kernel(
-            "handoff_input_invalid",
+            "from_file_invalid",
             format!("{} is not a valid handoff: {error}", from.display()),
             "--from expects the JSON shape in plan 0022 §7.2 (summary, changed_files, \
              acceptance, verify_results, docs_updated, learnings_used, friction, open_risks)",

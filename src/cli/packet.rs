@@ -24,7 +24,7 @@ pub(crate) fn handle_checkpoint(
     let bytes = std::fs::read(from).map_err(|error| PulseError::io(from, error))?;
     let input: CheckpointInput = serde_json::from_slice(&bytes).map_err(|error| {
         PulseError::kernel(
-            "checkpoint_input_invalid",
+            "from_file_invalid",
             format!("{} is not a valid checkpoint: {error}", from.display()),
             "--from expects the JSON shape in plan 0022 §4.4/§10.3",
         )

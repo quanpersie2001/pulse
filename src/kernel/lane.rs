@@ -178,9 +178,9 @@ fn apply_seal_corrections(
 ///
 /// # Errors
 /// `lane_mutated_workspace` if the tree changed since `dirty_hash_before`
-/// (no receipt). `lane_output_missing`/`lane_output_invalid` if the file is
-/// absent or fails schema. `lane_commit_mismatch` if `environment.commit`
-/// is not current HEAD (no receipt).
+/// (no receipt). `lane_output_invalid` if the file is absent or fails
+/// schema. `lane_commit_mismatch` if `environment.commit` is not current
+/// HEAD (no receipt).
 pub fn validate_and_seal(
     repo_root: &Path,
     ticket_id: &str,
@@ -203,7 +203,7 @@ pub fn validate_and_seal(
     let output_path = evidence_dir(repo_root, ticket_id).join(format!("{role}.json"));
     let bytes = fs::read(&output_path).map_err(|_| {
         PulseError::kernel(
-            "lane_output_missing",
+            "lane_output_invalid",
             format!("{} does not exist", output_path.display()),
             "the lane must write its output before printing {\"status\":\"done\"}",
         )
