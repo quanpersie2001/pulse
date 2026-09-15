@@ -25,7 +25,11 @@ pub fn run(cli: Cli) -> Result<(), PulseError> {
     let repo_root = crate::source::state_repo_root(&workspace_root)?;
 
     match cli.command {
-        args::Command::Init { json } => init::handle(&repo_root, json),
+        args::Command::Init {
+            refresh,
+            host,
+            json,
+        } => init::handle(&repo_root, refresh, host.as_deref(), json),
         args::Command::Work { command } => work::handle(&repo_root, command),
         args::Command::Run {
             role,

@@ -15,6 +15,13 @@ pub struct Cli {
 pub(crate) enum Command {
     /// Create `.pulse/`, `PULSE.md` and the store files it needs.
     Init {
+        /// Re-render the Pulse block in `AGENTS.md`, leaving the rest of the
+        /// file untouched.
+        #[arg(long)]
+        refresh: bool,
+        /// Copy host-specific detector files (only `claude-code` today).
+        #[arg(long)]
+        host: Option<String>,
         #[arg(long)]
         json: bool,
     },

@@ -7,12 +7,13 @@
 //! (model/validation/read/store layering, workgraph bootstrap ownership,
 //! `works/<id>` content_dir) are dropped with the mechanism they guarded;
 //! checks for the new layer (`storage -> store(issues) -> kernel -> cli`)
-//! replace them. `guidance_prose_only_names_commands_the_cli_has` and
-//! `only_planning_skill_can_name_node_creation_commands` are also dropped:
-//! `skills/`/`assets/agents-block.md` still describe v2 command names and
-//! stay that way until Phase 2/3 rewrites them (plan §12.3, §14 P3.5) —
-//! keeping the guard now would just fail on a gap the plan already knows
-//! about and schedules elsewhere.
+//! replace them. `only_planning_skill_can_name_node_creation_commands` is
+//! also dropped: `skills/` still describes v2 command names and stays that
+//! way until Phase 2/3 rewrites it (plan §12.3, §14 P3.5) — keeping that
+//! guard now would just fail on a gap the plan already knows about and
+//! schedules elsewhere. `guidance_prose_only_names_commands_the_cli_has` is
+//! back, narrowed to the AGENTS block `pulse init` now writes (P1.10, plan
+//! §12.1) rather than the whole `skills/` tree, which is still v2 prose.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -287,4 +288,82 @@ fn kernel_does_not_depend_on_cli() {
             path.display()
         );
     }
+}
+
+/// Plan §12.1: the AGENTS block `pulse init` writes is guidance prose, so
+/// (Decision 0009 §5, still true in v3) every `pulse …` command it names
+/// must be a real command. Without this guard the block can drift silently
+/// from the CLI it documents.
+#[test]
+fn agents_block_only_names_commands_the_cli_has() {
+    use clap::CommandFactory;
+
+    let repo = tempfile::tempdir().unwrap();
+    pulse::kernel::init::initialize_repository(repo.path(), false, None).unwrap();
+    let agents = fs::read_to_string(repo.path().join("AGENTS.md")).unwrap();
+
+    let mut checked = 0_usize;
+    for (index, _) in agents.match_indices("pulse ") {
+        let preceded_by = agents[..index].chars().next_back();
+        if preceded_by.is_some_and(|c| c.is_alphanumeric() || c == '-' || c == '/' || c == '.') {
+            continue;
+        }
+        let rest = &agents[index..];
+        let end = rest
+            .find(['\n', ',', '|', ')', '`', ';', '"'])
+            .unwrap_or(rest.len());
+        let mention = rest[..end].trim().trim_end_matches('.').trim();
+        let tokens: Vec<&str> = mention.split_whitespace().collect();
+        if tokens.len() <= 1 {
+            continue;
+        }
+        checked += 1;
+
+        let root = pulse::cli::Cli::command();
+        let mut current = root.clone();
+        let mut path = vec!["pulse".to_string()];
+        let mut positional_reached = false;
+        for token in tokens.iter().skip(1) {
+            if token.starts_with("--") {
+                let flag = token
+                    .trim_start_matches("--")
+                    .split('=')
+                    .next()
+                    .unwrap_or("");
+                let known = current
+                    .get_arguments()
+                    .any(|arg| arg.get_long() == Some(flag))
+                    || root.get_arguments().any(|arg| arg.get_long() == Some(flag));
+                assert!(
+                    known,
+                    "AGENTS.md: `{mention}` uses --{flag}, which `{}` does not accept",
+                    path.join(" ")
+                );
+                continue;
+            }
+            if positional_reached || token.starts_with('<') {
+                positional_reached = true;
+                continue;
+            }
+            let descend = current
+                .get_subcommands()
+                .find(|sub| sub.get_name() == *token)
+                .cloned();
+            if let Some(sub) = descend {
+                current = sub;
+                path.push((*token).to_string());
+                continue;
+            }
+            assert!(
+                current.get_subcommands().next().is_none(),
+                "AGENTS.md: `{mention}` names `{token}`, which is not a subcommand of `{}`",
+                path.join(" ")
+            );
+            positional_reached = true;
+        }
+    }
+    assert!(
+        checked >= 8,
+        "expected the AGENTS block to name several commands; only {checked} found"
+    );
 }

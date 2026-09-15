@@ -10,7 +10,7 @@
 
 pub mod checkpoint;
 pub mod completion;
-pub(crate) mod init;
+pub mod init;
 pub mod issues;
 pub mod lane;
 pub mod packet;
