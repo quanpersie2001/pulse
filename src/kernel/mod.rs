@@ -13,7 +13,9 @@ pub(crate) mod init;
 pub mod lifecycle;
 pub mod packet;
 pub mod readiness;
+pub mod ready;
 pub mod reservation;
+pub mod roles;
 pub mod run;
 pub mod story_completion;
 
