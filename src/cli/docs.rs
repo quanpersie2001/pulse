@@ -460,11 +460,11 @@ pub(crate) fn handle(store: &JsonGraphStore, command: DocsCommand) -> Result<(),
             } else {
                 crate::docs::build_index(store.repo_root(), opts)?
             };
-            render(json, &out, format!("docs index {}", out.index.state))
+            render(json, &out, index_summary(&out))
         }
         DocsCommand::Status { json } => {
             let out = crate::docs::index_status(store.repo_root())?;
-            render(json, &out, format!("docs index {}", out.index.state))
+            render(json, &out, index_summary(&out))
         }
         DocsCommand::Search {
             query,
@@ -641,4 +641,17 @@ pub(crate) fn handle(store: &JsonGraphStore, command: DocsCommand) -> Result<(),
             )
         }
     }
+}
+
+/// Human summary for `docs index` and `docs status`.
+///
+/// Both report two independent states: the disposable docs-search cache and
+/// the tracked `_index.md` projections. Naming only the cache made a build that
+/// had just written a projection print `docs index current`, which describes
+/// neither what changed nor what a following `docs validate` would say.
+fn index_summary(report: &crate::docs::IndexBuildReport) -> String {
+    format!(
+        "docs index {}, projections {}",
+        report.index.state, report.projections.state
+    )
 }

@@ -37,8 +37,9 @@ pub use get::{
 pub use index::{
     build_index, build_search_cache, cache_state_error_code, check_index,
     current_cache_fingerprint, current_generation, ensure_auto_refresh_allowed, index_status,
-    retrieval_fingerprint, within_auto_refresh_limits, IndexBuildReport, IndexDocumentsReport,
-    IndexOptions, IndexRegistryReport, IndexStateReport, IndexStatusReport, ProjectionReport,
+    retrieval_fingerprint, within_auto_refresh_limits, write_navigation_projections,
+    IndexBuildReport, IndexDocumentsReport, IndexOptions, IndexRegistryReport, IndexStateReport,
+    IndexStatusReport, NavigationProjectionWrite, ProjectionReport,
 };
 pub use lexical::{
     build_index as build_lexical_index, build_index_with_bodies,

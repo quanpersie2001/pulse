@@ -514,3 +514,37 @@ fn public_init_seeds_and_registers_the_domain_glossary() {
         .unwrap_or(0);
     assert_eq!(glossary_records, 1, "no duplicate registry record");
 }
+
+/// Enrolment must leave a repository that passes its own checks.
+///
+/// Registering `DOC-GLOSSARY` makes `docs validate` require the navigation
+/// projection that registration implies, so an init that skipped writing it
+/// handed every fresh repository a `docs_index_projection_missing` failure on
+/// the first command that validated anything.
+#[test]
+fn public_init_leaves_documentation_validation_passing() {
+    let repo = TestRepo::from_fixture("minimal-service");
+    let report = repo.pulse_ok(&["init", "--actor", "human:Pulse Test", "--json"]);
+    let created: Vec<&str> = report["created"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|value| value.as_str().unwrap())
+        .collect();
+    assert!(
+        created.contains(&"docs/_index.md"),
+        "init reports the projection it wrote: {created:?}"
+    );
+
+    let validated = repo.pulse_ok(&["docs", "validate", "--json"]);
+    assert_eq!(
+        validated["valid"], true,
+        "a freshly enrolled repository validates: {validated}"
+    );
+
+    let projection = fs::read_to_string(repo.path().join("docs/_index.md")).unwrap();
+    assert!(
+        projection.contains("pulse-docs-projection"),
+        "the projection carries its generated marker: {projection}"
+    );
+}

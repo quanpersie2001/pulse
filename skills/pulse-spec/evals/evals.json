@@ -1,0 +1,65 @@
+{
+  "skill_name": "pulse-spec",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "Here is the story draft grilling settled last session. Take it forward in Pulse and tell me exactly how you would spend this session. This is an evaluation: do not modify the repository or run Pulse commands; write the response you would give before receiving any answer from me.",
+      "expected_output": "Accept the draft as settled input, spend the session reading the codebase and the architecture and domain documents before designing, gather seam questions into a single batch rather than an interview, and name approach.md and qa.md as the outputs without proposing a work-item breakdown.",
+      "files": [
+        "evals/fixtures/withdraw-release-story.md"
+      ],
+      "expectations": [
+        "The response treats D1, D2 and D3 as settled input and does not reopen any of them for discussion.",
+        "The response states that the session starts by reading the codebase to locate where withdrawal behavior lives or would live, before proposing a solution shape.",
+        "The response gathers its questions for the human into one batch asked once, rather than one question per turn.",
+        "The response names works/_drafts/<slug>/approach.md and works/_drafts/<slug>/qa.md as the two outputs of the session.",
+        "The response does not propose Epics, Stories or Tickets, and names no node-creating or edge-creating Pulse command.",
+        "The response does not begin implementing the withdrawal behavior."
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "Read this QA baseline back against the contract and tell me whether pulse-planning will accept it. This is an evaluation: do not modify files or run commands; return the assessment you would give.",
+      "expected_output": "Refuse the baseline, naming the invalid posture, the unknown field, the missing Expected, the missing Reason, the shell operator in the pulse-check block and the implementation-bound case, and note that nothing validates the file until a Story node owns it.",
+      "files": [
+        "evals/fixtures/thin-qa-baseline.md"
+      ],
+      "expectations": [
+        "The response identifies `Posture: required` as invalid and states that required is a Ticket-level QA impact value, not a baseline posture.",
+        "The response identifies the `Owner:` line in QA-001 as a field outside the accepted vocabulary.",
+        "The response identifies that QA-001 has no Expected and is refused for that reason.",
+        "The response identifies that the QA-002 pulse-check run line uses a shell operator, which pulse-check refuses because it executes argv without a shell.",
+        "The response identifies QA-003 as bound to implementation detail rather than observable behavior, and proposes a behavioral replacement.",
+        "The response identifies that QA-004 is marked not_applicable without a Reason.",
+        "The response states that no Pulse command can validate this file while it lives under works/_drafts/, because the baseline command resolves a Story node's baseline."
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "The draft says the poll endpoint returns 404 with no_current_bundle after a withdrawal. I started reading the code and the channel poll path has no way to express an empty channel at all — the response type requires a bundle, and every caller dereferences it. Callers include the device SDK we do not own. What should happen now? This is an evaluation: do not modify files or run commands; answer with the correct route.",
+      "expected_output": "Escalate the specific decision back to pulse-grill with the evidence from the code, rather than redesigning around it, inventing an answer, or reopening the interview generally.",
+      "expectations": [
+        "The response names the specific settled decision that the code contradicts, rather than describing the problem in general terms.",
+        "The response returns that decision to pulse-grill for the human, and does not choose a replacement behavior on its own.",
+        "The response presents what the code shows as the evidence for the escalation.",
+        "The response does not reopen the other settled decisions in the draft or restart the interview.",
+        "The response does not proceed to write approach.md as though the question were resolved."
+      ],
+      "files": [
+        "evals/fixtures/withdraw-release-story.md"
+      ]
+    },
+    {
+      "id": 4,
+      "prompt": "We already agreed the poll endpoint should return 404 rather than 200 with an empty body, and the error code stays no_current_bundle. It is one handler plus its test, and the approach is obvious. Should we run pulse-spec on it first? This is an evaluation: do not modify files or run commands; answer with the correct workflow route.",
+      "expected_output": "Decline spec because the route is already obvious and the change is bounded, and send it through the ordinary R0 flow rather than substituting another discovery skill.",
+      "expectations": [
+        "The response declines to run spec and gives as the reason that the solution shape is already settled, not merely that the change is small.",
+        "The response routes the work to the ordinary bounded-change flow described in the Pulse-managed AGENTS.md block.",
+        "The response does not route to pulse-wayfind, pulse-grill or pulse-planning as a substitute ceremony.",
+        "The response does not begin designing an approach or writing a QA baseline."
+      ],
+      "files": []
+    }
+  ]
+}

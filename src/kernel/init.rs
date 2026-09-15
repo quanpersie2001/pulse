@@ -131,6 +131,24 @@ pub(crate) fn initialize_repository(
     };
     ensure_glossary(&repo_root, &owner_actor, &mut created, &mut preserved)?;
 
+    // Registering a document makes `docs validate` require the navigation
+    // projection that registration implies. Writing it here is what keeps a
+    // freshly enrolled repository valid; without it every fresh `init` leaves
+    // `docs_index_projection_missing` behind for the first command that checks.
+    let projections = crate::docs::write_navigation_projections(&repo_root)?;
+    created.extend(
+        projections
+            .changed
+            .iter()
+            .map(|relative| repo_root.join(relative)),
+    );
+    preserved.extend(
+        projections
+            .unchanged
+            .iter()
+            .map(|relative| repo_root.join(relative)),
+    );
+
     let knowledge = crate::knowledge::manifest::bootstrap_unlocked(&repo_root)?;
     created.extend(knowledge.created);
     preserved.extend(knowledge.preserved);
