@@ -1,10 +1,8 @@
 //! Generic storage primitives.
 //!
-//! This module owns only atomic writes, locking, path validation and transaction
-//! primitives. Workgraph bootstrap and embedded schema templates are owned by
-//! the graph repository (`crate::graph::store::bootstrap`) and re-exported here
-//! for compatibility with the historical `pulse::storage::{bootstrap,
-//! MANIFEST_JSON, ...}` path used by evidence, docs, knowledge and tests.
+//! This module owns only atomic writes, locking, path validation and
+//! transaction primitives. It does not depend on any higher domain (`store`,
+//! `kernel`, `evidence`, ...).
 
 pub mod append;
 pub mod atomic;
@@ -19,15 +17,6 @@ use std::path::{Component, Path, PathBuf};
 
 pub use append::append_line_fsync;
 pub use lock::WriteGuard;
-
-// Compatibility re-exports: workgraph bootstrap/schema ownership moved to the
-// graph repository. These aliases preserve the public `pulse::storage::*` paths.
-// Re-export through the `graph::store` facade (the bootstrap submodule itself is
-// private to the graph store).
-pub use crate::graph::store::{
-    bootstrap, default_manifest_value, BootstrapOutcome, EDGE_SCHEMA_JSON, MANIFEST_JSON,
-    NODE_SCHEMA_JSON,
-};
 
 pub fn atomic_write(path: &Path, bytes: &[u8]) -> Result<()> {
     atomic::atomic_replace(path, bytes).map(|_| ())

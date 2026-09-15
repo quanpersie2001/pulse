@@ -6,42 +6,14 @@
 //! contract. Timing-sensitive assertions use generous margins so the suite
 //! stays deterministic under parallel load.
 
-#[path = "runner/artifacts.rs"]
-mod artifacts;
-#[path = "runner/cli_run.rs"]
-mod cli_run;
-#[path = "common/bin.rs"]
-mod common_bin;
-#[path = "common/events.rs"]
-mod common_events;
-#[path = "runner/harness_learning.rs"]
-mod harness_learning;
-// The assignment fixture is shared by the story_close and qa_receipt
-// suites; included once at the crate root.
-#[allow(unused_imports, dead_code)]
-#[path = "graph/assignment_fixture.rs"]
-mod assignment_fixture;
-#[path = "runner/isolation.rs"]
-mod isolation;
-#[path = "runner/knowledge_usage.rs"]
-mod knowledge_usage;
-#[path = "runner/qa_receipt.rs"]
-mod qa_receipt;
-#[path = "runner/recovery.rs"]
-mod recovery;
-#[path = "runner/reviewer.rs"]
-mod reviewer;
-#[path = "runner/story_close.rs"]
-mod story_close;
-#[path = "runner/worktree_dispatch.rs"]
-mod worktree_dispatch;
-// The shared fixture helpers cover several crates; the runner crate uses a
-// subset, so unused helpers are expected here.
-#[allow(dead_code)]
-#[path = "common/fixture_repo.rs"]
-mod common_fixture_repo;
-#[path = "common/git.rs"]
-mod common_git;
+//! The CLI-level `pulse run` submodule suites (artifacts, cli_run,
+//! harness_learning, isolation, knowledge_usage, qa_receipt, recovery,
+//! reviewer, story_close, worktree_dispatch) tested the v2 `kernel::run`,
+//! deleted with the rest of the v2 graph/docs/knowledge stack (plan 0022
+//! P1.3/P1.4). Only this crate's own inline tests below survive: they
+//! exercise `pulse::runner` (spawn/timeout/bounded output) directly, which
+//! plan §14's file-fate table keeps as-is. The v3 runner + lane suite is
+//! rebuilt in P1.9 alongside `kernel::run`/`kernel::lane`.
 
 use std::collections::BTreeMap;
 use std::process::Command;

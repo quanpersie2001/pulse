@@ -86,9 +86,7 @@ pub fn put_artifact(
     let metadata_path = dir.join("metadata.json");
 
     let _guard = WriteGuard::acquire(repo_root)?;
-    crate::storage::bootstrap(repo_root)?;
     crate::storage::transaction::recover_prepared_transactions(repo_root)?;
-    crate::evidence::manifest::bootstrap(repo_root)?;
 
     if content_path.exists() {
         let existing =

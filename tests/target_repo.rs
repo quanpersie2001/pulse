@@ -1,9 +1,9 @@
 //! Target-repository fixture integration tests.
 //!
-//! Covers the shared `tests/common/fixture_repo` helper and the tracked
-//! `tests/fixtures/target-repos/minimal-service` template used to run Pulse
-//! against isolated target repositories from integration tests. The submodule
-//! is explicitly wired from `tests/target_repo/`.
+//! Covers the shared `tests/common/fixture_repo` helper, the tracked
+//! `tests/fixtures/target-repos/minimal-service` template, and `pulse init`
+//! against an isolated target repository. Each submodule is explicitly wired
+//! from `tests/target_repo/`.
 
 #[path = "common/mod.rs"]
 mod common;
@@ -13,13 +13,5 @@ mod common_bin;
 
 #[path = "target_repo/repository_init.rs"]
 mod repository_init;
-#[path = "target_repo/run_workspace_snapshot.rs"]
-mod run_workspace_snapshot;
 #[path = "target_repo/target_repo_fixture.rs"]
 mod target_repo_fixture;
-#[path = "target_repo/work_packet_i7.rs"]
-mod work_packet_i7;
-#[path = "target_repo/work_packet_target_repo.rs"]
-mod work_packet_target_repo;
-#[path = "target_repo/work_packet_under_fence.rs"]
-mod work_packet_under_fence;

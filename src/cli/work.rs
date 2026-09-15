@@ -1,161 +1,38 @@
+//! `pulse work {new,show,list,tree,ready,update,dep,transition}` (plan 0022
+//! §6). Thin renderer: parses args, resolves the actor, calls
+//! `kernel::issues`/`kernel::ready`/`store::issues`, renders the result.
+
 use std::path::PathBuf;
 
-use crate::execution::{AcceptanceProof, VerificationCheck, VerificationDisposition};
-use crate::graph::model::contract::{Materialization, Risk, TicketRole};
-use crate::graph::model::node::NodeStatus;
-use crate::id::WorkKind;
-use clap::{Subcommand, ValueEnum};
+use clap::Subcommand;
+use serde_json::{Map, Value};
 
-/// Verification disposition for `pulse work verify`.
-#[derive(Clone, Copy, ValueEnum)]
-#[value(rename_all = "snake_case")]
-pub(crate) enum VerifyDispositionArg {
-    Passed,
-    Rework,
-    Blocked,
-}
-
-impl From<VerifyDispositionArg> for VerificationDisposition {
-    fn from(value: VerifyDispositionArg) -> Self {
-        match value {
-            VerifyDispositionArg::Passed => VerificationDisposition::Passed,
-            VerifyDispositionArg::Rework => VerificationDisposition::Rework,
-            VerifyDispositionArg::Blocked => VerificationDisposition::Blocked,
-        }
-    }
-}
-
-/// Parse `LRN-001=helpful|not_needed|misleading` for `--learning-used`.
-fn parse_learning_used(
-    value: &str,
-) -> Result<(String, crate::execution::KnowledgeUsageOutcome), String> {
-    use crate::execution::KnowledgeUsageOutcome;
-    let (learning_id, outcome) = value
-        .split_once('=')
-        .ok_or_else(|| format!("expected <learning-id>=<outcome>, got {value:?}"))?;
-    let learning_id = learning_id.trim();
-    if learning_id.is_empty() {
-        return Err(format!("empty learning id in {value:?}"));
-    }
-    let outcome = match outcome.trim() {
-        "helpful" => KnowledgeUsageOutcome::Helpful,
-        "not_needed" => KnowledgeUsageOutcome::NotNeeded,
-        "misleading" => KnowledgeUsageOutcome::Misleading,
-        other => {
-            return Err(format!(
-                "unknown usage outcome {other:?}; expected helpful, not_needed or misleading"
-            ))
-        }
-    };
-    Ok((learning_id.to_string(), outcome))
-}
-
-fn parse_check(value: &str) -> Result<VerificationCheck, String> {
-    let parts: Vec<&str> = value.splitn(3, '=').collect();
-    let [name, command, exit] = parts.as_slice() else {
-        return Err("check must be name=command=exit_code".to_string());
-    };
-    let exit_code = exit
-        .parse::<i32>()
-        .map_err(|_| format!("check exit_code must be an integer: {exit}"))?;
-    Ok(VerificationCheck {
-        name: (*name).to_string(),
-        command: (*command).to_string(),
-        exit_code,
-        artifact_ids: vec![],
-    })
-}
-
-fn parse_proof(value: &str) -> Result<AcceptanceProof, String> {
-    let parts: Vec<&str> = value.splitn(3, '=').collect();
-    let [acceptance_id, checks, receipts] = parts.as_slice() else {
-        return Err("proof must be AC-ID=checks=receipts".to_string());
-    };
-    let split_list = |value: &str| -> Vec<String> {
-        value
-            .split(',')
-            .map(str::trim)
-            .filter(|entry| !entry.is_empty())
-            .map(str::to_string)
-            .collect()
-    };
-    Ok(AcceptanceProof {
-        acceptance_id: (*acceptance_id).to_string(),
-        check_names: split_list(checks),
-        evidence_receipt_ids: split_list(receipts),
-    })
-}
-
-/// Parse one shaped finding for `--finding`, as
-/// `<AC-ID|->|<summary>|<owner>|<check|->|<severity>` (Decision 0012 §3).
-/// `-` drops the optional field: no acceptance id, or no check — the latter
-/// marks the finding `unverifiable`. Severity is high|medium|low.
-fn parse_finding(value: &str) -> Result<crate::execution::Finding, String> {
-    use crate::execution::{Finding, FindingSeverity};
-    let parts: Vec<&str> = value.splitn(5, '|').collect();
-    let [acceptance_id, summary, owner, check, severity] = parts.as_slice() else {
-        return Err(
-            "finding must be AC-ID|summary|owner|check|severity (use - for a missing AC-ID or check)"
-                .to_string(),
-        );
-    };
-    let field = |raw: &str, name: &str| -> Result<String, String> {
-        let trimmed = raw.trim();
-        if trimmed.is_empty() {
-            return Err(format!("finding {name} must not be empty"));
-        }
-        Ok(trimmed.to_string())
-    };
-    let acceptance_id = if acceptance_id.trim() == "-" {
-        None
-    } else {
-        Some(field(acceptance_id, "acceptance id")?)
-    };
-    let check = if check.trim() == "-" {
-        None
-    } else {
-        Some(field(check, "check")?)
-    };
-    let severity = match severity.trim() {
-        "high" => FindingSeverity::High,
-        "medium" => FindingSeverity::Medium,
-        "low" => FindingSeverity::Low,
-        other => {
-            return Err(format!(
-                "finding severity must be high, medium or low, got {other:?}"
-            ))
-        }
-    };
-    let mut finding = Finding {
-        summary: field(summary, "summary")?,
-        owner: field(owner, "owner")?,
-        check,
-        severity,
-        acceptance_id,
-        case_id: None,
-        unverifiable: false,
-    };
-    finding.normalize();
-    Ok(finding)
-}
+use crate::cli::output::render;
+use crate::identity::actor::resolve_actor;
+use crate::kernel::issues::{self, DepType, NoteKind as KernelNoteKind};
+use crate::store::issues::read_all;
+use crate::PulseError;
 
 #[derive(Subcommand)]
 pub(crate) enum WorkCommand {
-    Create {
-        #[arg(long)]
-        kind: KindArg,
-        #[arg(long)]
+    /// Create a new draft record.
+    New {
+        /// epic | story | ticket | decision.
+        kind: String,
         title: String,
         #[arg(long)]
-        role: Option<TicketRoleArg>,
+        story: Option<String>,
         #[arg(long)]
-        risk: Option<RiskArg>,
+        epic: Option<String>,
         #[arg(long)]
-        materialization: Option<MaterializationArg>,
+        risk: Option<String>,
         #[arg(long)]
-        parent: Option<String>,
-        #[arg(long = "tag")]
-        tags: Vec<String>,
+        surface: Option<String>,
+        /// JSON file with additional fields to seed (role, objective, ...).
+        #[arg(long)]
+        from: Option<PathBuf>,
+        #[arg(long)]
+        actor: Option<String>,
         #[arg(long)]
         json: bool,
     },
@@ -166,778 +43,421 @@ pub(crate) enum WorkCommand {
     },
     List {
         #[arg(long)]
-        kind: Option<KindArg>,
-        /// Only nodes in this lifecycle status.
+        kind: Option<String>,
         #[arg(long)]
-        status: Option<StatusArg>,
-        /// Only Tickets with this role. Epics, Stories and Decisions carry no
-        /// role, so setting this excludes them.
+        status: Option<String>,
         #[arg(long)]
-        role: Option<TicketRoleArg>,
-        /// Only nodes carrying this tag.
+        story: Option<String>,
         #[arg(long)]
         tag: Option<String>,
         #[arg(long)]
-        json: bool,
-    },
-    Edit {
-        id: String,
-        #[arg(long)]
-        expected_revision: u64,
-        #[arg(long)]
-        title: String,
+        ready: bool,
         #[arg(long)]
         json: bool,
     },
-    /// Synchronize the graph contract binding from works/<id>/ticket.md.
-    Sync {
-        id: String,
-        #[arg(long)]
-        expected_revision: u64,
-        #[arg(long, default_value = "human:unknown")]
-        actor: String,
+    /// Epic -> Story -> Ticket, with status. Root at `id` if given.
+    Tree {
+        id: Option<String>,
         #[arg(long)]
         json: bool,
     },
-    Supersede {
-        old_id: String,
-        #[arg(long = "by", conflicts_with = "decision")]
-        by: Option<String>,
-        #[arg(long, conflicts_with = "by")]
-        decision: Option<String>,
-        #[arg(long)]
-        expected_revision: u64,
-        #[arg(long)]
-        reason: String,
-        #[arg(long, hide = true)]
-        assertion: Option<PathBuf>,
-        #[arg(long)]
-        reconciliation_receipt: Option<String>,
-        #[arg(long)]
-        actor: String,
-        #[arg(long)]
-        json: bool,
-    },
-    Transition {
-        id: String,
-        #[arg(long = "to")]
-        to: StatusArg,
-        #[arg(long)]
-        expected_revision: u64,
-        #[arg(long)]
-        actor: String,
-        #[arg(long)]
-        reason_code: Option<String>,
-        #[arg(long = "reason")]
-        reason: Option<String>,
-        #[arg(long)]
-        reference: Option<String>,
-        #[arg(long)]
-        expected_readiness_fingerprint: Option<String>,
-        #[arg(long)]
-        json: bool,
-    },
-    Executability {
-        id: String,
-        #[arg(long)]
-        json: bool,
-    },
+    /// Run the ready gate; on a clean report, `draft -> ready`.
     Ready {
         id: String,
         #[arg(long)]
-        profile: Option<String>,
+        actor: Option<String>,
         #[arg(long)]
         json: bool,
     },
-    Rollup {
+    /// Merge fields into a record. `--set k=v` may repeat; `--from` loads a
+    /// JSON object; `--stdin` reads one from standard input. Runtime-owned
+    /// fields (`lease`, `verdicts`, `checkpoints`) are rejected.
+    Update {
         id: String,
+        #[arg(long = "set")]
+        set: Vec<String>,
+        #[arg(long)]
+        from: Option<PathBuf>,
+        #[arg(long)]
+        stdin: bool,
+        #[arg(long)]
+        actor: Option<String>,
         #[arg(long)]
         json: bool,
     },
-    Close {
-        /// Ticket ID whose current passed verification should be closed.
+    Dep {
+        #[command(subcommand)]
+        command: DepCommand,
+    },
+    /// Manual status change: draft|ready|blocked -> cancelled, or
+    /// ready|active -> blocked.
+    Transition {
         id: String,
+        #[arg(long = "to")]
+        to: String,
         #[arg(long)]
-        actor: String,
-        #[arg(long)]
-        source_commit: String,
-        #[arg(long)]
-        summary: String,
-        #[arg(long)]
-        json: bool,
-    },
-    /// Free the live lease a Ticket holds and return an active Ticket to
-    /// ready (recovery for a stuck, crashed or expired run).
-    Release {
-        ticket_id: String,
-        #[arg(long)]
-        actor: String,
-        #[arg(long, default_value = "released by operator")]
         reason: String,
         #[arg(long)]
-        json: bool,
-    },
-    /// Submit the worker handoff proof for an active assignment.
-    Handoff {
-        /// Lease ID binding this handoff to its assignment (from the run input).
-        #[arg(long)]
-        lease: String,
-        #[arg(long)]
-        session: String,
-        #[arg(long, default_value = "agent:runner:worker")]
-        actor: String,
-        #[arg(long)]
-        source_commit: String,
-        #[arg(long)]
-        summary: String,
-        #[arg(long = "changed-path")]
-        changed_paths: Vec<String>,
-        #[arg(long = "evidence-receipt")]
-        evidence_receipt_ids: Vec<String>,
-        /// Claimed check as `name=command=exit_code`; the reviewer re-runs it.
-        #[arg(long = "check", value_parser = parse_check)]
-        checks: Vec<VerificationCheck>,
-        /// Claimed acceptance coverage as `AC-ID=check1,check2=receipt1,receipt2`.
-        #[arg(long = "proof", value_parser = parse_proof)]
-        proofs: Vec<AcceptanceProof>,
-        /// Learning usage feedback as `LRN-001=helpful|not_needed|misleading`.
-        #[arg(long = "learning-used", value_parser = parse_learning_used)]
-        learning_used: Vec<(String, crate::execution::KnowledgeUsageOutcome)>,
-        /// Harness friction hit while running this Ticket; the close gate
-        /// turns each into a learning candidate (Decision 0009 §4).
-        #[arg(long = "friction")]
-        frictions: Vec<String>,
+        actor: Option<String>,
         #[arg(long)]
         json: bool,
     },
-    /// Record an independent verification observation for a handoff.
-    Verify {
-        ticket_id: String,
-        #[arg(long)]
-        handoff: String,
-        #[arg(long)]
-        actor: String,
-        #[arg(long)]
-        source_commit: String,
-        #[arg(long, default_value = "passed")]
-        disposition: VerifyDispositionArg,
-        #[arg(long)]
-        summary: String,
-        /// Passing/failed check as `name=command=exit_code`.
-        #[arg(long = "check", value_parser = parse_check)]
-        checks: Vec<VerificationCheck>,
-        /// Acceptance proof as `AC-ID=check1,check2=receipt1,receipt2`.
-        #[arg(long = "proof", value_parser = parse_proof)]
-        proofs: Vec<AcceptanceProof>,
-        /// Shaped finding as `AC-ID|summary|owner|check|severity` (use - for
-        /// a missing AC-ID or check; severity is high|medium|low). A rework
-        /// needs at least one finding whose check is present.
-        #[arg(long = "finding", value_parser = parse_finding)]
-        findings: Vec<crate::execution::Finding>,
-        #[arg(long)]
-        json: bool,
-    },
-    CloseStory {
-        story_id: String,
-        #[arg(long, required = true, value_delimiter = ',')]
-        qualification_receipt: Vec<String>,
-        #[arg(long)]
-        actor: String,
-        #[arg(long)]
-        source_commit: String,
-        #[arg(long)]
-        summary: String,
-        #[arg(long)]
-        json: bool,
-    },
-    Frontier {
-        #[arg(long)]
-        for_: Option<String>,
-        #[arg(long)]
-        profile: Option<String>,
-        #[arg(long)]
-        include_excluded: bool,
-        #[arg(long)]
-        json: bool,
-    },
-    /// Build a preview work packet for a ready implementation Ticket.
-    ///
-    /// Output is a bounded, deterministic context snapshot. The packet does
-    /// not acquire a lease, create a workspace or change lifecycle.
-    Packet {
-        /// Ticket ID (must be an implementation Ticket with lifecycle ready).
+}
+
+#[derive(Subcommand)]
+pub(crate) enum DepCommand {
+    Add {
         id: String,
-        /// Load the exact packet committed for this Core reservation lease.
+        /// blocked_by | supersedes.
+        dep_type: String,
+        other: String,
         #[arg(long)]
-        lease: Option<String>,
-        /// Output as JSON.
+        actor: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
+    Rm {
+        id: String,
+        dep_type: String,
+        other: String,
+        #[arg(long)]
+        actor: Option<String>,
         #[arg(long)]
         json: bool,
     },
 }
 
-#[derive(Clone, ValueEnum)]
-pub(crate) enum KindArg {
-    Epic,
-    Story,
-    Ticket,
-    Decision,
-}
-
-#[derive(Clone, Copy, ValueEnum)]
-#[value(rename_all = "snake_case")]
-pub(crate) enum TicketRoleArg {
-    Implementation,
-    DecisionWork,
-}
-
-#[derive(Clone, Copy, ValueEnum)]
-#[value(rename_all = "snake_case")]
-pub(crate) enum RiskArg {
-    Unassessed,
-    Low,
-    Medium,
-    High,
-    Critical,
-}
-
-#[derive(Clone, Copy, ValueEnum)]
-#[value(rename_all = "verbatim")]
-pub(crate) enum MaterializationArg {
-    Unassessed,
-    R0,
-    R1,
-    R2,
-    R3,
-}
-
-#[derive(Clone, ValueEnum)]
-#[value(rename_all = "snake_case")]
-pub(crate) enum StatusArg {
-    Draft,
-    Shaped,
-    Ready,
-    Active,
-    Verifying,
-    Done,
-    Rework,
-    Blocked,
-    Cancelled,
-    Superseded,
-}
-
-impl From<StatusArg> for NodeStatus {
-    fn from(value: StatusArg) -> Self {
-        match value {
-            StatusArg::Draft => NodeStatus::Draft,
-            StatusArg::Shaped => NodeStatus::Shaped,
-            StatusArg::Ready => NodeStatus::Ready,
-            StatusArg::Active => NodeStatus::Active,
-            StatusArg::Verifying => NodeStatus::Verifying,
-            StatusArg::Done => NodeStatus::Done,
-            StatusArg::Rework => NodeStatus::Rework,
-            StatusArg::Blocked => NodeStatus::Blocked,
-            StatusArg::Cancelled => NodeStatus::Cancelled,
-            StatusArg::Superseded => NodeStatus::Superseded,
-        }
+fn parse_dep_type(raw: &str) -> Result<DepType, PulseError> {
+    match raw {
+        "blocked_by" => Ok(DepType::BlockedBy),
+        "supersedes" => Ok(DepType::Supersedes),
+        other => Err(PulseError::kernel(
+            "dep_type_invalid",
+            format!("unknown dep type {other}"),
+            "dep type must be blocked_by or supersedes",
+        )),
     }
 }
 
-impl From<KindArg> for WorkKind {
-    fn from(value: KindArg) -> Self {
-        match value {
-            KindArg::Epic => WorkKind::Epic,
-            KindArg::Story => WorkKind::Story,
-            KindArg::Ticket => WorkKind::Ticket,
-            KindArg::Decision => WorkKind::Decision,
-        }
+fn load_from_file(path: &PathBuf) -> Result<Map<String, Value>, PulseError> {
+    let bytes = std::fs::read(path).map_err(|error| PulseError::io(path, error))?;
+    let value: Value = serde_json::from_slice(&bytes).map_err(|error| {
+        PulseError::kernel(
+            "from_file_invalid",
+            format!("{} is not valid JSON: {error}", path.display()),
+            "--from expects a JSON object of fields to merge",
+        )
+    })?;
+    into_object(value)
+}
+
+fn into_object(value: Value) -> Result<Map<String, Value>, PulseError> {
+    match value {
+        Value::Object(map) => Ok(map),
+        _ => Err(PulseError::kernel(
+            "from_file_invalid",
+            "expected a JSON object at the top level",
+            "--from/--stdin expects a JSON object of fields to merge",
+        )),
     }
 }
 
-impl From<TicketRoleArg> for TicketRole {
-    fn from(value: TicketRoleArg) -> Self {
-        match value {
-            TicketRoleArg::Implementation => TicketRole::Implementation,
-            TicketRoleArg::DecisionWork => TicketRole::DecisionWork,
-        }
+/// Parse `--set key=value` pairs; `value` is parsed as JSON when possible
+/// (so `--set risk=\"low\"` and `--set risk=low` both work, and
+/// `--set tags=[\"a\"]` produces an array), falling back to a plain string.
+fn parse_set_pairs(pairs: &[String]) -> Result<Map<String, Value>, PulseError> {
+    let mut map = Map::new();
+    for pair in pairs {
+        let Some((key, value)) = pair.split_once('=') else {
+            return Err(PulseError::kernel(
+                "set_invalid",
+                format!("--set {pair} is missing '='"),
+                "use --set key=value, e.g. --set risk=low",
+            ));
+        };
+        let parsed = serde_json::from_str::<Value>(value)
+            .unwrap_or_else(|_| Value::String(value.to_string()));
+        map.insert(key.to_string(), parsed);
     }
+    Ok(map)
 }
 
-impl From<RiskArg> for Risk {
-    fn from(value: RiskArg) -> Self {
-        match value {
-            RiskArg::Unassessed => Risk::Unassessed,
-            RiskArg::Low => Risk::Low,
-            RiskArg::Medium => Risk::Medium,
-            RiskArg::High => Risk::High,
-            RiskArg::Critical => Risk::Critical,
-        }
-    }
-}
-
-impl From<MaterializationArg> for Materialization {
-    fn from(value: MaterializationArg) -> Self {
-        match value {
-            MaterializationArg::Unassessed => Materialization::Unassessed,
-            MaterializationArg::R0 => Materialization::R0,
-            MaterializationArg::R1 => Materialization::R1,
-            MaterializationArg::R2 => Materialization::R2,
-            MaterializationArg::R3 => Materialization::R3,
-        }
-    }
-}
-
-use serde_json::json;
-
-use crate::cli::output::render;
-use crate::graph::model::contract::PublicCreateClassification;
-use crate::graph::model::lifecycle::TransitionReason;
-use crate::graph::store::{NodeFilter, SupersessionTarget};
-use crate::{JsonGraphStore, PulseError};
-
-pub(crate) fn handle(
-    store: &JsonGraphStore,
-    command: WorkCommand,
-    explicit_key: Option<&str>,
-) -> Result<(), PulseError> {
+pub(crate) fn handle(repo_root: &std::path::Path, command: WorkCommand) -> Result<(), PulseError> {
     match command {
-        WorkCommand::Create {
+        WorkCommand::New {
             kind,
             title,
-            role,
+            story,
+            epic,
             risk,
-            materialization,
-            parent,
-            tags,
-            json,
-        } => {
-            let classification = PublicCreateClassification {
-                role: role.map(Into::into),
-                risk: risk.map(Into::into),
-                materialization: materialization.map(Into::into),
-            };
-            let out = store.create_node_public_with_context_and_tags(
-                kind.into(),
-                title,
-                classification,
-                tags,
-                crate::graph::store::OperationContext::default(),
-            )?;
-            if let Some(parent) = parent {
-                store.add_edge(
-                    crate::graph::model::edge::EdgeType::Parent,
-                    out.value.id.clone(),
-                    parent,
-                    "human:unknown".to_string(),
-                )?;
-            }
-            render(json, &out, format!("created {}", out.value.id))
-        }
-        WorkCommand::Sync {
-            id,
-            expected_revision,
+            surface,
+            from,
             actor,
             json,
         } => {
-            let out = store.sync_ticket(&id, expected_revision, actor)?;
-            render(json, &out, format!("synchronized {}", out.value.id))
+            let actor = resolve_actor(repo_root, actor.as_deref())?;
+            let mut fields = match from {
+                Some(path) => load_from_file(&path)?,
+                None => Map::new(),
+            };
+            if let Some(story) = story {
+                fields.insert("story".to_string(), Value::String(story));
+            }
+            if let Some(epic) = epic {
+                fields.insert("epic".to_string(), Value::String(epic));
+            }
+            if let Some(risk) = risk {
+                fields.insert("risk".to_string(), Value::String(risk));
+            }
+            if let Some(surface) = surface {
+                fields.insert("surface".to_string(), Value::String(surface));
+            }
+            let record = issues::create(repo_root, &actor, &kind, &title, fields)?;
+            let id = record.get("id").and_then(Value::as_str).unwrap_or("");
+            render(json, &record, format!("created {id}"))
         }
         WorkCommand::Show { id, json } => {
-            let node = store.show_node(&id)?;
-            let human = node.title.clone();
-            let brief = if node.kind == WorkKind::Ticket {
-                Some(store.read_ticket_brief(&id)?)
-            } else {
-                None
-            };
-            render(
-                json,
-                &json!({"schema_version": 1, "code": "ok", "node": node, "brief": brief}),
-                human,
-            )
+            let records = read_all(repo_root)?;
+            let record = records
+                .iter()
+                .find(|record| record.get("id").and_then(Value::as_str) == Some(id.as_str()))
+                .ok_or_else(|| {
+                    PulseError::kernel(
+                        "issue_not_found",
+                        format!("no record with id {id}"),
+                        "check the id with `pulse work list`",
+                    )
+                })?;
+            render(json, record, format!("{record}"))
         }
         WorkCommand::List {
             kind,
             status,
-            role,
+            story,
             tag,
+            ready,
             json,
         } => {
-            let out = store.list_nodes(&NodeFilter {
-                kind: kind.map(Into::into),
-                status: status.map(Into::into),
-                role: role.map(Into::into),
-                tag,
-            })?;
-            render(json, &out, format!("{} work items", out.items.len()))
+            let mut records = read_all(repo_root)?;
+            records.retain(|record| {
+                kind.as_deref().map_or(true, |k| {
+                    record.get("kind").and_then(Value::as_str) == Some(k)
+                }) && status.as_deref().map_or(true, |s| {
+                    record.get("status").and_then(Value::as_str) == Some(s)
+                }) && story.as_deref().map_or(true, |s| {
+                    record.get("story").and_then(Value::as_str) == Some(s)
+                }) && tag.as_deref().map_or(true, |t| {
+                    record
+                        .get("tags")
+                        .and_then(Value::as_array)
+                        .is_some_and(|tags| {
+                            tags.iter().any(|tag_value| tag_value.as_str() == Some(t))
+                        })
+                }) && (!ready || record.get("status").and_then(Value::as_str) == Some("ready"))
+            });
+            let human = records
+                .iter()
+                .map(|record| {
+                    format!(
+                        "{} [{}] {}",
+                        record.get("id").and_then(Value::as_str).unwrap_or("?"),
+                        record.get("status").and_then(Value::as_str).unwrap_or("?"),
+                        record.get("title").and_then(Value::as_str).unwrap_or("")
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            render(json, &records, human)
         }
-        WorkCommand::Edit {
+        WorkCommand::Tree { id, json } => {
+            let records = read_all(repo_root)?;
+            let tree = build_tree(&records, id.as_deref());
+            let human = render_tree_human(&tree);
+            render(json, &tree, human)
+        }
+        WorkCommand::Ready { id, actor, json } => {
+            let actor = resolve_actor(repo_root, actor.as_deref())?;
+            let record = issues::ready(repo_root, &actor, &id)?;
+            render(json, &record, format!("{id} is ready"))
+        }
+        WorkCommand::Update {
             id,
-            expected_revision,
-            title,
-            json,
-        } => {
-            let out = store.edit_title(&id, expected_revision, title)?;
-            render(json, &out, format!("updated {}", out.value.id))
-        }
-        WorkCommand::Supersede {
-            old_id,
-            by,
-            decision,
-            expected_revision,
-            reason,
-            assertion,
-            reconciliation_receipt,
+            set,
+            from,
+            stdin,
             actor,
             json,
         } => {
-            let target = match (by, decision) {
-                (Some(id), None) => SupersessionTarget::Replacement { id },
-                (None, Some(id)) => SupersessionTarget::Decision { id },
-                _ => {
-                    return Err(PulseError::validation(
-                        "invalid_supersession_target_form",
-                        "choose exactly one of --by or --decision",
-                    ));
-                }
-            };
-            if assertion.is_some() {
-                return Err(PulseError::validation(
-                "inline_supersession_assertion_unsupported",
-                "new supersession CLI requires --reconciliation-receipt; inline --assertion is retained only for historical/library compatibility",
-            ));
+            let actor = resolve_actor(repo_root, actor.as_deref())?;
+            let mut fields = parse_set_pairs(&set)?;
+            if let Some(path) = from {
+                fields.extend(load_from_file(&path)?);
             }
-            let Some(receipt_id) = reconciliation_receipt else {
-                return Err(PulseError::validation(
-                    "supersession_receipt_required",
-                    "new supersession CLI requires --reconciliation-receipt",
-                ));
-            };
-            let out = store.supersede_work_with_receipt(
-                &old_id,
-                target,
-                expected_revision,
-                reason,
-                receipt_id,
-                actor,
-            )?;
-            render(json, &out, format!("{} {}", out.code, out.value.node.id))
+            if stdin {
+                let mut buffer = String::new();
+                std::io::Read::read_to_string(&mut std::io::stdin(), &mut buffer)
+                    .map_err(|error| PulseError::io("<stdin>", error))?;
+                let value: Value = serde_json::from_str(&buffer).map_err(|error| {
+                    PulseError::kernel(
+                        "from_file_invalid",
+                        format!("stdin is not valid JSON: {error}"),
+                        "--stdin expects a JSON object of fields to merge",
+                    )
+                })?;
+                fields.extend(into_object(value)?);
+            }
+            let record = issues::update(repo_root, &actor, &id, fields)?;
+            render(json, &record, format!("updated {id}"))
         }
+        WorkCommand::Dep { command } => handle_dep(repo_root, command),
         WorkCommand::Transition {
             id,
             to,
-            expected_revision,
-            actor,
-            reason_code,
             reason,
-            reference,
-            expected_readiness_fingerprint,
-            json,
-        } => {
-            let transition_reason = match (reason_code, reason, reference) {
-                (None, None, None) => None,
-                (Some(code), Some(summary), reference) => Some(TransitionReason {
-                    code,
-                    summary,
-                    reference,
-                }),
-                _ => {
-                    return Err(PulseError::validation(
-                        "missing_status_reason",
-                        "transition reason requires --reason-code and --reason together",
-                    ));
-                }
-            };
-            let out = store.transition_node_gated_with_context(
-                &id,
-                to.into(),
-                expected_revision,
-                transition_reason,
-                expected_readiness_fingerprint.as_deref(),
-                crate::graph::store::OperationContext {
-                    actor: actor.clone(),
-                    now: chrono::Utc::now(),
-                },
-            )?;
-            render(json, &out, format!("transitioned {}", out.value.id))
-        }
-        WorkCommand::Executability { id, json } => {
-            let out = store.executability(&id)?;
-            render(
-                json,
-                &out,
-                format!("{:?} {}", out.structural_state, out.subject),
-            )
-        }
-        WorkCommand::Ready { id, profile, json } => {
-            if profile.is_some()
-                && profile.as_deref() != Some(crate::graph::read::readiness::READINESS_PROFILE)
-            {
-                return Err(PulseError::validation(
-                    "readiness_profile_unsupported",
-                    format!(
-                        "unsupported readiness profile; only {} is available in this release",
-                        crate::graph::read::readiness::READINESS_PROFILE
-                    ),
-                ));
-            }
-            let out = store.readiness(&id)?;
-            let human = format!(
-                "{} {} ({} families passing)",
-                out.subject.id,
-                out.status_as_word(),
-                out.gate_families
-                    .iter()
-                    .filter(|family| {
-                        matches!(
-                            family.status,
-                            crate::graph::read::readiness::GateStatus::Passed
-                                | crate::graph::read::readiness::GateStatus::NotApplicable
-                        )
-                    })
-                    .count()
-            );
-            render(json, &out, human)?;
-            if out.status == crate::graph::read::readiness::ReadinessStatus::Ready {
-                Ok(())
-            } else {
-                Err(PulseError::validation(
-                    "readiness_not_ready",
-                    format!(
-                        "work {} is {} under {}",
-                        out.subject.id,
-                        out.status_as_word(),
-                        out.profile
-                    ),
-                ))
-            }
-        }
-        WorkCommand::Rollup { id, json } => {
-            let out = store.rollup(&id)?;
-            render(json, &out, format!("rollup {}", out.subject))
-        }
-        WorkCommand::Close {
-            id,
             actor,
-            source_commit,
-            summary,
             json,
         } => {
-            let out = store.close_execution_ticket_for_ticket(
-                &id,
-                actor,
-                source_commit,
-                summary,
-                explicit_key.unwrap_or_default().to_string(),
-            )?;
-            render(json, &out, format!("closed Ticket {}", out.ticket_id))
-        }
-        WorkCommand::Release {
-            ticket_id,
-            actor,
-            reason,
-            json,
-        } => {
-            let out = store.release_live_lease_for_ticket(&ticket_id, &actor, &reason)?;
-            render(json, &out, format!("released lease {}", out.lease_id))
-        }
-        WorkCommand::Handoff {
-            lease,
-            session,
-            actor,
-            source_commit,
-            summary,
-            changed_paths,
-            evidence_receipt_ids,
-            checks,
-            proofs,
-            learning_used,
-            frictions,
-            json,
-        } => {
-            let out = store.submit_execution_handoff(crate::execution::SubmitHandoffArgs {
-                lease_id: lease,
-                actor,
-                session_id: session,
-                source_commit,
-                summary,
-                changed_paths,
-                evidence_receipt_ids,
-                checks,
-                acceptance_proofs: proofs,
-                learning_usage: learning_used
-                    .into_iter()
-                    .map(
-                        |(learning_id, outcome)| crate::execution::KnowledgeUsageClaim {
-                            learning_id,
-                            outcome,
-                        },
-                    )
-                    .collect(),
-                frictions,
-                idempotency_key: explicit_key.unwrap_or_default().to_string(),
-            })?;
-            render(
-                json,
-                &out,
-                format!("handed off Ticket {} ({})", out.ticket_id, out.handoff_id),
-            )
-        }
-        WorkCommand::Verify {
-            ticket_id: _,
-            handoff,
-            actor,
-            source_commit,
-            disposition,
-            summary,
-            checks,
-            proofs,
-            findings,
-            json,
-        } => {
-            let out = store.complete_execution_verification(
-                crate::execution::CompleteVerificationArgs {
-                    handoff_id: handoff,
-                    actor,
-                    source_commit,
-                    disposition: disposition.into(),
-                    summary,
-                    checks,
-                    acceptance_proofs: proofs,
-                    findings,
-                    idempotency_key: explicit_key.unwrap_or_default().to_string(),
-                },
-            )?;
-            render(
-                json,
-                &out,
-                format!(
-                    "verification {} -> {}",
-                    out.verification_id, out.resulting_status
-                ),
-            )
-        }
-        WorkCommand::CloseStory {
-            story_id,
-            qualification_receipt,
-            actor,
-            source_commit,
-            summary,
-            json,
-        } => {
-            let out = store.close_story(crate::execution::CloseStoryArgs {
-                story_id,
-                qualification_receipt_ids: qualification_receipt,
-                actor,
-                source_commit,
-                summary,
-                idempotency_key: explicit_key.unwrap_or_default().to_string(),
-            })?;
-            render(json, &out, format!("closed Story {}", out.story_id))
-        }
-        WorkCommand::Frontier {
-            for_,
-            profile,
-            include_excluded,
-            json,
-        } => {
-            let out = store.frontier(for_.as_deref(), profile.as_deref(), include_excluded)?;
-            let human = format!(
-                "execution frontier: {} item(s){}",
-                out.items.len(),
-                out.for_
-                    .as_ref()
-                    .map(|owner| format!(" for {owner}"))
-                    .unwrap_or_default()
-            );
-            render(json, &out, human)
-        }
-        WorkCommand::Packet { id, lease, json } => {
-            let packet = match lease {
-                Some(lease_id) => store.work_packet_for_lease(&id, &lease_id)?,
-                None => store.work_packet(&id)?,
-            };
-            packet.validate_schema_contract()?;
-            let human = packet_human(&packet);
-            render(json, &packet, human)
+            let actor = resolve_actor(repo_root, actor.as_deref())?;
+            let record = issues::transition(repo_root, &actor, &id, &to, &reason)?;
+            render(json, &record, format!("{id} -> {to}"))
         }
     }
 }
 
-fn packet_human(packet: &crate::work_packet::WorkPacket) -> String {
-    format!(
-        "{} packet: {}\nsource: {} ({})\nrequired docs: {}\nsuggested sections: {}\nblockers: {}\npacket fingerprint: {}",
-        packet.ticket.node.id,
-        packet.code,
-        packet.source.commit,
-        if packet.source.dirty { "dirty" } else { "clean" },
-        packet.docs.required.len(),
-        packet.docs.suggested.len(),
-        packet.blockers.len(),
-        packet.packet_fingerprint,
+fn handle_dep(repo_root: &std::path::Path, command: DepCommand) -> Result<(), PulseError> {
+    match command {
+        DepCommand::Add {
+            id,
+            dep_type,
+            other,
+            actor,
+            json,
+        } => {
+            let actor = resolve_actor(repo_root, actor.as_deref())?;
+            let dep_type = parse_dep_type(&dep_type)?;
+            let record = issues::dep_add(repo_root, &actor, &id, dep_type, &other)?;
+            render(json, &record, format!("{id} now depends on {other}"))
+        }
+        DepCommand::Rm {
+            id,
+            dep_type,
+            other,
+            actor,
+            json,
+        } => {
+            let actor = resolve_actor(repo_root, actor.as_deref())?;
+            let dep_type = parse_dep_type(&dep_type)?;
+            let record = issues::dep_rm(repo_root, &actor, &id, dep_type, &other)?;
+            render(json, &record, format!("{id} no longer depends on {other}"))
+        }
+    }
+}
+
+pub(crate) fn handle_note(
+    repo_root: &std::path::Path,
+    id: &str,
+    text: &str,
+    friction: bool,
+    from: Option<&str>,
+    json: bool,
+) -> Result<(), PulseError> {
+    let actor = resolve_actor(repo_root, from)?;
+    let kind = if friction {
+        KernelNoteKind::Friction
+    } else {
+        KernelNoteKind::Note
+    };
+    let record = issues::append_note(repo_root, &actor, id, text, kind)?;
+    render(
+        json,
+        &record,
+        format!("{} recorded for {id}", kind.as_str()),
     )
 }
 
-#[cfg(test)]
-mod tests {
-    use clap::Parser;
+#[derive(Debug, Default, serde::Serialize)]
+struct TreeEpic {
+    id: String,
+    title: String,
+    status: String,
+    stories: Vec<TreeStory>,
+}
 
-    use super::WorkCommand;
+#[derive(Debug, Default, serde::Serialize)]
+struct TreeStory {
+    id: String,
+    title: String,
+    status: String,
+    tickets: Vec<TreeTicket>,
+}
 
-    #[test]
-    fn cli_parses_ticket_close_request_by_ticket_id() {
-        let cli = crate::cli::Cli::try_parse_from([
-            "pulse",
-            "--idempotency-key",
-            "ticket-close-test",
-            "work",
-            "close",
-            "TK-01J00000000000000000000000",
-            "--actor",
-            "human:reviewer",
-            "--source-commit",
-            "0123456789012345678901234567890123456789",
-            "--summary",
-            "All close gates passed.",
-        ])
-        .expect("Ticket close CLI should parse");
-        assert!(matches!(
-            cli.command,
-            crate::cli::args::Command::Work {
-                command: WorkCommand::Close { id, .. }
-            } if id == "TK-01J00000000000000000000000"
-        ));
+#[derive(Debug, Default, serde::Serialize)]
+struct TreeTicket {
+    id: String,
+    title: String,
+    status: String,
+}
+
+fn field<'a>(record: &'a Value, key: &str) -> &'a str {
+    record.get(key).and_then(Value::as_str).unwrap_or("")
+}
+
+fn build_tree(records: &[Value], root: Option<&str>) -> Vec<TreeEpic> {
+    let epics = records.iter().filter(|record| {
+        field(record, "kind") == "epic" && root.map_or(true, |root| field(record, "id") == root)
+    });
+    epics
+        .map(|epic| {
+            let epic_id = field(epic, "id").to_string();
+            let stories = records
+                .iter()
+                .filter(|record| {
+                    field(record, "kind") == "story" && field(record, "epic") == epic_id
+                })
+                .map(|story| {
+                    let story_id = field(story, "id").to_string();
+                    let tickets = records
+                        .iter()
+                        .filter(|record| {
+                            field(record, "kind") == "ticket" && field(record, "story") == story_id
+                        })
+                        .map(|ticket| TreeTicket {
+                            id: field(ticket, "id").to_string(),
+                            title: field(ticket, "title").to_string(),
+                            status: field(ticket, "status").to_string(),
+                        })
+                        .collect();
+                    TreeStory {
+                        id: story_id,
+                        title: field(story, "title").to_string(),
+                        status: field(story, "status").to_string(),
+                        tickets,
+                    }
+                })
+                .collect();
+            TreeEpic {
+                id: epic_id,
+                title: field(epic, "title").to_string(),
+                status: field(epic, "status").to_string(),
+                stories,
+            }
+        })
+        .collect()
+}
+
+fn render_tree_human(tree: &[TreeEpic]) -> String {
+    let mut lines = Vec::new();
+    for epic in tree {
+        lines.push(format!("{} [{}] {}", epic.id, epic.status, epic.title));
+        for story in &epic.stories {
+            lines.push(format!("  {} [{}] {}", story.id, story.status, story.title));
+            for ticket in &story.tickets {
+                lines.push(format!(
+                    "    {} [{}] {}",
+                    ticket.id, ticket.status, ticket.title
+                ));
+            }
+        }
     }
-
-    #[test]
-    fn cli_parses_story_close_request_without_versioned_naming() {
-        let cli = crate::cli::Cli::try_parse_from([
-            "pulse",
-            "--idempotency-key",
-            "story-close-test",
-            "work",
-            "close-story",
-            "ST-01J00000000000000000000000",
-            "--qualification-receipt",
-            "rcpt_01J00000000000000000000000",
-            "--actor",
-            "human:conductor",
-            "--source-commit",
-            "0123456789012345678901234567890123456789",
-            "--summary",
-            "Integrated outcome qualified.",
-        ])
-        .expect("Story close CLI should parse");
-        assert!(matches!(
-            cli.command,
-            crate::cli::args::Command::Work {
-                command: WorkCommand::CloseStory {
-                    story_id,
-                    qualification_receipt,
-                    ..
-                }
-            } if story_id == "ST-01J00000000000000000000000"
-                && qualification_receipt == vec!["rcpt_01J00000000000000000000000"]
-        ));
-    }
+    lines.join("\n")
 }

@@ -7,9 +7,27 @@ use pulse::storage::transaction::{
     write_event_create_new, write_event_create_new_multi, FileState, MultiTargetTransactionIntent,
     RecoveryAction, TransactionIntent, TransactionTarget,
 };
-use pulse::storage::{bootstrap, MANIFEST_JSON};
 use serde_json::json;
 use std::fs;
+use std::path::Path;
+
+/// The v2 workgraph `bootstrap()` this crate used to call for its side
+/// effect of creating `.pulse/workgraph/nodes` etc. is gone with `graph/*`
+/// (plan 0022 P1.3/P1.4). These transaction/atomic-primitive tests never
+/// tested workgraph semantics — they just needed *some* nested target path
+/// under `.pulse/` to exist before writing "before" state directly with
+/// `fs::write`. This creates every such path any test below still uses.
+fn ensure_repo_dirs(repo: &Path) {
+    for dir in [
+        ".pulse/workgraph/nodes",
+        ".pulse/runtime/assignment/leases",
+        ".pulse/runtime/assignment/tombstones",
+        ".pulse/runtime/assignment/workspaces",
+        ".pulse/events",
+    ] {
+        fs::create_dir_all(repo.join(dir)).unwrap();
+    }
+}
 
 #[test]
 fn canonical_json_is_deterministic_and_lf_terminated() {
@@ -30,34 +48,6 @@ fn canonical_json_is_deterministic_and_lf_terminated() {
 fn canonical_json_rejects_float_numbers() {
     let error = to_canonical_bytes(&json!({"decimal_number": 1.5})).unwrap_err();
     assert!(matches!(error, PulseError::FloatRejected { .. }));
-}
-
-#[test]
-fn bootstrap_is_idempotent_and_does_not_overwrite_user_files() {
-    let tmp = tempfile::tempdir().unwrap();
-    let repo = tmp.path();
-
-    let first = bootstrap(repo).unwrap();
-    assert!(repo.join(".pulse/workgraph/manifest.json").exists());
-    assert!(repo
-        .join(".pulse/workgraph/schemas/node.schema.json")
-        .exists());
-    assert!(repo.join(".pulse/runtime/transactions").is_dir());
-    assert_eq!(
-        first.proposed_ignore_entries,
-        vec![".pulse/runtime/".to_string(), ".pulse/cache/".to_string()]
-    );
-
-    let manifest_path = repo.join(".pulse/workgraph/manifest.json");
-    fs::write(&manifest_path, b"user-owned manifest\n").unwrap();
-    let error = bootstrap(repo).unwrap_err();
-    assert_eq!(error.code(), "workgraph_partial_state_refused");
-    assert_eq!(fs::read(&manifest_path).unwrap(), b"user-owned manifest\n");
-
-    let template_value: serde_json::Value = serde_json::from_str(MANIFEST_JSON).unwrap();
-    assert!(to_canonical_bytes(&template_value)
-        .unwrap()
-        .ends_with(b"\n"));
 }
 
 #[test]
@@ -107,7 +97,7 @@ fn atomic_replace_writes_same_directory_and_replaces_existing() {
 fn transaction_recovery_rolls_back_when_target_before_and_event_absent() {
     let tmp = tempfile::tempdir().unwrap();
     let repo = tmp.path();
-    bootstrap(repo).unwrap();
+    ensure_repo_dirs(repo);
 
     let target = repo.join(".pulse/workgraph/nodes/TK-001.json");
     let before_bytes = to_canonical_bytes(&json!({"id": "TK-001", "revision": 1})).unwrap();
@@ -148,7 +138,7 @@ fn transaction_recovery_rolls_back_when_target_before_and_event_absent() {
 fn transaction_recovery_completes_event_when_target_after_and_event_absent() {
     let tmp = tempfile::tempdir().unwrap();
     let repo = tmp.path();
-    bootstrap(repo).unwrap();
+    ensure_repo_dirs(repo);
 
     let target = repo.join(".pulse/workgraph/nodes/TK-001.json");
     let before_bytes = to_canonical_bytes(&json!({"id": "TK-001", "revision": 1})).unwrap();
@@ -191,7 +181,7 @@ fn transaction_recovery_completes_event_when_target_after_and_event_absent() {
 fn transaction_recovery_hard_fails_ambiguous_state() {
     let tmp = tempfile::tempdir().unwrap();
     let repo = tmp.path();
-    bootstrap(repo).unwrap();
+    ensure_repo_dirs(repo);
 
     let target = repo.join(".pulse/workgraph/nodes/TK-001.json");
     let before_bytes = to_canonical_bytes(&json!({"id": "TK-001", "revision": 1})).unwrap();
@@ -228,7 +218,7 @@ fn transaction_recovery_hard_fails_ambiguous_state() {
 fn transaction_recovery_hard_fails_event_mismatch() {
     let tmp = tempfile::tempdir().unwrap();
     let repo = tmp.path();
-    bootstrap(repo).unwrap();
+    ensure_repo_dirs(repo);
 
     let target = repo.join(".pulse/workgraph/nodes/TK-001.json");
     let before_bytes = to_canonical_bytes(&json!({"id": "TK-001", "revision": 1})).unwrap();
@@ -273,7 +263,7 @@ fn transaction_recovery_hard_fails_event_mismatch() {
 fn transaction_recovery_cleans_after_event_before_intent_cleanup() {
     let tmp = tempfile::tempdir().unwrap();
     let repo = tmp.path();
-    bootstrap(repo).unwrap();
+    ensure_repo_dirs(repo);
 
     let target = repo.join(".pulse/workgraph/nodes/TK-001.json");
     let before_bytes = to_canonical_bytes(&json!({"id": "TK-001", "revision": 1})).unwrap();
@@ -314,7 +304,7 @@ fn transaction_recovery_cleans_after_event_before_intent_cleanup() {
 fn multi_target_recovery_rolls_back_when_all_targets_before_and_event_absent() {
     let tmp = tempfile::tempdir().unwrap();
     let repo = tmp.path();
-    bootstrap(repo).unwrap();
+    ensure_repo_dirs(repo);
 
     // Two create-new targets: lease + workspace (runtime-record-like)
     let lease_path = repo.join(".pulse/runtime/assignment/leases/lease_01JTEST.json");
@@ -374,7 +364,7 @@ fn multi_target_recovery_rolls_back_when_all_targets_before_and_event_absent() {
 fn multi_target_recovery_completes_first_target_written_rest_absent() {
     let tmp = tempfile::tempdir().unwrap();
     let repo = tmp.path();
-    bootstrap(repo).unwrap();
+    ensure_repo_dirs(repo);
 
     // Two create-new targets sorted by path.
     let target_a = repo.join(".pulse/runtime/a_record.json");
@@ -443,7 +433,7 @@ fn multi_target_recovery_completes_first_target_written_rest_absent() {
 fn multi_target_recovery_completes_last_target_written_event_absent() {
     let tmp = tempfile::tempdir().unwrap();
     let repo = tmp.path();
-    bootstrap(repo).unwrap();
+    ensure_repo_dirs(repo);
 
     let target_a = repo.join(".pulse/runtime/a_record.json");
     let target_b = repo.join(".pulse/runtime/b_record.json");
@@ -505,7 +495,7 @@ fn multi_target_recovery_completes_last_target_written_event_absent() {
 fn multi_target_recovery_cleans_when_all_targets_and_event_present() {
     let tmp = tempfile::tempdir().unwrap();
     let repo = tmp.path();
-    bootstrap(repo).unwrap();
+    ensure_repo_dirs(repo);
 
     let target_a = repo.join(".pulse/runtime/a_record.json");
     let target_b = repo.join(".pulse/runtime/b_record.json");
@@ -567,7 +557,7 @@ fn multi_target_recovery_cleans_when_all_targets_and_event_present() {
 fn multi_target_recovery_with_remove_target_rolls_back_when_file_still_present() {
     let tmp = tempfile::tempdir().unwrap();
     let repo = tmp.path();
-    bootstrap(repo).unwrap();
+    ensure_repo_dirs(repo);
 
     // Simulate a release: remove lease + create tombstone.
     let lease_path = repo.join(".pulse/runtime/assignment/leases/lease_01JTEST.json");
@@ -636,7 +626,7 @@ fn multi_target_recovery_with_remove_target_rolls_back_when_file_still_present()
 fn multi_target_recovery_with_remove_target_completes_when_file_removed() {
     let tmp = tempfile::tempdir().unwrap();
     let repo = tmp.path();
-    bootstrap(repo).unwrap();
+    ensure_repo_dirs(repo);
 
     let lease_path = repo.join(".pulse/runtime/assignment/leases/lease_01JTEST.json");
     let tombstone_path = repo.join(".pulse/runtime/assignment/tombstones/lease_01JTEST.json");
@@ -706,7 +696,7 @@ fn multi_target_recovery_with_remove_target_completes_when_file_removed() {
 fn multi_target_recovery_with_remove_target_cleans_when_all_done() {
     let tmp = tempfile::tempdir().unwrap();
     let repo = tmp.path();
-    bootstrap(repo).unwrap();
+    ensure_repo_dirs(repo);
 
     let lease_path = repo.join(".pulse/runtime/assignment/leases/lease_01JTEST.json");
     let tombstone_path = repo.join(".pulse/runtime/assignment/tombstones/lease_01JTEST.json");
@@ -772,7 +762,7 @@ fn multi_target_recovery_with_remove_target_cleans_when_all_done() {
 fn multi_target_recovery_mixed_create_and_replace_rolls_back() {
     let tmp = tempfile::tempdir().unwrap();
     let repo = tmp.path();
-    bootstrap(repo).unwrap();
+    ensure_repo_dirs(repo);
 
     // Runtime record (create-new) + node (atomic-replace).
     let runtime = repo.join(".pulse/runtime/records/rr.json");
@@ -839,7 +829,7 @@ fn multi_target_recovery_mixed_create_and_replace_rolls_back() {
 fn multi_target_recovery_hard_fails_ambiguous_state() {
     let tmp = tempfile::tempdir().unwrap();
     let repo = tmp.path();
-    bootstrap(repo).unwrap();
+    ensure_repo_dirs(repo);
 
     let target_a = repo.join(".pulse/runtime/a_record.json");
     let target_b = repo.join(".pulse/runtime/b_record.json");
@@ -896,7 +886,7 @@ fn multi_target_recovery_hard_fails_ambiguous_state() {
 fn multi_target_recovery_hard_fails_event_mismatch() {
     let tmp = tempfile::tempdir().unwrap();
     let repo = tmp.path();
-    bootstrap(repo).unwrap();
+    ensure_repo_dirs(repo);
 
     let target_a = repo.join(".pulse/runtime/a_record.json");
     let bytes_a = to_canonical_bytes(&json!({"id": "a"})).unwrap();
@@ -944,7 +934,7 @@ fn multi_target_recovery_hard_fails_event_mismatch() {
 fn multi_target_recovery_rejects_empty_targets() {
     let tmp = tempfile::tempdir().unwrap();
     let repo = tmp.path();
-    bootstrap(repo).unwrap();
+    ensure_repo_dirs(repo);
 
     let err = MultiTargetTransactionIntent::prepared(
         "evt_empty",
@@ -962,7 +952,7 @@ fn multi_target_recovery_rejects_empty_targets() {
 fn multi_target_preparation_sorts_targets_and_rejects_duplicate_paths() {
     let tmp = tempfile::tempdir().unwrap();
     let repo = tmp.path();
-    bootstrap(repo).unwrap();
+    ensure_repo_dirs(repo);
 
     let target_a = repo.join(".pulse/runtime/a_record.json");
     let target_b = repo.join(".pulse/runtime/b_record.json");
@@ -1035,7 +1025,7 @@ fn multi_target_preparation_sorts_targets_and_rejects_duplicate_paths() {
 fn multi_target_prepare_rejects_hash_mismatch_and_remove_payload() {
     let tmp = tempfile::tempdir().unwrap();
     let repo = tmp.path();
-    bootstrap(repo).unwrap();
+    ensure_repo_dirs(repo);
 
     let target = repo.join(".pulse/runtime/record.json");
     let bytes = to_canonical_bytes(&json!({"id": "record"})).unwrap();
@@ -1087,7 +1077,7 @@ fn multi_target_prepare_rejects_hash_mismatch_and_remove_payload() {
 fn multi_target_recovery_rejects_event_before_targets() {
     let tmp = tempfile::tempdir().unwrap();
     let repo = tmp.path();
-    bootstrap(repo).unwrap();
+    ensure_repo_dirs(repo);
 
     let target_a = repo.join(".pulse/runtime/a_record.json");
     let target_b = repo.join(".pulse/runtime/b_record.json");

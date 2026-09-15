@@ -88,37 +88,16 @@ pub fn validate_work_id(value: &str) -> Result<()> {
     validate_id_for_kind(value, kind)
 }
 
+/// Plan 0022 §4.2: every id is `<prefix>-<4 lowercase hex>`. The old
+/// counter-based `<prefix>-<3+ digits>` shape (and `format_id`/
+/// `parse_numeric`, which built and read it) is gone — the v2 workgraph was
+/// its only caller and is deleted with `graph/*` (plan 0022 P1.3).
 pub fn validate_id_for_kind(id: &str, kind: WorkKind) -> Result<()> {
-    let expected = kind.prefix();
-    if !id.starts_with(&format!("{expected}-")) {
-        return Err(PulseError::validation(
-            "id_kind_mismatch",
-            format!("id {id} does not match kind {kind:?}"),
-        ));
-    }
-    let suffix = &id[expected.len() + 1..];
-    if suffix.len() < 3 || !suffix.chars().all(|c| c.is_ascii_digit()) {
-        return Err(PulseError::validation(
-            "invalid_id",
-            format!("id {id} must match {expected}-[0-9]{{3,}}"),
-        ));
-    }
-    Ok(())
-}
-
-pub fn format_id(kind: WorkKind, numeric: u64) -> String {
-    format!("{}-{numeric:03}", kind.prefix())
-}
-
-pub fn parse_numeric(id: &str, prefix: &str) -> Option<u64> {
-    id.strip_prefix(&format!("{prefix}-"))?.parse().ok()
+    validate_hash_id_for_kind(id, kind)
 }
 
 /// Plan 0022 §4.2: `<PREFIX>-<4 hex>`, the 16 leading bits of
-/// `sha256(kind + title + created_at + 8 random bytes)`. Distinct from the
-/// numeric `format_id` above, which the v2 workgraph still uses until it is
-/// deleted (plan 0022 P1.3); callers of the new `issues.jsonl` store use this
-/// one exclusively.
+/// `sha256(kind + title + created_at + 8 random bytes)`.
 pub fn generate_hash_id(kind: WorkKind, title: &str, created_at: &str) -> WorkId {
     loop {
         let candidate = hash_id_once(kind, title, created_at);

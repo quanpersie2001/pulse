@@ -1,76 +1,46 @@
 //! Cross-domain compile-time public-path compatibility baseline.
 //!
-//! This crate locks the Rust paths that external-style integration coverage,
-//! benches and `src/bin/pulse.rs` currently import across Pulse domains. It is
-//! deliberately lightweight: compile and a few stable constants/constructors,
-//! not exhaustive API snapshots.
+//! Locks the Rust paths that integration coverage, benches and
+//! `src/bin/pulse.rs` currently import across Pulse v3 domains. Deliberately
+//! lightweight: compile and a few stable constants/constructors, not an
+//! exhaustive API snapshot.
+//!
+//! Rewritten for plan 0022 P1.3/P1.4: the entire v2 surface this file used
+//! to guard (`docs`, `graph`/`JsonGraphStore`, `knowledge`, `policy`,
+//! `qa`, `execution`, `work_packet`, `evidence::model`,
+//! `evidence::receipt::*`, `kernel::completion`/`story_completion`) is
+//! deleted. It also absorbs the old `tests/graph/public_api_paths.rs`,
+//! which guarded the same kind of baseline for the graph-specific surface
+//! that no longer exists — keeping two near-identical files once both are
+//! mostly deleted content would be redundant.
 
-use pulse::docs::{
-    ApplicabilityOptions, DocsRegistry, DocumentKind, DocumentRecord, DocumentScope,
-    DocumentStatus, GetOptions, IndexOptions, RetrievalConfig, SearchOptions, TreeOptions,
-};
+use pulse::canonical_json::{hash_bytes, to_canonical_bytes};
 use pulse::event::{EventActor, EventActorKind, EventCorrelation, EventEnvelope, EventSubject};
-use pulse::evidence::model::{
-    ActorKind, ActorRef, ReceiptBindings, ReceiptEnvelope, ReceiptKind, ReceiptPayload,
-    ReceiptResult, SourceBinding, SubjectRef,
+use pulse::id::{
+    generate_hash_id, generate_learning_hash_id, validate_hash_id_for_kind, WorkId, WorkKind,
 };
-use pulse::id::{new_event_id, new_transaction_id};
-use pulse::identity::actor::{ActorKind as NeutralActorKind, ActorRef as NeutralActorRef};
-use pulse::knowledge::{
-    Applicability, Audience, Confidence, Guidance, KnowledgeStore, LearningDraft, LearningKind,
-    LearningStatus, Moment, OperationContext as KnowledgeOperationContext, PromptPriority,
-    Severity,
-};
-use pulse::policy::AuthorityPolicy;
-use pulse::source::head_commit;
-use pulse::storage::transaction::{recover_prepared_transactions, TransactionFailpoint};
-use pulse::storage::{bootstrap as storage_bootstrap, safe_repo_relative, MANIFEST_JSON};
-use pulse::work_packet::{
-    PacketKnowledgeItem, PacketReadBudget, PacketSource, WorkPacket, MAX_CANONICAL_JSON_BYTES,
-    MAX_INITIAL_LINES, MAX_SNIPPET_BYTES_EACH, RECOMMENDED_INITIAL_SECTIONS, WORK_PACKET_SCHEMA,
-};
-use pulse::{JsonGraphStore, PulseError, PulseResult, Result};
+use pulse::identity::actor::{parse_actor, resolve_actor, ActorKind, ActorRef};
+use pulse::kernel::issues::{DepType, NoteKind};
+use pulse::kernel::ready::{evaluate as evaluate_ready, ReadyReport, ReadyViolation};
+use pulse::kernel::roles::{authorize, Action};
+use pulse::source::{same as source_same, snapshot as source_snapshot, state_repo_root, Source};
+use pulse::storage::{atomic_write, safe_repo_relative};
+use pulse::store::issues::{common_fields, mutate as issues_mutate, read_all, validate_record};
+use pulse::{PulseError, PulseResult, Result};
 
 #[test]
-fn docs_evidence_knowledge_storage_and_identity_public_paths_compile() {
+fn identity_event_storage_and_canonical_json_public_paths_compile() {
     let repo = tempfile::tempdir().unwrap();
-    storage_bootstrap(repo.path()).unwrap();
-    JsonGraphStore::new(repo.path()).bootstrap().unwrap();
-    let _knowledge = KnowledgeStore::new(repo.path());
-
-    let _registry = DocsRegistry::empty("repo-test".to_string());
-    let _record = DocumentRecord {
-        tags: vec![],
-        id: "DOC-ARCH".to_string(),
-        revision: 1,
-        path: "docs/architecture/graph.md".to_string(),
-        kind: DocumentKind::Architecture,
-        status: DocumentStatus::Approved,
-        owner: "team:test".to_string(),
-        summary: "Graph architecture.".to_string(),
-        scope: DocumentScope::default(),
-        generated: None,
-        superseded_by: None,
-    };
-
-    let _docs_options = (
-        ApplicabilityOptions::default(),
-        IndexOptions::default(),
-        SearchOptions::default(),
-        GetOptions::default(),
-        TreeOptions::default(),
-    );
-    assert_eq!(RetrievalConfig::defaults().default_search_limit, 8);
 
     let actor = EventActor::new(EventActorKind::Human, "tester");
-    let subject = EventSubject::new("ticket", "TK-001", Some(1));
+    let subject = EventSubject::new("ticket", "TK-a3f9", Some(1));
     let event = EventEnvelope::new_typed(
         "evt_01J00000000000000000000000",
-        "work.checked",
+        "issue.updated",
         actor,
         subject,
         Some(EventCorrelation {
-            run_id: Some("run_01J00000000000000000000000".to_string()),
+            run_id: None,
             lease_id: None,
             transaction_id: None,
             receipt_id: None,
@@ -80,194 +50,76 @@ fn docs_evidence_knowledge_storage_and_identity_public_paths_compile() {
     );
     assert_eq!(event.schema_version, 1);
 
-    let receipt = ReceiptEnvelope {
-        schema_version: 1,
-        receipt_version: 1,
-        id: "rcpt_01J00000000000000000000000".to_string(),
-        kind: ReceiptKind::DocumentationValidation,
-        result: ReceiptResult::Passed,
-        actor: ActorRef {
-            kind: ActorKind::Agent,
-            id: "reviewer".to_string(),
-        },
-        recorded_at: chrono::Utc::now(),
-        subject: SubjectRef {
-            kind: "document".to_string(),
-            id: "DOC-ARCH".to_string(),
-        },
-        bindings: ReceiptBindings {
-            source: Some(SourceBinding {
-                kind: "git_commit".to_string(),
-                commit: "0123456789abcdef0123456789abcdef01234567".to_string(),
-                repository_id: "repo-test".to_string(),
-            }),
-            ..ReceiptBindings::default()
-        },
-        payload: ReceiptPayload::DocumentationValidation(
-            pulse::evidence::model::DocumentationValidationPayload {
-                payload_version: 1,
-                documents: vec![],
-                checks: vec![],
-            },
-        ),
+    let neutral = ActorRef {
+        kind: ActorKind::Human,
+        id: "quan".to_string(),
     };
-    assert_eq!(receipt.kind.as_str(), "documentation_validation");
+    assert_eq!(neutral.as_kind_id(), "human:quan");
+    assert!(parse_actor("human:quan").is_ok());
+    assert!(resolve_actor(repo.path(), Some("human:quan")).is_ok());
 
-    let _learning = LearningDraft {
-        scope: None,
-        expected_signal: None,
-        title: "Use public paths intentionally".to_string(),
-        kind: LearningKind::ContextRoutingInsight,
-        severity: Severity::Low,
-        summary: "Compile-time tests guard source-tree refactor paths.".to_string(),
-        guidance: Guidance::default(),
-        applicability: Applicability::default(),
-        provenance_targets: vec![],
-        source_commits: vec![],
-        routing: None,
-        promotion: None,
-        freshness: None,
-        trust: None,
-        content: None,
-    };
-    assert_eq!(LearningStatus::Candidate, LearningStatus::Candidate);
-    assert_eq!(Audience::Implementer, Audience::Implementer);
-    assert_eq!(Moment::Execute, Moment::Execute);
-    assert_eq!(PromptPriority::Recommended, PromptPriority::Recommended);
-    assert_eq!(Confidence::Low, Confidence::Low);
+    let hash_id = generate_hash_id(WorkKind::Ticket, "title", "2026-09-16T00:00:00Z");
+    assert!(validate_hash_id_for_kind(hash_id.as_str(), WorkKind::Ticket).is_ok());
+    assert!(WorkId::new(hash_id.as_str()).is_ok());
+    assert!(generate_learning_hash_id("title", "2026-09-16T00:00:00Z").starts_with("LRN-"));
 
-    let _ctx = KnowledgeOperationContext {
-        actor: "human:test".to_string(),
-        now: chrono::Utc::now(),
-    };
-    let _policy = AuthorityPolicy {
-        schema_version: 1,
-        revision: 1,
-        principals: vec![],
-    };
-    assert!(head_commit(repo.path()).is_err());
-    let _ = recover_prepared_transactions(repo.path()).unwrap();
-    assert!(matches!(
-        TransactionFailpoint::AfterCanonical,
-        TransactionFailpoint::AfterCanonical
-    ));
-    assert!(safe_repo_relative("docs/architecture/graph.md").is_ok());
-    assert!(MANIFEST_JSON.contains("pulse-main"));
+    assert!(atomic_write(&repo.path().join("f.txt"), b"x").is_ok());
+    assert!(safe_repo_relative("docs/x.md").is_ok());
 
-    // Neutral identity ownership: the neutral `pulse::identity::actor` path is the
-    // real owner, and is type-identical to the historical `evidence::model` path
-    // (re-export, not a redefinition).
-    fn accepts_evidence_actor(_: ActorRef) {}
-    accepts_evidence_actor(NeutralActorRef {
-        kind: NeutralActorKind::Human,
-        id: "neutral".to_string(),
-    });
-    let neutral = NeutralActorRef {
-        kind: NeutralActorKind::System,
-        id: "neutral-2".to_string(),
-    };
-    let _evidence_view: ActorRef = neutral;
-    // ID generation compatibility re-exports remain reachable through `pulse::id`.
-    assert!(new_event_id().starts_with("evt_"));
-    assert!(new_transaction_id().starts_with("txn_"));
+    let bytes = to_canonical_bytes(&serde_json::json!({"a": 1})).unwrap();
+    assert!(!hash_bytes(&bytes).is_empty());
 
     fn accepts_result(_: PulseResult<()>) {}
     fn accepts_alias(_: Result<()>) {}
     accepts_result(Ok(()));
     accepts_alias(Ok(()));
-
     let error = PulseError::validation("baseline", "baseline");
     assert_eq!(error.code(), "baseline");
+    let kernel_error = PulseError::kernel("baseline", "baseline", "a hint");
+    assert_eq!(kernel_error.hint(), Some("a hint"));
 }
 
 #[test]
-fn evidence_receipt_public_paths_compile() {
-    // The receipt module was split into cohesive submodules. These stable
-    // public paths must remain reachable both via the `pulse::evidence::*`
-    // re-exports (used by tests / CLI) and the direct
-    // `pulse::evidence::receipt::*` paths (used by kernel / graph / knowledge
-    // consumers). Paths are referenced, not invoked, so this is a pure
-    // compile-time non-regression guard.
+fn store_and_kernel_public_paths_compile() {
+    let repo = tempfile::tempdir().unwrap();
 
-    // Re-export layer.
-    let _ = pulse::evidence::record_receipt;
-    let _ = pulse::evidence::show_receipt;
-    let _ = pulse::evidence::list_receipts;
-    let _ = pulse::evidence::verify_receipt;
-    let _ = pulse::evidence::validate_for_supersession;
+    let ticket = serde_json::json!({
+        "schema": 3, "id": "TK-a3f9", "kind": "ticket", "title": "t",
+        "status": "draft", "revision": 1,
+        "created_at": "2026-09-16T00:00:00Z", "updated_at": "2026-09-16T00:00:00Z",
+        "role": "implementation",
+    });
+    validate_record(&ticket).unwrap();
+    issues_mutate(repo.path(), |mut records| {
+        records.push(ticket.clone());
+        Ok(records)
+    })
+    .unwrap();
+    let records = read_all(repo.path()).unwrap();
+    assert_eq!(records.len(), 1);
+    assert_eq!(common_fields(&records[0]).unwrap().id, "TK-a3f9");
 
-    // Direct receipt-module paths.
-    let _ = pulse::evidence::receipt::record_receipt;
-    let _ = pulse::evidence::receipt::show_receipt;
-    let _ = pulse::evidence::receipt::list_receipts;
-    let _ = pulse::evidence::receipt::verify_receipt;
-    let _ = pulse::evidence::receipt::load_receipt;
-    let _ = pulse::evidence::receipt::validate_for_supersession;
-    let _ = pulse::evidence::receipt::content_source_binding_codes;
-    let _ = pulse::evidence::receipt::code_to_static;
+    let report: ReadyReport = evaluate_ready(repo.path(), &ticket, &records);
+    let _violation: Option<&ReadyViolation> = report.violations.first();
 
-    // Facade outcome / list / summary types stay reachable at stable paths.
-    let _: Option<pulse::evidence::ReceiptOutcome> = None;
-    let _: Option<pulse::evidence::ReceiptList> = None;
-    let _: Option<pulse::evidence::receipt::ReceiptStatus> = None;
-    let _: Option<pulse::evidence::receipt::ReceiptSummary> = None;
-}
-
-#[test]
-fn execution_proof_public_paths_compile() {
-    let _: Option<pulse::execution::HandoffReceipt> = None;
-    let _: Option<pulse::execution::VerificationReceipt> = None;
-    let _: Option<pulse::execution::AcceptanceProof> = None;
-    let _: Option<pulse::execution::CloseReceipt> = None;
-    let _: Option<pulse::execution::StoryCloseReceipt> = None;
-    let _: Option<pulse::execution::CloseStoryArgs> = None;
-    let _ = pulse::kernel::completion::load_handoff;
-    let _ = pulse::kernel::completion::load_verification;
-    let _ = pulse::kernel::completion::load_close;
-    let _ = pulse::kernel::story_completion::load_story_close;
-}
-
-#[test]
-fn work_packet_public_paths_compile() {
-    // Verify `pulse::work_packet` public types and constants are reachable
-    // from integration tests (external crate consumers).
-
-    // Constants.
-    assert_eq!(MAX_CANONICAL_JSON_BYTES, 131_072);
-
-    // Schema & defaults.
-    assert!(WORK_PACKET_SCHEMA.contains("WorkPacket"));
-    assert!(WORK_PACKET_SCHEMA.contains("work_packet"));
-
-    let budget = PacketReadBudget {
-        required_sections: 1,
-        recommended_initial_sections: RECOMMENDED_INITIAL_SECTIONS as u64,
-        max_initial_lines: MAX_INITIAL_LINES as u64,
-        suggestion_limit: 8,
-        snippet_max_bytes_each: MAX_SNIPPET_BYTES_EACH as u64,
+    let human = ActorRef {
+        kind: ActorKind::Human,
+        id: "quan".to_string(),
     };
-    assert_eq!(budget.required_sections, 1);
+    assert!(authorize(&human, Action::MutateGraph).is_ok());
+    let _dep_type = DepType::BlockedBy;
+    let _note_kind = NoteKind::Note;
 
-    let knowledge = PacketKnowledgeItem {
-        summary: "Rotate tokens atomically".to_string(),
-        why_applicable: "Concurrency hazard".to_string(),
-        required_checks: vec!["Exercise concurrent refresh".to_string()],
-        detail_ref: None,
+    // `source_snapshot` needs a real git repository; this guard only checks
+    // that the path and the `Source` shape are reachable, not git behavior
+    // (covered in `src/source.rs`'s own tests).
+    fn accepts_source_snapshot(_: fn(&std::path::Path, &[String]) -> Result<Source>) {}
+    accepts_source_snapshot(source_snapshot);
+    let source = Source {
+        commit: "0".repeat(40),
+        dirty_hash: "sha256:0".to_string(),
+        dirty_paths: Vec::new(),
     };
-    assert!(knowledge
-        .required_checks
-        .contains(&"Exercise concurrent refresh".to_string()));
-
-    let source = PacketSource {
-        repository_id: "repo".to_string(),
-        commit: "0000000000000000000000000000000000000000".to_string(),
-        dirty: false,
-        dirty_hash: "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-            .to_string(),
-    };
-    // Verify typed access.
-    let _s: &str = &source.repository_id;
-
-    // Verify that the major public DTO path compiles.
-    fn _accepts_packet(_: WorkPacket) {}
+    assert!(source_same(&source, &source));
+    assert_eq!(state_repo_root(repo.path()).unwrap(), repo.path());
 }

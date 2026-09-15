@@ -1,22 +1,14 @@
-//! Application composition layer for cross-domain Pulse operations.
+//! Application composition layer for cross-domain Pulse v3 operations.
 //!
-//! `graph::{model,validation,read}` stay as graph-owned pure/value layers.
-//! This module is the sanctioned place for coherent operations that compose the
-//! graph store with documentation, evidence, policy and source/content checks.
+//! `store::issues` stays the pure(ish) persistence layer; this module is
+//! where store, event log, roles and (later) evidence/lane/profile compose.
+//! Plan 0022 §14 Phase 1 is rebuilding this layer from scratch — most of the
+//! v2 kernel modules that used to live here (`completion`, `packet`, `run`,
+//! `reservation`, `lifecycle`, `readiness`, `frontier`, `story_completion`,
+//! `communication`, `documentation`, `guidance`) are deleted rather than
+//! carried forward; their v3 replacements land in later P1.x commits.
 
-pub mod communication;
-pub mod completion;
-pub mod documentation;
-pub mod frontier;
-pub(crate) mod guidance;
 pub(crate) mod init;
-pub mod lifecycle;
-pub mod packet;
-pub mod readiness;
+pub mod issues;
 pub mod ready;
-pub mod reservation;
 pub mod roles;
-pub mod run;
-pub mod story_completion;
-
-pub use run::DEFAULT_RUN_TTL_SECONDS;

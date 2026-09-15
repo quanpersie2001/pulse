@@ -41,32 +41,27 @@ fn pulse_mutates_only_the_temporary_fixture_copy() {
     let before = snapshot_tree(&fixture).expect("snapshot tracked fixture");
     let repo = TestRepo::from_fixture("minimal-service");
 
-    let bootstrap = repo.pulse_ok(&["graph", "bootstrap", "--json"]);
-    assert_eq!(bootstrap["code"], "bootstrapped");
+    let init = repo.pulse_ok(&["init", "--json"]);
+    assert_eq!(init["status"], "initialized");
 
     let created = repo.pulse_ok(&[
         "work",
-        "create",
-        "--kind",
+        "new",
         "ticket",
-        "--title",
         "Classify refresh-token failures",
-        "--role",
-        "implementation",
         "--risk",
         "low",
-        "--materialization",
-        "R0",
+        "--surface",
+        "cli",
+        "--actor",
+        "human:tester",
         "--json",
     ]);
-    let work_id = created["value"]["id"].as_str().expect("created work ID");
+    let work_id = created["id"].as_str().expect("created work ID");
 
-    assert!(repo.path().join(".pulse/workgraph/manifest.json").is_file());
-    assert!(repo
-        .path()
-        .join(".pulse/workgraph/nodes")
-        .join(format!("{work_id}.json"))
-        .is_file());
+    assert!(repo.path().join(".pulse/issues.jsonl").is_file());
+    let issues = fs::read_to_string(repo.path().join(".pulse/issues.jsonl")).unwrap();
+    assert!(issues.contains(work_id));
     assert!(!fixture.join(".pulse").exists());
 
     let after = snapshot_tree(&fixture).expect("snapshot tracked fixture after Pulse mutation");

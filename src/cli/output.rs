@@ -44,6 +44,7 @@ pub fn print_error(err: &PulseError) {
             "schema_version": 1,
             "code": err.code(),
             "message": err.to_string(),
+            "hint": err.hint(),
         }),
     };
     eprintln!(

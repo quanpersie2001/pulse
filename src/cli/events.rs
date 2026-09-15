@@ -1,23 +1,17 @@
-//! Thin CLI adapter for the event-log communication surface (`pulse note`,
-//! `pulse events tail`).
+//! Thin CLI adapter for `pulse events tail|compact`.
 
 use std::collections::HashSet;
 use std::io::Write;
+use std::path::Path;
 use std::thread::sleep;
 use std::time::Duration;
 
 use crate::cli::output::render;
 use crate::event::{compact_events, read_event_log, EventEnvelope};
-use crate::kernel::communication::NoteKind;
 use crate::storage::WriteGuard;
-use crate::{JsonGraphStore, PulseError};
+use crate::PulseError;
 
 /// Report a day file whose last line did not parse (Decision 0011 §5).
-///
-/// The diagnostic goes to stderr rather than into the tail payload: one-shot
-/// `--json` is a bare array of events that callers already parse as one, and a
-/// crash artefact is not an event. Streaming mode is newline-delimited events
-/// for the same reason.
 fn report_torn_tails(paths: &[String]) {
     for path in paths {
         eprintln!(
@@ -34,31 +28,10 @@ fn report_torn_tails(paths: &[String]) {
     }
 }
 
-pub(crate) fn handle_note(
-    store: &JsonGraphStore,
-    ticket: &str,
-    message: &str,
-    from: &str,
-    kind: NoteKind,
-    json: bool,
-) -> Result<(), PulseError> {
-    let note = store.record_note(ticket, message, from, kind)?;
-    render(
-        json,
-        &note,
-        format!(
-            "{} recorded for {} by {}",
-            note.kind.as_str(),
-            note.work_id,
-            note.recorded_by
-        ),
-    )
-}
-
 pub(crate) fn handle_tail(
-    store: &JsonGraphStore,
+    repo_root: &Path,
     since: &str,
-    ticket: Option<&str>,
+    id: Option<&str>,
     follow: bool,
     json: bool,
 ) -> Result<(), PulseError> {
@@ -66,11 +39,8 @@ pub(crate) fn handle_tail(
     // Follow mode re-reads once a second; a torn tail stays torn until the
     // next append, so report each file once rather than every poll.
     let mut reported: HashSet<String> = HashSet::new();
-    let batch = |store: &JsonGraphStore,
-                 cursor: &mut String,
-                 reported: &mut HashSet<String>|
-     -> Vec<EventEnvelope> {
-        let read = read_event_log(store.repo_root()).unwrap_or_default();
+    let batch = |cursor: &mut String, reported: &mut HashSet<String>| -> Vec<EventEnvelope> {
+        let read = read_event_log(repo_root).unwrap_or_default();
         let fresh: Vec<String> = read
             .torn_tails
             .iter()
@@ -83,8 +53,8 @@ pub(crate) fn handle_tail(
             if event.id.as_str() <= cursor.as_str() {
                 continue;
             }
-            if let Some(ticket) = ticket {
-                if !crate::kernel::communication::event_targets_ticket(&event, ticket) {
+            if let Some(id) = id {
+                if event.subject.id != id {
                     continue;
                 }
             }
@@ -96,10 +66,9 @@ pub(crate) fn handle_tail(
         matched
     };
 
-    let matched = batch(store, &mut cursor, &mut reported);
+    let matched = batch(&mut cursor, &mut reported);
     if !follow {
         if json {
-            // One-shot JSON reads return a single JSON array.
             println!(
                 "{}",
                 serde_json::to_string_pretty(&matched).unwrap_or_else(|_| "[]".to_string())
@@ -110,23 +79,18 @@ pub(crate) fn handle_tail(
         return Ok(());
     }
 
-    // Streaming mode: newline-delimited output, one event per line.
     print_batch(&matched, json);
     loop {
         sleep(Duration::from_millis(1000));
-        let matched = batch(store, &mut cursor, &mut reported);
+        let matched = batch(&mut cursor, &mut reported);
         print_batch(&matched, json);
     }
 }
 
 /// Convert the legacy one-file-per-event layout to `<date>.jsonl`.
-///
-/// Runs under the repository write lock so no mutation appends to a day file
-/// while it is being rewritten. Re-running is safe and reports zero work.
-pub(crate) fn handle_compact(store: &JsonGraphStore, json: bool) -> Result<(), PulseError> {
-    let repo_root = store.repo_root().to_path_buf();
-    let guard = WriteGuard::acquire(&repo_root)?;
-    let report = compact_events(&repo_root);
+pub(crate) fn handle_compact(repo_root: &Path, json: bool) -> Result<(), PulseError> {
+    let guard = WriteGuard::acquire(repo_root)?;
+    let report = compact_events(repo_root);
     drop(guard);
     let report = report?;
     let human = if report.directories_removed == 0 {
@@ -175,6 +139,7 @@ fn human_line(event: &EventEnvelope) -> String {
         event
             .payload
             .get("message")
+            .or_else(|| event.payload.get("text"))
             .or_else(|| event.payload.get("summary"))
             .and_then(|value| value.as_str())
             .unwrap_or(""),
