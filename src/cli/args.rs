@@ -66,6 +66,31 @@ pub(crate) enum Command {
         #[arg(long)]
         json: bool,
     },
+    /// Run a configured role (`worker`, a lane name, or `review`) against a
+    /// Ticket.
+    Run {
+        role: String,
+        id: String,
+        #[arg(long, default_value_t = 3600)]
+        ttl: i64,
+        #[arg(long, default_value_t = crate::kernel::run::DEFAULT_CONTINUE_LIMIT)]
+        continue_limit: u32,
+        /// Run a lane even if it is not in the Ticket's profile.
+        #[arg(long)]
+        force: bool,
+        #[arg(long)]
+        actor: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Drop a stuck or expired lease and return the Ticket to `ready`.
+    Release {
+        id: String,
+        #[arg(long)]
+        actor: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
     /// Record a note against `<id>` (append-only event log).
     Note {
         /// Epic, Story, Ticket or Decision id the note targets.

@@ -4,6 +4,7 @@ mod events;
 mod init;
 pub mod output;
 mod packet;
+mod run;
 mod work;
 
 use clap::Parser;
@@ -26,6 +27,27 @@ pub fn run(cli: Cli) -> Result<(), PulseError> {
     match cli.command {
         args::Command::Init { json } => init::handle(&repo_root, json),
         args::Command::Work { command } => work::handle(&repo_root, command),
+        args::Command::Run {
+            role,
+            id,
+            ttl,
+            continue_limit,
+            force,
+            actor,
+            json,
+        } => run::handle_run(
+            &repo_root,
+            &role,
+            &id,
+            ttl,
+            continue_limit,
+            force,
+            actor.as_deref(),
+            json,
+        ),
+        args::Command::Release { id, actor, json } => {
+            run::handle_release(&repo_root, &id, actor.as_deref(), json)
+        }
         args::Command::Packet { id, json } => packet::handle_packet(&repo_root, &id, json),
         args::Command::Checkpoint {
             id,

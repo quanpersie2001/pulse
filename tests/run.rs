@@ -1,0 +1,231 @@
+//! `pulse::kernel::run::run_worker` integration tests (plan 0022 §10.1).
+//!
+//! Drives the real worker loop (real subprocess spawns via a fake shell
+//! "agent" script) against a temporary git repo, calling the library
+//! function directly rather than the CLI. Needs `CARGO_BIN_EXE_pulse`
+//! (only set for this crate, not for `cargo test --lib`), which is why
+//! these live here instead of inline in `src/kernel/run.rs`.
+
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::process::Command as StdCommand;
+
+use serde_json::{json, Value};
+
+use pulse::identity::actor::{ActorKind, ActorRef};
+use pulse::kernel::run::run_worker;
+use pulse::store::issues;
+
+const PULSE_BIN: &str = env!("CARGO_BIN_EXE_pulse");
+
+fn agent(id: &str) -> ActorRef {
+    ActorRef {
+        kind: ActorKind::Agent,
+        id: id.to_string(),
+    }
+}
+
+fn git_repo_with_ready_ticket() -> tempfile::TempDir {
+    let dir = tempfile::tempdir().unwrap();
+    let run = |args: &[&str]| {
+        assert!(StdCommand::new("git")
+            .arg("-C")
+            .arg(dir.path())
+            .args(args)
+            .status()
+            .unwrap()
+            .success());
+    };
+    fs::write(dir.path().join("PULSE.md"), "profiles: {}\n").unwrap();
+    run(&["init", "-q"]);
+    run(&["config", "user.email", "test@example.com"]);
+    run(&["config", "user.name", "test"]);
+    run(&["add", "."]);
+    run(&["commit", "-q", "-m", "init"]);
+    issues::mutate(dir.path(), |mut records| {
+        records.push(json!({
+            "schema": 3, "id": "TK-a3f9", "kind": "ticket", "title": "t",
+            "status": "ready", "revision": 1,
+            "created_at": "2026-09-16T00:00:00Z", "updated_at": "2026-09-16T00:00:00Z",
+            "role": "implementation", "risk": "low", "surface": "cli",
+            "acceptance": [{"id": "AC-1", "when": "x", "then": "y"}],
+        }));
+        Ok(records)
+    })
+    .unwrap();
+    dir
+}
+
+fn write_script(repo: &Path, name: &str, body: &str) -> PathBuf {
+    let path = repo.join(name);
+    fs::write(&path, body).unwrap();
+    path
+}
+
+fn write_checkpoint_fixture(repo: &Path, run_id: &str) -> PathBuf {
+    let path = repo.join("cp.json");
+    fs::write(
+        &path,
+        serde_json::to_vec(&json!({
+            "run_id": run_id, "done_ac": [], "in_progress": "", "next": [],
+            "files": [], "decisions": [], "gotchas": [], "commands_run": [],
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    path
+}
+
+fn write_runners_json(repo: &Path, roles: &[(&str, String)]) {
+    let mut map = serde_json::Map::new();
+    for (role, command) in roles {
+        map.insert(
+            (*role).to_string(),
+            json!({"command": command, "timeout_seconds": 30}),
+        );
+    }
+    fs::write(
+        repo.join(".pulse/runners.json"),
+        serde_json::to_vec(&Value::Object(map)).unwrap(),
+    )
+    .unwrap();
+}
+
+#[test]
+fn continue_spawns_fresh_process_with_latest_checkpoint() {
+    let repo = git_repo_with_ready_ticket();
+    let checkpoint_fixture = write_checkpoint_fixture(repo.path(), "checkpoint-marker-xyz");
+    let worker_script = write_script(
+        repo.path(),
+        "worker.sh",
+        &format!(
+            "#!/bin/sh\n\"{PULSE_BIN}\" --repo-root \"$1\" checkpoint \"$2\" --from \"$3\" --actor agent:worker --json >/dev/null 2>&1\necho '{{\"status\":\"continue\"}}'\n"
+        ),
+    );
+    let continue_script = write_script(
+        repo.path(),
+        "worker-continue.sh",
+        "#!/bin/sh\nif grep -q \"checkpoint-marker-xyz\" \"$1\"; then\n  echo '{\"status\":\"blocked\",\"reason\":\"saw-latest-checkpoint\"}'\nelse\n  echo '{\"status\":\"blocked\",\"reason\":\"stale-checkpoint\"}'\nfi\n",
+    );
+    write_runners_json(
+        repo.path(),
+        &[
+            (
+                "worker",
+                format!(
+                    "sh {} {{repo}} {{ticket}} {}",
+                    worker_script.display(),
+                    checkpoint_fixture.display()
+                ),
+            ),
+            (
+                "worker-continue",
+                format!("sh {} {{input}}", continue_script.display()),
+            ),
+        ],
+    );
+
+    let updated = run_worker(repo.path(), &agent("worker"), "TK-a3f9", 3600, 5).unwrap();
+    assert_eq!(updated["status"], "blocked");
+    let notes = updated["notes"].as_array().unwrap();
+    assert_eq!(notes.last().unwrap()["text"], "saw-latest-checkpoint");
+}
+
+#[test]
+fn continue_without_new_checkpoint_is_a_crash() {
+    let repo = git_repo_with_ready_ticket();
+    let worker_script = write_script(
+        repo.path(),
+        "worker.sh",
+        "#!/bin/sh\necho '{\"status\":\"continue\"}'\n",
+    );
+    write_runners_json(
+        repo.path(),
+        &[("worker", format!("sh {}", worker_script.display()))],
+    );
+
+    let err = run_worker(repo.path(), &agent("worker"), "TK-a3f9", 3600, 5).unwrap_err();
+    assert_eq!(err.code(), "run_continue_without_checkpoint");
+}
+
+#[test]
+fn continue_limit_blocks_with_needs_split() {
+    let repo = git_repo_with_ready_ticket();
+    let checkpoint_fixture = write_checkpoint_fixture(repo.path(), "run-x");
+    let script = write_script(
+        repo.path(),
+        "worker.sh",
+        &format!(
+            "#!/bin/sh\n\"{PULSE_BIN}\" --repo-root \"$1\" checkpoint \"$2\" --from \"$3\" --actor agent:worker --json >/dev/null 2>&1\necho '{{\"status\":\"continue\"}}'\n"
+        ),
+    );
+    let command = format!(
+        "sh {} {{repo}} {{ticket}} {}",
+        script.display(),
+        checkpoint_fixture.display()
+    );
+    write_runners_json(
+        repo.path(),
+        &[("worker", command.clone()), ("worker-continue", command)],
+    );
+
+    let updated = run_worker(repo.path(), &agent("worker"), "TK-a3f9", 3600, 1).unwrap();
+    assert_eq!(updated["status"], "blocked");
+    let notes = updated["notes"].as_array().unwrap();
+    assert_eq!(notes.last().unwrap()["text"], "needs_split");
+}
+
+#[test]
+fn handed_off_ends_the_loop_successfully() {
+    let repo = git_repo_with_ready_ticket();
+    let handoff_fixture = repo.path().join("handoff.json");
+    fs::write(
+        &handoff_fixture,
+        serde_json::to_vec(&json!({
+            "summary": "done", "changed_files": [],
+            "acceptance": [{"id": "AC-1", "status": "done", "how": "ran it"}],
+            "verify_results": [], "docs_updated": [], "learnings_used": [],
+            "friction": [], "open_risks": [],
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let script = write_script(
+        repo.path(),
+        "worker.sh",
+        &format!(
+            "#!/bin/sh\n\"{PULSE_BIN}\" --repo-root \"$1\" handoff \"$2\" --from \"$3\" --actor agent:worker --json >/dev/null 2>&1\necho '{{\"status\":\"handed_off\"}}'\n"
+        ),
+    );
+    write_runners_json(
+        repo.path(),
+        &[(
+            "worker",
+            format!(
+                "sh {} {{repo}} {{ticket}} {}",
+                script.display(),
+                handoff_fixture.display()
+            ),
+        )],
+    );
+
+    let updated = run_worker(repo.path(), &agent("worker"), "TK-a3f9", 3600, 5).unwrap();
+    assert_eq!(updated["status"], "verifying");
+}
+
+#[test]
+fn a_nonzero_exit_is_inconclusive_and_keeps_the_lease() {
+    let repo = git_repo_with_ready_ticket();
+    let script = write_script(repo.path(), "worker.sh", "#!/bin/sh\nexit 1\n");
+    write_runners_json(
+        repo.path(),
+        &[("worker", format!("sh {}", script.display()))],
+    );
+
+    let err = run_worker(repo.path(), &agent("worker"), "TK-a3f9", 3600, 5).unwrap_err();
+    assert_eq!(err.code(), "run_inconclusive");
+    let records = issues::read_all(repo.path()).unwrap();
+    let ticket = records.iter().find(|r| r["id"] == "TK-a3f9").unwrap();
+    assert_eq!(ticket["status"], "active");
+    assert!(!ticket["lease"].is_null());
+}
