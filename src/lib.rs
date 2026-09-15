@@ -16,6 +16,7 @@ pub mod reservation;
 pub mod runner;
 pub mod source;
 pub mod storage;
+pub mod store;
 pub mod work_packet;
 
 pub use error::{PulseError, PulseResult, Result};

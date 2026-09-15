@@ -81,6 +81,17 @@ pub enum PulseError {
 
     #[error("already exists: {subject}")]
     AlreadyExists { subject: String },
+
+    /// v3 kernel/store error: every code here MUST carry a `hint` (plan 0022
+    /// §6 — "hint là bắt buộc cho mọi mã lỗi"). Older variants above predate
+    /// that rule and are being phased out with the modules that raise them;
+    /// new v3 code always constructs errors through [`PulseError::kernel`].
+    #[error("{message}")]
+    Kernel {
+        code: &'static str,
+        message: String,
+        hint: &'static str,
+    },
 }
 
 impl PulseError {
@@ -103,6 +114,17 @@ impl PulseError {
             Self::CasConflict { .. } => "cas_conflict",
             Self::NotFound { .. } => "not_found",
             Self::AlreadyExists { .. } => "already_exists",
+            Self::Kernel { code, .. } => code,
+        }
+    }
+
+    /// Operator-facing "how to fix this" text. Only [`Self::Kernel`] carries
+    /// one today; every new v3 error code goes through [`Self::kernel`], so
+    /// this is never `None` for a code introduced after plan 0022.
+    pub fn hint(&self) -> Option<&'static str> {
+        match self {
+            Self::Kernel { hint, .. } => Some(hint),
+            _ => None,
         }
     }
 
@@ -110,6 +132,14 @@ impl PulseError {
         Self::Validation {
             code,
             message: message.into(),
+        }
+    }
+
+    pub fn kernel(code: &'static str, message: impl Into<String>, hint: &'static str) -> Self {
+        Self::Kernel {
+            code,
+            message: message.into(),
+            hint,
         }
     }
 
