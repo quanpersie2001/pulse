@@ -1,4 +1,5 @@
 mod args;
+mod completion;
 mod events;
 mod init;
 pub mod output;
@@ -24,6 +25,18 @@ pub fn run(cli: Cli) -> Result<(), PulseError> {
     match cli.command {
         args::Command::Init { json } => init::handle(&repo_root, json),
         args::Command::Work { command } => work::handle(&repo_root, command),
+        args::Command::Handoff {
+            id,
+            from,
+            actor,
+            json,
+        } => completion::handle_handoff(&repo_root, &id, &from, actor.as_deref(), json),
+        args::Command::Close { id, actor, json } => {
+            completion::handle_close(&repo_root, &id, actor.as_deref(), json)
+        }
+        args::Command::CloseStory { id, actor, json } => {
+            completion::handle_close_story(&repo_root, &id, actor.as_deref(), json)
+        }
         args::Command::Note {
             id,
             text,

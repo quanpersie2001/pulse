@@ -24,17 +24,17 @@ use crate::store::issues;
 
 const RUNTIME_OWNED_FIELDS: [&str; 3] = ["lease", "verdicts", "checkpoints"];
 
-fn now_rfc3339() -> String {
+pub(crate) fn now_rfc3339() -> String {
     Utc::now().to_rfc3339()
 }
 
-fn find<'a>(records: &'a [Value], id: &str) -> Option<&'a Value> {
+pub(crate) fn find<'a>(records: &'a [Value], id: &str) -> Option<&'a Value> {
     records
         .iter()
         .find(|record| record.get("id").and_then(Value::as_str) == Some(id))
 }
 
-fn require<'a>(records: &'a [Value], id: &str) -> Result<&'a Value> {
+pub(crate) fn require<'a>(records: &'a [Value], id: &str) -> Result<&'a Value> {
     find(records, id).ok_or_else(|| {
         PulseError::kernel(
             "issue_not_found",
@@ -479,7 +479,7 @@ pub fn append_note(
     Ok(updated)
 }
 
-fn apply_to_record(
+pub(crate) fn apply_to_record(
     mut records: Vec<Value>,
     id: &str,
     edit: impl FnOnce(&mut Value) -> Result<()>,
@@ -498,7 +498,7 @@ fn apply_to_record(
     Ok(records)
 }
 
-fn bump(object: &mut Map<String, Value>) {
+pub(crate) fn bump(object: &mut Map<String, Value>) {
     let revision = object.get("revision").and_then(Value::as_u64).unwrap_or(0);
     object.insert("revision".to_string(), Value::from(revision + 1));
     object.insert("updated_at".to_string(), Value::String(now_rfc3339()));

@@ -22,6 +22,33 @@ pub(crate) enum Command {
         #[command(subcommand)]
         command: super::work::WorkCommand,
     },
+    /// Seal a handoff receipt and transition `active -> verifying`.
+    Handoff {
+        id: String,
+        /// JSON file with the handoff shape (plan 0022 §7.2).
+        #[arg(long)]
+        from: PathBuf,
+        #[arg(long)]
+        actor: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Run the close gate; on a clean report, `verifying -> done`.
+    Close {
+        id: String,
+        #[arg(long)]
+        actor: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Run the close-story gate; on a clean report, the Story becomes `done`.
+    CloseStory {
+        id: String,
+        #[arg(long)]
+        actor: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
     /// Record a note against `<id>` (append-only event log).
     Note {
         /// Epic, Story, Ticket or Decision id the note targets.

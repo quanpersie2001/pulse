@@ -8,7 +8,9 @@
 //! `communication`, `documentation`, `guidance`) are deleted rather than
 //! carried forward; their v3 replacements land in later P1.x commits.
 
+pub mod completion;
 pub(crate) mod init;
 pub mod issues;
+pub mod profile;
 pub mod ready;
 pub mod roles;

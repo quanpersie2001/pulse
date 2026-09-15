@@ -30,10 +30,19 @@ const DIRS: [&str; 6] = [
 const GITIGNORE_ENTRIES: [&str; 2] = ["**/.pulse/runtime/", "**/.pulse/cache/"];
 
 const PULSE_MD_SEED: &str = "\
-# PULSE.md - seeded by `pulse init`.
-# Profile and lane defaults land in plan 0022 P1.9; this is a placeholder.
+# PULSE.md - seeded by `pulse init` (plan 0022 section 8.1). Human-editable.
 fence_ignore: []
-profiles: {}
+profiles:
+  cli-low: {lanes: [review-correctness]}
+  lib-low: {lanes: [review-correctness]}
+  api-low: {lanes: [review-correctness]}
+  ui-low: {lanes: [review-correctness, qa-ui]}
+  api-medium: {lanes: [review-correctness, qa-api]}
+  ui-medium: {lanes: [review-correctness, qa-ui]}
+  api-high: {lanes: [review-correctness, review-adversarial, qa-api], human: required}
+  ui-high: {lanes: [review-correctness, review-adversarial, qa-ui, qa-api], human: required}
+  docs-low: {lanes: [check-docs]}
+  decision_work: {lanes: []}
 ";
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
