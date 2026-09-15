@@ -22,6 +22,23 @@ pub(crate) enum Command {
         #[command(subcommand)]
         command: super::work::WorkCommand,
     },
+    /// The one bounded JSON a worker reads before doing anything.
+    Packet {
+        id: String,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Append a checkpoint; does not change status.
+    Checkpoint {
+        id: String,
+        /// JSON file with the checkpoint shape (plan 0022 §4.4/§10.3).
+        #[arg(long)]
+        from: PathBuf,
+        #[arg(long)]
+        actor: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
     /// Seal a handoff receipt and transition `active -> verifying`.
     Handoff {
         id: String,
