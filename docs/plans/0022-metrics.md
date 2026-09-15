@@ -21,15 +21,25 @@ Phase 2.
 
 ## Table
 
-| Metric | Baseline 2026-09-16 | After Phase 0 | Target v3.0 |
-|---|---|---|---|
-| Rust lines in `src/` | 43106 | 43106 | < 10000 |
-| Distinct error codes (pattern match) | 271 | 271 | < 40 |
-| CLI leaf commands | 67 (measured; plan estimated ~60) | 67 | ≤ 22 |
-| Hand-typed commands to close one Ticket | ~11 (plan estimate) | ~11 | ≤ 6 |
-| Required flags on that path | ~25 (plan estimate) | ~25 | ≤ 4 |
-| Friction/Ticket that is a Pulse bug | Track B: majority | Track B: majority (no new dogfood yet) | < 1 |
-| Repos running Pulse for real | 0 | 0 | 1 (UI + API) |
+| Metric | Baseline 2026-09-16 | After Phase 0 | After P1.3+P1.4+P1.5 (2026-09-16) | Target v3.0 |
+|---|---|---|---|---|
+| Rust lines in `src/` | 43106 | 43106 | 6517 | < 10000 |
+| Distinct error codes (pattern match) | 271 | 271 | 31 | < 40 |
+| CLI leaf commands | 67 (measured; plan estimated ~60) | 67 | 13 | ≤ 22 |
+| Hand-typed commands to close one Ticket | ~11 (plan estimate) | ~11 | n/a — `close` doesn't exist until P1.7 | ≤ 6 |
+| Required flags on that path | ~25 (plan estimate) | ~25 | n/a | ≤ 4 |
+| Friction/Ticket that is a Pulse bug | Track B: majority | Track B: majority (no new dogfood yet) | Track B: majority (no new dogfood yet) | < 1 |
+| Repos running Pulse for real | 0 | 0 | 0 | 1 (UI + API) |
 
-Baseline test suite (`cargo test --all-targets`) at this commit: 12 test
-binaries, 624 tests, 0 failures.
+Baseline test suite (`cargo test --all-targets`) at the Phase 0 commit: 12
+test binaries, 624 tests, 0 failures.
+
+After P1.3+P1.4+P1.5 (commit `a2d164a`): 8 test binaries, 130 tests, 0
+failures. `src/` is already under the Phase 1 target (< 12000) and the v3.0
+target (< 10000) because P1.3/P1.4/P1.5 had to merge into one commit (see
+that commit's message) — deletion landed all at once instead of spread
+across P1.3-P1.5. The count will grow again as P1.6-P1.10 add
+`evidence::receipt`, `kernel::{completion,packet,checkpoint,profile,lane,
+run}`, and `kernel::init`'s full asset set; 13 CLI leaves will grow the
+same way (`checkpoint`, `handoff`, `release`, `close`, `close-story`,
+`packet`, `run` are not implemented yet).
