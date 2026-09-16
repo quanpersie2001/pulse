@@ -251,6 +251,53 @@ fn story_scope_lane_without_surface_or_risk_is_profile_missing_even_with_force()
 }
 
 #[test]
+fn story_scope_lane_routes_through_its_cases_surfaces_without_force() {
+    // Dogfood ST-1 F18: a story classified api-medium must still run qa-ui
+    // for its ui-surface cases — the profile gate unions the case surfaces
+    // instead of demanding --force.
+    let repo = tempfile::tempdir().unwrap();
+    let run = |args: &[&str]| {
+        assert!(StdCommand::new("git")
+            .arg("-C")
+            .arg(repo.path())
+            .args(args)
+            .status()
+            .unwrap()
+            .success());
+    };
+    fs::write(
+        repo.path().join("PULSE.md"),
+        "profiles:\n  api-medium: {lanes: [review-correctness, qa-api]}\n  ui-medium: {lanes: [review-correctness, qa-ui]}\n",
+    )
+    .unwrap();
+    run(&["init", "-q"]);
+    run(&["config", "user.email", "test@example.com"]);
+    run(&["config", "user.name", "test"]);
+    run(&["add", "."]);
+    run(&["commit", "-q", "-m", "init"]);
+    issues::mutate(repo.path(), |mut records| {
+        records.push(json!({
+            "schema": 3, "id": "ST-1111", "kind": "story", "title": "s",
+            "status": "ready", "revision": 1,
+            "created_at": "2026-09-16T00:00:00Z", "updated_at": "2026-09-16T00:00:00Z",
+            "outcome": "o", "risk": "medium", "surface": "api",
+            "qa_cases": [
+                {"id": "QA-001", "surface": "api", "priority": "high", "steps": ["GET /"]},
+                {"id": "QA-002", "surface": "ui", "priority": "high", "steps": ["http://127.0.0.1:3000/"]}
+            ],
+        }));
+        Ok(records)
+    })
+    .unwrap();
+    write_runners_json(repo.path(), &[]);
+
+    // The profile gate must let qa-ui through (the case surface routes it);
+    // failing later at the missing runner entry proves the gate passed.
+    let err = run_lane(repo.path(), &agent("qa-ui"), "ST-1111", "qa-ui", false).unwrap_err();
+    assert_eq!(err.code(), "runner_role_missing");
+}
+
+#[test]
 fn a_nonzero_exit_is_inconclusive_and_keeps_the_lease() {
     let repo = git_repo_with_ready_ticket();
     let script = write_script(repo.path(), "worker.sh", "#!/bin/sh\nexit 1\n");

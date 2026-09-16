@@ -224,23 +224,17 @@ fn identity_module_owns_shared_actor_types() {
 }
 
 #[test]
-fn event_and_transaction_modules_own_their_id_generation() {
+fn event_module_owns_its_id_generation() {
+    // The v2 transaction machinery (and with it new_transaction_id) went
+    // with storage/transaction.rs — 0022-open A7, deleted 2026-09-16.
     assert!(
         source("src/event.rs").contains("pub fn new_event_id"),
         "event module should own new_event_id generation"
-    );
-    assert!(
-        source("src/storage/transaction.rs").contains("pub fn new_transaction_id"),
-        "storage transaction module should own new_transaction_id generation"
     );
     let id = source("src/id.rs");
     assert!(
         id.contains("pub use crate::event::new_event_id"),
         "id should re-export new_event_id from event for compatibility"
-    );
-    assert!(
-        id.contains("pub use crate::storage::transaction::new_transaction_id"),
-        "id should re-export new_transaction_id from storage::transaction for compatibility"
     );
     assert!(id.contains("pub enum WorkKind"));
     assert!(id.contains("pub struct WorkId"));

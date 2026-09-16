@@ -173,11 +173,11 @@ pub fn validate_hash_id_for_kind(id: &str, kind: WorkKind) -> Result<()> {
     Ok(())
 }
 
-// Compatibility re-exports: event/transaction identity generation now lives
-// with its owning module. These aliases preserve the historical
-// `pulse::id::{new_event_id, new_transaction_id}` path.
+// Compatibility re-export: event identity generation lives with its owning
+// module; the alias preserves the historical `pulse::id::new_event_id` path.
+// (`new_transaction_id` went with the deleted v2 transaction machinery —
+// 0022-open A7.)
 pub use crate::event::new_event_id;
-pub use crate::storage::transaction::new_transaction_id;
 
 #[cfg(test)]
 mod hash_id_tests {

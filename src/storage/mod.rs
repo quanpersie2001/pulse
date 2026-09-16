@@ -1,14 +1,12 @@
 //! Generic storage primitives.
 //!
-//! This module owns only atomic writes, locking, path validation and
-//! transaction primitives. It does not depend on any higher domain (`store`,
-//! `kernel`, `evidence`, ...).
+//! This module owns only atomic writes, locking and path validation. It
+//! does not depend on any higher domain (`store`, `kernel`, `evidence`, ...).
 
 pub mod append;
 pub mod atomic;
 pub mod lock;
 pub mod paths;
-pub mod transaction;
 
 use crate::error::{PulseError, Result};
 use serde::de::DeserializeOwned;
