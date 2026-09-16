@@ -10,7 +10,8 @@ a clear error if it is missing, rather than shipping its own copy.
 
 Both scripts start/stop the app themselves, reading how from two fenced
 code blocks in the target repo's `docs/operations/run.md`, each with the
-info string `pulse-run` and one YAML object with exactly these keys:
+info string `pulse-run` and one YAML object with these keys (`await_exit`
+optional, default `true` — see below):
 
 ```pulse-run
 id: api
@@ -18,6 +19,7 @@ start: ["docker", "compose", "up", "-d", "api"]
 ready_url: "http://127.0.0.1:8000/health"
 stop: ["docker", "compose", "stop", "api"]
 log: ".pulse/runtime/logs/api.log"
+await_exit: true
 ```
 
 ```pulse-run
@@ -26,6 +28,7 @@ start: ["pnpm", "dev"]
 ready_url: "http://127.0.0.1:3000"
 stop: ["pkill", "-f", "next dev"]
 log: ".pulse/runtime/logs/ui.log"
+await_exit: false
 ```
 
 `id` picks which block belongs to which script (`ui.mjs` reads `id: ui`,
@@ -37,16 +40,23 @@ YAML library, to stay dependency-free); `ready_url` is polled with a plain
 root) the running app writes to, tailed into each case's evidence.
 
 `start` is spawned detached into its own process group with stdout/stderr
-redirected to `log`, and the script does not wait for it to exit — many
-`start` commands (the `pnpm dev` example above included) are long-running
-dev servers that never exit on their own, so waiting would hang until
-Pulse's lane timeout. `ready_url` returning 200 is the only readiness
-signal. `stop` is expected to actually terminate the app; if it exits
-non-zero the script falls back to sending `SIGTERM` to the process group
-`start` was spawned into, best-effort. `commands_run[]` records this
+redirected to `log`. With the default `await_exit: true`, the script then
+waits (bounded, 120 s) for `start` to exit before polling `ready_url`:
+`docker compose up -d --build` recreates the container even on a cached
+build, and the old instance — which answers `ready_url` immediately — goes
+down for several seconds while the new one comes up. Polling earlier is how
+a lane ends up grading a stale or dying instance (dogfood ST-1, F2). After
+`start` exits, `ready_url` must answer 200 three times in a row, so a
+container blipping during startup does not count as ready. A `start` that
+never exits (the `pnpm dev` example above included) must set
+`await_exit: false` — the wait is capped and cannot tell a dev server from
+a pending compose run, so that mode keeps the old poll-immediately behavior
+and cannot fully protect against the stale-instance race; prefer a `start`
+command that exits. `stop` is expected to actually terminate the app; if it
+exits non-zero the script falls back to sending `SIGTERM` to the process
+group `start` was spawned into, best-effort. `commands_run[]` records this
 truthfully: the detached `start` with `exit: null` and `detached: true`
-(it has no exit code — it never exits during the run), then `stop` with
-its real exit code.
+(it has no exit code during the run), then `stop` with its real exit code.
 
 A missing `docs/operations/run.md`, a missing block for the script's `id`,
 or a block missing any of the four keys, is not a crash: the script writes
@@ -57,6 +67,12 @@ was a Pulse bug.
 
 ## `qa_cases[]` step conventions
 
+- Story-scope inputs (`pulse run qa-<x> <story-id>`) carry the Story's
+  whole `qa_cases[]`; each script runs only the cases whose `surface`
+  matches its own (`api.mjs` runs `surface: "api"`, `ui.mjs` runs
+  `surface: "ui"`; a case without `surface` is assumed to belong to the
+  script's surface) — the other surface's steps are not `METHOD /path`
+  lines (api) or URLs (ui) and would only crash the script.
 - `ui.mjs`: `steps[0]` is the URL to navigate to; every other step is free
   text recorded verbatim into the case's `observation` — the script never
   interprets it as an instruction.
@@ -67,11 +83,12 @@ was a Pulse bug.
 
 A `qa_cases[]` entry may carry a `check: {argv: [...], assert: [{"exit_code": N}]}`
 (plan §4.5). When present, the script runs `argv` and compares its exit
-code against `assert[].exit_code`: `pass` on a match, `fail` otherwise. When
-absent, the case is always `inconclusive` with its artifacts attached —
+code against `assert[].exit_code`: `pass` on a match, `fail` otherwise. When absent, the case is always `inconclusive` with its artifacts attached —
 neither script ever marks a case `pass` on its own judgment of a screenshot,
 console log or HTTP response; that call is left to whoever reads the
-evidence next (a review lane, or a human).
+evidence next (a review lane, or a human). When a `check` fails, the
+check's own last stdout/stderr line is appended to the case's `observation`
+(`|| check: ...`) so a failed check is diagnosable from the receipt alone.
 
 ## Output
 

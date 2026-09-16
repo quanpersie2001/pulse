@@ -53,16 +53,43 @@ async function readRunConfig(repoRoot, id) {
   return { config: block };
 }
 
-async function waitForReady(url, timeoutMs = 60000) {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
+function isRunning(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// The detached `start` may keep working after something already answers:
+// `docker compose up -d --build` recreates the container even on a cached
+// build, and the old instance goes down for several seconds while the new
+// one comes up — so a 200 from `ready_url` can come from an instance that
+// is about to be replaced (dogfood ST-1, F2). With `await_exit: true` (the
+// block default) the script therefore waits for the start command to exit
+// first (bounded), then requires `ready_url` to answer 200 several times
+// in a row so a recreate blip cannot count as ready. A start command that
+// never exits (a long-running dev server) must set `await_exit: false` —
+// the wait is capped and cannot tell a dev server from a pending compose.
+async function waitForStartThenReady(pid, url, awaitExit) {
+  if (awaitExit) {
+    const exitDeadline = Date.now() + 120000;
+    while (Date.now() < exitDeadline && isRunning(pid)) {
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+    }
+  }
+  let consecutive = 0;
+  const readyDeadline = Date.now() + 60000;
+  while (Date.now() < readyDeadline) {
     try {
       const response = await fetch(url);
-      if (response.status === 200) return true;
+      consecutive = response.status === 200 ? consecutive + 1 : 0;
+      if (consecutive >= 3) return true;
     } catch {
-      // not up yet
+      consecutive = 0;
     }
-    await new Promise((resolve) => setTimeout(resolve, 500));
+    await new Promise((resolve) => setTimeout(resolve, 1000));
   }
   return false;
 }
@@ -71,11 +98,9 @@ async function runProcess(argv, cwd) {
   return execFileAsync(argv[0], argv.slice(1), { cwd });
 }
 
-// `start` is often a long-running dev server that never exits on its own
-// (plan §8.6's own `pnpm dev` example) — waiting for it the way runProcess
-// does would hang until Pulse's lane timeout. Spawn it detached into its own
-// process group and return immediately; `ready_url` polling is the actual
-// readiness signal, not this call returning.
+// `start` is spawned detached into its own process group so a hanging
+// command cannot take the whole lane down; waitForStartThenReady then waits
+// for it in a bounded way before trusting `ready_url` (dogfood ST-1, F2).
 function startApp(argv, cwd, logPath) {
   const fullLogPath = path.join(cwd, logPath);
   mkdirSync(path.dirname(fullLogPath), { recursive: true });
@@ -179,13 +204,16 @@ async function main() {
   let browser;
   let report;
   try {
-    if (!(await waitForReady(config.ready_url))) {
+    if (!(await waitForStartThenReady(pid, config.ready_url, config.await_exit !== 'false'))) {
       report = inconclusiveReport(commit, `${config.ready_url} never returned 200`, config.ready_url);
     } else {
       browser = await playwright.chromium.launch();
       const viewports = input.viewports && input.viewports.length > 0 ? input.viewports : ['1280x800'];
       const cases = [];
-      for (const qaCase of input.qa_cases || []) {
+      // A story-scope input carries the Story's whole qa_cases[]; this lane
+      // only runs its own surface's cases (dogfood ST-1, F16).
+      const uiCases = (input.qa_cases || []).filter((c) => !c.surface || c.surface === 'ui');
+      for (const qaCase of uiCases) {
         const [url, ...rest] = qaCase.steps || [];
         const consoleLines = [];
         for (const viewport of viewports) {
@@ -193,10 +221,21 @@ async function main() {
           const page = await browser.newPage({ viewport: { width, height } });
           page.on('console', (message) => consoleLines.push(`[${viewport}] ${message.type()}: ${message.text()}`));
           if (url) await page.goto(url);
+          // Let client-side fetches settle so evidence shows the rendered
+          // page rather than a loading state (dogfood ST-1, F22).
+          await page.waitForLoadState('networkidle', { timeout: 5000 }).catch(() => {});
           await page.screenshot({ path: path.join(evidenceDir, 'shots', `${qaCase.id}-${viewport}.png`) });
           if (viewport === viewports[0]) {
-            const snapshot = await page.accessibility.snapshot();
-            await writeFile(path.join(evidenceDir, 'logs', `${qaCase.id}.a11y.txt`), JSON.stringify(snapshot, null, 2));
+            // playwright >= 1.45 removed page.accessibility.snapshot(); the
+            // supported replacement is locator.ariaSnapshot() — a YAML
+            // string, written as-is (dogfood ST-1, F1).
+            let a11y;
+            try {
+              a11y = await page.locator('body').ariaSnapshot();
+            } catch (a11yError) {
+              a11y = `(ariaSnapshot unavailable: ${a11yError.message})`;
+            }
+            await writeFile(path.join(evidenceDir, 'logs', `${qaCase.id}.a11y.txt`), String(a11y));
           }
           await page.close();
         }
@@ -207,16 +246,24 @@ async function main() {
           .concat([`logs/${qaCase.id}.console.txt`, `logs/${qaCase.id}.a11y.txt`]);
 
         let status = 'inconclusive';
+        let checkDetail = '';
         if (qaCase.check) {
           let exitCode = 0;
           try {
             await runProcess(qaCase.check.argv, repoRoot);
           } catch (checkError) {
             exitCode = typeof checkError.code === 'number' ? checkError.code : 1;
+            const output = [checkError.stdout, checkError.stderr].filter(Boolean).join('\n').trim();
+            checkDetail = output.split('\n').pop() ?? '';
           }
           status = matchesAssert(qaCase.check.assert, exitCode) ? 'pass' : 'fail';
         }
-        cases.push({ id: qaCase.id, status, observation: rest.join(' | '), artifacts });
+        // A failed check's own last output line rides along in `observation`
+        // so the receipt alone is diagnosable (dogfood ST-1, F19).
+        const observation = checkDetail
+          ? `${rest.join(' | ')} || check: ${checkDetail}`
+          : rest.join(' | ');
+        cases.push({ id: qaCase.id, status, observation, artifacts });
       }
 
       const verdict = cases.some((c) => c.status === 'fail')

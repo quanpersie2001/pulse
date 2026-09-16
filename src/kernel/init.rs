@@ -647,13 +647,17 @@ mod tests {
     /// The A8.1 regression, exercised for real: `start` is a long-running
     /// server (`python3 -m http.server`, which never exits), so the old
     /// awaited-execFile code blocked forever before ever polling
-    /// `ready_url`. The fixed script must finish quickly (bounded at 10s so
-    /// a regression fails instead of hanging the suite), report
+    /// `ready_url`. With `await_exit: false` (this block's explicit
+    /// opt-out) the script must still finish quickly (bounded at 30s so a
+    /// regression fails instead of hanging the suite — an unconditional
+    /// await burns the script's 120s cap and dwarfs the bound), report
     /// `inconclusive` (the case carries no `check`), record the detached
     /// `start` truthfully in `commands_run[]`, leave the HTTP transcript,
     /// and leave no server listening. Skipped, with a stated reason, when
     /// `node` or `python3` is not on PATH — the suite must not depend on
-    /// either toolchain.
+    /// either toolchain. The block sets `await_exit: false` explicitly: a
+    /// never-exiting start cannot be awaited (dogfood ST-1 F2), which is
+    /// exactly the opt-out this test pins.
     #[test]
     fn qa_api_script_survives_a_long_running_start_and_stops_the_server() {
         if std::process::Command::new("node")
@@ -685,7 +689,7 @@ mod tests {
             repo.path().join("docs/operations/run.md"),
             "# Run\n\n```pulse-run\nid: api\nstart: [\"python3\", \"-m\", \"http.server\", \"18080\"]\n\
              ready_url: \"http://127.0.0.1:18080/\"\nstop: [\"pkill\", \"-f\", \"http.server 18080\"]\n\
-             log: \".pulse/runtime/logs/api.log\"\n```\n",
+             log: \".pulse/runtime/logs/api.log\"\nawait_exit: false\n```\n",
         )
         .unwrap();
         fs::write(
@@ -706,14 +710,14 @@ mod tests {
         let status = loop {
             match child.try_wait().expect("node child should be pollable") {
                 Some(status) => break status,
-                None if started.elapsed() < std::time::Duration::from_secs(10) => {
+                None if started.elapsed() < std::time::Duration::from_secs(30) => {
                     std::thread::sleep(std::time::Duration::from_millis(50));
                 }
                 None => {
                     let _ = child.kill();
                     panic!(
-                        "api.mjs was still running after 10s — `start` is being awaited, \
-                         not spawned detached"
+                        "api.mjs was still running after 30s — with `await_exit: false` it must \
+                         not await the start child"
                     );
                 }
             }
@@ -748,6 +752,93 @@ mod tests {
         assert!(
             stopped,
             "http.server on 127.0.0.1:18080 still listens after api.mjs exited"
+        );
+    }
+
+    /// The dogfood ST-1 F2 regression: with the default `await_exit: true`,
+    /// the script must wait for the detached `start` to exit before trusting
+    /// `ready_url`, even when `ready_url` already answers — a pre-existing
+    /// instance answering early is exactly the stale-instance race. Here the
+    /// start is `sleep 3` (exits after 3s, starts nothing) and an unrelated
+    /// server already answers `ready_url` from t=0: the script may only
+    /// finish after the start child has exited, i.e. no earlier than ~3s.
+    #[test]
+    fn qa_api_script_awaits_start_exit_before_trusting_ready_url() {
+        if std::process::Command::new("node")
+            .arg("--version")
+            .output()
+            .is_err()
+        {
+            eprintln!(
+                "skipping qa_api_script_awaits_start_exit_before_trusting_ready_url: \
+                 `node` is not on PATH"
+            );
+            return;
+        }
+        let script = Path::new(env!("CARGO_MANIFEST_DIR")).join("templates/qa/api.mjs");
+        let repo = tempfile::tempdir().unwrap();
+        fs::create_dir_all(repo.path().join("docs/operations")).unwrap();
+        fs::write(
+            repo.path().join("docs/operations/run.md"),
+            "# Run\n\n```pulse-run\nid: api\nstart: [\"sh\", \"-c\", \"sleep 3\"]\n\
+             ready_url: \"http://127.0.0.1:18081/\"\nstop: [\"true\"]\n\
+             log: \".pulse/runtime/logs/api.log\"\nawait_exit: true\n```\n",
+        )
+        .unwrap();
+        fs::write(
+            repo.path().join("input.json"),
+            r#"{"qa_cases":[{"id":"QA-001","steps":["GET /"]}],"evidence_dir":".pulse/evidence/TK-qa","handoff_commit":""}"#,
+        )
+        .unwrap();
+
+        // An unrelated server already answers `ready_url` from t=0.
+        let mut server = std::process::Command::new("node")
+            .arg("-e")
+            .arg("require('http').createServer((q,s)=>s.end('ok')).listen(18081)")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .unwrap();
+        let mut up = false;
+        for _ in 0..50 {
+            if std::net::TcpStream::connect("127.0.0.1:18081").is_ok() {
+                up = true;
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+        assert!(up, "node http server on 18081 never came up");
+
+        let started = std::time::Instant::now();
+        let output = std::process::Command::new("node")
+            .arg(&script)
+            .arg("input.json")
+            .current_dir(repo.path())
+            .output()
+            .expect("node child should run");
+        let elapsed = started.elapsed();
+        let _ = server.kill();
+        let _ = server.wait();
+
+        assert!(
+            output.status.success(),
+            "api.mjs exited {:?}: {}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(
+            elapsed >= std::time::Duration::from_secs(2),
+            "api.mjs finished in {elapsed:?} — it trusted `ready_url` while the \
+             start child was still running (the F2 stale-instance race)"
+        );
+        let evidence = repo.path().join(".pulse/evidence/TK-qa");
+        let report: serde_json::Value =
+            serde_json::from_slice(&fs::read(evidence.join("qa-api.json")).unwrap()).unwrap();
+        assert_eq!(report["verdict"], "inconclusive");
+        let http = fs::read_to_string(evidence.join("logs/QA-001.http.txt")).unwrap();
+        assert!(
+            http.contains("< 200"),
+            "expected the GET / transcript to record a 200: {http}"
         );
     }
 }

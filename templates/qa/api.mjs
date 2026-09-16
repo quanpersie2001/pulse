@@ -52,16 +52,43 @@ async function readRunConfig(repoRoot, id) {
   return { config: block };
 }
 
-async function waitForReady(url, timeoutMs = 60000) {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
+function isRunning(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// The detached `start` may keep working after something already answers:
+// `docker compose up -d --build` recreates the container even on a cached
+// build, and the old instance goes down for several seconds while the new
+// one comes up — so a 200 from `ready_url` can come from an instance that
+// is about to be replaced (dogfood ST-1, F2). With `await_exit: true` (the
+// block default) the script therefore waits for the start command to exit
+// first (bounded), then requires `ready_url` to answer 200 several times
+// in a row so a recreate blip cannot count as ready. A start command that
+// never exits (a long-running dev server) must set `await_exit: false` —
+// the wait is capped and cannot tell a dev server from a pending compose.
+async function waitForStartThenReady(pid, url, awaitExit) {
+  if (awaitExit) {
+    const exitDeadline = Date.now() + 120000;
+    while (Date.now() < exitDeadline && isRunning(pid)) {
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+    }
+  }
+  let consecutive = 0;
+  const readyDeadline = Date.now() + 60000;
+  while (Date.now() < readyDeadline) {
     try {
       const response = await fetch(url);
-      if (response.status === 200) return true;
+      consecutive = response.status === 200 ? consecutive + 1 : 0;
+      if (consecutive >= 3) return true;
     } catch {
-      // not up yet
+      consecutive = 0;
     }
-    await new Promise((resolve) => setTimeout(resolve, 500));
+    await new Promise((resolve) => setTimeout(resolve, 1000));
   }
   return false;
 }
@@ -70,11 +97,9 @@ async function runProcess(argv, cwd) {
   return execFileAsync(argv[0], argv.slice(1), { cwd });
 }
 
-// `start` is often a long-running server that never exits on its own —
-// waiting for it the way runProcess does would hang until Pulse's lane
-// timeout. Spawn it detached into its own process group and return
-// immediately; `ready_url` polling is the actual readiness signal, not this
-// call returning.
+// `start` is spawned detached into its own process group so a hanging
+// command cannot take the whole lane down; waitForStartThenReady then waits
+// for it in a bounded way before trusting `ready_url` (dogfood ST-1, F2).
 function startApp(argv, cwd, logPath) {
   const fullLogPath = path.join(cwd, logPath);
   mkdirSync(path.dirname(fullLogPath), { recursive: true });
@@ -180,11 +205,16 @@ async function main() {
   const pid = startApp(config.start, repoRoot, config.log);
   let report;
   try {
-    if (!(await waitForReady(config.ready_url))) {
+    if (!(await waitForStartThenReady(pid, config.ready_url, config.await_exit !== 'false'))) {
       report = inconclusiveReport(commit, `${config.ready_url} never returned 200`, config.ready_url);
     } else {
       const cases = [];
-      for (const qaCase of input.qa_cases || []) {
+      // A story-scope input carries the Story's whole qa_cases[]; this lane
+      // only runs its own surface's cases — the other surface's steps are
+      // not `METHOD /path` lines and would crash parseStep (dogfood ST-1,
+      // F16).
+      const apiCases = (input.qa_cases || []).filter((c) => !c.surface || c.surface === 'api');
+      for (const qaCase of apiCases) {
         const httpLines = [];
         for (const step of qaCase.steps || []) {
           const { method, urlPath, body } = parseStep(step);
@@ -202,19 +232,27 @@ async function main() {
         await writeFile(path.join(evidenceDir, 'logs', `${qaCase.id}.server.txt`), await tailLines(logPath, 200));
 
         let status = 'inconclusive';
+        let checkDetail = '';
         if (qaCase.check) {
           let exitCode = 0;
           try {
             await runProcess(qaCase.check.argv, repoRoot);
           } catch (checkError) {
             exitCode = typeof checkError.code === 'number' ? checkError.code : 1;
+            const output = [checkError.stdout, checkError.stderr].filter(Boolean).join('\n').trim();
+            checkDetail = output.split('\n').pop() ?? '';
           }
           status = matchesAssert(qaCase.check.assert, exitCode) ? 'pass' : 'fail';
         }
+        // A failed check's own last output line rides along in `observation`
+        // so the receipt alone is diagnosable (dogfood ST-1, F19).
+        const observation = checkDetail
+          ? `${(qaCase.steps || []).join(' | ')} || check: ${checkDetail}`
+          : (qaCase.steps || []).join(' | ');
         cases.push({
           id: qaCase.id,
           status,
-          observation: (qaCase.steps || []).join(' | '),
+          observation,
           artifacts: [`logs/${qaCase.id}.http.txt`, `logs/${qaCase.id}.server.txt`],
         });
       }
