@@ -279,12 +279,17 @@ pub fn run_lane(
 ) -> Result<Value> {
     let records = issues::read_all(repo_root)?;
     let ticket = require(&records, id)?;
+    let kind = ticket.get("kind").and_then(Value::as_str).unwrap_or("");
     let status = ticket.get("status").and_then(Value::as_str).unwrap_or("");
-    if status != "verifying" {
+    // A Ticket must have handed off; a Story has no `verifying` status in its
+    // lifecycle at all (plan §4.7) — a story-scope qa lane (§10.6, "QA scope
+    // story_close là `pulse run qa-<x> <story-id>`") runs against whatever
+    // status the Story is currently in, most often `ready`.
+    if kind == "ticket" && status != "verifying" {
         return Err(PulseError::kernel(
             "lane_not_verifying",
             format!("{id} is {status}, not verifying"),
-            "a lane only runs against a Ticket that has handed off",
+            "a lane only runs against a Ticket that has handed off, or a Story for a story-scope qa lane",
         ));
     }
     if !force {
