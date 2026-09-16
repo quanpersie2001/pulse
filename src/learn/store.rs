@@ -118,7 +118,7 @@ pub fn read(repo_root: &Path, id: &str) -> Result<Learning> {
         PulseError::kernel(
             "learning_not_found",
             format!("no learning {id}"),
-            "check the id with `pulse learn list`",
+            "check the id with `pulse learn show`",
         )
     })?;
     let text = String::from_utf8(bytes).map_err(|error| {

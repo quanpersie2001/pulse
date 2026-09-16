@@ -61,10 +61,14 @@ trả interest cho flow đọc thủ công.
 ## Consequences
 
 - Dependency mới: `tiny_http` (kèm `ascii`, `chunked_transfer`, `httpdate`).
-- **Đợt cắt bù bắt buộc** (quy tắc §14 "mỗi cơ chế mới kèm một xoá"): xoá
-  `src/storage/transaction.rs` (855 dòng) + `src/evidence/artifact.rs`
-  (255 dòng) — orphaned toàn bộ caller graph, đã chứng minh trong
-  0022-open mục A7. Net `src/` kỳ vọng ~phẳng quanh 12.4k; đích < 10.000
-  vẫn phụ thuộc 5 lần gộp CLI leaves còn lại.
+- **Đợt cắt bù:** Decision này ban đầu nêu xoá
+  `storage/transaction.rs` + `evidence/artifact.rs` làm cột mốc cắt bù —
+  **sai thời điểm**: đợt cắt đó đã landing từ trước ở `d363734` (A7,
+  0022-open), chỉ là ghi chú trong 0022-open chưa kịp gắn nhãn Done. Cột
+  mốc cắt bù thực tế cho serve là **gộp `learn list` vào `learn show`**
+  (gợi ý sẵn của plan §2; CLI leaves 27 -> 26), thực hiện cùng commit đợt
+  serve. Net `src/` kỳ vọng tăng ~một nghìn dòng sau serve; đích < 10.000
+  phụ thuộc các lần gộp CLI còn lại (`work dep rm`, gộp `events`) — ghi
+  rõ ở 0022-metrics khi Phase 3 khép.
 - §14 bỏ `pulse serve` khỏi điều kiện dừng; tám cơ chế còn lại giữ nguyên.
-- Metrics (`0022-metrics.md`) ghi lại sau khi serve + đợt cắt landed.
+- Metrics (`0022-metrics.md`) ghi lại sau khi serve landed.

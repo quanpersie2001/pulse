@@ -1,4 +1,4 @@
-//! `pulse learn add|list|show|applicable|activate|retire` (plan 0022 §11.2).
+//! `pulse learn add|show|applicable|activate|retire` (plan 0022 §11.2).
 //! Thin renderer: resolves the actor, parses `--from`, calls `pulse::learn`,
 //! renders the result.
 
@@ -34,14 +34,12 @@ pub(crate) enum LearnCommand {
         #[arg(long)]
         json: bool,
     },
-    List {
+    /// One learning (`show <id>`) or all of them (`show` — Decision 0023's
+    /// CLI-leaf pairing cut merged the old `learn list` in here).
+    Show {
+        id: Option<String>,
         #[arg(long)]
         status: Option<String>,
-        #[arg(long)]
-        json: bool,
-    },
-    Show {
-        id: String,
         #[arg(long)]
         json: bool,
     },
@@ -132,7 +130,11 @@ pub(crate) fn handle(repo_root: &std::path::Path, command: LearnCommand) -> Resu
             let id = learning.frontmatter.id.clone();
             render(json, &learning_value(&learning), format!("created {id}"))
         }
-        LearnCommand::List { status, json } => {
+        LearnCommand::Show {
+            id: None,
+            status,
+            json,
+        } => {
             let mut learnings = store::list(repo_root)?;
             if let Some(status) = status {
                 learnings.retain(|learning| learning.frontmatter.status == status);
@@ -145,7 +147,9 @@ pub(crate) fn handle(repo_root: &std::path::Path, command: LearnCommand) -> Resu
                 .join("\n");
             render(json, &values, human)
         }
-        LearnCommand::Show { id, json } => {
+        LearnCommand::Show {
+            id: Some(id), json, ..
+        } => {
             let learning = store::read(repo_root, &id)?;
             let human = store::render(&learning)?;
             render(json, &learning_value(&learning), human)
