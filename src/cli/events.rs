@@ -6,9 +6,7 @@ use std::path::Path;
 use std::thread::sleep;
 use std::time::Duration;
 
-use crate::cli::output::render;
-use crate::event::{compact_events, read_event_log, EventEnvelope};
-use crate::storage::WriteGuard;
+use crate::event::{read_event_log, EventEnvelope};
 use crate::PulseError;
 
 /// Report a day file whose last line did not parse (Decision 0011 §5).
@@ -85,25 +83,6 @@ pub(crate) fn handle_tail(
         let matched = batch(&mut cursor, &mut reported);
         print_batch(&matched, json);
     }
-}
-
-/// Convert the legacy one-file-per-event layout to `<date>.jsonl`.
-pub(crate) fn handle_compact(repo_root: &Path, json: bool) -> Result<(), PulseError> {
-    let guard = WriteGuard::acquire(repo_root)?;
-    let report = compact_events(repo_root);
-    drop(guard);
-    let report = report?;
-    let human = if report.directories_removed == 0 {
-        "event log already compact; nothing to convert".to_string()
-    } else {
-        format!(
-            "compacted {} event(s) from {} legacy director(ies) into {} day file(s)",
-            report.events_converted,
-            report.directories_removed,
-            report.days.len()
-        )
-    };
-    render(json, &report, human)
 }
 
 fn print_batch(events: &[EventEnvelope], json: bool) {

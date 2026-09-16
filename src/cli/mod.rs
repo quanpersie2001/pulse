@@ -87,8 +87,5 @@ pub fn run(cli: Cli) -> Result<(), PulseError> {
                     json,
                 },
         } => events::handle_tail(&repo_root, &since, id.as_deref(), follow, json),
-        args::Command::Events {
-            command: args::EventsCommand::Compact { json },
-        } => events::handle_compact(&repo_root, json),
     }
 }

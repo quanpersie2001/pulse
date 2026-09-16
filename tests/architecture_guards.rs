@@ -8,12 +8,12 @@
 //! `works/<id>` content_dir) are dropped with the mechanism they guarded;
 //! checks for the new layer (`storage -> store(issues) -> kernel -> cli`)
 //! replace them. `only_planning_skill_can_name_node_creation_commands` is
-//! also dropped: `skills/` still describes v2 command names and stays that
-//! way until Phase 2/3 rewrites it (plan §12.3, §14 P3.5) — keeping that
-//! guard now would just fail on a gap the plan already knows about and
-//! schedules elsewhere. `guidance_prose_only_names_commands_the_cli_has` is
-//! back, narrowed to the AGENTS block `pulse init` now writes (P1.10, plan
-//! §12.1) rather than the whole `skills/` tree, which is still v2 prose.
+//! also dropped: the v2 skill drafts that guard covered now live under
+//! `references/pulse-v2-skills/` (F3, P1.12), raw material for
+//! `pulse-shape`/`pulse-plan` rather than a live skill surface, so a guard
+//! over their command names no longer applies to anything shipped.
+//! `guidance_prose_only_names_commands_the_cli_has` is back, narrowed to the
+//! AGENTS block `pulse init` now writes (P1.10, plan §12.1).
 
 use std::fs;
 use std::path::{Path, PathBuf};

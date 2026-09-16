@@ -1,12 +1,13 @@
-//! `pulse note` / `pulse events tail|compact` integration tests (plan 0022
-//! §6, §4.3).
+//! `pulse note` / `pulse events tail` integration tests (plan 0022 §6, §4.3).
 //!
 //! Rewritten for plan 0022 P1.3/P1.4: `note` is now `pulse note <id> <text>
 //! [--friction] [--from actor]` against `issues.jsonl` (no more `work
 //! create`/`sync`/authority grants/`JsonGraphStore`). The event-log
 //! mechanics this file also covers (one line per day, torn-tail handling,
-//! since-cursor across a day boundary, legacy-layout compaction) are
-//! untouched by the plan and kept close to their v2 shape.
+//! since-cursor across a day boundary) are untouched by the plan and kept
+//! close to their v2 shape. `pulse events compact` (the legacy
+//! one-file-per-event layout converter) is gone with the v2 repositories
+//! that could ever have produced that layout (F3, P1.12).
 
 use std::fs;
 use std::process::Output;
@@ -399,74 +400,4 @@ fn the_since_cursor_crosses_a_day_boundary() {
         .map(|event| event["payload"]["text"].as_str().unwrap())
         .collect();
     assert_eq!(messages, vec!["day two"]);
-}
-
-#[test]
-fn events_compact_converts_the_legacy_layout_once() {
-    let repo = TestRepo::from_fixture("minimal-service");
-    let ticket_id = setup_ticket(&repo);
-    repo.pulse_ok(&[
-        "note",
-        &ticket_id,
-        "already compact",
-        "--from",
-        ACTOR,
-        "--json",
-    ]);
-
-    let events_dir = repo.path().join(".pulse/events");
-    let day_file = fs::read_dir(&events_dir)
-        .unwrap()
-        .map(|entry| entry.unwrap().path())
-        .find(|path| path.extension().and_then(|ext| ext.to_str()) == Some("jsonl"))
-        .expect("day file");
-    let day = day_file.file_stem().unwrap().to_str().unwrap().to_string();
-    let before: Vec<Value> =
-        serde_json::from_value(repo.pulse_ok(&["events", "tail", "--json"])).unwrap();
-
-    let legacy_dir = events_dir.join(&day);
-    fs::create_dir_all(&legacy_dir).unwrap();
-    let legacy_ids = [
-        "evt_00000000000000000000000001",
-        "evt_00000000000000000000000002",
-    ];
-    for id in legacy_ids {
-        let event = serde_json::json!({
-            "schema_version": 1,
-            "id": id,
-            "event_type": "note.recorded",
-            "occurred_at": format!("{day}T00:00:00Z"),
-            "actor": {"kind": "human", "id": "tester"},
-            "subject": {"kind": "ticket", "id": ticket_id},
-            "payload": {"text": format!("legacy {id}")},
-        });
-        fs::write(
-            legacy_dir.join(format!("{id}.json")),
-            pulse::canonical_json::to_canonical_bytes(&event).unwrap(),
-        )
-        .unwrap();
-    }
-
-    let report = repo.pulse_ok(&["events", "compact", "--json"]);
-    assert_eq!(report["events_converted"], 2);
-    assert_eq!(report["directories_removed"], 1);
-    assert!(!legacy_dir.exists(), "the legacy directory is removed");
-
-    let after: Vec<Value> =
-        serde_json::from_value(repo.pulse_ok(&["events", "tail", "--json"])).unwrap();
-    assert_eq!(after.len(), before.len() + 2, "no event is lost or doubled");
-    let ids: Vec<&str> = after.iter().map(|e| e["id"].as_str().unwrap()).collect();
-    let mut sorted = ids.clone();
-    sorted.sort_unstable();
-    assert_eq!(ids, sorted, "compaction writes ULID order");
-    for id in legacy_ids {
-        assert!(ids.contains(&id), "{id} survived compaction");
-    }
-
-    let again = repo.pulse_ok(&["events", "compact", "--json"]);
-    assert_eq!(again["events_converted"], 0);
-    assert_eq!(again["directories_removed"], 0);
-    let final_events: Vec<Value> =
-        serde_json::from_value(repo.pulse_ok(&["events", "tail", "--json"])).unwrap();
-    assert_eq!(final_events.len(), after.len());
 }
