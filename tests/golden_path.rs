@@ -105,8 +105,14 @@ fn receipts(repo: &Path) -> Vec<Value> {
     };
     for entry in entries {
         let path = entry.unwrap().path();
-        if path.extension().and_then(|ext| ext.to_str()) == Some("json") {
-            out.push(serde_json::from_slice(&fs::read(&path).unwrap()).unwrap());
+        if path.extension().and_then(|ext| ext.to_str()) == Some("jsonl") {
+            let content = fs::read_to_string(&path).unwrap();
+            for line in content.lines() {
+                if line.trim().is_empty() {
+                    continue;
+                }
+                out.push(serde_json::from_str(line).unwrap());
+            }
         }
     }
     out

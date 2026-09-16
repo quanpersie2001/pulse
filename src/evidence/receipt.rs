@@ -1,9 +1,12 @@
 //! One receipt family (plan 0022 §5.1), replacing the v2 handoff/
 //! verification/close/decision/documentation receipt hierarchy.
 //!
-//! A receipt is immutable once written: `.pulse/receipts/<ulid>.json`.
-//! Writing the same id with the same canonical content is idempotent;
-//! writing the same id with different content is `receipt_conflict`.
+//! A receipt is immutable once appended: `.pulse/receipts/<YYYY-MM>.jsonl`,
+//! one canonical JSON line per receipt, month-sharded like the events log
+//! (ST-1 dogfood: 25 per-receipt files after one day; the owner felt the
+//! weight, and the events machinery already solves append/fsync/torn-tail).
+//! Appending the same id with the same canonical content is idempotent;
+//! appending the same id with different content is `receipt_conflict`.
 //! `artifacts[]` are declared by path (relative to the repo root, under
 //! `.pulse/evidence/<subject-id>/`), hashed at seal time — a declared path
 //! that does not exist fails the whole write with `artifact_missing`
@@ -18,7 +21,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::canonical_json::{hash_bytes, to_canonical_bytes};
+use crate::canonical_json::{hash_bytes, to_canonical_line_bytes};
 use crate::error::{PulseError, Result};
 use crate::evidence::redaction::clean_json_strings;
 use crate::storage;
@@ -76,8 +79,26 @@ fn receipts_dir(repo_root: &Path) -> std::path::PathBuf {
     repo_root.join(".pulse/receipts")
 }
 
-fn receipt_path(repo_root: &Path, id: &str) -> std::path::PathBuf {
-    receipts_dir(repo_root).join(format!("{id}.json"))
+/// The month shard a receipt recorded at `at` belongs to.
+fn receipts_file_for(repo_root: &Path, at: DateTime<Utc>) -> std::path::PathBuf {
+    receipts_dir(repo_root).join(format!("{}.jsonl", at.format("%Y-%m")))
+}
+
+/// Every receipt shard, oldest first.
+fn receipt_files(repo_root: &Path) -> Vec<std::path::PathBuf> {
+    let dir = receipts_dir(repo_root);
+    let files: Vec<std::path::PathBuf> = fs::read_dir(&dir)
+        .map(|entries| {
+            let mut paths: Vec<std::path::PathBuf> = entries
+                .filter_map(std::result::Result::ok)
+                .map(|entry| entry.path())
+                .filter(|path| path.extension().and_then(|ext| ext.to_str()) == Some("jsonl"))
+                .collect();
+            paths.sort();
+            paths
+        })
+        .unwrap_or_default();
+    files
 }
 
 /// Seal a new receipt, or confirm an existing one with identical content.
@@ -129,9 +150,9 @@ pub fn record_receipt(
         artifacts,
     };
 
-    let path = receipt_path(repo_root, &id);
-    if path.exists() {
-        let existing = load_receipt(repo_root, &id)?;
+    // Idempotent seal / conflict: an id already present in any shard must
+    // either match exactly (a retried seal) or refuse (different content).
+    if let Ok(existing) = load_receipt(repo_root, &id) {
         if same_content(&existing, &envelope) {
             return Ok(existing);
         }
@@ -143,8 +164,9 @@ pub fn record_receipt(
         ));
     }
 
-    let bytes = to_canonical_bytes(&envelope)?;
-    storage::create_new(&path, &bytes)?;
+    let file = receipts_file_for(repo_root, envelope.recorded_at);
+    let line = to_canonical_line_bytes(&envelope)?;
+    storage::append_line_fsync(&file, &line)?;
     Ok(envelope)
 }
 
@@ -162,9 +184,27 @@ fn same_content(a: &ReceiptEnvelope, b: &ReceiptEnvelope) -> bool {
 }
 
 /// # Errors
-/// Propagates an I/O or JSON error reading `.pulse/receipts/<id>.json`.
+/// `receipt_not_found` when no shard contains `id` (unparseable lines are
+/// skipped here and reported by [`list_receipts`]).
 pub fn load_receipt(repo_root: &Path, id: &str) -> Result<ReceiptEnvelope> {
-    storage::read_json(&receipt_path(repo_root, id))
+    for file in receipt_files(repo_root) {
+        let content = fs::read_to_string(&file).map_err(|error| PulseError::io(&file, error))?;
+        for line in content.lines() {
+            if line.trim().is_empty() {
+                continue;
+            }
+            if let Ok(envelope) = serde_json::from_str::<ReceiptEnvelope>(line) {
+                if envelope.id == id {
+                    return Ok(envelope);
+                }
+            }
+        }
+    }
+    Err(PulseError::kernel(
+        "receipt_not_found",
+        format!("no receipt {id} in .pulse/receipts/*.jsonl"),
+        "receipts are one canonical JSON line per shard in .pulse/receipts/YYYY-MM.jsonl",
+    ))
 }
 
 /// A receipt that failed to parse: reported, never silently dropped
@@ -191,36 +231,26 @@ pub struct ReceiptList {
 /// unreadable receipt file does not fail the read; it is reported in
 /// `unreadable` instead.
 pub fn list_receipts(repo_root: &Path) -> Result<ReceiptList> {
-    let dir = receipts_dir(repo_root);
-    if !dir.exists() {
-        return Ok(ReceiptList::default());
-    }
+    let files = receipt_files(repo_root);
     let mut list = ReceiptList::default();
-    for entry in fs::read_dir(&dir).map_err(|error| PulseError::io(&dir, error))? {
-        let path = entry.map_err(|error| PulseError::io(&dir, error))?.path();
-        if path.extension().and_then(|ext| ext.to_str()) != Some("json") {
-            continue;
-        }
-        let id = path
-            .file_stem()
-            .and_then(|stem| stem.to_str())
-            .unwrap_or_default()
-            .to_string();
-        match fs::read(&path)
-            .map_err(|error| error.to_string())
-            .and_then(|bytes| {
-                serde_json::from_slice::<ReceiptEnvelope>(&bytes).map_err(|error| error.to_string())
-            }) {
-            Ok(receipt) => list.receipts.push(receipt),
-            Err(reason) => list.unreadable.push(UnreadableReceipt {
-                id,
-                path: path.display().to_string(),
-                reason,
-            }),
+    for file in &files {
+        let content = fs::read_to_string(file).map_err(|error| PulseError::io(file, error))?;
+        for (offset, line) in content.lines().enumerate() {
+            if line.trim().is_empty() {
+                continue;
+            }
+            match serde_json::from_str::<ReceiptEnvelope>(line) {
+                Ok(envelope) => list.receipts.push(envelope),
+                Err(error) => list.unreadable.push(UnreadableReceipt {
+                    id: String::new(),
+                    path: format!("{}#{}", file.display(), offset + 1),
+                    reason: error.to_string(),
+                }),
+            }
         }
     }
     list.receipts.sort_by(|a, b| a.id.cmp(&b.id));
-    list.unreadable.sort_by(|a, b| a.id.cmp(&b.id));
+    let _ = std::io::Write::flush(&mut std::io::stdout().lock());
     Ok(list)
 }
 
@@ -311,16 +341,23 @@ mod tests {
     }
 
     #[test]
-    fn list_receipts_reports_an_unreadable_file_instead_of_hiding_it() {
+    fn list_receipts_reports_an_unreadable_line_instead_of_hiding_it() {
+        // Decision 0017, now line-granular: a torn/garbage line inside a
+        // shard is reported, never silently dropped (and the shard's good
+        // receipts still list).
         let repo = tempfile::tempdir().unwrap();
         record_receipt(repo.path(), None, new_receipt(json!({"a": 1}))).unwrap();
-        let broken_path = receipts_dir(repo.path()).join("01JBROKEN0000000000000000.json");
-        fs::write(&broken_path, b"not json").unwrap();
+        let shard = receipt_files(repo.path()).into_iter().next().unwrap();
+        fs::write(&shard, "not json\n").unwrap();
 
         let list = list_receipts(repo.path()).unwrap();
-        assert_eq!(list.receipts.len(), 1);
+        assert!(list.receipts.is_empty());
         assert_eq!(list.unreadable.len(), 1);
-        assert_eq!(list.unreadable[0].id, "01JBROKEN0000000000000000");
+        assert!(
+            list.unreadable[0].path.contains(".jsonl#1"),
+            "{:?}",
+            list.unreadable
+        );
     }
 
     #[test]
