@@ -287,16 +287,28 @@ pub fn run_lane(
             "a lane only runs against a Ticket that has handed off, or a Story for a story-scope qa lane",
         ));
     }
+
+    // A Story's own `surface`/`risk` (plan §4.5) resolve its profile for a
+    // story-scope lane run. Unlike a Ticket, the ready gate never requires
+    // these on a Story, so a Story can reach `ready` without them — that is
+    // a data problem `--force` must not paper over, so this check runs
+    // whether or not `force` was passed.
+    let surface = ticket.get("surface").and_then(Value::as_str);
+    let risk = ticket.get("risk").and_then(Value::as_str);
+    if kind == "story" && (surface.is_none() || risk.is_none()) {
+        return Err(PulseError::kernel(
+            "profile_missing",
+            format!("{id} has no surface/risk set; a story-scope lane run needs both to resolve a profile"),
+            "set both first: `pulse work update <id> --set surface=<cli|api|ui|lib|docs> --set risk=<low|medium|high>`",
+        ));
+    }
+
     if !force {
         let ticket_role = ticket
             .get("role")
             .and_then(Value::as_str)
             .unwrap_or("implementation");
-        let key = profile::profile_key(
-            ticket_role,
-            ticket.get("surface").and_then(Value::as_str),
-            ticket.get("risk").and_then(Value::as_str),
-        );
+        let key = profile::profile_key(ticket_role, surface, risk);
         let config = profile::load(repo_root)?;
         let profile = profile::profile_for(&config, &key)?;
         if !profile.lanes.iter().any(|lane_name| lane_name == role) {

@@ -217,6 +217,8 @@ fn golden_path_new_to_close_story_with_fake_agents() {
         &harness.path().join("story.json"),
         &serde_json::to_string(&json!({
             "outcome": "A user can create and complete tasks from the CLI.",
+            "surface": "cli",
+            "risk": "low",
             "qa_cases": [
                 {"id": "QA-001", "intent": "create then list a task via the CLI",
                  "surface": "cli", "priority": "high"},
@@ -346,11 +348,11 @@ fn golden_path_new_to_close_story_with_fake_agents() {
     assert!(has_receipt(repo.path(), "close", &ticket_id));
     assert_issues_list_parses(repo.path());
 
-    // --- Step 9: story-scope qa-cli, then close-story. ---
-    pulse_ok(
-        repo.path(),
-        &["run", "qa-cli", &story_id, "--force", "--json"],
-    );
+    // --- Step 9: story-scope qa-cli, then close-story. The Story's own
+    // surface/risk (set above) resolve the cli-low profile without needing
+    // --force (A1: --force is no longer required to route a story-scope
+    // lane run past profile resolution).
+    pulse_ok(repo.path(), &["run", "qa-cli", &story_id, "--json"]);
     assert!(
         has_receipt(repo.path(), "lane", &story_id),
         "expected a story-scope lane receipt: {:?}",

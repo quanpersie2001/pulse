@@ -1,4 +1,4 @@
-//! Thin CLI adapter for `pulse events tail|compact`.
+//! Thin CLI adapter for `pulse events tail`.
 
 use std::collections::HashSet;
 use std::io::Write;

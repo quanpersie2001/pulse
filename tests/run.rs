@@ -13,7 +13,7 @@ use std::process::Command as StdCommand;
 use serde_json::{json, Value};
 
 use pulse::identity::actor::{ActorKind, ActorRef};
-use pulse::kernel::run::run_worker;
+use pulse::kernel::run::{run_lane, run_worker};
 use pulse::store::issues;
 
 const PULSE_BIN: &str = env!("CARGO_BIN_EXE_pulse");
@@ -211,6 +211,43 @@ fn handed_off_ends_the_loop_successfully() {
 
     let updated = run_worker(repo.path(), &agent("worker"), "TK-a3f9", 3600, 5).unwrap();
     assert_eq!(updated["status"], "verifying");
+}
+
+#[test]
+fn story_scope_lane_without_surface_or_risk_is_profile_missing_even_with_force() {
+    // A1: `--force` must not route a story-scope lane run around a Story
+    // that never got surface/risk set — the ready gate does not require
+    // either on a Story, so this is a real, unforceable data gap.
+    let repo = tempfile::tempdir().unwrap();
+    let run = |args: &[&str]| {
+        assert!(StdCommand::new("git")
+            .arg("-C")
+            .arg(repo.path())
+            .args(args)
+            .status()
+            .unwrap()
+            .success());
+    };
+    fs::write(repo.path().join("PULSE.md"), "profiles: {}\n").unwrap();
+    run(&["init", "-q"]);
+    run(&["config", "user.email", "test@example.com"]);
+    run(&["config", "user.name", "test"]);
+    run(&["add", "."]);
+    run(&["commit", "-q", "-m", "init"]);
+    issues::mutate(repo.path(), |mut records| {
+        records.push(json!({
+            "schema": 3, "id": "ST-1111", "kind": "story", "title": "s",
+            "status": "ready", "revision": 1,
+            "created_at": "2026-09-16T00:00:00Z", "updated_at": "2026-09-16T00:00:00Z",
+            "outcome": "o",
+        }));
+        Ok(records)
+    })
+    .unwrap();
+
+    let err = run_lane(repo.path(), &agent("qa-cli"), "ST-1111", "qa-cli", true).unwrap_err();
+    assert_eq!(err.code(), "profile_missing");
+    assert!(err.hint().is_some());
 }
 
 #[test]
