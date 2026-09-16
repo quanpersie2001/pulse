@@ -31,15 +31,15 @@ Phase 2.
 
 ## Table
 
-| Metric | Baseline 2026-09-16 | After Phase 0 | After P1.3+P1.4+P1.5 | After Phase 1 (P1.11, 2026-09-16) | After P1.12 (2026-09-16) | Target v3.0 |
-|---|---|---|---|---|---|---|
-| Rust lines in `src/` | 43106 | 43106 | 6517 | 10422 | 10599 | < 10000 |
-| Distinct error codes (wide count, see above) | 271 (grep-pattern count, not directly comparable) | 271 | 31 | 64 (methodology undocumented) | 85 | < 40 |
-| CLI leaf commands | 67 (measured; plan estimated ~60) | 67 | 13 | 20 | 19 | ≤ 22 |
-| Hand-typed commands to close one Ticket | ~11 (plan estimate) | ~11 | n/a | 5 (`new`, `ready`, `run worker`, `run review`, `close`) | 5 (unchanged; now proven end-to-end through the real `pulse` binary by `tests/golden_path.rs`, not just fixture-fake-agent unit tests) | ≤ 6 |
-| Required flags on that path | ~25 (plan estimate) | ~25 | n/a | ~2 (`--risk`, `--surface` on `new`; actor defaults from git config) | ~2 (unchanged) | ≤ 4 |
-| Friction/Ticket that is a Pulse bug | Track B: majority | Track B: majority (no new dogfood yet) | (same) | (same — no new dogfood yet; Phase 2) | (same — no Phase 2 dogfood yet; but `tests/golden_path.rs`, the first true end-to-end CLI run, found exactly one real Pulse bug on its first pass — `run_lane` blocking every story-scope qa lane with `lane_not_verifying` — fixed the same session, F2 prereq of P1.12) | < 1 |
-| Repos running Pulse for real | 0 | 0 | 0 | 0 | 0 (the golden path repo is a throwaway temp dir per test run, not a persistent dogfood target) | 1 (UI + API) |
+| Metric | Baseline 2026-09-16 | After Phase 0 | After P1.3+P1.4+P1.5 | After Phase 1 (P1.11, 2026-09-16) | After P1.12 (2026-09-16) | After Phase 2A (2026-09-16) | Target v3.0 |
+|---|---|---|---|---|---|---|---|
+| Rust lines in `src/` | 43106 | 43106 | 6517 | 10422 | 10599 | 13089 | < 10000 |
+| Distinct error codes (wide count, see above) | 271 (grep-pattern count, not directly comparable) | 271 | 31 | 64 (methodology undocumented) | 85 | 93 | < 40 |
+| CLI leaf commands | 67 (measured; plan estimated ~60) | 67 | 13 | 20 | 19 | 27 | ≤ 22 |
+| Hand-typed commands to close one Ticket | ~11 (plan estimate) | ~11 | n/a | 5 (`new`, `ready`, `run worker`, `run review`, `close`) | 5 (unchanged; now proven end-to-end through the real `pulse` binary by `tests/golden_path.rs`, not just fixture-fake-agent unit tests) | 5 (unchanged — `learn`/`docs` are enrichments a worker/reviewer can use, not new required steps on this path) | ≤ 6 |
+| Required flags on that path | ~25 (plan estimate) | ~25 | n/a | ~2 (`--risk`, `--surface` on `new`; actor defaults from git config) | ~2 (unchanged) | ~2 (unchanged) | ≤ 4 |
+| Friction/Ticket that is a Pulse bug | Track B: majority | Track B: majority (no new dogfood yet) | (same) | (same — no new dogfood yet; Phase 2) | (same — no Phase 2 dogfood yet; but `tests/golden_path.rs`, the first true end-to-end CLI run, found exactly one real Pulse bug on its first pass — `run_lane` blocking every story-scope qa lane with `lane_not_verifying` — fixed the same session, F2 prereq of P1.12) | (same — still no Phase 2 dogfood; this session's own smoke tests of `docs check`, `learn`, `init --with-qa-templates` found no new Pulse bugs, only the two P1.12 review carryovers A1 was scoped to fix) | < 1 |
+| Repos running Pulse for real | 0 | 0 | 0 | 0 | 0 (the golden path repo is a throwaway temp dir per test run, not a persistent dogfood target) | 0 (dogfood target still doesn't exist; that's Phase 2B, P2.2 onward) | 1 (UI + API) |
 
 Baseline test suite (`cargo test --all-targets`) at the Phase 0 commit: 12
 test binaries, 624 tests, 0 failures.
@@ -98,3 +98,32 @@ backed by a real end-to-end run of the actual `pulse` binary
 tests — that run surfaced one genuine Pulse bug (`run_lane` refusing
 every story-scope qa lane with `lane_not_verifying`, since a Story never
 reaches `verifying`), fixed in the commit immediately before the test.
+
+**After Phase 2A (this session — A1-A6, commits `dd445ed`..`297a893`):**
+10 test binaries, 250 tests, 0 failures (`cargo fmt --check` /
+`cargo clippy --all-targets -- -D warnings` / `cargo test --all-targets` all
+green throughout — every commit landed with a clean validation run before
+it, per plan §14's rule). `src/` grew from 10599 to 13089 (+2490): A2
+(`learn/*` + wiring, +1355), A3 (`docs/*` + wiring, +804), A4 (prompt
+assets are markdown, not `.rs`, but `runners_json_seed`/`ensure_prompts`
+and their tests in `kernel::init`, +154), A5 (QA template copying +
+`kernel::init` wiring/tests, +148), A6 (seed content only, +17); A1 was a
+net +12 (a profile-check refactor plus one new test). This is exactly what
+Phase 1's own "After Phase 1" note predicted: "P2.1 (`learn/*`,
+`docs::{applicable,check}`) and P3 (`board`, `doctor`) still land" — both
+the `src/` (13089, over the < 10000 target by 3089) and error-code (93,
+over the < 40 target by 53) rows are now *further* from the v3.0 target
+than after P1.12, not closer, because Phase 2A's job was to add the
+remaining plan-mandated surface, not shrink it; Phase 3 (`board`,
+`doctor`, then the actual cut-or-keep decisions) is where those two rows
+turn around. CLI leaves grew from 19 to 27 (+8: `learn`'s 6 leaves —
+`add`/`list`/`show`/`applicable`/`activate`/`retire` — plus `docs`'s 2 —
+`applicable`/`check`), already 5 over the ≤ 22 target for the same reason.
+The golden-path/required-flags rows are unchanged in shape and value — A1
+removed a `--force` a Story-scope lane run needed, but that was never on
+the Ticket-closing path golden_path.rs measures, so this row didn't move.
+No new dogfood target exists yet (Phase 2B, P2.2 onward), so the last two
+rows are unchanged from P1.12 other than confirming no Pulse bug turned up
+in this session's own manual smoke tests of `docs check`, `learn add`,
+and `init --with-qa-templates` (see each commit's message for the exact
+commands run).
