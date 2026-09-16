@@ -370,7 +370,7 @@ fn assert_pulse_mentions_parse(source_label: &str, text: &str) -> usize {
 #[test]
 fn agents_block_only_names_commands_the_cli_has() {
     let repo = tempfile::tempdir().unwrap();
-    pulse::kernel::init::initialize_repository(repo.path(), false, None).unwrap();
+    pulse::kernel::init::initialize_repository(repo.path(), false, None, false).unwrap();
     let agents = fs::read_to_string(repo.path().join("AGENTS.md")).unwrap();
 
     let checked = assert_pulse_mentions_parse("AGENTS.md", &agents);

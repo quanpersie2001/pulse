@@ -30,8 +30,15 @@ pub fn run(cli: Cli) -> Result<(), PulseError> {
         args::Command::Init {
             refresh,
             host,
+            with_qa_templates,
             json,
-        } => init::handle(&repo_root, refresh, host.as_deref(), json),
+        } => init::handle(
+            &repo_root,
+            refresh,
+            host.as_deref(),
+            with_qa_templates,
+            json,
+        ),
         args::Command::Work { command } => work::handle(&repo_root, command),
         args::Command::Run {
             role,

@@ -15,13 +15,18 @@ pub struct Cli {
 pub(crate) enum Command {
     /// Create `.pulse/`, `PULSE.md` and the store files it needs.
     Init {
-        /// Re-render the Pulse block in `AGENTS.md`, leaving the rest of the
-        /// file untouched.
+        /// Re-render the Pulse block in `AGENTS.md` and the lane prompts,
+        /// leaving the rest of `AGENTS.md` and any existing `runners.json`
+        /// untouched.
         #[arg(long)]
         refresh: bool,
         /// Copy host-specific detector files (only `claude-code` today).
         #[arg(long)]
         host: Option<String>,
+        /// Copy the qa-ui/qa-api lane scripts into `scripts/qa/` (never
+        /// overwrites a file already there).
+        #[arg(long)]
+        with_qa_templates: bool,
         #[arg(long)]
         json: bool,
     },

@@ -11,10 +11,9 @@
 //! prompt files (never the rest of `AGENTS.md`, and never an existing
 //! `runners.json` a human may have already customized). `host` copies
 //! host-specific detector files (plan §10.4) — `"claude-code"` is the only
-//! one implemented.
-//!
-//! Not yet implemented: `--with-qa-templates` (assets/qa/{ui,api}.mjs, plan
-//! §8.6) — A5's job.
+//! one implemented. `with_qa_templates` copies `scripts/qa/{ui,api}.mjs`
+//! and `scripts/qa/README.md` (plan §8.6), skipping (never overwriting) any
+//! that already exist.
 
 use std::fs;
 use std::path::Path;
@@ -94,21 +93,37 @@ const RUNNERS_JSON_ROLES: &[(&str, &str, u64)] = &[
     ),
 ];
 
+/// Only seeded when `--with-qa-templates` also copies the scripts these
+/// commands point at (plan §8.6) — seeding them unconditionally would give
+/// every plain `pulse init` a `runners.json` naming `scripts/qa/*.mjs`
+/// files that don't exist.
+const QA_RUNNERS_JSON_ROLES: &[(&str, &str, u64)] = &[
+    ("qa-ui", "node scripts/qa/ui.mjs {input}", 900),
+    ("qa-api", "node scripts/qa/api.mjs {input}", 900),
+];
+
 /// Plan §8.2's `runners.json` seed, built with `serde_json` rather than a
 /// hand-escaped string literal (a command line already needs its own `"`
 /// quoting — nesting that inside a Rust string *and* JSON by hand is a typo
 /// magnet `json!` avoids). `worker`/`worker-continue`/`review-*` point at
 /// the prompt files this module also seeds (plan §8.5); `check-docs` needs
 /// no prompt or wrapper — `pulse docs check --write` already writes the
-/// lane §8.4 shape directly (A3). `qa-ui`/`qa-api` are not seeded yet: their
-/// backing scripts (`assets/qa/*.mjs`, plan §8.6) don't exist until A5.
-fn runners_json_seed() -> serde_json::Value {
+/// lane §8.4 shape directly (A3).
+fn runners_json_seed(with_qa_templates: bool) -> serde_json::Value {
     let mut roles = serde_json::Map::new();
     for (role, command, timeout_seconds) in RUNNERS_JSON_ROLES {
         roles.insert(
             (*role).to_string(),
             json!({"command": command, "timeout_seconds": timeout_seconds}),
         );
+    }
+    if with_qa_templates {
+        for (role, command, timeout_seconds) in QA_RUNNERS_JSON_ROLES {
+            roles.insert(
+                (*role).to_string(),
+                json!({"command": command, "timeout_seconds": timeout_seconds}),
+            );
+        }
     }
     serde_json::Value::Object(roles)
 }
@@ -233,6 +248,12 @@ pub struct RepositoryInitReport {
     pub schema_version: u32,
     pub status: RepositoryInitStatus,
     pub created: Vec<String>,
+    /// Files `--with-qa-templates` left alone because they already existed
+    /// (plan §8.6: "không ghi đè file đã có, báo skipped") — unlike the
+    /// AGENTS block and prompts, a QA template is a one-time starting point
+    /// a target repo is expected to edit, so it is never refreshed either.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub skipped: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub host_settings_snippet: Vec<String>,
 }
@@ -244,6 +265,7 @@ pub fn initialize_repository(
     repo_root: &Path,
     refresh: bool,
     host: Option<&str>,
+    with_qa_templates: bool,
 ) -> Result<RepositoryInitReport> {
     let _guard = WriteGuard::acquire(repo_root)?;
     let mut created = Vec::new();
@@ -264,7 +286,7 @@ pub fn initialize_repository(
 
     let runners_path = repo_root.join(".pulse/runners.json");
     if !runners_path.exists() {
-        let bytes = serde_json::to_vec_pretty(&runners_json_seed())?;
+        let bytes = serde_json::to_vec_pretty(&runners_json_seed(with_qa_templates))?;
         fs::write(&runners_path, bytes).map_err(|error| PulseError::io(&runners_path, error))?;
         created.push(".pulse/runners.json".to_string());
     }
@@ -293,6 +315,13 @@ pub fn initialize_repository(
 
     created.extend(ensure_gitignore_entries(repo_root)?);
 
+    let mut skipped = Vec::new();
+    if with_qa_templates {
+        let (qa_created, qa_skipped) = copy_qa_templates(repo_root)?;
+        created.extend(qa_created);
+        skipped.extend(qa_skipped);
+    }
+
     let mut host_settings_snippet = Vec::new();
     if let Some(host) = host {
         if host == "claude-code" {
@@ -316,8 +345,38 @@ pub fn initialize_repository(
         schema_version: 1,
         status,
         created,
+        skipped,
         host_settings_snippet,
     })
+}
+
+const QA_TEMPLATE_FILES: [(&str, &str); 3] = [
+    ("ui.mjs", include_str!("../../assets/qa/ui.mjs")),
+    ("api.mjs", include_str!("../../assets/qa/api.mjs")),
+    ("README.md", include_str!("../../assets/qa/README.md")),
+];
+
+/// `pulse init --with-qa-templates` (plan §8.6): copies the QA lane scripts
+/// into `scripts/qa/` of the target repo. Never overwrites an existing
+/// file — these are starting points a repo is expected to edit once copied,
+/// not a region Pulse keeps refreshing like the AGENTS block or prompts.
+/// Returns `(created, skipped)`.
+fn copy_qa_templates(repo_root: &Path) -> Result<(Vec<String>, Vec<String>)> {
+    let dir = repo_root.join("scripts/qa");
+    fs::create_dir_all(&dir).map_err(|error| PulseError::io(&dir, error))?;
+    let mut created = Vec::new();
+    let mut skipped = Vec::new();
+    for (name, body) in QA_TEMPLATE_FILES {
+        let path = dir.join(name);
+        let label = format!("scripts/qa/{name}");
+        if path.exists() {
+            skipped.push(label);
+            continue;
+        }
+        fs::write(&path, body).map_err(|error| PulseError::io(&path, error))?;
+        created.push(label);
+    }
+    Ok((created, skipped))
 }
 
 /// Writes or refreshes the Pulse block in `AGENTS.md`. Returns whether it
@@ -423,7 +482,7 @@ mod tests {
     #[test]
     fn first_run_creates_everything_and_reports_initialized() {
         let repo = tempfile::tempdir().unwrap();
-        let report = initialize_repository(repo.path(), false, None).unwrap();
+        let report = initialize_repository(repo.path(), false, None, false).unwrap();
         assert_eq!(report.status, RepositoryInitStatus::Initialized);
         assert!(repo.path().join(".pulse/issues.jsonl").exists());
         assert!(repo.path().join(".pulse/runners.json").exists());
@@ -447,7 +506,7 @@ mod tests {
     #[test]
     fn runners_json_seed_points_every_role_at_its_prompt_or_a_wrapper_free_command() {
         let repo = tempfile::tempdir().unwrap();
-        initialize_repository(repo.path(), false, None).unwrap();
+        initialize_repository(repo.path(), false, None, false).unwrap();
         let runners: serde_json::Value =
             serde_json::from_slice(&fs::read(repo.path().join(".pulse/runners.json")).unwrap())
                 .unwrap();
@@ -473,7 +532,7 @@ mod tests {
             "{\"custom\": true}\n",
         )
         .unwrap();
-        initialize_repository(repo.path(), true, None).unwrap();
+        initialize_repository(repo.path(), true, None, false).unwrap();
         let text = fs::read_to_string(repo.path().join(".pulse/runners.json")).unwrap();
         assert!(text.contains("custom"));
     }
@@ -481,11 +540,11 @@ mod tests {
     #[test]
     fn prompts_are_written_once_and_left_alone_without_refresh() {
         let repo = tempfile::tempdir().unwrap();
-        initialize_repository(repo.path(), false, None).unwrap();
+        initialize_repository(repo.path(), false, None, false).unwrap();
         let worker_path = repo.path().join(".pulse/prompts/worker.md");
         fs::write(&worker_path, "hand edited\n").unwrap();
 
-        let report = initialize_repository(repo.path(), false, None).unwrap();
+        let report = initialize_repository(repo.path(), false, None, false).unwrap();
         assert_eq!(report.status, RepositoryInitStatus::Unchanged);
         assert_eq!(fs::read_to_string(&worker_path).unwrap(), "hand edited\n");
     }
@@ -493,11 +552,11 @@ mod tests {
     #[test]
     fn refresh_overwrites_prompt_files() {
         let repo = tempfile::tempdir().unwrap();
-        initialize_repository(repo.path(), false, None).unwrap();
+        initialize_repository(repo.path(), false, None, false).unwrap();
         let worker_path = repo.path().join(".pulse/prompts/worker.md");
         fs::write(&worker_path, "stale\n").unwrap();
 
-        let report = initialize_repository(repo.path(), true, None).unwrap();
+        let report = initialize_repository(repo.path(), true, None, false).unwrap();
         assert_eq!(report.status, RepositoryInitStatus::Initialized);
         let text = fs::read_to_string(&worker_path).unwrap();
         assert!(text.starts_with("# Pulse worker"));
@@ -507,8 +566,8 @@ mod tests {
     #[test]
     fn second_run_is_idempotent_and_reports_unchanged() {
         let repo = tempfile::tempdir().unwrap();
-        initialize_repository(repo.path(), false, None).unwrap();
-        let report = initialize_repository(repo.path(), false, None).unwrap();
+        initialize_repository(repo.path(), false, None, false).unwrap();
+        let report = initialize_repository(repo.path(), false, None, false).unwrap();
         assert_eq!(report.status, RepositoryInitStatus::Unchanged);
         assert!(report.created.is_empty());
     }
@@ -517,7 +576,7 @@ mod tests {
     fn preserves_a_hand_edited_gitignore_and_only_appends_missing_entries() {
         let repo = tempfile::tempdir().unwrap();
         fs::write(repo.path().join(".gitignore"), "node_modules/\n").unwrap();
-        initialize_repository(repo.path(), false, None).unwrap();
+        initialize_repository(repo.path(), false, None, false).unwrap();
         let gitignore = fs::read_to_string(repo.path().join(".gitignore")).unwrap();
         assert!(gitignore.contains("node_modules/"));
         for entry in GITIGNORE_ENTRIES {
@@ -533,7 +592,7 @@ mod tests {
             "# My repo rules\n\nBe nice.\n",
         )
         .unwrap();
-        initialize_repository(repo.path(), false, None).unwrap();
+        initialize_repository(repo.path(), false, None, false).unwrap();
         let agents = fs::read_to_string(repo.path().join("AGENTS.md")).unwrap();
         assert!(agents.starts_with("# My repo rules\n\nBe nice.\n"));
         assert!(agents.contains(AGENTS_BLOCK_BEGIN));
@@ -542,13 +601,13 @@ mod tests {
     #[test]
     fn without_refresh_an_existing_block_is_left_untouched() {
         let repo = tempfile::tempdir().unwrap();
-        initialize_repository(repo.path(), false, None).unwrap();
+        initialize_repository(repo.path(), false, None, false).unwrap();
         let path = repo.path().join("AGENTS.md");
         let mut hand_edited = fs::read_to_string(&path).unwrap();
         hand_edited = hand_edited.replace("Pulse is the local CLI", "HAND EDITED TEXT");
         fs::write(&path, &hand_edited).unwrap();
 
-        let report = initialize_repository(repo.path(), false, None).unwrap();
+        let report = initialize_repository(repo.path(), false, None, false).unwrap();
         assert_eq!(report.status, RepositoryInitStatus::Unchanged);
         let after = fs::read_to_string(&path).unwrap();
         assert!(after.contains("HAND EDITED TEXT"));
@@ -562,13 +621,13 @@ mod tests {
             "# My repo rules\n\nBe nice.\n",
         )
         .unwrap();
-        initialize_repository(repo.path(), false, None).unwrap();
+        initialize_repository(repo.path(), false, None, false).unwrap();
         let path = repo.path().join("AGENTS.md");
         let mut hand_edited = fs::read_to_string(&path).unwrap();
         hand_edited = hand_edited.replace("Pulse is the local CLI", "STALE TEXT");
         fs::write(&path, &hand_edited).unwrap();
 
-        let report = initialize_repository(repo.path(), true, None).unwrap();
+        let report = initialize_repository(repo.path(), true, None, false).unwrap();
         assert_eq!(report.status, RepositoryInitStatus::Initialized);
         let after = fs::read_to_string(&path).unwrap();
         assert!(after.starts_with("# My repo rules\n\nBe nice.\n"));
@@ -579,7 +638,7 @@ mod tests {
     #[test]
     fn host_claude_code_writes_detector_files_and_a_settings_snippet() {
         let repo = tempfile::tempdir().unwrap();
-        let report = initialize_repository(repo.path(), false, Some("claude-code")).unwrap();
+        let report = initialize_repository(repo.path(), false, Some("claude-code"), false).unwrap();
         assert!(repo
             .path()
             .join("assets/hosts/claude-code/statusline.sh")
@@ -594,7 +653,77 @@ mod tests {
     #[test]
     fn unsupported_host_is_refused() {
         let repo = tempfile::tempdir().unwrap();
-        let err = initialize_repository(repo.path(), false, Some("cursor")).unwrap_err();
+        let err = initialize_repository(repo.path(), false, Some("cursor"), false).unwrap_err();
         assert_eq!(err.code(), "host_unsupported");
+    }
+
+    #[test]
+    fn with_qa_templates_copies_the_scripts_and_seeds_their_roles() {
+        let repo = tempfile::tempdir().unwrap();
+        let report = initialize_repository(repo.path(), false, None, true).unwrap();
+        for (name, _) in QA_TEMPLATE_FILES {
+            assert!(
+                repo.path().join("scripts/qa").join(name).exists(),
+                "missing scripts/qa/{name}"
+            );
+            assert!(report.created.contains(&format!("scripts/qa/{name}")));
+        }
+        let runners: serde_json::Value =
+            serde_json::from_slice(&fs::read(repo.path().join(".pulse/runners.json")).unwrap())
+                .unwrap();
+        assert_eq!(
+            runners["qa-ui"]["command"],
+            serde_json::json!("node scripts/qa/ui.mjs {input}")
+        );
+        assert!(runners.get("qa-api").is_some());
+    }
+
+    #[test]
+    fn without_with_qa_templates_neither_scripts_nor_roles_are_seeded() {
+        let repo = tempfile::tempdir().unwrap();
+        initialize_repository(repo.path(), false, None, false).unwrap();
+        assert!(!repo.path().join("scripts/qa").exists());
+        let runners: serde_json::Value =
+            serde_json::from_slice(&fs::read(repo.path().join(".pulse/runners.json")).unwrap())
+                .unwrap();
+        assert!(runners.get("qa-ui").is_none());
+    }
+
+    #[test]
+    fn an_existing_qa_template_file_is_skipped_not_overwritten() {
+        let repo = tempfile::tempdir().unwrap();
+        fs::create_dir_all(repo.path().join("scripts/qa")).unwrap();
+        fs::write(repo.path().join("scripts/qa/ui.mjs"), "// hand written\n").unwrap();
+
+        let report = initialize_repository(repo.path(), true, None, true).unwrap();
+        assert_eq!(
+            fs::read_to_string(repo.path().join("scripts/qa/ui.mjs")).unwrap(),
+            "// hand written\n"
+        );
+        assert!(report.skipped.contains(&"scripts/qa/ui.mjs".to_string()));
+        assert!(report.created.contains(&"scripts/qa/api.mjs".to_string()));
+    }
+
+    /// Plan §8.6's own test requirement: `node --check` on both QA scripts
+    /// (skipped, with a stated reason, when `node` is not on PATH — this
+    /// crate's own test suite must not depend on a Node toolchain).
+    #[test]
+    fn qa_templates_are_syntactically_valid_node() {
+        let node = std::process::Command::new("node").arg("--version").output();
+        if node.is_err() {
+            eprintln!("skipping qa_templates_are_syntactically_valid_node: `node` is not on PATH");
+            return;
+        }
+        let repo = tempfile::tempdir().unwrap();
+        initialize_repository(repo.path(), false, None, true).unwrap();
+        for name in ["ui.mjs", "api.mjs"] {
+            let path = repo.path().join("scripts/qa").join(name);
+            let status = std::process::Command::new("node")
+                .arg("--check")
+                .arg(&path)
+                .status()
+                .unwrap();
+            assert!(status.success(), "node --check failed for {name}");
+        }
     }
 }
