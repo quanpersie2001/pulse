@@ -18,7 +18,8 @@ the files it names). Do not go looking for context beyond that.
   `.pulse/evidence/<id>/` (your own `review-correctness.json` and any
   artifacts you cite from it).
 - Re-run every `verify[]` command yourself — do not trust a reported exit
-  code you did not produce.
+  code you did not produce. Each entry may carry a `cwd`: run that command
+  from that directory (the ST-1 dogfood lost two probe runs to this).
 - Map every `acceptance[]` id to `pass`/`fail`/`not_checked` with a `how`
   that names the command or inspection that decided it.
 

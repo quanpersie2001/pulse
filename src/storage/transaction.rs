@@ -398,10 +398,12 @@ fn single_target(intent: &TransactionIntent) -> Result<&TransactionTarget> {
 pub fn commit_prepared_transaction(
     prepared: &PreparedTransaction,
     canonical_bytes: &[u8],
-    failpoint: Option<TransactionFailpoint>,
+    // Only read under cfg(debug_assertions); underscore keeps release
+    // builds (dogfood sessions build --release) warning-free.
+    _failpoint: Option<TransactionFailpoint>,
 ) -> Result<()> {
     #[cfg(debug_assertions)]
-    if failpoint == Some(TransactionFailpoint::AfterIntent) {
+    if _failpoint == Some(TransactionFailpoint::AfterIntent) {
         trigger_failpoint("after_intent")?;
     }
 
@@ -414,13 +416,13 @@ pub fn commit_prepared_transaction(
         target.private,
     )?;
     #[cfg(debug_assertions)]
-    if failpoint == Some(TransactionFailpoint::AfterCanonical) {
+    if _failpoint == Some(TransactionFailpoint::AfterCanonical) {
         trigger_failpoint("after_canonical")?;
     }
 
     write_event_create_new(&prepared.intent)?;
     #[cfg(debug_assertions)]
-    if failpoint == Some(TransactionFailpoint::AfterEvent) {
+    if _failpoint == Some(TransactionFailpoint::AfterEvent) {
         trigger_failpoint("after_event")?;
     }
 
@@ -429,14 +431,14 @@ pub fn commit_prepared_transaction(
 
 pub fn commit_prepared_multi_target_transaction(
     prepared: &PreparedMultiTargetTransaction,
-    failpoint: Option<TransactionFailpoint>,
+    _failpoint: Option<TransactionFailpoint>,
 ) -> Result<()> {
     #[cfg(debug_assertions)]
-    if failpoint == Some(TransactionFailpoint::AfterIntent) {
+    if _failpoint == Some(TransactionFailpoint::AfterIntent) {
         trigger_failpoint("after_intent")?;
     }
 
-    for (index, target) in prepared.intent.targets.iter().enumerate() {
+    for (_index, target) in prepared.intent.targets.iter().enumerate() {
         write_target_respecting_before(
             &target.path,
             &target.before,
@@ -445,19 +447,19 @@ pub fn commit_prepared_multi_target_transaction(
             target.private,
         )?;
         #[cfg(debug_assertions)]
-        if index == 0 && failpoint == Some(TransactionFailpoint::AfterMultiTargetFirst) {
+        if _index == 0 && _failpoint == Some(TransactionFailpoint::AfterMultiTargetFirst) {
             trigger_failpoint("after_multi_target_first")?;
         }
     }
 
     #[cfg(debug_assertions)]
-    if failpoint == Some(TransactionFailpoint::AfterMultiTargetAll) {
+    if _failpoint == Some(TransactionFailpoint::AfterMultiTargetAll) {
         trigger_failpoint("after_multi_target_all")?;
     }
 
     write_event_create_new_multi(&prepared.intent)?;
     #[cfg(debug_assertions)]
-    if failpoint == Some(TransactionFailpoint::AfterEvent) {
+    if _failpoint == Some(TransactionFailpoint::AfterEvent) {
         trigger_failpoint("after_event")?;
     }
 
