@@ -743,4 +743,111 @@ mod tests {
             assert!(status.success(), "node --check failed for {name}");
         }
     }
+
+    /// The A8.1 regression, exercised for real: `start` is a long-running
+    /// server (`python3 -m http.server`, which never exits), so the old
+    /// awaited-execFile code blocked forever before ever polling
+    /// `ready_url`. The fixed script must finish quickly (bounded at 10s so
+    /// a regression fails instead of hanging the suite), report
+    /// `inconclusive` (the case carries no `check`), record the detached
+    /// `start` truthfully in `commands_run[]`, leave the HTTP transcript,
+    /// and leave no server listening. Skipped, with a stated reason, when
+    /// `node` or `python3` is not on PATH — the suite must not depend on
+    /// either toolchain.
+    #[test]
+    fn qa_api_script_survives_a_long_running_start_and_stops_the_server() {
+        if std::process::Command::new("node")
+            .arg("--version")
+            .output()
+            .is_err()
+        {
+            eprintln!(
+                "skipping qa_api_script_survives_a_long_running_start_and_stops_the_server: \
+                 `node` is not on PATH"
+            );
+            return;
+        }
+        if std::process::Command::new("python3")
+            .arg("--version")
+            .output()
+            .is_err()
+        {
+            eprintln!(
+                "skipping qa_api_script_survives_a_long_running_start_and_stops_the_server: \
+                 `python3` is not on PATH"
+            );
+            return;
+        }
+        let script = Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/qa/api.mjs");
+        let repo = tempfile::tempdir().unwrap();
+        fs::create_dir_all(repo.path().join("docs/operations")).unwrap();
+        fs::write(
+            repo.path().join("docs/operations/run.md"),
+            "# Run\n\n```pulse-run\nid: api\nstart: [\"python3\", \"-m\", \"http.server\", \"18080\"]\n\
+             ready_url: \"http://127.0.0.1:18080/\"\nstop: [\"pkill\", \"-f\", \"http.server 18080\"]\n\
+             log: \".pulse/runtime/logs/api.log\"\n```\n",
+        )
+        .unwrap();
+        fs::write(
+            repo.path().join("input.json"),
+            r#"{"qa_cases":[{"id":"QA-001","steps":["GET /"]}],"evidence_dir":".pulse/evidence/TK-qa","handoff_commit":""}"#,
+        )
+        .unwrap();
+
+        let mut child = std::process::Command::new("node")
+            .arg(&script)
+            .arg("input.json")
+            .current_dir(repo.path())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        let started = std::time::Instant::now();
+        let status = loop {
+            match child.try_wait().expect("node child should be pollable") {
+                Some(status) => break status,
+                None if started.elapsed() < std::time::Duration::from_secs(10) => {
+                    std::thread::sleep(std::time::Duration::from_millis(50));
+                }
+                None => {
+                    let _ = child.kill();
+                    panic!(
+                        "api.mjs was still running after 10s — `start` is being awaited, \
+                         not spawned detached"
+                    );
+                }
+            }
+        };
+        assert!(status.success(), "api.mjs exited {status}");
+
+        let evidence = repo.path().join(".pulse/evidence/TK-qa");
+        let report: serde_json::Value =
+            serde_json::from_slice(&fs::read(evidence.join("qa-api.json")).unwrap()).unwrap();
+        assert_eq!(report["verdict"], "inconclusive");
+        assert_eq!(
+            report["commands_run"][0]["argv"],
+            serde_json::json!(["python3", "-m", "http.server", "18080"])
+        );
+        assert_eq!(report["commands_run"][0]["exit"], serde_json::Value::Null);
+        assert_eq!(report["commands_run"][0]["detached"], true);
+        assert_eq!(report["commands_run"][1]["exit"], 0); // pkill stopped it
+        let http = fs::read_to_string(evidence.join("logs/QA-001.http.txt")).unwrap();
+        assert!(
+            http.contains("< 200"),
+            "expected the GET / transcript to record a 200: {http}"
+        );
+
+        let mut stopped = false;
+        for _ in 0..40 {
+            if std::net::TcpStream::connect("127.0.0.1:18080").is_err() {
+                stopped = true;
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+        assert!(
+            stopped,
+            "http.server on 127.0.0.1:18080 still listens after api.mjs exited"
+        );
+    }
 }

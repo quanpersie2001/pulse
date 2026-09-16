@@ -9,7 +9,8 @@
 // the docs/operations/run.md `pulse-run` block format this reads.
 
 import { readFile, writeFile, mkdir } from 'node:fs/promises';
-import { execFile } from 'node:child_process';
+import { mkdirSync, openSync } from 'node:fs';
+import { execFile, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
 import path from 'node:path';
 
@@ -68,6 +69,46 @@ async function waitForReady(url, timeoutMs = 60000) {
 
 async function runProcess(argv, cwd) {
   return execFileAsync(argv[0], argv.slice(1), { cwd });
+}
+
+// `start` is often a long-running dev server that never exits on its own
+// (plan §8.6's own `pnpm dev` example) — waiting for it the way runProcess
+// does would hang until Pulse's lane timeout. Spawn it detached into its own
+// process group and return immediately; `ready_url` polling is the actual
+// readiness signal, not this call returning.
+function startApp(argv, cwd, logPath) {
+  const fullLogPath = path.join(cwd, logPath);
+  mkdirSync(path.dirname(fullLogPath), { recursive: true });
+  const out = openSync(fullLogPath, 'a');
+  const child = spawn(argv[0], argv.slice(1), {
+    cwd,
+    detached: true,
+    stdio: ['ignore', out, out],
+  });
+  // Without a listener, a failed spawn (e.g. command not found) would throw
+  // as an uncaught 'error' event; let ready_url's own timeout report it
+  // instead.
+  child.on('error', () => {});
+  child.unref();
+  return child.pid;
+}
+
+// `stop` is expected to actually terminate the app; if it fails, fall back
+// to killing the process group `start` was detached into (best-effort).
+async function stopApp(argv, cwd, pid) {
+  try {
+    await runProcess(argv, cwd);
+    return 0;
+  } catch (stopError) {
+    if (pid) {
+      try {
+        process.kill(-pid, 'SIGTERM');
+      } catch {
+        // already gone
+      }
+    }
+    return typeof stopError.code === 'number' ? stopError.code : 1;
+  }
 }
 
 function matchesAssert(assertions, exitCode) {
@@ -134,80 +175,76 @@ async function main() {
     process.exit(1);
   }
 
-  await runProcess(config.start, repoRoot);
+  const pid = startApp(config.start, repoRoot, config.log);
   let browser;
+  let report;
   try {
     if (!(await waitForReady(config.ready_url))) {
-      await writeFile(
-        outputPath,
-        JSON.stringify(inconclusiveReport(commit, `${config.ready_url} never returned 200`, config.ready_url), null, 2)
-      );
-      console.log(JSON.stringify({ status: 'done' }));
-      return;
-    }
-
-    browser = await playwright.chromium.launch();
-    const viewports = input.viewports && input.viewports.length > 0 ? input.viewports : ['1280x800'];
-    const cases = [];
-    for (const qaCase of input.qa_cases || []) {
-      const [url, ...rest] = qaCase.steps || [];
-      const consoleLines = [];
-      for (const viewport of viewports) {
-        const [width, height] = viewport.split('x').map(Number);
-        const page = await browser.newPage({ viewport: { width, height } });
-        page.on('console', (message) => consoleLines.push(`[${viewport}] ${message.type()}: ${message.text()}`));
-        if (url) await page.goto(url);
-        await page.screenshot({ path: path.join(evidenceDir, 'shots', `${qaCase.id}-${viewport}.png`) });
-        if (viewport === viewports[0]) {
-          const snapshot = await page.accessibility.snapshot();
-          await writeFile(path.join(evidenceDir, 'logs', `${qaCase.id}.a11y.txt`), JSON.stringify(snapshot, null, 2));
+      report = inconclusiveReport(commit, `${config.ready_url} never returned 200`, config.ready_url);
+    } else {
+      browser = await playwright.chromium.launch();
+      const viewports = input.viewports && input.viewports.length > 0 ? input.viewports : ['1280x800'];
+      const cases = [];
+      for (const qaCase of input.qa_cases || []) {
+        const [url, ...rest] = qaCase.steps || [];
+        const consoleLines = [];
+        for (const viewport of viewports) {
+          const [width, height] = viewport.split('x').map(Number);
+          const page = await browser.newPage({ viewport: { width, height } });
+          page.on('console', (message) => consoleLines.push(`[${viewport}] ${message.type()}: ${message.text()}`));
+          if (url) await page.goto(url);
+          await page.screenshot({ path: path.join(evidenceDir, 'shots', `${qaCase.id}-${viewport}.png`) });
+          if (viewport === viewports[0]) {
+            const snapshot = await page.accessibility.snapshot();
+            await writeFile(path.join(evidenceDir, 'logs', `${qaCase.id}.a11y.txt`), JSON.stringify(snapshot, null, 2));
+          }
+          await page.close();
         }
-        await page.close();
-      }
-      await writeFile(path.join(evidenceDir, 'logs', `${qaCase.id}.console.txt`), consoleLines.join('\n'));
+        await writeFile(path.join(evidenceDir, 'logs', `${qaCase.id}.console.txt`), consoleLines.join('\n'));
 
-      const artifacts = viewports
-        .map((viewport) => `shots/${qaCase.id}-${viewport}.png`)
-        .concat([`logs/${qaCase.id}.console.txt`, `logs/${qaCase.id}.a11y.txt`]);
+        const artifacts = viewports
+          .map((viewport) => `shots/${qaCase.id}-${viewport}.png`)
+          .concat([`logs/${qaCase.id}.console.txt`, `logs/${qaCase.id}.a11y.txt`]);
 
-      let status = 'inconclusive';
-      if (qaCase.check) {
-        let exitCode = 0;
-        try {
-          await runProcess(qaCase.check.argv, repoRoot);
-        } catch (checkError) {
-          exitCode = typeof checkError.code === 'number' ? checkError.code : 1;
+        let status = 'inconclusive';
+        if (qaCase.check) {
+          let exitCode = 0;
+          try {
+            await runProcess(qaCase.check.argv, repoRoot);
+          } catch (checkError) {
+            exitCode = typeof checkError.code === 'number' ? checkError.code : 1;
+          }
+          status = matchesAssert(qaCase.check.assert, exitCode) ? 'pass' : 'fail';
         }
-        status = matchesAssert(qaCase.check.assert, exitCode) ? 'pass' : 'fail';
+        cases.push({ id: qaCase.id, status, observation: rest.join(' | '), artifacts });
       }
-      cases.push({ id: qaCase.id, status, observation: rest.join(' | '), artifacts });
+
+      const verdict = cases.some((c) => c.status === 'fail')
+        ? 'fail'
+        : cases.some((c) => c.status === 'inconclusive')
+          ? 'inconclusive'
+          : 'pass';
+
+      report = {
+        verdict,
+        acceptance: [],
+        cases,
+        findings: [],
+        commands_run: [],
+        environment: { commit, server: config.ready_url, tool: 'playwright' },
+      };
     }
-
-    const verdict = cases.some((c) => c.status === 'fail')
-      ? 'fail'
-      : cases.some((c) => c.status === 'inconclusive')
-        ? 'inconclusive'
-        : 'pass';
-
-    await writeFile(
-      outputPath,
-      JSON.stringify(
-        {
-          verdict,
-          acceptance: [],
-          cases,
-          findings: [],
-          commands_run: [],
-          environment: { commit, server: config.ready_url, tool: 'playwright' },
-        },
-        null,
-        2
-      )
-    );
   } finally {
     if (browser) await browser.close();
-    await runProcess(config.stop, repoRoot).catch(() => {});
+    const stopExit = await stopApp(config.stop, repoRoot, pid);
+    if (report) {
+      report.commands_run = [
+        { argv: config.start, exit: null, detached: true },
+        { argv: config.stop, exit: stopExit },
+      ];
+    }
   }
+  await writeFile(outputPath, JSON.stringify(report, null, 2));
   console.log(JSON.stringify({ status: 'done' }));
 }
 

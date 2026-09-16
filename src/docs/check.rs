@@ -151,7 +151,8 @@ fn check_generated_by(
         };
         commands_run.push(CommandRun {
             argv: generated.check_argv.clone(),
-            exit: i64::from(exit_code),
+            exit: Some(i64::from(exit_code)),
+            detached: None,
         });
         if exit_code != 0 {
             findings.push(finding(
@@ -317,7 +318,7 @@ mod tests {
             .unwrap();
         assert!(found.check.is_some());
         assert_eq!(report.commands_run.len(), 1);
-        assert_eq!(report.commands_run[0].exit, 1);
+        assert_eq!(report.commands_run[0].exit, Some(1));
     }
 
     #[test]
@@ -331,6 +332,6 @@ mod tests {
         .unwrap();
         let report = check(repo.path()).unwrap();
         assert!(report.findings.is_empty());
-        assert_eq!(report.commands_run[0].exit, 0);
+        assert_eq!(report.commands_run[0].exit, Some(0));
     }
 }

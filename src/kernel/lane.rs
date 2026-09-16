@@ -65,7 +65,14 @@ pub struct Finding {
 #[serde(deny_unknown_fields)]
 pub struct CommandRun {
     pub argv: Vec<String>,
-    pub exit: i64,
+    /// `None` for a command that was still running when the report was
+    /// written — the QA lanes' detached `start` (A8.1) has no exit code to
+    /// report; every other entry carries the real exit code.
+    pub exit: Option<i64>,
+    /// `Some(true)` only for a `start` spawned into its own process group
+    /// and never awaited; omitted (not serialized) for ordinary runs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detached: Option<bool>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -536,6 +543,28 @@ mod tests {
             .unwrap_err();
         assert_eq!(err.code(), "lane_mutated_workspace");
         assert!(record_receipt_count(repo.path()) == 0);
+    }
+
+    /// A8.1: the QA lanes record their detached `start` truthfully — no exit
+    /// code while it is still running, plus the `detached` flag — and the
+    /// lane schema must accept that shape (a report failing to parse here
+    /// would turn every qa lane into `lane_output_invalid`). Ordinary
+    /// entries keep a real exit and no flag.
+    #[test]
+    fn command_run_accepts_a_detached_start_without_an_exit_code() {
+        let output: LaneOutput = serde_json::from_value(json!({
+            "verdict": "inconclusive", "acceptance": [], "cases": [], "findings": [],
+            "commands_run": [
+                {"argv": ["python3", "-m", "http.server", "18080"], "exit": null, "detached": true},
+                {"argv": ["pkill", "-f", "http.server 18080"], "exit": 0},
+            ],
+            "environment": {"commit": "abc1234"},
+        }))
+        .unwrap();
+        assert_eq!(output.commands_run[0].exit, None);
+        assert_eq!(output.commands_run[0].detached, Some(true));
+        assert_eq!(output.commands_run[1].exit, Some(0));
+        assert_eq!(output.commands_run[1].detached, None);
     }
 
     fn record_receipt_count(repo_root: &Path) -> usize {

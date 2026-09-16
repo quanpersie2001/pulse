@@ -8,7 +8,8 @@
 // docs/operations/run.md `pulse-run` block format this reads.
 
 import { readFile, writeFile, mkdir } from 'node:fs/promises';
-import { execFile } from 'node:child_process';
+import { mkdirSync, openSync } from 'node:fs';
+import { execFile, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
 import path from 'node:path';
 
@@ -67,6 +68,46 @@ async function waitForReady(url, timeoutMs = 60000) {
 
 async function runProcess(argv, cwd) {
   return execFileAsync(argv[0], argv.slice(1), { cwd });
+}
+
+// `start` is often a long-running server that never exits on its own —
+// waiting for it the way runProcess does would hang until Pulse's lane
+// timeout. Spawn it detached into its own process group and return
+// immediately; `ready_url` polling is the actual readiness signal, not this
+// call returning.
+function startApp(argv, cwd, logPath) {
+  const fullLogPath = path.join(cwd, logPath);
+  mkdirSync(path.dirname(fullLogPath), { recursive: true });
+  const out = openSync(fullLogPath, 'a');
+  const child = spawn(argv[0], argv.slice(1), {
+    cwd,
+    detached: true,
+    stdio: ['ignore', out, out],
+  });
+  // Without a listener, a failed spawn (e.g. command not found) would throw
+  // as an uncaught 'error' event; let ready_url's own timeout report it
+  // instead.
+  child.on('error', () => {});
+  child.unref();
+  return child.pid;
+}
+
+// `stop` is expected to actually terminate the app; if it fails, fall back
+// to killing the process group `start` was detached into (best-effort).
+async function stopApp(argv, cwd, pid) {
+  try {
+    await runProcess(argv, cwd);
+    return 0;
+  } catch (stopError) {
+    if (pid) {
+      try {
+        process.kill(-pid, 'SIGTERM');
+      } catch {
+        // already gone
+      }
+    }
+    return typeof stopError.code === 'number' ? stopError.code : 1;
+  }
 }
 
 function matchesAssert(assertions, exitCode) {
@@ -136,77 +177,73 @@ async function main() {
     return;
   }
 
-  await runProcess(config.start, repoRoot);
+  const pid = startApp(config.start, repoRoot, config.log);
+  let report;
   try {
     if (!(await waitForReady(config.ready_url))) {
-      await writeFile(
-        outputPath,
-        JSON.stringify(inconclusiveReport(commit, `${config.ready_url} never returned 200`, config.ready_url), null, 2)
-      );
-      console.log(JSON.stringify({ status: 'done' }));
-      return;
-    }
-
-    const cases = [];
-    for (const qaCase of input.qa_cases || []) {
-      const httpLines = [];
-      for (const step of qaCase.steps || []) {
-        const { method, urlPath, body } = parseStep(step);
-        const url = new URL(urlPath, config.ready_url).toString();
-        const response = await fetch(url, {
-          method,
-          headers: body === undefined ? {} : { 'content-type': 'application/json' },
-          body: body === undefined ? undefined : JSON.stringify(body),
-        });
-        const responseText = await response.text();
-        httpLines.push(`> ${step}`, `< ${response.status}`, responseText, '');
-      }
-      await writeFile(path.join(evidenceDir, 'logs', `${qaCase.id}.http.txt`), httpLines.join('\n'));
-      const logPath = path.join(repoRoot, config.log);
-      await writeFile(path.join(evidenceDir, 'logs', `${qaCase.id}.server.txt`), await tailLines(logPath, 200));
-
-      let status = 'inconclusive';
-      if (qaCase.check) {
-        let exitCode = 0;
-        try {
-          await runProcess(qaCase.check.argv, repoRoot);
-        } catch (checkError) {
-          exitCode = typeof checkError.code === 'number' ? checkError.code : 1;
+      report = inconclusiveReport(commit, `${config.ready_url} never returned 200`, config.ready_url);
+    } else {
+      const cases = [];
+      for (const qaCase of input.qa_cases || []) {
+        const httpLines = [];
+        for (const step of qaCase.steps || []) {
+          const { method, urlPath, body } = parseStep(step);
+          const url = new URL(urlPath, config.ready_url).toString();
+          const response = await fetch(url, {
+            method,
+            headers: body === undefined ? {} : { 'content-type': 'application/json' },
+            body: body === undefined ? undefined : JSON.stringify(body),
+          });
+          const responseText = await response.text();
+          httpLines.push(`> ${step}`, `< ${response.status}`, responseText, '');
         }
-        status = matchesAssert(qaCase.check.assert, exitCode) ? 'pass' : 'fail';
+        await writeFile(path.join(evidenceDir, 'logs', `${qaCase.id}.http.txt`), httpLines.join('\n'));
+        const logPath = path.join(repoRoot, config.log);
+        await writeFile(path.join(evidenceDir, 'logs', `${qaCase.id}.server.txt`), await tailLines(logPath, 200));
+
+        let status = 'inconclusive';
+        if (qaCase.check) {
+          let exitCode = 0;
+          try {
+            await runProcess(qaCase.check.argv, repoRoot);
+          } catch (checkError) {
+            exitCode = typeof checkError.code === 'number' ? checkError.code : 1;
+          }
+          status = matchesAssert(qaCase.check.assert, exitCode) ? 'pass' : 'fail';
+        }
+        cases.push({
+          id: qaCase.id,
+          status,
+          observation: (qaCase.steps || []).join(' | '),
+          artifacts: [`logs/${qaCase.id}.http.txt`, `logs/${qaCase.id}.server.txt`],
+        });
       }
-      cases.push({
-        id: qaCase.id,
-        status,
-        observation: (qaCase.steps || []).join(' | '),
-        artifacts: [`logs/${qaCase.id}.http.txt`, `logs/${qaCase.id}.server.txt`],
-      });
+
+      const verdict = cases.some((c) => c.status === 'fail')
+        ? 'fail'
+        : cases.some((c) => c.status === 'inconclusive')
+          ? 'inconclusive'
+          : 'pass';
+
+      report = {
+        verdict,
+        acceptance: [],
+        cases,
+        findings: [],
+        commands_run: [],
+        environment: { commit, server: config.ready_url, tool: 'fetch' },
+      };
     }
-
-    const verdict = cases.some((c) => c.status === 'fail')
-      ? 'fail'
-      : cases.some((c) => c.status === 'inconclusive')
-        ? 'inconclusive'
-        : 'pass';
-
-    await writeFile(
-      outputPath,
-      JSON.stringify(
-        {
-          verdict,
-          acceptance: [],
-          cases,
-          findings: [],
-          commands_run: [],
-          environment: { commit, server: config.ready_url, tool: 'fetch' },
-        },
-        null,
-        2
-      )
-    );
   } finally {
-    await runProcess(config.stop, repoRoot).catch(() => {});
+    const stopExit = await stopApp(config.stop, repoRoot, pid);
+    if (report) {
+      report.commands_run = [
+        { argv: config.start, exit: null, detached: true },
+        { argv: config.stop, exit: stopExit },
+      ];
+    }
   }
+  await writeFile(outputPath, JSON.stringify(report, null, 2));
   console.log(JSON.stringify({ status: 'done' }));
 }
 

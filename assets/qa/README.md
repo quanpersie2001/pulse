@@ -36,6 +36,18 @@ YAML library, to stay dependency-free); `ready_url` is polled with a plain
 `fetch` until it returns HTTP 200; `log` is a path (relative to the repo
 root) the running app writes to, tailed into each case's evidence.
 
+`start` is spawned detached into its own process group with stdout/stderr
+redirected to `log`, and the script does not wait for it to exit — many
+`start` commands (the `pnpm dev` example above included) are long-running
+dev servers that never exit on their own, so waiting would hang until
+Pulse's lane timeout. `ready_url` returning 200 is the only readiness
+signal. `stop` is expected to actually terminate the app; if it exits
+non-zero the script falls back to sending `SIGTERM` to the process group
+`start` was spawned into, best-effort. `commands_run[]` records this
+truthfully: the detached `start` with `exit: null` and `detached: true`
+(it has no exit code — it never exits during the run), then `stop` with
+its real exit code.
+
 A missing `docs/operations/run.md`, a missing block for the script's `id`,
 or a block missing any of the four keys, is not a crash: the script writes
 `<evidence_dir>/qa-{ui,api}.json` with `verdict: "inconclusive"` and one
