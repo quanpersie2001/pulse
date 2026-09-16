@@ -23,7 +23,7 @@ use serde_json::Value;
 use crate::error::{PulseError, Result};
 use crate::event::emit_event;
 use crate::identity::actor::ActorRef;
-use crate::kernel::issues::{append_note, apply_to_record, bump, require, NoteKind};
+use crate::kernel::issues::{append_note, apply_to_record, bump, find, require, NoteKind};
 use crate::kernel::{lane, packet, profile, reservation};
 use crate::runner::{self, CommandSpec};
 use crate::source;
@@ -282,7 +282,7 @@ pub fn run_lane(
     let status = ticket.get("status").and_then(Value::as_str).unwrap_or("");
     if status != "verifying" {
         return Err(PulseError::kernel(
-            "close_not_verifying",
+            "lane_not_verifying",
             format!("{id} is {status}, not verifying"),
             "a lane only runs against a Ticket that has handed off",
         ));
@@ -316,8 +316,13 @@ pub fn run_lane(
     fs::create_dir_all(&dir).map_err(|error| PulseError::io(&dir, error))?;
     let evidence = evidence_dir(repo_root, id);
     fs::create_dir_all(&evidence).map_err(|error| PulseError::io(&evidence, error))?;
+    let story = ticket
+        .get("story")
+        .and_then(Value::as_str)
+        .and_then(|story_id| find(&records, story_id));
+    let input_value = lane::lane_input(repo_root, ticket, story, role)?;
     let input_path = dir.join(format!("{role}-input.json"));
-    fs::write(&input_path, serde_json::to_vec_pretty(ticket)?)
+    fs::write(&input_path, serde_json::to_vec_pretty(&input_value)?)
         .map_err(|error| PulseError::io(&input_path, error))?;
 
     let spec = load_runner(repo_root, role)?;
