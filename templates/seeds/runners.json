@@ -1,0 +1,30 @@
+{
+  "worker": {
+    "command": "claude -p --output-format text --dangerously-skip-permissions \"Read .pulse/prompts/worker.md then {input}\"",
+    "timeout_seconds": 3600
+  },
+  "worker-continue": {
+    "command": "claude -p --output-format text --dangerously-skip-permissions \"Read .pulse/prompts/worker-continue.md then {input}\"",
+    "timeout_seconds": 3600
+  },
+  "review-correctness": {
+    "command": "claude -p --output-format text \"Read .pulse/prompts/review-correctness.md then {input}\"",
+    "timeout_seconds": 1800
+  },
+  "review-adversarial": {
+    "command": "claude -p --output-format text \"Read .pulse/prompts/review-adversarial.md then {input}\"",
+    "timeout_seconds": 1800
+  },
+  "check-docs": {
+    "command": "pulse docs check --write {artifact_dir}/check-docs.json",
+    "timeout_seconds": 120
+  },
+  "qa-ui": {
+    "command": "node scripts/qa/ui.mjs {input}",
+    "timeout_seconds": 900
+  },
+  "qa-api": {
+    "command": "node scripts/qa/api.mjs {input}",
+    "timeout_seconds": 900
+  }
+}

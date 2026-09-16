@@ -457,16 +457,16 @@ Quy tắc MUST khi seal:
 
 ### 8.5 Prompt mẫu cho lane agent (tài liệu, không code)
 
-`assets/prompts/review-correctness.md`, `review-adversarial.md`, `worker.md`.
-Mỗi prompt ≤ 60 dòng: identity, input ở đâu, được/không được làm gì, output
+`templates/prompts/review-correctness.md`, `review-adversarial.md`,
+`worker.md`. Mỗi prompt ≤ 60 dòng: identity, input ở đâu, được/không được làm gì, output
 ghi đâu, câu cuối in gì. Không copy nội dung Ticket vào prompt.
 
 ### 8.6 Template script QA (cho repo đích)
 
-`assets/qa/ui.mjs` (Playwright): đọc input → với mỗi case: navigate theo
+`templates/qa/ui.mjs` (Playwright): đọc input → với mỗi case: navigate theo
 `steps`, chụp 1280×800 và 375×812, ghi console vào `logs/`, lấy a11y
 snapshot, so `expected` bằng agent-free assert khi case có `check`, nếu không
-đánh `inconclusive` kèm ảnh để lane agent/human kết luận. `assets/qa/api.mjs`:
+đánh `inconclusive` kèm ảnh để lane agent/human kết luận. `templates/qa/api.mjs`:
 start server theo `docs/operations/run.md` (`run.start`, `run.ready_url`),
 gọi theo `steps`, lưu response + tail log server. `pulse init --with-qa-templates`
 copy vào `scripts/qa/`.
@@ -551,7 +551,8 @@ xong và trước khi thoát `continue`.
 .pulse/runtime/context-threshold` (nếu `.pulse/runtime/run/current` tồn tại).
 `.pulse/hosts/claude-code/post-tool-use.sh`: nếu marker tồn tại → in
 `{"decision":"continue","reason":"Context ≥70%: pulse checkpoint rồi thoát {\"status\":\"continue\"}"}`
-một lần rồi xoá marker. `pulse init --host claude-code` copy hai file và in
+một lần rồi xoá marker. `pulse init --host claude-code` copy hai file (template ở
+`templates/hosts/claude-code/` của repo Pulse, A8.4) và in
 đoạn JSON cần dán vào `settings.json`. Host khác: chỉ quy tắc trong worker
 prompt + timeout.
 

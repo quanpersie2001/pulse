@@ -295,8 +295,8 @@ fn kernel_does_not_depend_on_cli() {
 /// unknown subcommand or flag. Returns how many mentions it actually
 /// checked, so a caller can assert it found a sane minimum rather than
 /// silently checking nothing. Shared by the AGENTS block guard and the
-/// prompt-asset guard below (plan §8.5: "guard test parse mọi `pulse …`
-/// trong `assets/prompts/**` bằng clap (cùng cơ chế guard khối AGENTS)").
+/// template guard below (plan §8.5: "guard test parse mọi `pulse …`
+/// trong `templates/**` bằng clap (cùng cơ chế guard khối AGENTS)").
 fn assert_pulse_mentions_parse(source_label: &str, text: &str) -> usize {
     use clap::CommandFactory;
 
@@ -380,25 +380,79 @@ fn agents_block_only_names_commands_the_cli_has() {
     );
 }
 
-/// Plan §8.5: the worker/review prompt assets `pulse init` seeds under
-/// `.pulse/prompts/` are guidance prose too, and name real `pulse` commands
-/// (`checkpoint`, `handoff`, `note`) the agent following them is expected to
-/// run — the same drift risk the AGENTS block guard covers.
+/// Plan §8.5: the worker/review prompt templates `pulse init` seeds under
+/// `.pulse/prompts/` are guidance prose, and name real `pulse` commands
+/// (`checkpoint`, `handoff`, `note`) the agent following them is expected
+/// to run — the same drift risk the AGENTS block guard covers. A8.4 moved
+/// everything `pulse init` writes into a target repo under `templates/`,
+/// so the guard now covers every markdown template there (prompts, the
+/// AGENTS block seed, the PULSE.md/docs seeds) — not just `prompts/`.
 #[test]
-fn prompt_assets_only_name_commands_the_cli_has() {
-    let prompts_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/prompts");
+fn templates_only_name_commands_the_cli_has() {
+    let templates_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("templates");
+    let mut pending = vec![templates_dir.clone()];
     let mut total_checked = 0_usize;
-    for entry in fs::read_dir(&prompts_dir).unwrap() {
-        let path = entry.unwrap().path();
-        if path.extension().and_then(|ext| ext.to_str()) != Some("md") {
-            continue;
+    while let Some(dir) = pending.pop() {
+        for entry in fs::read_dir(&dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                pending.push(path);
+                continue;
+            }
+            if path.extension().and_then(|ext| ext.to_str()) != Some("md") {
+                continue;
+            }
+            let text = fs::read_to_string(&path).unwrap();
+            let label = path.display().to_string();
+            total_checked += assert_pulse_mentions_parse(&label, &text);
         }
-        let text = fs::read_to_string(&path).unwrap();
-        let label = path.display().to_string();
-        total_checked += assert_pulse_mentions_parse(&label, &text);
     }
     assert!(
         total_checked >= 4,
-        "expected the prompt assets to name several commands; only {total_checked} found"
+        "expected the templates to name several commands; only {total_checked} found"
+    );
+}
+
+/// Plan §10.4: the host detector shell scripts `pulse init --host
+/// claude-code` copies into the target repo live at
+/// `templates/hosts/**/*.sh` (A8.4) — they must at least parse as POSIX
+/// shell. Syntax drift here otherwise only surfaces in a target repo when
+/// the detector runs. Skipped, with a stated reason, when `sh` is not on
+/// PATH (this crate's suite must not depend on a POSIX shell).
+#[test]
+fn host_detector_templates_are_valid_shell() {
+    if std::process::Command::new("sh")
+        .arg("--version")
+        .output()
+        .is_err()
+    {
+        eprintln!("skipping host_detector_templates_are_valid_shell: `sh` is not on PATH");
+        return;
+    }
+    let hosts_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("templates/hosts");
+    let mut pending = vec![hosts_dir.clone()];
+    let mut checked = 0_usize;
+    while let Some(dir) = pending.pop() {
+        for entry in fs::read_dir(&dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                pending.push(path);
+                continue;
+            }
+            if path.extension().and_then(|ext| ext.to_str()) != Some("sh") {
+                continue;
+            }
+            let status = std::process::Command::new("sh")
+                .arg("-n")
+                .arg(&path)
+                .status()
+                .unwrap();
+            assert!(status.success(), "sh -n failed for {}", path.display());
+            checked += 1;
+        }
+    }
+    assert!(
+        checked >= 2,
+        "expected the claude-code detector scripts to be checked; only {checked} found"
     );
 }

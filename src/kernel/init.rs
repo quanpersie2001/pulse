@@ -3,9 +3,9 @@
 //! function without the AGENTS block, docs map or host files).
 //!
 //! Creates the `.pulse/` tree, an empty `issues.jsonl`, a `runners.json`
-//! seed wired to the prompt assets below (plan §8.2), a `PULSE.md` profile
-//! seed (plan §8.1), the runtime/cache `.gitignore` entries (plan §3), the
-//! Pulse block in `AGENTS.md` (plan §12.1), `docs/README.md` and
+//! seed wired to the prompt templates below (plan §8.2), a `PULSE.md`
+//! profile seed (plan §8.1), the runtime/cache `.gitignore` entries (plan
+//! §3), the Pulse block in `AGENTS.md` (plan §12.1), `docs/README.md` and
 //! `docs/operations/run.md` (plan §12.2, §8.6) and `.pulse/prompts/*.md`
 //! (plan §8.5) if any are missing — so a fresh `pulse docs check` passes
 //! rather than immediately reporting `docs/README.md`'s own
@@ -22,7 +22,6 @@ use std::fs;
 use std::path::Path;
 
 use serde::{Deserialize, Serialize};
-use serde_json::json;
 
 use crate::error::Result;
 use crate::storage::WriteGuard;
@@ -40,149 +39,56 @@ const DIRS: [&str; 7] = [
 
 const GITIGNORE_ENTRIES: [&str; 2] = ["**/.pulse/runtime/", "**/.pulse/cache/"];
 
-const PULSE_MD_SEED: &str = "\
-# PULSE.md - seeded by `pulse init` (plan 0022 section 8.1). Human-editable.
-# Each profile key below is <surface>-<risk> (a Ticket/Story's own
-# `surface`/`risk` fields, e.g. a `ui` Ticket with `risk: medium` resolves
-# `ui-medium`) except `decision_work`, which every `role: decision_work`
-# Ticket uses regardless of its surface or risk.
-fence_ignore: []
-profiles:
-  cli-low: {lanes: [review-correctness]}
-  lib-low: {lanes: [review-correctness]}
-  api-low: {lanes: [review-correctness]}
-  ui-low: {lanes: [review-correctness, qa-ui]}
-  api-medium: {lanes: [review-correctness, qa-api]}
-  ui-medium: {lanes: [review-correctness, qa-ui]}
-  api-high: {lanes: [review-correctness, review-adversarial, qa-api], human: required}
-  ui-high: {lanes: [review-correctness, review-adversarial, qa-ui, qa-api], human: required}
-  docs-low: {lanes: [check-docs]}
-  decision_work: {lanes: []}
-";
+const PULSE_MD_SEED: &str = include_str!("../../templates/seeds/PULSE.md");
 
-const DOCS_README_SEED: &str = "\
-# Docs map
-
-Hand-maintained index of durable docs, kept short on purpose.
-`pulse docs applicable <id>` matches a Ticket's anchors/tags against
-`applies_to`/`tags` frontmatter on the docs listed here; `pulse docs check`
-finds broken links and stale generated sections, and confirms every path
-listed below still exists.
-
-- (add entries as `- path/to/doc.md` plus a one-line why)
-- docs/operations/run.md — lane qa-* reads this file; format in
-  scripts/qa/README.md
-";
+const DOCS_README_SEED: &str = include_str!("../../templates/seeds/docs-README.md");
 
 /// Referenced by [`DOCS_README_SEED`] since P1.10/A6, but never itself
-/// created until now — a fresh `pulse init` (with or without
+/// created until A8.2 — a fresh `pulse init` (with or without
 /// `--with-qa-templates`) left `docs check` reporting the path as missing
-/// immediately, on every repo, rather than pointing at a real starting
-/// point. Placeholder `docker compose` argv (syntactically valid, not
-/// meant to run as-is) for both blocks — `pulse init` has no way to know
-/// this repo's actual stack; a human edits `start`/`ready_url`/`stop`/`log`
-/// for how it really runs, per `scripts/qa/README.md`.
-const RUN_MD_SEED: &str = "\
-# Run
+/// immediately, on every repo. Placeholder `docker compose` argv
+/// (syntactically valid, not meant to run as-is) for both blocks — `pulse
+/// init` has no way to know this repo's actual stack; a human edits
+/// `start`/`ready_url`/`stop`/`log` for how it really runs, per
+/// `scripts/qa/README.md`.
+const RUN_MD_SEED: &str = include_str!("../../templates/seeds/run.md");
 
-Lanes `qa-ui`/`qa-api` read the two `pulse-run` blocks below to start and
-stop this repo's own app; edit `start`/`ready_url`/`stop`/`log` for how
-this repo actually runs. Block format: `scripts/qa/README.md` (copied in
-by `pulse init --with-qa-templates`).
-
-```pulse-run
-id: api
-start: [\"docker\", \"compose\", \"up\", \"-d\", \"api\"]
-ready_url: \"http://127.0.0.1:8000/health\"
-stop: [\"docker\", \"compose\", \"stop\", \"api\"]
-log: \".pulse/runtime/logs/api.log\"
-```
-
-```pulse-run
-id: ui
-start: [\"docker\", \"compose\", \"up\", \"-d\", \"ui\"]
-ready_url: \"http://127.0.0.1:3000\"
-stop: [\"docker\", \"compose\", \"stop\", \"ui\"]
-log: \".pulse/runtime/logs/ui.log\"
-```
-";
-
-const RUNNERS_JSON_ROLES: &[(&str, &str, u64)] = &[
-    (
-        "worker",
-        "claude -p --output-format text --dangerously-skip-permissions \"Read .pulse/prompts/worker.md then {input}\"",
-        3600,
-    ),
-    (
-        "worker-continue",
-        "claude -p --output-format text --dangerously-skip-permissions \"Read .pulse/prompts/worker-continue.md then {input}\"",
-        3600,
-    ),
-    (
-        "review-correctness",
-        "claude -p --output-format text \"Read .pulse/prompts/review-correctness.md then {input}\"",
-        1800,
-    ),
-    (
-        "review-adversarial",
-        "claude -p --output-format text \"Read .pulse/prompts/review-adversarial.md then {input}\"",
-        1800,
-    ),
-    (
-        "check-docs",
-        "pulse docs check --write {artifact_dir}/check-docs.json",
-        120,
-    ),
-];
-
-/// Only seeded when `--with-qa-templates` also copies the scripts these
-/// commands point at (plan §8.6) — seeding them unconditionally would give
-/// every plain `pulse init` a `runners.json` naming `scripts/qa/*.mjs`
-/// files that don't exist.
-const QA_RUNNERS_JSON_ROLES: &[(&str, &str, u64)] = &[
-    ("qa-ui", "node scripts/qa/ui.mjs {input}", 900),
-    ("qa-api", "node scripts/qa/api.mjs {input}", 900),
-];
-
-/// Plan §8.2's `runners.json` seed, built with `serde_json` rather than a
-/// hand-escaped string literal (a command line already needs its own `"`
-/// quoting — nesting that inside a Rust string *and* JSON by hand is a typo
-/// magnet `json!` avoids). `worker`/`worker-continue`/`review-*` point at
-/// the prompt files this module also seeds (plan §8.5); `check-docs` needs
-/// no prompt or wrapper — `pulse docs check --write` already writes the
-/// lane §8.4 shape directly (A3).
+/// Plan §8.2's `runners.json` seed, now a real file at
+/// `templates/seeds/runners.json` (`include_str!`'d — a JSON file is
+/// readable, lintable and diffable outside Rust in a way a code-built table
+/// never was). The `qa-ui`/`qa-api` roles are only seeded when
+/// `--with-qa-templates` also copies the scripts these commands point at
+/// (plan §8.6) — seeding them unconditionally would give every plain
+/// `pulse init` a `runners.json` naming `scripts/qa/*.mjs` files that don't
+/// exist, so the plain run strips every `qa-*` role from the seed.
 fn runners_json_seed(with_qa_templates: bool) -> serde_json::Value {
-    let mut roles = serde_json::Map::new();
-    for (role, command, timeout_seconds) in RUNNERS_JSON_ROLES {
-        roles.insert(
-            (*role).to_string(),
-            json!({"command": command, "timeout_seconds": timeout_seconds}),
-        );
+    let mut seed: serde_json::Value =
+        serde_json::from_str(include_str!("../../templates/seeds/runners.json"))
+            .expect("templates/seeds/runners.json must be valid JSON");
+    if !with_qa_templates {
+        seed.as_object_mut()
+            .expect("runners.json seed must be an object")
+            .retain(|role, _| !role.starts_with("qa-"));
     }
-    if with_qa_templates {
-        for (role, command, timeout_seconds) in QA_RUNNERS_JSON_ROLES {
-            roles.insert(
-                (*role).to_string(),
-                json!({"command": command, "timeout_seconds": timeout_seconds}),
-            );
-        }
-    }
-    serde_json::Value::Object(roles)
+    seed
 }
 
 const PROMPT_FILES: [(&str, &str); 4] = [
-    ("worker.md", include_str!("../../assets/prompts/worker.md")),
+    (
+        "worker.md",
+        include_str!("../../templates/prompts/worker.md"),
+    ),
     (
         "worker-continue.md",
-        include_str!("../../assets/prompts/worker-continue.md"),
+        include_str!("../../templates/prompts/worker-continue.md"),
     ),
     (
         "review-correctness.md",
-        include_str!("../../assets/prompts/review-correctness.md"),
+        include_str!("../../templates/prompts/review-correctness.md"),
     ),
     (
         "review-adversarial.md",
-        include_str!("../../assets/prompts/review-adversarial.md"),
+        include_str!("../../templates/prompts/review-adversarial.md"),
     ),
 ];
 
@@ -212,82 +118,13 @@ const AGENTS_BLOCK_END: &str = "<!-- PULSE:END -->";
 /// mutation, routing by shape, `done` as a gate not a claim, friction ->
 /// `note --friction`, checkpoint-then-continue, a short command table. Kept
 /// to what actually exists today — no skill-based routing, since
-/// `pulse-shape`/`pulse-plan` aren't rebuilt until Phase 2/3.
-const AGENTS_BLOCK_BODY: &str = "\
-## Pulse
+/// `pulse-shape`/`pulse-plan` aren't rebuilt until Phase 2/3. Body lives in
+/// `templates/seeds/agents-block.md`, `include_str!`'d here.
+const AGENTS_BLOCK_BODY: &str = include_str!("../../templates/seeds/agents-block.md");
 
-Pulse is the local CLI truth layer for work in this repository: one JSONL
-store (`.pulse/issues.jsonl`) for Epic/Story/Ticket/Decision records,
-receipts as the only proof of completion, an append-only event log, and a
-friction -> learning -> check ratchet. Pulse does not run agents and has no
-daemon.
+const STATUSLINE_SH: &str = include_str!("../../templates/hosts/claude-code/statusline.sh");
 
-Before any mutation, ask: does this id exist (`pulse work show <id>`)? what
-is its current status? am I the actor allowed to change it? will this leave
-`issues.jsonl` schema-valid?
-
-Route by shape: a small, well-understood change is `pulse work new ticket
-\"<title>\" --risk <low|medium|high> --surface <cli|api|ui|lib|docs>`, then
-`pulse work ready <id>`, then `pulse run worker <id>` — the worker itself
-reads `.pulse/prompts/worker.md` before `{input}`, so that contract is not
-restated here. Anything bigger needs a Story first (`pulse work new story
-...`), with an Epic above it if the work doesn't fit under an existing one.
-
-`done` is never a claim, only a gate reading receipts: a Ticket goes
-`verifying -> done` only through `pulse close`, after every lane in its
-profile has a passing receipt on the handoff's commit.
-
-Hit friction (a Pulse bug, an unclear doc, a missing check)? Record it:
-`pulse note <id> \"<what happened>\" --friction` — don't work around it
-silently. Learned something worth keeping from it (a failure, a
-constraint, a technique)? `pulse learn add --title \"...\" --kind
-<failure|constraint|technique|routing> --applies-to <glob>` records a
-candidate; `pulse learn applicable <id>` shows what already applies to a
-Ticket.
-
-Need a doc before writing one? `pulse docs applicable <id>` shows which
-docs match a Ticket's anchors/tags; `pulse docs check` finds broken links
-and stale generated sections under `docs/`.
-
-Context filling up mid-Ticket? `pulse checkpoint <id> --from <cp.json>`
-recording what's done, what's next and any gotchas, then exit printing
-exactly `{\"status\":\"continue\"}` — the runner resumes in a fresh process
-with that checkpoint in the packet.
-
-| Command | Does |
-|---|---|
-| `pulse work new <kind> <title>` | create a draft record |
-| `pulse work show <id>` / `list` / `tree` | read records |
-| `pulse work ready <id>` | run the ready gate |
-| `pulse work update <id>` / `dep` / `transition` | edit a record |
-| `pulse packet <id>` | the one input to read before working |
-| `pulse run worker <id>` | dispatch the configured worker |
-| `pulse checkpoint <id> --from <f>` | save progress mid-run |
-| `pulse handoff <id> --from <f>` | hand off for review |
-| `pulse run <lane> <id>` | run one review/qa lane |
-| `pulse close <id>` / `close-story <id>` | the only way to `done` |
-| `pulse note <id> <text> [--friction]` | append-only note |
-| `pulse learn add` / `applicable <id>` | record / recall a learning |
-| `pulse docs applicable <id>` / `check` | find relevant docs / doc rot |
-";
-
-const STATUSLINE_SH: &str = "#!/bin/sh\n\
-# Pulse host detector for Claude Code (plan 0022 SS10.4).\n\
-# Reads the statusline JSON payload on stdin; touches a marker once context\n\
-# usage crosses 70% and a run is in progress, so post-tool-use.sh can tell\n\
-# the agent to checkpoint and exit continue.\n\
-payload=$(cat)\n\
-pct=$(printf '%s' \"$payload\" | sed -n 's/.*\"used_percentage\"[: ]*\\([0-9]*\\).*/\\1/p')\n\
-if [ -n \"$pct\" ] && [ \"$pct\" -ge 70 ] 2>/dev/null && [ -e .pulse/runtime/run/current ]; then\n\
-  touch .pulse/runtime/context-threshold\n\
-fi\n";
-
-const POST_TOOL_USE_SH: &str = "#!/bin/sh\n\
-# Pulse host detector for Claude Code (plan 0022 SS10.4).\n\
-if [ -e .pulse/runtime/context-threshold ]; then\n\
-  rm -f .pulse/runtime/context-threshold\n\
-  printf '%s\\n' '{\"decision\":\"continue\",\"reason\":\"Context >=70%%: pulse checkpoint then exit {\\\"status\\\":\\\"continue\\\"}\"}'\n\
-fi\n";
+const POST_TOOL_USE_SH: &str = include_str!("../../templates/hosts/claude-code/post-tool-use.sh");
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -413,9 +250,9 @@ pub fn initialize_repository(
 }
 
 const QA_TEMPLATE_FILES: [(&str, &str); 3] = [
-    ("ui.mjs", include_str!("../../assets/qa/ui.mjs")),
-    ("api.mjs", include_str!("../../assets/qa/api.mjs")),
-    ("README.md", include_str!("../../assets/qa/README.md")),
+    ("ui.mjs", include_str!("../../templates/qa/ui.mjs")),
+    ("api.mjs", include_str!("../../templates/qa/api.mjs")),
+    ("README.md", include_str!("../../templates/qa/README.md")),
 ];
 
 /// `pulse init --with-qa-templates` (plan §8.6): copies the QA lane scripts
@@ -578,7 +415,19 @@ mod tests {
         let runners: serde_json::Value =
             serde_json::from_slice(&fs::read(repo.path().join(".pulse/runners.json")).unwrap())
                 .unwrap();
-        for (role, _, _) in RUNNERS_JSON_ROLES {
+        // Every non-qa role in the seed file must survive the plain init's
+        // qa-* strip and appear in the written runners.json.
+        let seed: serde_json::Value =
+            serde_json::from_str(include_str!("../../templates/seeds/runners.json")).unwrap();
+        let base_roles: Vec<&str> = seed
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .filter(|role| !role.starts_with("qa-"))
+            .collect();
+        assert!(!base_roles.is_empty(), "seed lost its base roles");
+        for role in base_roles {
             assert!(runners.get(role).is_some(), "missing role {role}");
         }
         assert!(runners["worker"]["command"]
@@ -829,7 +678,7 @@ mod tests {
             );
             return;
         }
-        let script = Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/qa/api.mjs");
+        let script = Path::new(env!("CARGO_MANIFEST_DIR")).join("templates/qa/api.mjs");
         let repo = tempfile::tempdir().unwrap();
         fs::create_dir_all(repo.path().join("docs/operations")).unwrap();
         fs::write(

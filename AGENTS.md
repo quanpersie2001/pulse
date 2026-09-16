@@ -56,6 +56,10 @@ with no hint is a bug).
 
 ## Source architecture
 
+`templates/` is everything `pulse init` writes into a target repo,
+embedded with `include_str!`; `assets/` is this repository's own media
+only.
+
 Layers sit bottom-up; never reach up the ladder. Guarded by
 `tests/architecture_guards.rs` and `tests/public_api_contract.rs`.
 
