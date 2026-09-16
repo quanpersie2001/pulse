@@ -546,10 +546,10 @@ xong và trước khi thoát `continue`.
 
 ### 10.4 Detector cho host (không phải code Pulse)
 
-`assets/hosts/claude-code/statusline.sh`: đọc
+`.pulse/hosts/claude-code/statusline.sh`: đọc
 `.context_window.used_percentage`; ≥ 70 → `touch
 .pulse/runtime/context-threshold` (nếu `.pulse/runtime/run/current` tồn tại).
-`assets/hosts/claude-code/post-tool-use.sh`: nếu marker tồn tại → in
+`.pulse/hosts/claude-code/post-tool-use.sh`: nếu marker tồn tại → in
 `{"decision":"continue","reason":"Context ≥70%: pulse checkpoint rồi thoát {\"status\":\"continue\"}"}`
 một lần rồi xoá marker. `pulse init --host claude-code` copy hai file và in
 đoạn JSON cần dán vào `settings.json`. Host khác: chỉ quy tắc trong worker

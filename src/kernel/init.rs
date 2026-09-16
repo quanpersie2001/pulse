@@ -508,8 +508,13 @@ fn ensure_gitignore_entries(repo_root: &Path) -> Result<Vec<String>> {
         .collect())
 }
 
+/// Writes into `.pulse/hosts/claude-code/` (never `assets/hosts/`) — that
+/// path is Pulse's own repository layout, not a convention a target repo
+/// should adopt; `.pulse/` is where Pulse-owned generated files belong, and
+/// unlike `.pulse/runtime/`/`.pulse/cache/` it is tracked, not gitignored
+/// (plan §3, §10.4).
 fn write_claude_code_host_files(repo_root: &Path) -> Result<Vec<String>> {
-    let dir = repo_root.join("assets/hosts/claude-code");
+    let dir = repo_root.join(".pulse/hosts/claude-code");
     fs::create_dir_all(&dir).map_err(|error| PulseError::io(&dir, error))?;
     let mut written = Vec::new();
     for (name, body) in [
@@ -524,7 +529,7 @@ fn write_claude_code_host_files(repo_root: &Path) -> Result<Vec<String>> {
                 use std::os::unix::fs::PermissionsExt;
                 let _ = fs::set_permissions(&path, fs::Permissions::from_mode(0o755));
             }
-            written.push(format!("assets/hosts/claude-code/{name}"));
+            written.push(format!(".pulse/hosts/claude-code/{name}"));
         }
     }
     Ok(written)
@@ -532,8 +537,8 @@ fn write_claude_code_host_files(repo_root: &Path) -> Result<Vec<String>> {
 
 fn claude_code_settings_snippet() -> Vec<String> {
     vec![
-        "statusLine: assets/hosts/claude-code/statusline.sh".to_string(),
-        "hooks.PostToolUse: assets/hosts/claude-code/post-tool-use.sh".to_string(),
+        "statusLine: .pulse/hosts/claude-code/statusline.sh".to_string(),
+        "hooks.PostToolUse: .pulse/hosts/claude-code/post-tool-use.sh".to_string(),
     ]
 }
 
@@ -704,11 +709,11 @@ mod tests {
         let report = initialize_repository(repo.path(), false, Some("claude-code"), false).unwrap();
         assert!(repo
             .path()
-            .join("assets/hosts/claude-code/statusline.sh")
+            .join(".pulse/hosts/claude-code/statusline.sh")
             .exists());
         assert!(repo
             .path()
-            .join("assets/hosts/claude-code/post-tool-use.sh")
+            .join(".pulse/hosts/claude-code/post-tool-use.sh")
             .exists());
         assert!(!report.host_settings_snippet.is_empty());
     }
