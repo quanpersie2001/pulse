@@ -14,7 +14,12 @@ use super::api;
 ///
 /// # Errors
 /// An io error binding the socket surfaces as `PulseError::io`.
-pub fn run(workspace: &Path, port: u16, open: bool) -> Result<(), crate::PulseError> {
+pub fn run(
+    registry: Option<&Path>,
+    workspace: Option<&Path>,
+    port: u16,
+    open: bool,
+) -> Result<(), crate::PulseError> {
     let server = Server::http(("127.0.0.1", port)).map_err(|error| {
         crate::PulseError::io(
             std::path::PathBuf::from(format!("127.0.0.1:{port}")),
@@ -22,13 +27,25 @@ pub fn run(workspace: &Path, port: u16, open: bool) -> Result<(), crate::PulseEr
         )
     })?;
     let url = format!("http://127.0.0.1:{port}/");
-    eprintln!("pulse serve: {url} (workspace: {})", workspace.display());
+    match (registry, workspace) {
+        (Some(_), Some(w)) => {
+            eprintln!(
+                "pulse serve: {url} (registry + workspace scan: {})",
+                w.display()
+            )
+        }
+        (Some(_), None) => eprintln!("pulse serve: {url} (registry)"),
+        (None, Some(w)) => eprintln!("pulse serve: {url} (workspace scan: {})", w.display()),
+        (None, None) => {
+            eprintln!("pulse serve: {url} (no projects: run pulse init, or pass --workspace)")
+        }
+    }
     eprintln!("read-only; Ctrl-C to stop");
     if open {
         open_browser(&url);
     }
     for request in server.incoming_requests() {
-        let _ = respond(request, workspace);
+        let _ = respond(request, registry, workspace);
     }
     Ok(())
 }
@@ -69,7 +86,11 @@ fn route(path: &str) -> Route<'_> {
     }
 }
 
-fn respond(request: tiny_http::Request, workspace: &Path) -> std::io::Result<()> {
+fn respond(
+    request: tiny_http::Request,
+    registry: Option<&Path>,
+    workspace: Option<&Path>,
+) -> std::io::Result<()> {
     let method = request.method().clone();
     let url = request.url().to_string();
     let path = url.split('?').next().unwrap_or("").trim_matches('/');
@@ -88,17 +109,21 @@ fn respond(request: tiny_http::Request, workspace: &Path) -> std::io::Result<()>
                 html.as_bytes().to_vec(),
             )
         }
-        Route::Projects => json_response(request, 200, &api::projects_payload(workspace)),
-        Route::Board { pid } => match api::with_project(workspace, pid, api::board_payload) {
-            Some(payload) => json_response(request, 200, &payload),
-            None => json_response(
-                request,
-                404,
-                &serde_json::json!({"error": format!("unknown project {pid}")}),
-            ),
-        },
+        Route::Projects => json_response(request, 200, &api::projects_payload(registry, workspace)),
+        Route::Board { pid } => {
+            match api::with_project(registry, workspace, pid, api::board_payload) {
+                Some(payload) => json_response(request, 200, &payload),
+                None => json_response(
+                    request,
+                    404,
+                    &serde_json::json!({"error": format!("unknown project {pid}")}),
+                ),
+            }
+        }
         Route::Issue { pid, id } => {
-            match api::with_project(workspace, pid, |root| api::issue_payload(root, id)) {
+            match api::with_project(registry, workspace, pid, |root| {
+                api::issue_payload(root, id)
+            }) {
                 Some(Some(payload)) => json_response(request, 200, &payload),
                 Some(None) => json_response(
                     request,
@@ -117,7 +142,7 @@ fn respond(request: tiny_http::Request, workspace: &Path) -> std::io::Result<()>
             issue,
             relative,
         } => {
-            let served = api::with_project(workspace, pid, |root| {
+            let served = api::with_project(registry, workspace, pid, |root| {
                 api::evidence_file(root, &issue, &relative)
             });
             match served {

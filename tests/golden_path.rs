@@ -55,7 +55,13 @@ fn pulse_output(repo: &Path, args: &[&str], env: &[(&str, &str)]) -> Output {
         .arg("--repo-root")
         .arg(repo)
         .args(args)
-        .env_remove("PULSE_ACTOR");
+        .env_remove("PULSE_ACTOR")
+        // `pulse init` registers into the user registry (Decision 0023);
+        // tests must never touch the real ~/.pulse.
+        .env(
+            "PULSE_REGISTRY",
+            std::env::temp_dir().join("pulse-test-registry.json"),
+        );
     for (key, value) in env {
         command.env(key, value);
     }

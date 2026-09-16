@@ -68,6 +68,29 @@ pub fn discover(workspace: &Path) -> Vec<ProjectEntry> {
     out
 }
 
+/// The default project source (Decision 0023 §5 as amended): everything
+/// in the registry at `registry` (the env-resolved user registry in
+/// production), optionally merged with a `--workspace` scan. Entries
+/// dedupe by id (a registered repo found by a scan is the same project).
+/// Dead registry entries are filtered out by `registered_roots_at`.
+pub fn discover_merged(registry: Option<&Path>, workspace: Option<&Path>) -> Vec<ProjectEntry> {
+    let mut out: Vec<ProjectEntry> = Vec::new();
+    if let Some(registry) = registry {
+        for root in crate::serve::registry::registered_roots_at(registry) {
+            out.push(project_entry(&root));
+        }
+    }
+    if let Some(workspace) = workspace {
+        let mut scanned = Vec::new();
+        walk(workspace, 0, &mut scanned);
+        out.extend(scanned);
+    }
+    let mut seen = std::collections::HashSet::new();
+    out.retain(|entry| seen.insert(entry.id.clone()));
+    out.sort_by(|a, b| a.name.cmp(&b.name).then(a.id.cmp(&b.id)));
+    out
+}
+
 /// The canonical repo root whose id matches `pid`, if discovered.
 pub fn resolve(workspace: &Path, pid: &str) -> Option<PathBuf> {
     discover(workspace)

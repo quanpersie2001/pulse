@@ -7,6 +7,9 @@ use std::path::Path;
 
 use crate::PulseError;
 
-pub(crate) fn handle(workspace: &Path, port: u16, open: bool) -> Result<(), PulseError> {
-    crate::serve::http::run(workspace, port, open)
+pub(crate) fn handle(workspace: Option<&Path>, port: u16, open: bool) -> Result<(), PulseError> {
+    // The user registry path is resolved once at startup; file contents
+    // are still re-read per request.
+    let registry = crate::serve::registry::registry_path().ok();
+    crate::serve::http::run(registry.as_deref(), workspace, port, open)
 }

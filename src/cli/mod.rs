@@ -29,7 +29,7 @@ pub fn run(cli: Cli) -> Result<(), PulseError> {
             workspace,
             port,
             open,
-        } => serve::handle(&workspace, port, open),
+        } => serve::handle(workspace.as_deref(), port, open),
         other => run_in_repo(other, cli.repo_root),
     }
 }
@@ -48,15 +48,17 @@ fn run_in_repo(
             workspace,
             port,
             open,
-        } => serve::handle(&workspace, port, open),
+        } => serve::handle(workspace.as_deref(), port, open),
         args::Command::Init {
             refresh,
+            no_register,
             host,
             with_qa_templates,
             json,
         } => init::handle(
             &repo_root,
             refresh,
+            no_register,
             host.as_deref(),
             with_qa_templates,
             json,

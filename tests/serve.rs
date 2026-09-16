@@ -3,7 +3,10 @@
 //! path-traversal guard. The HTTP layer itself is a thin router over these
 //! functions and is exercised by hand (`pulse serve --open`).
 
-use pulse::serve::{api, discovery};
+#[path = "common/bin.rs"]
+mod common_bin;
+
+use pulse::serve::{api, discovery, registry};
 use serde_json::{json, Value};
 use std::fs;
 
@@ -102,6 +105,31 @@ fn board_payload_reports_records_and_counts_skipped_lines() {
     assert_eq!(payload["issues"].as_array().unwrap().len(), 2);
     assert_eq!(payload["skipped_lines"], 1);
     assert!(payload["learnings"].is_array());
+    assert_eq!(payload["recent_events"], json!([]));
+}
+
+#[test]
+fn board_payload_carries_the_newest_events_oldest_first() {
+    let repo = tempfile::tempdir().unwrap();
+    write_issues(repo.path(), &[sample_issue("TK-1", "ticket", "active")]);
+    let start = chrono::Utc::now();
+    for revision in 0..205 {
+        pulse::event::emit_event(
+            repo.path(),
+            "issue.updated",
+            "human:quan",
+            "TK-1",
+            json!({"revision_after": revision}),
+            start + chrono::Duration::milliseconds(revision),
+        )
+        .unwrap();
+    }
+
+    let payload = api::board_payload(repo.path());
+    let events = payload["recent_events"].as_array().unwrap();
+    assert_eq!(events.len(), 200);
+    assert_eq!(events[0]["payload"]["revision_after"], 5);
+    assert_eq!(events[199]["payload"]["revision_after"], 204);
 }
 
 #[test]
@@ -211,4 +239,96 @@ fn evidence_content_types_cover_the_common_artifacts() {
         api::evidence_file(repo.path(), "TK-1", "a.svg").unwrap().1,
         "image/svg+xml"
     );
+}
+
+// ---- registry (Decision 0023 §5 as amended) ----
+// These use the `_at`/`_into` pure forms: mutating process env from
+// parallel Rust tests is a race (a set_var can collide with another
+// thread's getenv), so the CLI-level registration test spawns the real
+// binary with a scratch PULSE_REGISTRY instead.
+
+/// Register a repo, hide it when the repo disappears, and stay idempotent.
+#[test]
+fn registry_registers_filters_dead_and_is_idempotent() {
+    let registry = tempfile::tempdir().unwrap();
+    let registry_file = registry.path().join("projects.json");
+    let repo = tempfile::tempdir().unwrap();
+    write_issues(repo.path(), &[sample_issue("EP-1", "epic", "draft")]);
+
+    registry::register_into(&registry_file, repo.path()).unwrap();
+    registry::register_into(&registry_file, repo.path()).unwrap(); // idempotent
+    let roots = registry::registered_roots_at(&registry_file);
+    assert_eq!(roots.len(), 1);
+    assert!(roots[0].ends_with(repo.path().file_name().unwrap()));
+
+    // The repo disappearing hides it from the registry read.
+    fs::remove_file(repo.path().join(".pulse/issues.jsonl")).unwrap();
+    assert!(registry::registered_roots_at(&registry_file).is_empty());
+}
+
+/// `discover_merged` unions the registry with a workspace scan and
+/// dedupes by project id.
+#[test]
+fn discover_merged_unions_registry_and_scan_without_duplicates() {
+    let registry = tempfile::tempdir().unwrap();
+    let registry_file = registry.path().join("projects.json");
+
+    let workspace = tempfile::tempdir().unwrap();
+    let scanned = workspace.path().join("only-on-disk");
+    write_issues(&scanned, &[sample_issue("EP-1", "epic", "draft")]);
+    registry::register_into(&registry_file, &scanned).unwrap();
+
+    let scanned_id = discovery::project_id(&scanned.canonicalize().unwrap());
+    // No workspace: registry only, one entry.
+    assert_eq!(
+        discovery::discover_merged(Some(&registry_file), None).len(),
+        1
+    );
+    // Workspace scan: same repo registered AND scanned, deduped to one.
+    let merged = discovery::discover_merged(Some(&registry_file), Some(workspace.path()));
+    assert_eq!(merged.len(), 1);
+    assert_eq!(merged[0].id, scanned_id);
+
+    // A registered repo outside the scan root also lists, and an unknown
+    // registry file lists nothing.
+    let elsewhere = tempfile::tempdir().unwrap();
+    write_issues(elsewhere.path(), &[sample_issue("EP-2", "epic", "draft")]);
+    registry::register_into(&registry_file, elsewhere.path()).unwrap();
+    assert_eq!(
+        discovery::discover_merged(Some(&registry_file), None).len(),
+        2
+    );
+    assert_eq!(
+        discovery::discover_merged(Some(registry.path().join("nope.json").as_path()), None).len(),
+        0
+    );
+}
+
+/// `pulse init` registers the repo through the CLI layer (best-effort):
+/// spawn the real binary with a scratch registry, like golden_path does.
+#[test]
+fn init_registers_into_the_registry() {
+    let registry = tempfile::tempdir().unwrap();
+    let repo = tempfile::tempdir().unwrap();
+
+    // The kernel entry point never touches the registry — only the CLI does.
+    pulse::kernel::init::initialize_repository(repo.path(), false, None, false).unwrap();
+    assert!(registry::registered_roots_at(&registry.path().join("projects.json")).is_empty());
+
+    let output = std::process::Command::new(common_bin::bin())
+        .arg("--repo-root")
+        .arg(repo.path())
+        .args(["init", "--json"])
+        .env("PULSE_REGISTRY", registry.path().join("projects.json"))
+        .output()
+        .expect("run pulse init with a scratch registry");
+    assert!(
+        output.status.success(),
+        "init failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let roots = registry::registered_roots_at(&registry.path().join("projects.json"));
+    assert_eq!(roots.len(), 1);
+    assert!(roots[0].ends_with(repo.path().file_name().unwrap()));
 }

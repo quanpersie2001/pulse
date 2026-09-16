@@ -42,6 +42,12 @@ impl TestRepo {
             .arg("--repo-root")
             .arg(self.path())
             .args(args)
+            // init registers into the user registry (Decision 0023); the
+            // fixture must never touch the real ~/.pulse.
+            .env(
+                "PULSE_REGISTRY",
+                std::env::temp_dir().join("pulse-test-registry.json"),
+            )
             .output()
             .expect("run Pulse against target repository fixture copy")
     }

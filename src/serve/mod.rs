@@ -14,6 +14,7 @@
 pub mod api;
 pub mod discovery;
 pub mod http;
+pub mod registry;
 
 use serde_json::Value;
 use std::path::Path;

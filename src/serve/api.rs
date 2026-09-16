@@ -11,19 +11,31 @@ use std::path::{Path, PathBuf};
 use super::discovery;
 use super::lenient_read_issues;
 
-/// `GET /api/projects` — rescan the workspace fresh on every call.
-pub fn projects_payload(workspace: &Path) -> Value {
-    json!({ "projects": discovery::discover(workspace) })
+/// `GET /api/projects` — registry first, optional workspace scan, fresh on
+/// every call.
+pub fn projects_payload(registry: Option<&Path>, workspace: Option<&Path>) -> Value {
+    json!({ "projects": discovery::discover_merged(registry, workspace) })
 }
 
-/// The repo root behind a project id, resolved by rescanning.
-pub fn resolve_project(workspace: &Path, pid: &str) -> Option<PathBuf> {
-    discovery::resolve(workspace, pid)
+/// The repo root behind a project id, resolved fresh.
+pub fn resolve_project(
+    registry: Option<&Path>,
+    workspace: Option<&Path>,
+    pid: &str,
+) -> Option<PathBuf> {
+    discovery::discover_merged(registry, workspace)
+        .into_iter()
+        .find(|entry| entry.id == pid)
+        .map(|entry| PathBuf::from(entry.path))
 }
+
+/// How many of the newest events the board payload carries for the
+/// project-wide activity feed; the full trace rides on the issue payload.
+const RECENT_EVENTS: usize = 200;
 
 /// `GET /api/p/<pid>/board` — everything the kanban needs: all records,
-/// learnings, and the receipt ledger's health (counts only; receipts ride
-/// on the per-issue payload).
+/// learnings, the newest events, and the receipt ledger's health (counts
+/// only; receipts ride on the per-issue payload).
 pub fn board_payload(repo_root: &Path) -> Value {
     let (records, skipped) = lenient_read_issues(repo_root);
     let (learnings, learnings_note) = match crate::learn::store::list(repo_root) {
@@ -35,8 +47,13 @@ pub fn board_payload(repo_root: &Path) -> Value {
             Ok(list) => (list.receipts.len(), list.unreadable.len()),
             Err(_) => (0, 0),
         };
+    // `read_events` sorts by ULID id, i.e. chronologically: the tail is
+    // the newest.
+    let events = crate::event::read_events(repo_root).unwrap_or_default();
+    let recent_events = &events[events.len().saturating_sub(RECENT_EVENTS)..];
     json!({
         "issues": records,
+        "recent_events": recent_events,
         "skipped_lines": skipped,
         "learnings": learnings,
         "learnings_note": learnings_note,
@@ -137,8 +154,13 @@ pub fn evidence_file(
 
 /// Convenience for tests and the http layer: map a project id to its
 /// payload context in one call.
-pub fn with_project<T>(workspace: &Path, pid: &str, f: impl FnOnce(&Path) -> T) -> Option<T> {
-    resolve_project(workspace, pid).map(|root| f(&root))
+pub fn with_project<T>(
+    registry: Option<&Path>,
+    workspace: Option<&Path>,
+    pid: &str,
+    f: impl FnOnce(&Path) -> T,
+) -> Option<T> {
+    resolve_project(registry, workspace, pid).map(|root| f(&root))
 }
 
 fn content_type(name: &str) -> &'static str {

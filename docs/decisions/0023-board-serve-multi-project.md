@@ -39,12 +39,20 @@ trả interest cho flow đọc thủ công.
    path = không cần actor/auth; thêm ghi là một decision mới.
 4. **Bind 127.0.0.1** mặc định; `--port` (mặc định do bước implement chốt,
    ghi vào `--help`), `--open` gọi `open`/`xdg-open`.
-5. **Discovery:** `pulse serve --workspace <dir>` (mặc định: cwd). Walk
-   depth ≤ 4, bỏ qua `node_modules/ .git/ target/ .venv/ venv/ __pycache__/
-   .next/ dist/ build/`; một thư mục là project khi và chỉ khi
-   `.pulse/issues.jsonl` tồn tại. `project id` = 12 ký tự hex đầu của
-   sha256 canonical path (path không bao giờ xuất hiện trong URL).
-   Rescan ở **mọi** request `/api/projects`; không state giữa các request.
+5. **Discovery — amended same day (2026-09-17, pre-dogfood), registry
+   primary:** `pulse init` registers the repo in a user-level registry
+   (`~/.pulse/projects.json`, `PULSE_REGISTRY` override for tests),
+   written best-effort by the CLI layer (kernel::init stays pure; tests
+   that call it never touch the real registry) with `--no-register` to
+   opt out. `pulse serve` lists registered repos — entries whose
+   `.pulse/issues.jsonl` vanished are filtered silently, no state kept
+   between requests — and `--workspace <dir>` additionally scans a tree
+   (depth ≤ 4, same skip list) merged with the registry, deduping by id.
+   No `register`/`unregister` commands: re-running `pulse init` on a
+   clone registers it; dead entries self-hide. The original walk-only
+   design lost because the operator must know the scan root up front —
+   registration belongs at the enrollment moment, which `pulse init`
+   already is.
 6. **API:**
    - `GET /api/projects` — danh sách project (id, tên, path hiển thị,
      counts theo kind/status, event mới nhất).
