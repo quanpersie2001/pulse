@@ -390,18 +390,22 @@ hard-code ngoài file `init` seed.
 ### 8.2 `runners.json`
 
 ```json
-{"worker":            {"argv":["claude","-p","--output-format","text","--dangerously-skip-permissions",
-                                "Pulse worker. Read {input} and follow it exactly."],"timeout":3600},
- "worker-continue":   {"argv":["codex","exec","--sandbox","workspace-write","Pulse worker continue. Read {input}."],"timeout":3600},
- "review-correctness":{"argv":["codex","exec","--sandbox","read-only","Pulse reviewer. Read {input}."],"timeout":1800},
- "review-adversarial":{"argv":["claude","-p","--output-format","text","Pulse adversarial reviewer. Read {input}."],"timeout":1800},
- "qa-ui":             {"argv":["node","scripts/qa/ui.mjs","{input}"],"timeout":900},
- "qa-api":            {"argv":["node","scripts/qa/api.mjs","{input}"],"timeout":900},
- "check-docs":        {"argv":["pulse","docs","check","--json"],"timeout":120}}
+{"worker":            {"command": "claude -p --output-format text --dangerously-skip-permissions \"Pulse worker. Read {input} and follow it exactly.\"", "timeout_seconds": 3600},
+ "worker-continue":   {"command": "codex exec --sandbox workspace-write \"Pulse worker continue. Read {input}.\"", "timeout_seconds": 3600},
+ "review-correctness":{"command": "codex exec --sandbox read-only \"Pulse reviewer. Read {input}.\"", "timeout_seconds": 1800},
+ "review-adversarial":{"command": "claude -p --output-format text \"Pulse adversarial reviewer. Read {input}.\"", "timeout_seconds": 1800},
+ "qa-ui":             {"command": "node scripts/qa/ui.mjs {input}", "timeout_seconds": 900},
+ "qa-api":            {"command": "node scripts/qa/api.mjs {input}", "timeout_seconds": 900},
+ "check-docs":        {"command": "pulse docs check --json", "timeout_seconds": 120}}
 ```
 
-Placeholder: `{input}`, `{issue}`, `{repo}`, `{evidence_dir}`. argv, không
-shell. `worker-continue` tuỳ chọn; thiếu thì `continue` dùng lại `worker`.
+Mỗi role là một `"command"` (chuỗi, không phải `"argv"` mảng), tách thành argv
+bằng `runner::split_argv` — hỗ trợ quote đơn/kép, không bao giờ qua shell —
+cộng `"timeout_seconds"`; `"max_output_bytes"` tuỳ chọn (mặc định 8 MiB).
+Placeholder trong `command`: `{input}`, `{ticket}`, `{repo}`, `{artifact_dir}`
+— khớp `runner::PLACEHOLDERS`; một placeholder lạ (`{issue}`, `{evidence_dir}`,
+…) là lỗi `runner_placeholder_unknown` khi spawn, không im lặng bỏ qua.
+`worker-continue` tuỳ chọn; thiếu thì `continue` dùng lại `worker`.
 
 ### 8.3 Input của từng lane
 
