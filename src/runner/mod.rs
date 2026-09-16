@@ -313,6 +313,11 @@ impl Outcome {
 /// The child runs as its own process group on Unix. On timeout or observed
 /// cancellation the whole group is killed. Output streams are capped at
 /// `max_output_bytes` each; excess is drained and reported as truncated.
+/// `env` is applied on top of the inherited parent environment (via
+/// [`std::process::Command::envs`], scoped to this one child) rather than
+/// through a process-global `std::env::set_var` — callers that need the
+/// child to see a variable like `PULSE_ACTOR` pass it here instead of
+/// mutating the current process's environment first.
 ///
 /// # Errors
 ///
@@ -320,6 +325,7 @@ impl Outcome {
 pub fn execute(
     working_dir: &Path,
     argv: &[String],
+    env: &[(&str, String)],
     timeout: Duration,
     max_output_bytes: usize,
     cancel: Option<&CancelFlag>,
@@ -329,6 +335,7 @@ pub fn execute(
     command
         .args(&argv[1..])
         .current_dir(working_dir)
+        .envs(env.iter().map(|(key, value)| (*key, value.as_str())))
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());

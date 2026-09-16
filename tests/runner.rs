@@ -166,6 +166,7 @@ fn execute_captures_exit_code_and_streams() {
     let outcome = runner::execute(
         tmp.path(),
         &sh("echo stdout-line; echo stderr-line >&2; exit 3"),
+        &[],
         Duration::from_secs(30),
         runner::DEFAULT_MAX_OUTPUT_BYTES,
         None,
@@ -185,6 +186,7 @@ fn execute_kills_on_timeout_within_the_bound() {
     let outcome = runner::execute(
         tmp.path(),
         &sh("sleep 60"),
+        &[],
         Duration::from_secs(2),
         runner::DEFAULT_MAX_OUTPUT_BYTES,
         None,
@@ -203,6 +205,7 @@ fn execute_kills_process_group_not_just_direct_child() {
     let outcome = runner::execute(
         tmp.path(),
         &sh("sleep 300 & sleep 300 & wait"),
+        &[],
         Duration::from_secs(2),
         runner::DEFAULT_MAX_OUTPUT_BYTES,
         None,
@@ -227,6 +230,7 @@ fn execute_honours_cancellation() {
     let outcome = runner::execute(
         tmp.path(),
         &sh("sleep 60"),
+        &[],
         Duration::from_secs(60),
         runner::DEFAULT_MAX_OUTPUT_BYTES,
         Some(&cancel),
@@ -244,6 +248,7 @@ fn execute_bounds_output_and_reports_truncation() {
     let outcome = runner::execute(
         tmp.path(),
         &sh("yes x | head -c 100000"),
+        &[],
         Duration::from_secs(30),
         4_096,
         None,
@@ -259,6 +264,7 @@ fn execute_reports_spawn_failure() {
     let error = runner::execute(
         tmp.path(),
         &["definitely-not-a-real-binary-4f9d".to_string()],
+        &[],
         Duration::from_secs(10),
         runner::DEFAULT_MAX_OUTPUT_BYTES,
         None,
@@ -327,6 +333,7 @@ fn argv_splitted_commands_do_not_invoke_a_shell() {
     let error = runner::execute(
         tmp.path(),
         &argv,
+        &[],
         Duration::from_secs(10),
         runner::DEFAULT_MAX_OUTPUT_BYTES,
         None,

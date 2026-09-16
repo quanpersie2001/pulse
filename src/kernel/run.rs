@@ -105,15 +105,10 @@ fn spawn_and_classify(
     );
     let argv = runner::materialize_argv(&argv, &values)?;
 
-    // SAFETY-adjacent note: `runner::execute` inherits the current
-    // process's environment (it never calls `env_clear`), and this loop is
-    // strictly sequential (one spawn's `execute` returns before the next is
-    // set up), so setting this ahead of each spawn is race-free in
-    // practice even though `set_var` is process-global.
-    std::env::set_var("PULSE_ACTOR", actor.as_kind_id());
     let outcome = runner::execute(
         repo_root,
         &argv,
+        &[("PULSE_ACTOR", actor.as_kind_id())],
         Duration::from_secs(spec.timeout_seconds),
         spec.max_output_bytes,
         None,
@@ -341,10 +336,10 @@ pub fn run_lane(
         evidence_dir(repo_root, id).display().to_string(),
     );
     let argv = runner::materialize_argv(&argv, &values)?;
-    std::env::set_var("PULSE_ACTOR", format!("agent:{role}"));
     let outcome = runner::execute(
         repo_root,
         &argv,
+        &[("PULSE_ACTOR", format!("agent:{role}"))],
         Duration::from_secs(spec.timeout_seconds),
         spec.max_output_bytes,
         None,
