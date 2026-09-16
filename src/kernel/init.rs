@@ -2,34 +2,37 @@
 //! `pulse init` seeds; P1.3 shipped a minimal interim version of this same
 //! function without the AGENTS block, docs map or host files).
 //!
-//! Creates the `.pulse/` tree, an empty `issues.jsonl`, an empty
-//! `runners.json`, a `PULSE.md` profile seed (plan §8.1), the runtime/cache
-//! `.gitignore` entries (plan §3), the Pulse block in `AGENTS.md` (plan
-//! §12.1) and `docs/README.md` (plan §12.2) if either is missing. `refresh`
-//! rewrites only the Pulse block region of `AGENTS.md`, never the rest of
-//! the file. `host` copies host-specific detector files (plan §10.4) —
-//! `"claude-code"` is the only one implemented.
+//! Creates the `.pulse/` tree, an empty `issues.jsonl`, a `runners.json`
+//! seed wired to the prompt assets below (plan §8.2), a `PULSE.md` profile
+//! seed (plan §8.1), the runtime/cache `.gitignore` entries (plan §3), the
+//! Pulse block in `AGENTS.md` (plan §12.1), `docs/README.md` (plan §12.2)
+//! and `.pulse/prompts/*.md` (plan §8.5) if any are missing. `refresh`
+//! rewrites only the Pulse block region of `AGENTS.md` and overwrites the
+//! prompt files (never the rest of `AGENTS.md`, and never an existing
+//! `runners.json` a human may have already customized). `host` copies
+//! host-specific detector files (plan §10.4) — `"claude-code"` is the only
+//! one implemented.
 //!
-//! Not yet implemented: `--with-qa-templates` (assets/qa/{ui,api}.mjs) and
-//! the review/worker prompt assets (plan §8.5/§8.6) — no lane or worker
-//! runs against a real target exist yet to consume them (that starts in
-//! Phase 2).
+//! Not yet implemented: `--with-qa-templates` (assets/qa/{ui,api}.mjs, plan
+//! §8.6) — A5's job.
 
 use std::fs;
 use std::path::Path;
 
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 
 use crate::error::Result;
 use crate::storage::WriteGuard;
 use crate::PulseError;
 
-const DIRS: [&str; 6] = [
+const DIRS: [&str; 7] = [
     ".pulse",
     ".pulse/receipts",
     ".pulse/evidence",
     ".pulse/events",
     ".pulse/learnings",
+    ".pulse/prompts",
     ".pulse/runtime",
 ];
 
@@ -55,13 +58,95 @@ const DOCS_README_SEED: &str = "\
 # Docs map
 
 Hand-maintained index of durable docs, kept short on purpose.
-`pulse docs applicable <id>` (plan 0022 P2.1) will match a Ticket's
-anchors/tags against `applies_to`/`tags` frontmatter on the docs listed
-here; `pulse docs check` will find broken links and stale generated
-sections.
+`pulse docs applicable <id>` matches a Ticket's anchors/tags against
+`applies_to`/`tags` frontmatter on the docs listed here; `pulse docs check`
+finds broken links and stale generated sections, and confirms every path
+listed below still exists.
 
 - (add entries as `- path/to/doc.md` plus a one-line why)
 ";
+
+const RUNNERS_JSON_ROLES: &[(&str, &str, u64)] = &[
+    (
+        "worker",
+        "claude -p --output-format text --dangerously-skip-permissions \"Read .pulse/prompts/worker.md then {input}\"",
+        3600,
+    ),
+    (
+        "worker-continue",
+        "claude -p --output-format text --dangerously-skip-permissions \"Read .pulse/prompts/worker-continue.md then {input}\"",
+        3600,
+    ),
+    (
+        "review-correctness",
+        "claude -p --output-format text \"Read .pulse/prompts/review-correctness.md then {input}\"",
+        1800,
+    ),
+    (
+        "review-adversarial",
+        "claude -p --output-format text \"Read .pulse/prompts/review-adversarial.md then {input}\"",
+        1800,
+    ),
+    (
+        "check-docs",
+        "pulse docs check --write {artifact_dir}/check-docs.json",
+        120,
+    ),
+];
+
+/// Plan §8.2's `runners.json` seed, built with `serde_json` rather than a
+/// hand-escaped string literal (a command line already needs its own `"`
+/// quoting — nesting that inside a Rust string *and* JSON by hand is a typo
+/// magnet `json!` avoids). `worker`/`worker-continue`/`review-*` point at
+/// the prompt files this module also seeds (plan §8.5); `check-docs` needs
+/// no prompt or wrapper — `pulse docs check --write` already writes the
+/// lane §8.4 shape directly (A3). `qa-ui`/`qa-api` are not seeded yet: their
+/// backing scripts (`assets/qa/*.mjs`, plan §8.6) don't exist until A5.
+fn runners_json_seed() -> serde_json::Value {
+    let mut roles = serde_json::Map::new();
+    for (role, command, timeout_seconds) in RUNNERS_JSON_ROLES {
+        roles.insert(
+            (*role).to_string(),
+            json!({"command": command, "timeout_seconds": timeout_seconds}),
+        );
+    }
+    serde_json::Value::Object(roles)
+}
+
+const PROMPT_FILES: [(&str, &str); 4] = [
+    ("worker.md", include_str!("../../assets/prompts/worker.md")),
+    (
+        "worker-continue.md",
+        include_str!("../../assets/prompts/worker-continue.md"),
+    ),
+    (
+        "review-correctness.md",
+        include_str!("../../assets/prompts/review-correctness.md"),
+    ),
+    (
+        "review-adversarial.md",
+        include_str!("../../assets/prompts/review-adversarial.md"),
+    ),
+];
+
+/// Writes each of [`PROMPT_FILES`] under `.pulse/prompts/` (plan §8.5):
+/// missing ones are always written; existing ones only when `refresh`
+/// (mirrors [`ensure_agents_block`]'s idempotent-unless-refresh contract,
+/// applied per-file since a prompt file has no internal region markers to
+/// preserve hand edits around).
+fn ensure_prompts(repo_root: &Path, refresh: bool) -> Result<Vec<String>> {
+    let dir = repo_root.join(".pulse/prompts");
+    let mut created = Vec::new();
+    for (name, body) in PROMPT_FILES {
+        let path = dir.join(name);
+        if path.exists() && !refresh {
+            continue;
+        }
+        fs::write(&path, body).map_err(|error| PulseError::io(&path, error))?;
+        created.push(format!(".pulse/prompts/{name}"));
+    }
+    Ok(created)
+}
 
 const AGENTS_BLOCK_BEGIN: &str = "<!-- PULSE:BEGIN -->";
 const AGENTS_BLOCK_END: &str = "<!-- PULSE:END -->";
@@ -179,7 +264,8 @@ pub fn initialize_repository(
 
     let runners_path = repo_root.join(".pulse/runners.json");
     if !runners_path.exists() {
-        fs::write(&runners_path, b"{}\n").map_err(|error| PulseError::io(&runners_path, error))?;
+        let bytes = serde_json::to_vec_pretty(&runners_json_seed())?;
+        fs::write(&runners_path, bytes).map_err(|error| PulseError::io(&runners_path, error))?;
         created.push(".pulse/runners.json".to_string());
     }
 
@@ -202,6 +288,8 @@ pub fn initialize_repository(
     if ensure_agents_block(repo_root, refresh)? {
         created.push("AGENTS.md".to_string());
     }
+
+    created.extend(ensure_prompts(repo_root, refresh)?);
 
     created.extend(ensure_gitignore_entries(repo_root)?);
 
@@ -348,6 +436,72 @@ mod tests {
         for entry in GITIGNORE_ENTRIES {
             assert!(gitignore.contains(entry));
         }
+        for (name, _) in PROMPT_FILES {
+            assert!(
+                repo.path().join(".pulse/prompts").join(name).exists(),
+                "missing prompt {name}"
+            );
+        }
+    }
+
+    #[test]
+    fn runners_json_seed_points_every_role_at_its_prompt_or_a_wrapper_free_command() {
+        let repo = tempfile::tempdir().unwrap();
+        initialize_repository(repo.path(), false, None).unwrap();
+        let runners: serde_json::Value =
+            serde_json::from_slice(&fs::read(repo.path().join(".pulse/runners.json")).unwrap())
+                .unwrap();
+        for (role, _, _) in RUNNERS_JSON_ROLES {
+            assert!(runners.get(role).is_some(), "missing role {role}");
+        }
+        assert!(runners["worker"]["command"]
+            .as_str()
+            .unwrap()
+            .contains(".pulse/prompts/worker.md"));
+        assert!(runners["check-docs"]["command"]
+            .as_str()
+            .unwrap()
+            .contains("pulse docs check --write"));
+    }
+
+    #[test]
+    fn an_existing_runners_json_is_never_overwritten() {
+        let repo = tempfile::tempdir().unwrap();
+        fs::create_dir_all(repo.path().join(".pulse")).unwrap();
+        fs::write(
+            repo.path().join(".pulse/runners.json"),
+            "{\"custom\": true}\n",
+        )
+        .unwrap();
+        initialize_repository(repo.path(), true, None).unwrap();
+        let text = fs::read_to_string(repo.path().join(".pulse/runners.json")).unwrap();
+        assert!(text.contains("custom"));
+    }
+
+    #[test]
+    fn prompts_are_written_once_and_left_alone_without_refresh() {
+        let repo = tempfile::tempdir().unwrap();
+        initialize_repository(repo.path(), false, None).unwrap();
+        let worker_path = repo.path().join(".pulse/prompts/worker.md");
+        fs::write(&worker_path, "hand edited\n").unwrap();
+
+        let report = initialize_repository(repo.path(), false, None).unwrap();
+        assert_eq!(report.status, RepositoryInitStatus::Unchanged);
+        assert_eq!(fs::read_to_string(&worker_path).unwrap(), "hand edited\n");
+    }
+
+    #[test]
+    fn refresh_overwrites_prompt_files() {
+        let repo = tempfile::tempdir().unwrap();
+        initialize_repository(repo.path(), false, None).unwrap();
+        let worker_path = repo.path().join(".pulse/prompts/worker.md");
+        fs::write(&worker_path, "stale\n").unwrap();
+
+        let report = initialize_repository(repo.path(), true, None).unwrap();
+        assert_eq!(report.status, RepositoryInitStatus::Initialized);
+        let text = fs::read_to_string(&worker_path).unwrap();
+        assert!(text.starts_with("# Pulse worker"));
+        assert!(!text.contains("stale"));
     }
 
     #[test]

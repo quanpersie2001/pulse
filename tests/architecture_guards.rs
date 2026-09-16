@@ -290,25 +290,23 @@ fn kernel_does_not_depend_on_cli() {
     }
 }
 
-/// Plan §12.1: the AGENTS block `pulse init` writes is guidance prose, so
-/// (Decision 0009 §5, still true in v3) every `pulse …` command it names
-/// must be a real command. Without this guard the block can drift silently
-/// from the CLI it documents.
-#[test]
-fn agents_block_only_names_commands_the_cli_has() {
+/// Scans `text` for every `pulse <subcommand> ...` mention and parses it
+/// against the real CLI (via clap), panicking (naming `source_label`) on an
+/// unknown subcommand or flag. Returns how many mentions it actually
+/// checked, so a caller can assert it found a sane minimum rather than
+/// silently checking nothing. Shared by the AGENTS block guard and the
+/// prompt-asset guard below (plan §8.5: "guard test parse mọi `pulse …`
+/// trong `assets/prompts/**` bằng clap (cùng cơ chế guard khối AGENTS)").
+fn assert_pulse_mentions_parse(source_label: &str, text: &str) -> usize {
     use clap::CommandFactory;
 
-    let repo = tempfile::tempdir().unwrap();
-    pulse::kernel::init::initialize_repository(repo.path(), false, None).unwrap();
-    let agents = fs::read_to_string(repo.path().join("AGENTS.md")).unwrap();
-
     let mut checked = 0_usize;
-    for (index, _) in agents.match_indices("pulse ") {
-        let preceded_by = agents[..index].chars().next_back();
+    for (index, _) in text.match_indices("pulse ") {
+        let preceded_by = text[..index].chars().next_back();
         if preceded_by.is_some_and(|c| c.is_alphanumeric() || c == '-' || c == '/' || c == '.') {
             continue;
         }
-        let rest = &agents[index..];
+        let rest = &text[index..];
         let end = rest
             .find(['\n', ',', '|', ')', '`', ';', '"'])
             .unwrap_or(rest.len());
@@ -336,7 +334,7 @@ fn agents_block_only_names_commands_the_cli_has() {
                     || root.get_arguments().any(|arg| arg.get_long() == Some(flag));
                 assert!(
                     known,
-                    "AGENTS.md: `{mention}` uses --{flag}, which `{}` does not accept",
+                    "{source_label}: `{mention}` uses --{flag}, which `{}` does not accept",
                     path.join(" ")
                 );
                 continue;
@@ -356,14 +354,51 @@ fn agents_block_only_names_commands_the_cli_has() {
             }
             assert!(
                 current.get_subcommands().next().is_none(),
-                "AGENTS.md: `{mention}` names `{token}`, which is not a subcommand of `{}`",
+                "{source_label}: `{mention}` names `{token}`, which is not a subcommand of `{}`",
                 path.join(" ")
             );
             positional_reached = true;
         }
     }
+    checked
+}
+
+/// Plan §12.1: the AGENTS block `pulse init` writes is guidance prose, so
+/// (Decision 0009 §5, still true in v3) every `pulse …` command it names
+/// must be a real command. Without this guard the block can drift silently
+/// from the CLI it documents.
+#[test]
+fn agents_block_only_names_commands_the_cli_has() {
+    let repo = tempfile::tempdir().unwrap();
+    pulse::kernel::init::initialize_repository(repo.path(), false, None).unwrap();
+    let agents = fs::read_to_string(repo.path().join("AGENTS.md")).unwrap();
+
+    let checked = assert_pulse_mentions_parse("AGENTS.md", &agents);
     assert!(
         checked >= 8,
         "expected the AGENTS block to name several commands; only {checked} found"
+    );
+}
+
+/// Plan §8.5: the worker/review prompt assets `pulse init` seeds under
+/// `.pulse/prompts/` are guidance prose too, and name real `pulse` commands
+/// (`checkpoint`, `handoff`, `note`) the agent following them is expected to
+/// run — the same drift risk the AGENTS block guard covers.
+#[test]
+fn prompt_assets_only_name_commands_the_cli_has() {
+    let prompts_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/prompts");
+    let mut total_checked = 0_usize;
+    for entry in fs::read_dir(&prompts_dir).unwrap() {
+        let path = entry.unwrap().path();
+        if path.extension().and_then(|ext| ext.to_str()) != Some("md") {
+            continue;
+        }
+        let text = fs::read_to_string(&path).unwrap();
+        let label = path.display().to_string();
+        total_checked += assert_pulse_mentions_parse(&label, &text);
+    }
+    assert!(
+        total_checked >= 4,
+        "expected the prompt assets to name several commands; only {total_checked} found"
     );
 }
