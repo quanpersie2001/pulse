@@ -9,6 +9,7 @@ pub mod identity;
 pub mod kernel;
 pub mod learn;
 pub mod runner;
+pub mod serve;
 pub mod source;
 pub mod storage;
 pub mod store;

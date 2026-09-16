@@ -29,6 +29,7 @@ serde_json = { version = "1", features = ["preserve_order"] }
 serde_yaml = "0.9"
 sha2 = "0.10"
 thiserror = "1"
+tiny_http = "0.12"
 jsonschema = { version = "0.17", features = ["draft202012"] }
 ulid = "1"
 

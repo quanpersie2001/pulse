@@ -135,6 +135,20 @@ pub(crate) enum Command {
         #[command(subcommand)]
         command: super::docs::DocsCommand,
     },
+    /// Read-only board server over a workspace of Pulse repos (Decision
+    /// 0023). Discovers every repo holding `.pulse/issues.jsonl` under
+    /// `--workspace` and serves a kanban UI on 127.0.0.1.
+    Serve {
+        /// Directory to scan for Pulse projects (depth <= 4).
+        #[arg(long, default_value = ".")]
+        workspace: PathBuf,
+        /// TCP port to bind on 127.0.0.1.
+        #[arg(long, default_value_t = 7777)]
+        port: u16,
+        /// Open the board in the system browser after binding.
+        #[arg(long, default_value_t = false)]
+        open: bool,
+    },
 }
 
 #[derive(Subcommand)]

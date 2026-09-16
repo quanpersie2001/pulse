@@ -49,7 +49,7 @@ pub struct Frontmatter {
     pub usage: UsageCounts,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct Learning {
     pub frontmatter: Frontmatter,
     pub body: String,

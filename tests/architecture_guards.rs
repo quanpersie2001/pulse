@@ -451,6 +451,29 @@ fn skills_only_name_commands_the_cli_has() {
     );
 }
 
+/// Decision 0023: `serve` is a read-only composition domain over the same
+/// storage/store/event/evidence reads the CLI uses — it must not reach
+/// into `kernel` (which owns mutations) or `cli` (which owns transport),
+/// or the read-only guarantee gets a mutation path by accident.
+#[test]
+fn serve_does_not_depend_on_kernel_or_cli() {
+    for (path, source) in rust_sources("src/serve") {
+        for line in source.lines() {
+            let trimmed = line.trim_start();
+            assert!(
+                !trimmed.starts_with("use crate::kernel"),
+                "{}: serve must not depend on kernel: {line}",
+                path.display()
+            );
+            assert!(
+                !trimmed.starts_with("use crate::cli"),
+                "{}: serve must not depend on cli: {line}",
+                path.display()
+            );
+        }
+    }
+}
+
 /// Plan §10.4: the host detector shell scripts `pulse init --host
 /// claude-code` copies into the target repo live at
 /// `templates/hosts/**/*.sh` (A8.4) — they must at least parse as POSIX

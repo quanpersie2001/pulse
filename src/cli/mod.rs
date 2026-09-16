@@ -7,6 +7,7 @@ mod learn;
 pub mod output;
 mod packet;
 mod run;
+mod serve;
 mod work;
 
 use clap::Parser;
@@ -21,12 +22,33 @@ pub fn parse() -> Cli {
 }
 
 pub fn run(cli: Cli) -> Result<(), PulseError> {
-    let workspace_root = cli
-        .repo_root
-        .unwrap_or_else(|| std::env::current_dir().expect("current dir"));
+    // `serve` deliberately bypasses repo-root resolution: it reads a
+    // *workspace* of repos, so it must work from anywhere (Decision 0023).
+    match cli.command {
+        args::Command::Serve {
+            workspace,
+            port,
+            open,
+        } => serve::handle(&workspace, port, open),
+        other => run_in_repo(other, cli.repo_root),
+    }
+}
+
+fn run_in_repo(
+    command: args::Command,
+    repo_root: Option<std::path::PathBuf>,
+) -> Result<(), PulseError> {
+    let workspace_root = repo_root.unwrap_or_else(|| std::env::current_dir().expect("current dir"));
     let repo_root = crate::source::state_repo_root(&workspace_root)?;
 
-    match cli.command {
+    match command {
+        // Unreachable via `run` (it routes Serve before repo-root
+        // resolution), but the match must stay exhaustive.
+        args::Command::Serve {
+            workspace,
+            port,
+            open,
+        } => serve::handle(&workspace, port, open),
         args::Command::Init {
             refresh,
             host,
