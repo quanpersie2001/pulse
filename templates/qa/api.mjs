@@ -216,6 +216,7 @@ async function main() {
       const apiCases = (input.qa_cases || []).filter((c) => !c.surface || c.surface === 'api');
       for (const qaCase of apiCases) {
         const httpLines = [];
+        const created = [];
         for (const step of qaCase.steps || []) {
           const { method, urlPath, body } = parseStep(step);
           const url = new URL(urlPath, config.ready_url).toString();
@@ -226,6 +227,28 @@ async function main() {
           });
           const responseText = await response.text();
           httpLines.push(`> ${step}`, `< ${response.status}`, responseText, '');
+          // Remember what a POST created so the case can delete it after
+          // itself (dogfood ST-1, F20 — lane steps used to leave residue
+          // rows in the dev database).
+          if (method === 'POST' && response.ok) {
+            try {
+              const created_id = JSON.parse(responseText).id;
+              if (created_id) created.push({ urlPath, id: created_id });
+            } catch {
+              // non-JSON body — nothing to track
+            }
+          }
+        }
+        // Cleanup before the transcript is written, so the artifact shows
+        // the steps' effects AND their cleanup (dogfood ST-1, F20).
+        for (const { urlPath, id } of created) {
+          const cleanupUrl = new URL(`${urlPath}/${id}`, config.ready_url).toString();
+          try {
+            const cleanup = await fetch(cleanupUrl, { method: 'DELETE' });
+            httpLines.push(`> DELETE ${urlPath}/${id} (cleanup)`, `< ${cleanup.status}`, '');
+          } catch (cleanupError) {
+            httpLines.push(`> DELETE ${urlPath}/${id} (cleanup)`, `< ${cleanupError.message}`, '');
+          }
         }
         await writeFile(path.join(evidenceDir, 'logs', `${qaCase.id}.http.txt`), httpLines.join('\n'));
         const logPath = path.join(repoRoot, config.log);

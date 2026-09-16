@@ -2,9 +2,11 @@
 
 `ui.mjs` and `api.mjs` are the `qa-ui`/`qa-api` lane scripts `pulse init
 --with-qa-templates` copies into `scripts/qa/` of the target repo. Node >=
-20, no bundled dependency: `ui.mjs` loads `playwright` with a dynamic
-`import('playwright')` from the target repo's own `node_modules` and prints
-a clear error if it is missing, rather than shipping its own copy.
+20, no bundled dependency: prints
+a clear error if it is missing, rather than shipping its own copy. Node
+resolves that import walking UP from `scripts/qa/`, so playwright belongs
+in the repo's ROOT `node_modules` — installing it inside a sub-package
+(`web/`) will not be found (ST-1 dogfood, F21).
 
 ## `docs/operations/run.md`'s `pulse-run` blocks
 

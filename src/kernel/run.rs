@@ -53,13 +53,17 @@ fn load_runner(repo_root: &Path, role: &str) -> Result<CommandSpec> {
     CommandSpec::from_value(entry)
 }
 
-fn write_worker_input(repo_root: &Path, id: &str) -> Result<PathBuf> {
-    let packet_value = packet::build_packet(repo_root, id)?;
+fn write_worker_input(repo_root: &Path, id: &str, run_id: &str) -> Result<PathBuf> {
+    let mut packet_value = packet::build_packet(repo_root, id)?;
     let dir = run_dir(repo_root, id);
     fs::create_dir_all(&dir).map_err(|error| PulseError::io(&dir, error))?;
     let evidence = evidence_dir(repo_root, id);
     fs::create_dir_all(&evidence).map_err(|error| PulseError::io(&evidence, error))?;
     let path = dir.join("worker-input.json");
+    // The runner's own run id, so a worker echoing it back in cp.json/handoff
+    // lines up with run.started/run.completed events (dogfood ST-1, F11 —
+    // two id spaces used to coexist in the same event field).
+    packet_value["protocol"]["run_id"] = serde_json::json!(run_id);
     let bytes = serde_json::to_vec_pretty(&packet_value)?;
     fs::write(&path, bytes).map_err(|error| PulseError::io(&path, error))?;
     Ok(path)
@@ -185,7 +189,7 @@ pub fn run_worker(
             "worker"
         };
         let checkpoints_before = checkpoint_count(repo_root, id)?;
-        let input_path = write_worker_input(repo_root, id)?;
+        let input_path = write_worker_input(repo_root, id, &run_id)?;
         let outcome = spawn_and_classify(repo_root, role, actor, id, &input_path)?;
 
         match outcome {
@@ -310,8 +314,31 @@ pub fn run_lane(
             .unwrap_or("implementation");
         let key = profile::profile_key(ticket_role, surface, risk);
         let config = profile::load(repo_root)?;
-        let profile = profile::profile_for(&config, &key)?;
-        if !profile.lanes.iter().any(|lane_name| lane_name == role) {
+        let own_profile = profile::profile_for(&config, &key)?;
+        // A story's own surface routes its own profile, and the surface of
+        // each qa_case routes too (dogfood ST-1, F18): a multi-surface story
+        // classified api must still run its ui cases' qa-ui lane without
+        // --force. Tickets keep the single-surface rule.
+        let mut allowed = own_profile.lanes.iter().any(|lane_name| lane_name == role);
+        if !allowed && kind == "story" {
+            let case_surfaces: Vec<&str> = ticket
+                .get("qa_cases")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(|case| case.get("surface").and_then(Value::as_str))
+                .collect();
+            for case_surface in case_surfaces {
+                let case_key = profile::profile_key(ticket_role, Some(case_surface), risk);
+                if let Ok(case_profile) = profile::profile_for(&config, &case_key) {
+                    if case_profile.lanes.iter().any(|lane_name| lane_name == role) {
+                        allowed = true;
+                        break;
+                    }
+                }
+            }
+        }
+        if !allowed {
             return Err(PulseError::kernel(
                 "lane_not_in_profile",
                 format!("{role} is not in the {key} profile"),

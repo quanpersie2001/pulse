@@ -243,8 +243,10 @@ Giữ `src/event.rs` + `storage::append_line_fsync`. Event type gọn:
 
 ## 6. CLI
 
-Mọi lệnh: `--repo-root`, `--json`; exit 0/1/2 (2 = lỗi dùng sai). JSON output
-luôn có `"ok": bool` và khi lỗi `{"ok":false,"error":{"code":"…","message":"…","hint":"…"}}`.
+Mọi lệnh: `--repo-root`, `--json`; exit 0/1/2 (2 = lỗi dùng sai). Lệnh mutation
+in record sau khi sửa (không bọc envelope); khi lỗi in `{"schema_version":1,
+"code":"…","message":"…","hint":"…"}` kèm exit ≠ 0 (F3 — bản "ok": bool trong
+bản đầu của plan không đúng với binary, giữ ghi chú để người mới không tìm lại).
 `hint` là bắt buộc cho mọi mã lỗi (friction: lỗi không gợi ý cách sửa).
 
 | Lệnh | Làm gì | Mutation |

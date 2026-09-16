@@ -27,8 +27,10 @@ use store::{Frontmatter, Learning, UsageCounts};
 
 /// `pulse learn add --from <file>` supplies a complete learning file
 /// (frontmatter + body) to register as a fresh candidate; the `Fields`
-/// variant synthesizes a minimal one (`Summary` = `title`, `Do`/`Avoid`/
-/// `Check` left as placeholders for a human/agent to fill in).
+/// variant synthesizes a minimal one (`Summary` = `title`, `Check` =
+/// `expected_signal` — the one concrete, verifiable thing the submitter
+/// supplied; `Do`/`Avoid` left empty for a human/agent to fill in from
+/// experience rather than padded with placeholders).
 pub enum AddInput {
     FromFile(String),
     Fields {
@@ -40,10 +42,8 @@ pub enum AddInput {
     },
 }
 
-fn synthesize_body(title: &str) -> String {
-    format!(
-        "## Summary\n{title}\n## Do\n- (fill in)\n## Avoid\n- (fill in)\n## Check\n- (fill in)\n"
-    )
+fn synthesize_body(title: &str, expected_signal: &str) -> String {
+    format!("## Summary\n{title}\n## Do\n## Avoid\n## Check\n- {expected_signal}\n")
 }
 
 /// # Errors
@@ -64,19 +64,22 @@ pub fn add(repo_root: &Path, actor: &ActorRef, input: AddInput) -> Result<Learni
             applies_to,
             tags,
             expected_signal,
-        } => (
-            Frontmatter {
-                id: String::new(),
-                status: "candidate".to_string(),
-                kind,
-                applies_to,
-                tags,
-                from: Vec::new(),
-                expected_signal,
-                usage: UsageCounts::default(),
-            },
-            synthesize_body(&title),
-        ),
+        } => {
+            let body = synthesize_body(&title, &expected_signal);
+            (
+                Frontmatter {
+                    id: String::new(),
+                    status: "candidate".to_string(),
+                    kind,
+                    applies_to,
+                    tags,
+                    from: Vec::new(),
+                    expected_signal,
+                    usage: UsageCounts::default(),
+                },
+                body,
+            )
+        }
     };
 
     if !store::KINDS.contains(&frontmatter.kind.as_str()) {

@@ -34,6 +34,9 @@ fn story_view(story: &Value) -> Value {
         "rules": story.get("rules").cloned().unwrap_or(json!([])),
         "exceptions": story.get("exceptions").cloned().unwrap_or(json!([])),
         "approach": story.get("approach"),
+        // The reviewer's QA oracle (dogfood ST-1, F4): the worker should know
+        // what will be independently checked, not just its own acceptance.
+        "qa_cases": story.get("qa_cases").cloned().unwrap_or(json!([])),
     })
 }
 
@@ -110,6 +113,7 @@ fn learning_view(learning: &crate::learn::store::Learning) -> Value {
     };
     json!({
         "id": learning.frontmatter.id,
+        "status": learning.frontmatter.status,
         "summary": text("Summary"),
         "do": crate::learn::store::bullet_items(&text("Do")),
         "avoid": crate::learn::store::bullet_items(&text("Avoid")),
@@ -155,7 +159,12 @@ pub fn build_packet(repo_root: &Path, id: &str) -> Result<Value> {
         .unwrap_or_default();
 
     let snapshot = source::snapshot(repo_root, &[])?;
-    let learnings: Vec<Value> = crate::learn::recall::applicable(repo_root, id, false)?
+    // Candidates included, clearly tagged with their status (dogfood ST-1,
+    // F23): the old exclude-candidates rule made the activate bar
+    // (usage.helpful >= 1) unreachable — a learning nobody sees can never be
+    // cited as helpful by a handoff. The worker can now cite a candidate and
+    // its handoff feeds the two-sided activation bar.
+    let learnings: Vec<Value> = crate::learn::recall::applicable(repo_root, id, true)?
         .iter()
         .map(learning_view)
         .collect();
@@ -279,7 +288,7 @@ mod tests {
     }
 
     #[test]
-    fn packet_carries_active_learnings_but_not_candidates() {
+    fn packet_carries_learnings_with_status_including_candidates() {
         let repo = git_repo();
         crate::store::issues::mutate(repo.path(), |mut records| {
             records.push(json!({
@@ -312,13 +321,25 @@ mod tests {
         crate::learn::store::write(repo.path(), &candidate).unwrap();
 
         let packet = build_packet(repo.path(), "TK-a3f9").unwrap();
+        // Dogfood ST-1 F23: candidates ride along, tagged with their status —
+        // the old exclude-candidates rule made the activation bar
+        // (usage.helpful >= 1) unreachable, since nobody could cite them.
         let learnings = packet["learnings"].as_array().unwrap();
-        assert_eq!(learnings.len(), 1);
-        assert_eq!(learnings[0]["id"], "LRN-1111");
-        assert_eq!(learnings[0]["summary"], "rotation must be atomic");
-        assert_eq!(learnings[0]["do"], json!(["use a transaction"]));
-        assert_eq!(learnings[0]["avoid"], json!(["split read/write"]));
-        assert_eq!(learnings[0]["check"], "run it 10x");
+        assert_eq!(learnings.len(), 2);
+        let by_id = |id: &str| {
+            learnings
+                .iter()
+                .find(|l| l["id"] == id)
+                .unwrap_or_else(|| panic!("missing {id}"))
+        };
+        let active = by_id("LRN-1111");
+        assert_eq!(active["status"], "active");
+        assert_eq!(active["summary"], "rotation must be atomic");
+        assert_eq!(active["do"], json!(["use a transaction"]));
+        assert_eq!(active["avoid"], json!(["split read/write"]));
+        assert_eq!(active["check"], "run it 10x");
+        let candidate = by_id("LRN-2222");
+        assert_eq!(candidate["status"], "candidate");
     }
 
     #[test]
