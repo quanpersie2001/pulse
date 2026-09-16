@@ -144,7 +144,10 @@ pub fn checkpoint(
 
     emit_event(
         repo_root,
-        "run.completed",
+        // Its own event type — emitting `run.completed` here made an operator
+        // watching `events tail` misread a mid-run checkpoint as the end of
+        // the run (dogfood ST-1, F7).
+        "checkpoint.recorded",
         actor.as_kind_id(),
         id,
         json!({"checkpoint": true, "run_id": input.run_id}),
@@ -255,6 +258,26 @@ mod tests {
         assert_eq!(updated["status"], "active");
         assert_eq!(updated["checkpoints"].as_array().unwrap().len(), 1);
         assert_eq!(updated["checkpoints"][0]["in_progress"], "AC-2");
+    }
+
+    #[test]
+    fn checkpoint_emits_its_own_event_type() {
+        // Dogfood ST-1 F7: checkpointing used to emit `run.completed`, which
+        // an operator watching `events tail` cannot tell apart from the
+        // runner's own end-of-run event.
+        let repo = git_repo_with_leased_ticket();
+        checkpoint(repo.path(), &agent("worker"), "TK-a3f9", input("run_1")).unwrap();
+        let log = crate::event::read_event_log(repo.path()).unwrap();
+        let kinds: Vec<&str> = log
+            .events
+            .iter()
+            .map(|event| event.event_type.as_str())
+            .collect();
+        assert!(kinds.contains(&"checkpoint.recorded"), "kinds: {kinds:?}");
+        assert!(
+            !kinds.contains(&"run.completed"),
+            "checkpointing must not look like the run finished: {kinds:?}"
+        );
     }
 
     #[test]

@@ -109,18 +109,31 @@ fn print_human_lines(events: &[EventEnvelope]) {
 }
 
 fn human_line(event: &EventEnvelope) -> String {
+    // Prose events (notes) render their message; structured events (run /
+    // checkpoint, whose facts are role/outcome/verdict and no prose) render
+    // the payload compactly, so `events tail` is readable without opening
+    // the day file (dogfood ST-1, F7/F8).
+    let detail = event
+        .payload
+        .get("message")
+        .or_else(|| event.payload.get("text"))
+        .or_else(|| event.payload.get("summary"))
+        .and_then(|value| value.as_str())
+        .map(str::to_string)
+        .unwrap_or_else(|| {
+            let compact = serde_json::to_string(&event.payload).unwrap_or_default();
+            if compact == "{}" {
+                String::new()
+            } else {
+                compact
+            }
+        });
     format!(
         "{} {} {} {}: {}",
         event.id,
         event.occurred_at.to_rfc3339(),
         event.event_type,
         event.subject.id,
-        event
-            .payload
-            .get("message")
-            .or_else(|| event.payload.get("text"))
-            .or_else(|| event.payload.get("summary"))
-            .and_then(|value| value.as_str())
-            .unwrap_or(""),
+        detail,
     )
 }

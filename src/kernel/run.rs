@@ -348,6 +348,17 @@ pub fn run_lane(
         evidence_dir(repo_root, id).display().to_string(),
     );
     let argv = runner::materialize_argv(&argv, &values)?;
+    // Lane runs emit the same run.started/run.completed pair as the worker
+    // loop — a lane that dies without sealing used to be invisible in
+    // `events tail` (dogfood ST-1, F8).
+    emit_event(
+        repo_root,
+        "run.started",
+        actor.as_kind_id(),
+        id,
+        serde_json::json!({"role": role}),
+        Utc::now(),
+    )?;
     let outcome = runner::execute(
         repo_root,
         &argv,
@@ -357,6 +368,14 @@ pub fn run_lane(
         None,
     )?;
     if !outcome.exited_cleanly() {
+        emit_event(
+            repo_root,
+            "run.completed",
+            actor.as_kind_id(),
+            id,
+            serde_json::json!({"role": role, "outcome": "inconclusive", "reason": "nonzero exit or timeout"}),
+            Utc::now(),
+        )?;
         return Err(PulseError::kernel(
             "run_inconclusive",
             format!("{role} did not exit cleanly"),
@@ -364,8 +383,34 @@ pub fn run_lane(
         ));
     }
 
-    let receipt = lane::validate_and_seal(repo_root, id, role, &before, &fence_ignore)?;
-    if receipt.payload.get("verdict").and_then(Value::as_str) == Some("fail") {
+    let receipt = match lane::validate_and_seal(repo_root, id, role, &before, &fence_ignore) {
+        Ok(receipt) => receipt,
+        Err(error) => {
+            emit_event(
+                repo_root,
+                "run.completed",
+                actor.as_kind_id(),
+                id,
+                serde_json::json!({"role": role, "outcome": "inconclusive", "reason": "seal failed"}),
+                Utc::now(),
+            )?;
+            return Err(error);
+        }
+    };
+    let verdict = receipt
+        .payload
+        .get("verdict")
+        .and_then(Value::as_str)
+        .unwrap_or("inconclusive");
+    emit_event(
+        repo_root,
+        "run.completed",
+        actor.as_kind_id(),
+        id,
+        serde_json::json!({"role": role, "outcome": "sealed", "verdict": verdict}),
+        Utc::now(),
+    )?;
+    if verdict == "fail" {
         let updated = set_status(repo_root, id, "active")?;
         emit_event(
             repo_root,

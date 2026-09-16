@@ -266,3 +266,81 @@ fn a_nonzero_exit_is_inconclusive_and_keeps_the_lease() {
     assert_eq!(ticket["status"], "active");
     assert!(!ticket["lease"].is_null());
 }
+
+fn flip_ticket_to_verifying(repo: &Path) {
+    issues::mutate(repo, |mut records| {
+        for record in records.iter_mut() {
+            if record["id"] == "TK-a3f9" {
+                record["status"] = "verifying".into();
+            }
+        }
+        Ok(records)
+    })
+    .unwrap();
+}
+
+fn lane_events(repo: &Path) -> Vec<(String, Value)> {
+    pulse::event::read_event_log(repo)
+        .unwrap()
+        .events
+        .iter()
+        .filter(|event| event.subject.id == "TK-a3f9")
+        .map(|event| (event.event_type.clone(), event.payload.clone()))
+        .collect()
+}
+
+#[test]
+fn a_lane_that_dies_without_sealing_still_leaves_run_events() {
+    // Dogfood ST-1 F8: a lane that never sealed used to be invisible in
+    // `events tail` — only the CLI's own log knew. The start and the
+    // inconclusive end must both be recorded.
+    let repo = git_repo_with_ready_ticket();
+    flip_ticket_to_verifying(repo.path());
+    write_runners_json(repo.path(), &[("qa-cli", "false".to_string())]);
+
+    let err = run_lane(repo.path(), &agent("qa-cli"), "TK-a3f9", "qa-cli", true).unwrap_err();
+    assert_eq!(err.code(), "run_inconclusive");
+
+    let events = lane_events(repo.path());
+    let started = events
+        .iter()
+        .any(|(kind, payload)| kind == "run.started" && payload["role"] == "qa-cli");
+    let completed = events.iter().any(|(kind, payload)| {
+        kind == "run.completed"
+            && payload["role"] == "qa-cli"
+            && payload["outcome"] == "inconclusive"
+    });
+    assert!(started, "no run.started event: {events:?}");
+    assert!(completed, "no inconclusive run.completed event: {events:?}");
+}
+
+#[test]
+fn a_sealed_lane_leaves_run_events_with_its_verdict() {
+    let repo = git_repo_with_ready_ticket();
+    flip_ticket_to_verifying(repo.path());
+    let script = write_script(
+        repo.path(),
+        "lane.sh",
+        "#!/bin/sh\ncommit=$(git -C \"$1\" rev-parse HEAD)\nmkdir -p \"$1/.pulse/evidence/$2\"\n\
+             printf '{\"verdict\":\"pass\",\"acceptance\":[],\"cases\":[],\"findings\":[],\"commands_run\":[],\"environment\":{\"commit\":\"%s\"}}' \"$commit\" \
+             > \"$1/.pulse/evidence/$2/qa-cli.json\"\necho '{\"status\":\"done\"}'\n",
+    );
+    write_runners_json(
+        repo.path(),
+        &[(
+            "qa-cli",
+            format!("sh {} {{repo}} {{ticket}}", script.display()),
+        )],
+    );
+
+    run_lane(repo.path(), &agent("qa-cli"), "TK-a3f9", "qa-cli", true).unwrap();
+
+    let events = lane_events(repo.path());
+    let sealed = events.iter().any(|(kind, payload)| {
+        kind == "run.completed"
+            && payload["role"] == "qa-cli"
+            && payload["outcome"] == "sealed"
+            && payload["verdict"] == "pass"
+    });
+    assert!(sealed, "no sealed run.completed event: {events:?}");
+}
