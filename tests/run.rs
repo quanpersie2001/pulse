@@ -344,3 +344,143 @@ fn a_sealed_lane_leaves_run_events_with_its_verdict() {
     });
     assert!(sealed, "no sealed run.completed event: {events:?}");
 }
+
+fn handoff_fixture(path: &Path) {
+    fs::write(
+        path,
+        serde_json::to_vec(&json!({
+            "summary": "done", "changed_files": [],
+            "acceptance": [{"id": "AC-1", "status": "done", "how": "ran it"}],
+            "verify_results": [], "docs_updated": [], "learnings_used": [],
+            "friction": [], "open_risks": [],
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+}
+
+fn handoff_receipts(repo: &Path) -> Vec<Value> {
+    let dir = repo.join(".pulse/receipts");
+    let mut out = Vec::new();
+    let Ok(entries) = fs::read_dir(&dir) else {
+        return out;
+    };
+    for entry in entries {
+        let path = entry.unwrap().path();
+        if path.extension().and_then(|ext| ext.to_str()) == Some("json") {
+            let receipt: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+            if receipt["kind"] == "handoff" && receipt["subject"]["id"] == "TK-a3f9" {
+                out.push(receipt);
+            }
+        }
+    }
+    out
+}
+
+#[test]
+fn a_verifying_ticket_can_be_reverified_with_a_fresh_handoff_snapshot() {
+    // Dogfood ST-1 F10: after a post-handoff source change the ticket used
+    // to be bricked in verifying — close_source_stale forever, because the
+    // only verifying->active door was a review-lane fail. `pulse run worker`
+    // on a verifying ticket now re-verifies: fresh lease, back to active,
+    // and the next handoff records a source snapshot that includes the fix.
+    let repo = git_repo_with_ready_ticket();
+    let script = write_script(
+        repo.path(),
+        "worker.sh",
+        &format!(
+            "#!/bin/sh\n\"{PULSE_BIN}\" --repo-root \"$1\" handoff \"$2\" --from \"$3\" --actor agent:worker --json >/dev/null 2>&1\necho '{{\"status\":\"handed_off\"}}'\n"
+        ),
+    );
+
+    // Run 1: ready -> verifying (handoff #1).
+    handoff_fixture(&repo.path().join("handoff1.json"));
+    write_runners_json(
+        repo.path(),
+        &[(
+            "worker",
+            format!(
+                "sh {} {{repo}} {{ticket}} {}",
+                script.display(),
+                repo.path().join("handoff1.json").display()
+            ),
+        )],
+    );
+    run_worker(repo.path(), &agent("worker"), "TK-a3f9", 3600, 5).unwrap();
+    let records = issues::read_all(repo.path()).unwrap();
+    assert_eq!(
+        records.iter().find(|r| r["id"] == "TK-a3f9").unwrap()["status"],
+        "verifying"
+    );
+
+    // A tracked file to fix (the helper's repo only tracks PULSE.md, which
+    // is fence-exempt harness config).
+    std::fs::write(repo.path().join("README.md"), "v1\n").unwrap();
+    assert!(StdCommand::new("git")
+        .arg("-C")
+        .arg(repo.path())
+        .args(["add", "README.md"])
+        .status()
+        .unwrap()
+        .success());
+    assert!(StdCommand::new("git")
+        .arg("-C")
+        .arg(repo.path())
+        .args(["commit", "-qm", "readme"])
+        .status()
+        .unwrap()
+        .success());
+
+    // Post-handoff source fix, committed: HEAD moves past handoff #1.
+    std::fs::write(repo.path().join("README.md"), "fixed\n").unwrap();
+    let commit = StdCommand::new("git")
+        .arg("-C")
+        .arg(repo.path())
+        .args(["commit", "-am", "post-handoff fix"])
+        .output()
+        .unwrap();
+    assert!(
+        commit.status.success(),
+        "git commit failed: stderr={} stdout={} status={:?}",
+        String::from_utf8_lossy(&commit.stderr),
+        String::from_utf8_lossy(&commit.stdout),
+        StdCommand::new("git")
+            .arg("-C")
+            .arg(repo.path())
+            .args(["status", "--porcelain"])
+            .output()
+            .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
+            .unwrap_or_default()
+    );
+
+    // Run 2: re-verify from verifying.
+    handoff_fixture(&repo.path().join("handoff2.json"));
+    write_runners_json(
+        repo.path(),
+        &[(
+            "worker",
+            format!(
+                "sh {} {{repo}} {{ticket}} {}",
+                script.display(),
+                repo.path().join("handoff2.json").display()
+            ),
+        )],
+    );
+    run_worker(repo.path(), &agent("worker"), "TK-a3f9", 3600, 5).unwrap();
+
+    let records = issues::read_all(repo.path()).unwrap();
+    assert_eq!(
+        records.iter().find(|r| r["id"] == "TK-a3f9").unwrap()["status"],
+        "verifying"
+    );
+    let handoffs = handoff_receipts(repo.path());
+    assert_eq!(handoffs.len(), 2, "expected two handoff receipts");
+    // The latest handoff's snapshot is current: close_source_stale is gone.
+    let now = pulse::source::snapshot(repo.path(), &[]).unwrap();
+    let latest = handoffs
+        .iter()
+        .max_by(|a, b| a["id"].as_str().unwrap().cmp(b["id"].as_str().unwrap()))
+        .unwrap();
+    assert_eq!(latest["source"]["commit"], json!(now.commit));
+    assert_eq!(latest["source"]["dirty_hash"], json!(now.dirty_hash));
+}

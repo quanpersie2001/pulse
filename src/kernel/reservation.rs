@@ -36,7 +36,10 @@ fn lease_is_live(ticket: &Value, now: chrono::DateTime<Utc>) -> bool {
 /// still-live lease.
 ///
 /// # Errors
-/// `run_not_ready_or_active` if the Ticket is neither `ready` nor `active`.
+/// `run_not_ready_or_active` if the Ticket is neither `ready`, `active` nor
+/// `verifying` (a `verifying` Ticket is re-verified: fresh lease, back to
+/// `active`, and its next handoff refreshes the source snapshot — the ST-1
+/// dogfood F10 recovery for a post-handoff source fix).
 /// `run_lease_held` if another actor's lease on this Ticket is still live.
 /// `run_another_active` if a different Ticket is active with a live lease.
 pub fn acquire_lease(
@@ -51,11 +54,13 @@ pub fn acquire_lease(
     let records = issues::read_all(repo_root)?;
     let ticket = require(&records, id)?;
     let status = ticket.get("status").and_then(Value::as_str).unwrap_or("");
-    if !matches!(status, "ready" | "active") {
+    if !matches!(status, "ready" | "active" | "verifying") {
         return Err(PulseError::kernel(
             "run_not_ready_or_active",
-            format!("{id} is {status}, not ready or active"),
-            "only a ready or active ticket can be picked up by a worker run",
+            format!("{id} is {status}, not ready, active or verifying"),
+            "a worker run picks up a ready ticket, resumes an active one, or \
+             re-verifies a verifying one (fresh lease, next handoff refreshes \
+             the source snapshot)",
         ));
     }
     if status == "active"

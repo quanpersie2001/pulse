@@ -4,10 +4,11 @@
 //! deleted alongside `graph/*` — it could not compile standalone).
 //!
 //! A cheap snapshot of "what does the tree look like right now": HEAD plus a
-//! hash of every dirty path's content/diff, filtered to drop `.pulse/**` and
-//! any path matching a caller-supplied `fence_ignore` list (plan §5.2 —
-//! editing a note file must never stale a close; Track B hit exactly that
-//! false positive with `close_source_stale`).
+//! hash of every dirty path's content/diff, filtered to drop `.pulse/**`,
+//! the root `PULSE.md`/`AGENTS.md` harness config, and any path matching a
+//! caller-supplied `fence_ignore` list (plan §5.2 — editing a note file must
+//! never stale a close; Track B hit exactly that false positive with
+//! `close_source_stale`).
 //!
 //! No worktree mirroring in v3 (plan §10.6): [`state_repo_root`] is the
 //! identity function.
@@ -68,6 +69,14 @@ fn dirty_paths(repo_root: &Path, fence_ignore: &[String]) -> Result<Vec<String>>
 
 fn is_fenced_out(path: &str, fence_ignore: &[String]) -> bool {
     if path.starts_with(".pulse/") {
+        return true;
+    }
+    // Harness config written by `pulse init` is not product source: editing
+    // it must never stale a close or brick one (dogfood ST-1, F14 — tuning
+    // the qa-lane seed's own profiles left every ticket uncloseable until
+    // the repo opted out via fence_ignore). Root-level only: a nested
+    // AGENTS.md belongs to the repo's own tree.
+    if path == "PULSE.md" || path == "AGENTS.md" {
         return true;
     }
     fence_ignore.iter().any(|pattern| glob_match(pattern, path))
@@ -225,6 +234,40 @@ mod tests {
         std::fs::write(repo.path().join(".pulse/issues.jsonl"), "{}\n").unwrap();
         let snap = snapshot(repo.path(), &[]).unwrap();
         assert!(snap.dirty_paths.is_empty());
+    }
+
+    #[test]
+    fn fence_ignores_the_root_harness_config_files() {
+        // Dogfood ST-1 F14: tuning PULSE.md (the qa-lane profiles) after a
+        // handoff bricked every close with close_source_stale. Harness
+        // config is not product source — the root files are always fenced;
+        // a nested AGENTS.md still counts.
+        let repo = init_repo();
+        // A tracked file under web/ so git reports web/AGENTS.md as its own
+        // untracked path instead of collapsing it into `?? web/`.
+        std::fs::create_dir_all(repo.path().join("web")).unwrap();
+        std::fs::write(repo.path().join("web/tracked.md"), "x\n").unwrap();
+        assert!(StdCommand::new("git")
+            .arg("-C")
+            .arg(repo.path())
+            .args(["add", "."])
+            .status()
+            .unwrap()
+            .success());
+        assert!(StdCommand::new("git")
+            .arg("-C")
+            .arg(repo.path())
+            .args(["commit", "-qm", "web"])
+            .status()
+            .unwrap()
+            .success());
+        std::fs::write(repo.path().join("PULSE.md"), "profiles: {}\n").unwrap();
+        std::fs::write(repo.path().join("AGENTS.md"), "agent rules\n").unwrap();
+        std::fs::write(repo.path().join("web/AGENTS.md"), "nested\n").unwrap();
+        let snap = snapshot(repo.path(), &[]).unwrap();
+        assert!(!snap.dirty_paths.contains(&"PULSE.md".to_string()));
+        assert!(!snap.dirty_paths.contains(&"AGENTS.md".to_string()));
+        assert!(snap.dirty_paths.contains(&"web/AGENTS.md".to_string()));
     }
 
     #[test]

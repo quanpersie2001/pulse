@@ -358,9 +358,13 @@ Ticket bằng `update --set risk=low` có lý do trong event.
 
 ### 7.4 Close-story gate
 
-Mọi Ticket con `done|cancelled`, ≥ 1 `done`; nếu Story có `qa_cases` với
-`priority: high` thì có receipt lane `qa-*` scope `story` pass trên HEAD hiện
-tại cover đủ case đó; actor ≠ actor lane. Ghi receipt `close_story`.
+Mọi Ticket con `done|cancelled`, ≥ 1 `done`; tree phải sạch tại lúc đóng
+(`close_story_source_dirty` — F15: story không handoff nên không có baseline
+so sánh; thay vào đó là "không có uncommitted work dưới cột mốc", commit
+thì được); nếu Story có `qa_cases` với `priority: high` thì coverage gộp
+(union) qua mọi receipt lane `qa-*` scope `story` pass trên HEAD hiện tại
+phải cover đủ case đó (F17 — story đa surface chia case hợp lệ qua qa-api
+và qa-ui); actor ≠ actor lane. Ghi receipt `close_story`.
 
 ---
 
@@ -506,7 +510,10 @@ Không fingerprint từng input; fence duy nhất là `source`. Packet stale =
 ### 10.1 `pulse run worker <id>`
 
 ```text
-1. Ticket ready|active. active mà lease của actor khác còn hạn → run_lease_held.
+1. Ticket ready|active|verifying. verifying = re-verify (F10, dogfood ST-1):
+   lease mới, status quay lại active, handoff tiếp theo chụp snapshot source
+   mới — thoát bẫy "sửa source sau handoff = kẹt verifying vĩnh viễn".
+   active mà lease của actor khác còn hạn → run_lease_held.
    Một Ticket active khác trong repo → run_another_active (hint: đóng/release nó).
 2. Lấy/gia hạn lease; ready -> active.
 3. Ghi packet + input; evidence dir tạo nếu chưa.

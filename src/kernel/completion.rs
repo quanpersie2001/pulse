@@ -592,6 +592,22 @@ pub fn evaluate_close_story(
         ));
     }
 
+    // Source fence (dogfood ST-1 F15): ticket-level close compares a handoff
+    // snapshot, but a Story hands nothing off — the story milestone must
+    // simply not close over uncommitted work. Committed changes are fine:
+    // a post-close operator fix that lands as a commit and is re-validated
+    // by story-scope qa is the legitimate flow the ST-1 dogfood ran into.
+    let now_source = source::snapshot(repo_root, &fence_ignore(repo_root))?;
+    if !now_source.dirty_paths.is_empty() {
+        violations.push(violation(
+            "close_story_source_dirty",
+            format!(
+                "uncommitted changes at story close: {:?}",
+                now_source.dirty_paths
+            ),
+        ));
+    }
+
     let high_priority_cases: Vec<&str> = story
         .get("qa_cases")
         .and_then(Value::as_array)
@@ -605,25 +621,25 @@ pub fn evaluate_close_story(
         .unwrap_or_default();
     if !high_priority_cases.is_empty() {
         let receipts = list_receipts(repo_root)?.receipts;
-        let qa_receipt = receipts
+        // Coverage unions across every passing story-scope qa receipt on the
+        // current HEAD: a multi-surface story legitimately splits its cases
+        // across qa-api and qa-ui, and no single receipt can cover both
+        // (dogfood ST-1, F17 — the target needed a hand-rolled qa-all lane
+        // under the old latest-receipt-only rule).
+        let covered: std::collections::HashSet<&str> = receipts
             .iter()
             .filter(|r| {
                 r.kind == "lane"
                     && r.subject.id == story_id
+                    && r.source.commit == now_source.commit
                     && r.payload
                         .get("role")
                         .and_then(Value::as_str)
                         .is_some_and(|role| role.starts_with("qa-"))
                     && r.payload.get("verdict").and_then(Value::as_str) == Some("pass")
             })
-            .max_by(|a, b| a.id.cmp(&b.id));
-        match qa_receipt {
-            None => violations.push(violation(
-                "close_story_qa_not_satisfied",
-                "no passing story-scope qa lane receipt covers the high-priority qa_cases",
-            )),
-            Some(receipt) => {
-                let covered: std::collections::HashSet<&str> = receipt
+            .flat_map(|receipt| {
+                receipt
                     .payload
                     .get("cases")
                     .and_then(Value::as_array)
@@ -632,18 +648,36 @@ pub fn evaluate_close_story(
                             .iter()
                             .filter(|c| c.get("status").and_then(Value::as_str) == Some("pass"))
                             .filter_map(|c| c.get("id").and_then(Value::as_str))
-                            .collect()
+                            .collect::<Vec<&str>>()
                     })
-                    .unwrap_or_default();
-                for case in &high_priority_cases {
-                    if !covered.contains(case) {
-                        violations.push(violation(
-                            "close_story_qa_not_satisfied",
-                            format!("{case} is not covered by a passing case in the qa receipt"),
-                        ));
-                    }
-                }
-            }
+                    .unwrap_or_default()
+            })
+            .collect();
+        if high_priority_cases
+            .iter()
+            .all(|case| covered.contains(*case))
+        {
+            // covered — nothing to report
+        } else {
+            let uncovered: Vec<&str> = high_priority_cases
+                .iter()
+                .filter(|case| !covered.contains(*case))
+                .copied()
+                .collect();
+            violations.push(violation(
+                "close_story_qa_not_satisfied",
+                if covered.is_empty() && receipts.iter().any(|r| r.subject.id == story_id) {
+                    "no passing story-scope qa lane receipt on the current HEAD covers the \
+                     high-priority qa_cases"
+                        .to_string()
+                } else {
+                    format!(
+                        "high-priority qa_cases not covered by a passing case in any \
+                         story-scope qa receipt on HEAD: {}",
+                        uncovered.join(", ")
+                    )
+                },
+            ));
         }
     }
 
@@ -1206,5 +1240,86 @@ profiles:
         let all = crate::store::issues::read_all(repo.path()).unwrap();
         let report = evaluate_close_story(repo.path(), &story, &all).unwrap();
         assert!(report.is_clean(), "{:?}", report.violations);
+    }
+
+    /// Record a passing story-scope qa receipt covering `cases` at `commit`.
+    fn seal_story_qa_receipt(repo: &Path, role: &str, cases: &[&str], commit: &str) {
+        record_receipt(
+            repo,
+            None,
+            NewReceipt {
+                kind: "lane".to_string(),
+                subject: ReceiptSubject {
+                    id: "ST-1111".to_string(),
+                    revision: None,
+                },
+                actor: format!("agent:{role}"),
+                source: ReceiptSource {
+                    commit: commit.to_string(),
+                    dirty_hash: "sha256:0".to_string(),
+                },
+                run_id: None,
+                payload: json!({
+                    "role": role, "verdict": "pass",
+                    "cases": cases.iter().map(|id| json!({"id": id, "status": "pass"})).collect::<Vec<_>>(),
+                }),
+                artifact_paths: Vec::new(),
+            },
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn close_story_source_dirty_is_reported() {
+        // Dogfood ST-1 F15: story close had no source fence — uncommitted
+        // work could slip under the milestone. A ticket-level close compares
+        // a handoff snapshot; a story hands nothing off, so the fence is
+        // simply "the tree is clean at story close". Committed changes are
+        // fine: the legitimate post-close-fix flow commits and re-validates
+        // through story-scope qa.
+        let repo = git_repo();
+        let (story, _ticket) = story_with_ticket(repo.path(), "done");
+        std::fs::write(repo.path().join("uncommitted.txt"), "x\n").unwrap();
+        let all = crate::store::issues::read_all(repo.path()).unwrap();
+        let report = evaluate_close_story(repo.path(), &story, &all).unwrap();
+        assert!(report
+            .violations
+            .iter()
+            .any(|v| v.code == "close_story_source_dirty"));
+    }
+
+    #[test]
+    fn close_story_coverage_unions_across_passing_qa_receipts() {
+        // Dogfood ST-1 F17: a multi-surface story legitimately splits its
+        // high-priority cases across qa-api and qa-ui; requiring ONE receipt
+        // to cover everything forced targets to invent a combined lane.
+        let repo = git_repo();
+        let (mut story, _ticket) = story_with_ticket(repo.path(), "done");
+        story["qa_cases"] = json!([
+            {"id": "QA-001", "intent": "x", "priority": "high"},
+            {"id": "QA-002", "intent": "y", "priority": "high"},
+        ]);
+        let commit = source::head_commit(repo.path()).unwrap();
+        seal_story_qa_receipt(repo.path(), "qa-api", &["QA-001"], &commit);
+        seal_story_qa_receipt(repo.path(), "qa-ui", &["QA-002"], &commit);
+        let all = crate::store::issues::read_all(repo.path()).unwrap();
+        let report = evaluate_close_story(repo.path(), &story, &all).unwrap();
+        assert!(report.is_clean(), "{:?}", report.violations);
+    }
+
+    #[test]
+    fn close_story_qa_receipts_from_an_older_head_do_not_cover() {
+        // Plan §7.4: qa receipts count "trên HEAD hiện tại" — a pass on a
+        // commit that is no longer HEAD proves nothing about this tree.
+        let repo = git_repo();
+        let (mut story, _ticket) = story_with_ticket(repo.path(), "done");
+        story["qa_cases"] = json!([{"id": "QA-001", "intent": "x", "priority": "high"}]);
+        seal_story_qa_receipt(repo.path(), "qa-api", &["QA-001"], "commit-from-the-past");
+        let all = crate::store::issues::read_all(repo.path()).unwrap();
+        let report = evaluate_close_story(repo.path(), &story, &all).unwrap();
+        assert!(report
+            .violations
+            .iter()
+            .any(|v| v.code == "close_story_qa_not_satisfied"));
     }
 }
