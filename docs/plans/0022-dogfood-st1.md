@@ -141,3 +141,90 @@ Chỉ tiêu §2:
   (chưa từng chạy thật trước P2) — mật độ lỗi này là lý do Phase 2 tồn tại;
   sau việc (1) ở trên, chạy lại dogfood ST-2 để đo lại chỉ tiêu này trên một
   Story "lạnh" là phép thử thật sự của v3.0.
+
+---
+
+## 8. Dogfood ST-2 — golden path qua `pulse-shape`/`pulse-plan` (2026-09-17)
+
+Session ngay sau ST-1, trên cùng target, Story mới **ST-332b** ("Today/
+Upcoming/Overdue views + due dates + priority") — lần đầu hai skill mới
+(commit `977667f`) được dùng thật từ đầu đến cuối: shape → plan → golden
+path ×2 → story-scope qa ×2 → close-story. Kết quả: **ST-332b done, cả hai
+Ticket done, QA-003 (api) + QA-004 (ui) pass trên HEAD, friction/ticket =
+0.5** (đích < 1; baseline ST-1 ≈ 7). Todolist HEAD cuối: `95e9d4b`.
+
+### 8.1 Shape (pulse-shape)
+
+Một cuộc phỏng vấn, 6 quyết định D-1..D-6, mỗi câu kèm recommended answer:
+date-only due (D-1), phân hoạch 4 views uncompleted-only (D-2), priority
+low/medium/high nullable (D-3), `?view=` server-side (D-4), tabs + form +
+inline edit (D-5), và D-6 — **product timezone** — bắn sau khi đo được
+host `09-17` vs container `09-16` UTC: "server local date" bị loại vì sẽ
+sai view 7 tiếng mỗi đêm; chốt `TZ=Asia/Ho_Chi_Minh` cho service api.
+Story `ready` ngay sau `pulse docs check` pass, không câu hỏi blocking.
+Oracle authored trong shape: `qa-003.sh`, `qa-004.mjs`.
+
+### 8.2 Plan (pulse-plan)
+
+Cut 2 tracer bullets sau một lần duyệt grain/edges: TK-ea8f (api, low,
+QA-003), TK-d1e3 (ui, low, QA-004, `blocked_by` TK-ea8f). 14 anchors đọc
+từ disk. **Gate từ chối ready TK-d1e3** (`ready_blocked_by_open`) — đúng
+§7.1-4 nhưng lệch plan §15 bước 3 ("cả hai ready"); ST-1 đã đi vòng bằng
+cách ready ui sau khi api đóng. Drift plan/gate cần sửa text ở lần viết
+SPEC (P3.4); gate giữ nguyên.
+
+### 8.3 Golden path
+
+| Bước | TK-ea8f (api) | TK-d1e3 (ui) |
+|---|---|---|
+| `run worker` | 3m44s, handoff 4/4 AC, checkpoint ×1 | 5m59s, handoff 4/4 AC, checkpoint ×1 |
+| `run review` | pass, 85s, 0 findings | pass, 2m19s, 0 findings |
+| `close` | done, sạch | done, sạch |
+
+Vòng rework worker: **0**. Vòng lane chạy lại: qa-api ×1 (lỗi shaping,
+xem 8.4). Lệnh tay mỗi ticket: 3 (`run worker`, `run review`, `close`),
+0 flag bắt buộc. Worker TK-d1e3 tự chạy thử QA-004, phát hiện CORS
+allow-list buộc UI chạy :3000, ghi note thay vì sửa ngoài scope — prompt
+đang làm đúng.
+
+### 8.4 Friction (8 note `--friction`, phân loại theo cách ST-1)
+
+| id | Ticket | mô tả | loại |
+|---|---|---|---|
+| F25 | TK-ea8f | Worker break stdout contract (dòng cuối không phải JSON) → `run_inconclusive` dù handoff đã seal sạch 9s trước; nguyên nhân gốc không chứng minh được vì **runner vứt captured stdout/stderr sau khi classify** (`src/runner/mod.rs` drain_bounded → `run.rs`) | pulse-bug (observability) + trigger là agent |
+| F26 | TK-ea8f | qa-api lane khởi động app từ `run.md` nhưng không bước nào chạy `alembic upgrade head` — db volume mới sẽ đứng ở 0002 mãi; worker phải tự migrate tay | target-harness (run.md start contract) |
+| F27 | TK-ea8f | Worker ghi friction trùng nhau 2 lần (F26) + dán nhãn friction cho một gotcha triển khai (pydantic Strict) | agent (over-labeling) |
+| F28 | ST-332b | Shaping viết step QA-003 dạng pseudo-JSON (`{title, due_date: today, …}`) — api.mjs THỰC THI mọi step surface-api như METHOD/path JSON-line nên parseStep crash cả lane (`qa_api_crashed`) trước khi kịp ghi artifact; qua `pulse run` crash output vô hình (cùng gap F25) | target-harness (human shaping) |
+| F29 | TK-d1e3 | CORS allow-list chỉ phủ origin cấu hình; UI phải chạy :3000 cho QA — worker tự phát hiện, note đúng chuẩn | target-harness (docs gap) |
+
+Không có bug mới ở gate/lifecycle/store/close — phần cơ chế đã vá sau ST-1
+(cf16acd: verifying-door, fence, union coverage; templates: surface filter,
+await_exit, settle) **chạy sạch lần đầu**. `--force` phải dùng: 0.
+
+### 8.5 Số đo ST-2 vs đích
+
+| Số đo | ST-1 | ST-2 | Đích |
+|---|---|---|---|
+| Friction/Ticket là lỗi Pulse | ≈ 7 (14/2) | **0.5 (1/2)** | < 1 ✅ |
+| Lệnh tay đóng một Ticket | 3 | 3 | ≤ 6 ✅ |
+| Flag bắt buộc | 0 | 0 | ≤ 4 ✅ |
+| Vòng rework worker | 0 | 0 | — |
+| `--force` | 2 | 0 | — |
+| Mở file tay vì thiếu observability | ~11 | 2 (evidence qa-api.json + events tail) | ≈ 0 |
+| Wall-clock worker | 4m40s / 55s resume | 3m44s / 5m59s | — |
+| Friction tổng (mọi loại) | 22 | 8 note (5 vấn đề thật) | — |
+
+### 8.6 Ba việc ứng viên cho Phase 3 (theo bằng chứng ST-2)
+
+1. **Persist bounded run output** (F25/F28 — hai friction cùng loại, đủ
+   ngưỡng ≥2): tail stdout/stderr vào `.pulse/evidence/<id>/` cho mọi run,
+  không chỉ worker. Cần quyết định riêng + test, không vá trong session này.
+2. **run.md start contract cho migration** (F26/F29): mẫu seed
+   `docs/operations/run.md` nên tách `start` thành up+upgrade (hoặc thêm
+   khóa `migrate:`) — sửa ở templates/seeds, một dòng kèm test fixture.
+3. **Sửa plan §15 bước 3** theo gate thật (§8.2): Ticket bị chặn chỉ
+   `ready` sau khi blocker done — text vào SPEC.md ở P3.4.
+
+P3.5 (xoá skills v2 dưới `references/pulse-v2-skills/`) — điều kiện
+"pulse-shape/pulse-plan chạy thật" đã đạt; xoá ở đầu Phase 3, giữ eval
+fixture là records ST-332b.
