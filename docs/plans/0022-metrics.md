@@ -127,3 +127,18 @@ rows are unchanged from P1.12 other than confirming no Pulse bug turned up
 in this session's own manual smoke tests of `docs check`, `learn add`,
 and `init --with-qa-templates` (see each commit's message for the exact
 commands run).
+
+## After Decision 0023 lands (2026-09-17 — `pulse serve` + learn merge)
+
+`pulse serve` replaces the never-built static board (0023 amends 0022 §13;
+§14 drops `pulse serve` from the frozen list by owner decision, not by
+dogfood friction — the friction case it answers is measured in ST-2's
+report: evidence dirs still opened by hand after lane runs). src/ moved
+12435 -> 13016 (+581: serve domain ~560 + tests live outside src/); the
+pairing cut was the `learn list` -> `learn show` merge (CLI leaves
+27 -> 26), transaction.rs/artifact.rs having already been cut at
+`d363734`. Target < 10000 still owes ~3000 lines to the remaining CLI
+merges (`work dep rm`, `events` consolidation) and any Phase 3
+board/doctor work must keep the one-mechanism-one-cut rule. Error codes
+unchanged this round (93; serve added none — reads degrade to payload
+notes, not new codes).

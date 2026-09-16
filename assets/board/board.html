@@ -1,1 +1,315 @@
-<!doctype html><title>pulse board</title>
+<!doctype html>
+<!-- pulse serve board (Decision 0023). Self-contained: no CDN, no build
+     step, no framework. Data comes from the read-only API:
+       /api/projects · /api/p/<pid>/board · /api/p/<pid>/issue/<id>
+     Evidence files are linked at /p/<pid>/evidence/<issue>/<path>. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>pulse board</title>
+<style>
+  :root {
+    --bg: #f6f7f9; --card: #ffffff; --ink: #1c2430; --muted: #66707d;
+    --line: #dfe3e8; --accent: #2563eb; --chip: #eef1f5;
+    --draft: #9aa4b2; --ready: #2563eb; --blocked: #d97706; --active: #7c3aed;
+    --verifying: #0891b2; --done: #059669; --cancelled: #94a3b8;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 14px/1.45 -apple-system, "Segoe UI", Roboto, sans-serif; background: var(--bg); color: var(--ink); }
+  header { display: flex; align-items: center; gap: 12px; padding: 10px 16px; background: var(--card); border-bottom: 1px solid var(--line); position: sticky; top: 0; z-index: 5; }
+  header h1 { font-size: 15px; margin: 0 8px 0 0; }
+  select, button { font: inherit; padding: 5px 9px; border: 1px solid var(--line); border-radius: 7px; background: var(--card); color: var(--ink); cursor: pointer; }
+  .muted { color: var(--muted); }
+  #learnings-btn { margin-left: auto; }
+  #epics { display: flex; gap: 6px; flex-wrap: wrap; padding: 10px 16px 0; }
+  .chip { border: 1px solid var(--line); background: var(--chip); border-radius: 999px; padding: 3px 11px; cursor: pointer; font-size: 12.5px; }
+  .chip.on { background: var(--accent); color: #fff; border-color: var(--accent); }
+  #board { display: flex; gap: 12px; padding: 14px 16px 40px; overflow-x: auto; align-items: flex-start; }
+  .col { min-width: 250px; width: 250px; flex: 0 0 auto; }
+  .col h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 0 0 8px; display: flex; gap: 6px; align-items: center; }
+  .col h2 .dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block; }
+  .story-head { font-size: 11.5px; color: var(--muted); margin: 10px 2px 5px; cursor: pointer; }
+  .story-head:hover { color: var(--accent); }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 9px; padding: 8px 10px; margin-bottom: 7px; cursor: pointer; }
+  .card:hover { border-color: var(--accent); }
+  .card .id { font-size: 11px; color: var(--muted); font-family: ui-monospace, monospace; }
+  .card .title { margin: 2px 0 0; font-weight: 550; }
+  .card .meta { margin-top: 5px; display: flex; gap: 5px; flex-wrap: wrap; }
+  .tag { font-size: 10.5px; border-radius: 5px; padding: 1px 6px; background: var(--chip); color: var(--muted); }
+  .tag.risk-high { background: #fee2e2; color: #b91c1c; }
+  #drawer-bg { position: fixed; inset: 0; background: rgba(15, 23, 42, .32); display: none; }
+  #drawer { position: fixed; top: 0; right: -640px; width: min(640px, 94vw); height: 100vh; background: var(--card); border-left: 1px solid var(--line); box-shadow: -8px 0 24px rgba(15,23,42,.10); transition: right .16s ease; display: flex; flex-direction: column; }
+  #drawer.open { right: 0; }
+  #drawer-bg.open { display: block; }
+  .d-head { padding: 12px 16px; border-bottom: 1px solid var(--line); display: flex; gap: 10px; align-items: baseline; }
+  .d-head .id { font-family: ui-monospace, monospace; color: var(--muted); font-size: 12px; }
+  .d-head .title { font-size: 16px; font-weight: 650; flex: 1; }
+  .d-close { border: none; background: none; font-size: 19px; cursor: pointer; color: var(--muted); }
+  .tabs { display: flex; gap: 2px; padding: 8px 16px 0; border-bottom: 1px solid var(--line); }
+  .tabs button { border: none; background: none; padding: 7px 12px; border-bottom: 2px solid transparent; border-radius: 0; }
+  .tabs button.on { border-bottom-color: var(--accent); color: var(--accent); font-weight: 600; }
+  .d-body { overflow-y: auto; padding: 14px 16px 30px; flex: 1; }
+  section { margin-bottom: 18px; }
+  section h3 { font-size: 12px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); margin: 0 0 6px; }
+  li { margin: 3px 0; }
+  pre { background: var(--chip); border-radius: 8px; padding: 9px 11px; overflow-x: auto; font-size: 12px; margin: 4px 0; }
+  .kv { display: grid; grid-template-columns: 110px 1fr; gap: 3px 10px; font-size: 13px; }
+  .kv .k { color: var(--muted); }
+  .event { border-left: 2px solid var(--line); margin: 0 0 8px 4px; padding: 2px 0 2px 11px; }
+  .event .t { font-family: ui-monospace, monospace; font-size: 11.5px; color: var(--muted); }
+  .event .t b { color: var(--ink); font-weight: 600; }
+  .evfile { display: flex; gap: 8px; align-items: center; padding: 4px 0; border-bottom: 1px dashed var(--line); cursor: pointer; }
+  .evfile:hover { color: var(--accent); }
+  .evfile .sz { color: var(--muted); font-size: 11.5px; }
+  #preview { margin-top: 10px; }
+  #preview img { max-width: 100%; border: 1px solid var(--line); border-radius: 8px; }
+  #preview pre { max-height: 340px; overflow: auto; }
+  #learnings-panel { display: none; margin: 8px 16px; background: var(--card); border: 1px solid var(--line); border-radius: 9px; padding: 10px 14px; }
+  .empty { color: var(--muted); font-style: italic; padding: 14px 16px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>pulse board</h1>
+  <select id="project" aria-label="Project"><option value="">loading…</option></select>
+  <span id="counts" class="muted"></span>
+  <button id="learnings-btn" onclick="toggleLearnings()">learnings</button>
+</header>
+<div id="epics"></div>
+<div id="learnings-panel"></div>
+<div id="board"><div class="empty">Chọn một project…</div></div>
+
+<div id="drawer-bg" onclick="closeDrawer()"></div>
+<div id="drawer" role="dialog" aria-label="Issue detail">
+  <div class="d-head">
+    <span class="id" id="d-id"></span>
+    <span class="title" id="d-title"></span>
+    <button class="d-close" onclick="closeDrawer()" aria-label="Close">✕</button>
+  </div>
+  <div class="tabs">
+    <button id="tab-detail" class="on" onclick="showTab('detail')">Detail</button>
+    <button id="tab-evidence" onclick="showTab('evidence')">Evidence</button>
+    <button id="tab-events" onclick="showTab('events')">Events</button>
+  </div>
+  <div class="d-body" id="d-body"></div>
+</div>
+
+<script>
+"use strict";
+const STATUSES = ["draft", "ready", "blocked", "active", "verifying", "done", "cancelled"];
+const COLOR = { draft: "var(--draft)", ready: "var(--ready)", blocked: "var(--blocked)", active: "var(--active)", verifying: "var(--verifying)", done: "var(--done)", cancelled: "var(--cancelled)" };
+let PID = null, ISSUES = new Map(), LEARNINGS = [], EPIC_FILTER = null, CURRENT = null;
+
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const byId = (id) => ISSUES.get(id);
+const titleOf = (r) => r?.title ?? r?.question ?? "(untitled)";
+
+async function loadProjects() {
+  const data = await (await fetch("/api/projects")).json();
+  const sel = $("project");
+  sel.innerHTML = data.projects.length
+    ? data.projects.map(p => `<option value="${p.id}">${esc(p.name)} — ${p.counts.ticket} tickets (${p.counts.tickets_done} done)</option>`).join("")
+    : `<option value="">no pulse projects found</option>`;
+  sel.onchange = () => loadBoard(sel.value);
+  if (data.projects.length) loadBoard(data.projects[0].id);
+}
+
+async function loadBoard(pid) {
+  PID = pid; EPIC_FILTER = null;
+  if (!pid) { $("board").innerHTML = `<div class="empty">Chọn một project…</div>`; return; }
+  const data = await (await fetch(`/api/p/${pid}/board`)).json();
+  ISSUES = new Map(data.issues.map(r => [r.id, r]));
+  LEARNINGS = data.learnings || [];
+  renderLearnings();
+  renderEpics();
+  renderBoard();
+  const c = data.issues.reduce((m, r) => (m[r.kind] = (m[r.kind] || 0) + 1, m), {});
+  $("counts").textContent = Object.entries(c).map(([k, v]) => `${v} ${k}`).join(" · ")
+    + (data.skipped_lines ? ` · ⚠ ${data.skipped_lines} unreadable lines` : "")
+    + (data.unreadable_receipts ? ` · ⚠ ${data.unreadable_receipts} unreadable receipts` : "");
+}
+
+function renderEpics() {
+  const epics = [...ISSUES.values()].filter(r => r.kind === "epic");
+  $("epics").innerHTML = epics.length
+    ? `<span class="chip ${EPIC_FILTER === null ? "on" : ""}" onclick="setEpic(null)">all</span>` +
+      epics.map(e => `<span class="chip ${EPIC_FILTER === e.id ? "on" : ""}" onclick="setEpic('${e.id}')">${esc(e.id)} · ${esc(titleOf(e))}</span>`).join("")
+    : "";
+}
+function setEpic(id) { EPIC_FILTER = id; renderEpics(); renderBoard(); }
+
+function epicScopedStories() {
+  return [...ISSUES.values()].filter(r =>
+    r.kind === "story" && (!EPIC_FILTER || r.epic === EPIC_FILTER));
+}
+function storyTickets(storyId) {
+  return [...ISSUES.values()].filter(r =>
+    r.kind === "ticket" && r.story === storyId && (!EPIC_FILTER || epicScopedStories().some(s => s.id === storyId)));
+}
+function orphanTickets() {
+  const scoped = new Set(epicScopedStories().map(s => s.id));
+  return [...ISSUES.values()].filter(r =>
+    r.kind === "ticket" && !scoped.has(r.story) &&
+    (!EPIC_FILTER || scoped.has(r.story)));
+}
+
+function renderBoard() {
+  const board = $("board");
+  const cols = STATUSES.map(status => {
+    const tickets = epicScopedStories().flatMap(s => storyTickets(s.id)).filter(t => t.status === status);
+    const orphans = orphanTickets().filter(t => t.status === status);
+    const all = [...tickets, ...orphans];
+    const groups = {};
+    all.forEach(t => (groups[t.story || "—"] ||= []).push(t));
+    const body = Object.entries(groups).map(([sid, ts]) => {
+      const s = byId(sid);
+      const head = s
+        ? `<div class="story-head" onclick="openIssue('${s.id}')">${esc(s.id)} · ${esc(titleOf(s))}</div>`
+        : (sid === "—" ? "" : `<div class="story-head">${esc(sid)}</div>`);
+      return head + ts.map(card).join("");
+    }).join("");
+    return `<div class="col"><h2><span class="dot" style="background:${COLOR[status]}"></span>${status} <span class="muted">${all.length}</span></h2>${body || ""}</div>`;
+  });
+  board.innerHTML = cols.join("") || `<div class="empty">Không có ticket nào.</div>`;
+}
+
+function card(t) {
+  const tags = [
+    t.risk ? `<span class="tag risk-${esc(t.risk)}">${esc(t.risk)}</span>` : "",
+    t.surface ? `<span class="tag">${esc(t.surface)}</span>` : "",
+    (t.deps || []).map(d => `<span class="tag" title="dependency">⇠ ${esc(d.id)}</span>`).join(""),
+  ].join("");
+  return `<div class="card" onclick="openIssue('${t.id}')">
+    <div class="id">${esc(t.id)}</div><p class="title">${esc(titleOf(t))}</p>
+    <div class="meta">${tags}</div></div>`;
+}
+
+async function openIssue(id) {
+  CURRENT = id;
+  const data = await (await fetch(`/api/p/${PID}/issue/${id}`)).json();
+  if (!data.issue) return;
+  CURRENT = { ...data, pid: PID };
+  const r = data.issue;
+  $("d-id").textContent = r.id;
+  $("d-title").textContent = titleOf(r);
+  showTab("detail");
+  $("drawer-bg").classList.add("open");
+  $("drawer").classList.add("open");
+}
+function closeDrawer() {
+  $("drawer-bg").classList.remove("open");
+  $("drawer").classList.remove("open");
+  CURRENT = null;
+}
+function showTab(tab) {
+  ["detail", "evidence", "events"].forEach(t => $("tab-" + t).classList.toggle("on", t === tab));
+  const body = $("d-body");
+  if (!CURRENT) return;
+  if (tab === "detail") body.innerHTML = renderDetail(CURRENT.issue);
+  if (tab === "evidence") body.innerHTML = renderEvidence(CURRENT);
+  if (tab === "events") body.innerHTML = renderEvents(CURRENT.events || []);
+}
+
+function sec(title, inner) { return inner ? `<section><h3>${title}</h3>${inner}</section>` : ""; }
+const list = (arr) => Array.isArray(arr) && arr.length ? `<ul>${arr.map(x => `<li>${esc(typeof x === "string" ? x : (x.text || x.q || JSON.stringify(x)))}</li>`).join("")}</ul>` : "";
+const table = (rows) => rows.length ? `<table>${rows.join("")}</table>` : "";
+
+function renderDetail(r) {
+  const kv = [
+    r.kind && `<span class="k">kind</span><span>${esc(r.kind)}${r.status ? ` · ${esc(r.status)}` : ""}${r.role ? ` · ${esc(r.role)}` : ""}</span>`,
+    (r.risk || r.surface) && `<span class="k">risk / surface</span><span>${esc(r.risk || "—")} / ${esc(r.surface || "—")}</span>`,
+    r.epic && `<span class="k">epic</span><span>${esc(r.epic)}</span>`,
+    r.story && `<span class="k">story</span><span>${esc(r.story)}</span>`,
+    r.parent && `<span class="k">parent</span><span>${esc(r.parent)}</span>`,
+    r.updated_at && `<span class="k">updated</span><span>${esc(r.updated_at)}</span>`,
+  ].filter(Boolean).join("");
+  const rules = (r.rules || []).map(x => `<b>${esc(x.id)}</b> — ${esc(x.text)}`).join("<br>");
+  const exc = (r.exceptions || []).map(x => `<b>${esc(x.id)}</b> — ${esc(x.text)}`).join("<br>");
+  const ac = (r.acceptance || []).map(a =>
+    `<li><b>${esc(a.id)}</b> <i>when</i> ${esc(a.when)} <i>then</i> ${esc(a.then)}</li>`).join("");
+  const verify = (r.verify || []).map(v => `<li><code>${esc((v.argv || []).join(" "))}</code>${v.cwd ? ` <span class="muted">in ${esc(v.cwd)}</span>` : ""}</li>`).join("");
+  const qa = (r.qa_cases || []).map(c => `<li>${esc(typeof c === "string" ? c : c.id)}${c?.surface ? ` <span class="tag">${esc(c.surface)}</span>` : ""}${c?.priority ? ` <span class="tag">${esc(c.priority)}</span>` : ""}</li>`).join("");
+  const oq = (r.open_questions || []).map(q => `<li>${esc(q.q)} — <b>${esc(q.disposition || "open")}</b>${q.answer ? `: ${esc(q.answer)}` : ""}</li>`).join("");
+  const nys = (r.not_yet_specified || []).map(x => `<li>${esc(x)}</li>`).join("");
+  const deps = (r.deps || []).map(d => `<li>${esc(d.type)} → <b onclick="openIssue('${esc(d.id)}')" style="cursor:pointer">${esc(d.id)}</b></li>`).join("");
+  const verdicts = Object.entries(r.verdicts || {}).map(([lane, v]) =>
+    `<li>${esc(lane)}: <b>${esc(v.verdict)}</b> <span class="muted">@ ${esc((v.commit || "").slice(0, 8))}</span></li>`).join("");
+  const checkpoints = (r.checkpoints || []).slice(-3).reverse().map(c =>
+    `<li><span class="muted">${esc((c.at || "").slice(0, 19))}</span> — ${esc(c.in_progress || "")}${(c.next || []).length ? ` → ${esc(c.next.join("; "))}` : ""}</li>`).join("");
+  const notes = (r.notes || []).map(n =>
+    `<li><span class="muted">${esc((n.at || "").slice(0, 19))}</span> ${n.kind === "friction" ? "<b>[friction]</b> " : ""}${esc(n.text)}</li>`).join("");
+
+  return `<section><div class="kv">${kv}</div></section>`
+    + sec("Outcome", r.outcome ? `<p>${esc(r.outcome)}</p>` : "")
+    + sec("Objective", r.objective ? `<p>${esc(r.objective)}</p>` : "")
+    + sec("Success signals", list(r.success_signals))
+    + sec("Business rules", rules)
+    + sec("Exceptions", exc)
+    + sec("Acceptance", ac ? `<ul>${ac}</ul>` : "")
+    + sec("Verify", verify ? `<ul>${verify}</ul>` : "")
+    + sec("QA cases", qa ? `<ul>${qa}</ul>` : "")
+    + sec("Non-scope", list(r.non_scope))
+    + sec("Change · required", list(r.change?.required))
+    + sec("Change · invariants", list(r.change?.invariants))
+    + sec("Dependencies", deps ? `<ul>${deps}</ul>` : "")
+    + sec("Open questions", oq ? `<ul>${oq}</ul>` : "")
+    + sec("Not yet specified", nys ? `<ul>${nys}</ul>` : "")
+    + sec("Verdicts (lanes)", verdicts ? `<ul>${verdicts}</ul>` : "")
+    + sec("Checkpoints", checkpoints ? `<ul>${checkpoints}</ul>` : "")
+    + sec("Notes", notes ? `<ul>${notes}</ul>` : "");
+}
+
+function renderEvidence(data) {
+  const files = data.evidence || [];
+  const links = files.length ? files.map(f =>
+    `<div class="evfile" onclick="preview('${esc(data.issue.id)}', '${esc(f.path)}', '${esc(f.path.split(".").pop())}')">
+       <span>📄 ${esc(f.path)}</span><span class="sz">${f.size > 1024 ? (f.size / 1024).toFixed(1) + " KB" : f.size + " B"}</span>
+     </div>`).join("")
+    : `<p class="muted">Không có file evidence nào.</p>`;
+  const receipts = (data.receipts || []).map(rc =>
+    `<li><b>${esc(rc.kind)}</b> <span class="muted">${esc(rc.id)} · ${esc((rc.recorded_at || "").slice(0, 19))} · ${esc(rc.actor)}</span></li>`).join("");
+  return `<section><h3>Files (.pulse/evidence/${esc(data.issue.id)}/)</h3>${links}<div id="preview"></div></section>`
+    + sec("Receipts", receipts ? `<ul>${receipts}</ul>` : "");
+}
+
+async function preview(issue, path, ext) {
+  const url = `/p/${PID}/evidence/${issue}/${path}`;
+  const el = $("preview");
+  if (["png", "jpg", "jpeg", "gif", "svg", "webp"].includes(ext)) {
+    el.innerHTML = `<img src="${url}" alt="${esc(path)}">`;
+  } else {
+    try {
+      const text = await (await fetch(url)).text();
+      el.innerHTML = `<pre>${esc(text.slice(0, 20000))}</pre>`;
+    } catch { el.innerHTML = `<p class="muted">Không đọc được file.</p>`; }
+  }
+}
+
+function renderEvents(events) {
+  if (!events.length) return `<p class="muted">Chưa có event nào cho issue này.</p>`;
+  const rows = [...events].reverse().map(e => {
+    const payload = JSON.stringify(e.payload || {});
+    return `<div class="event">
+      <div class="t">${esc((e.occurred_at || "").slice(0, 19))} — <b>${esc(e.event_type)}</b> · ${esc(e.actor ? e.actor.kind + ":" + e.actor.id : "")}</div>
+      ${payload !== "{}" ? `<details><summary class="muted" style="cursor:pointer">payload</summary><pre>${esc(payload)}</pre></details>` : ""}
+    </div>`;
+  }).join("");
+  return `<section><h3>Event trace (${events.length})</h3>${rows}</section>`;
+}
+
+function toggleLearnings() {
+  const p = $("learnings-panel");
+  p.style.display = p.style.display === "block" ? "none" : "block";
+}
+function renderLearnings() {
+  $("learnings-panel").innerHTML = LEARNINGS.length
+    ? `<ul>${LEARNINGS.map(l => `<li><b>${esc(l.frontmatter.id)}</b> <span class="tag">${esc(l.frontmatter.status)}</span> ${esc(l.frontmatter.title)}<div class="muted" style="font-size:12px">${esc((l.body || "").slice(0, 160))}</div></li>`).join("")}</ul>`
+    : `<p class="muted">Chưa có learning nào.</p>`;
+}
+
+loadProjects();
+</script>
+</body>
+</html>
