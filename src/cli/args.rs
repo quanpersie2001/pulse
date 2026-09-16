@@ -125,6 +125,11 @@ pub(crate) enum Command {
         #[command(subcommand)]
         command: super::learn::LearnCommand,
     },
+    /// Doc routing and structural checks (plan 0022 §12.2).
+    Docs {
+        #[command(subcommand)]
+        command: super::docs::DocsCommand,
+    },
 }
 
 #[derive(Subcommand)]

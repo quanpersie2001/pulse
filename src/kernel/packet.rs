@@ -1,14 +1,13 @@
 //! `pulse packet <id>` (plan 0022 §9): the one bounded JSON a worker reads
 //! before doing anything.
 //!
-//! `docs.applicable` is still an empty stub — `docs::{applicable,check}` is
-//! A3's job. `learnings` is populated from `learn::recall::applicable`
-//! (A2). `last_verdicts` passes through `ticket.verdicts` as recorded
-//! (lane/verdict/commit); resolving each verdict's findings would mean
-//! reading the referenced receipt, which has no caller producing `verdict:
-//! fail` receipts yet (`kernel::lane` is P1.9). Packet staleness has one
-//! fence: `source` (plan §9 — "Không fingerprint từng input; fence duy nhất
-//! là `source`").
+//! `docs.applicable` comes from `docs::applicable::applicable` (A3);
+//! `learnings` from `learn::recall::applicable` (A2). `last_verdicts`
+//! passes through `ticket.verdicts` as recorded (lane/verdict/commit);
+//! resolving each verdict's findings would mean reading the referenced
+//! receipt, which has no caller producing `verdict: fail` receipts yet
+//! (`kernel::lane` is P1.9). Packet staleness has one fence: `source` (plan
+//! §9 — "Không fingerprint từng input; fence duy nhất là `source`").
 
 use std::path::Path;
 
@@ -160,6 +159,10 @@ pub fn build_packet(repo_root: &Path, id: &str) -> Result<Value> {
         .iter()
         .map(learning_view)
         .collect();
+    let docs_applicable: Vec<Value> = crate::docs::applicable::applicable(repo_root, id)?
+        .iter()
+        .map(|m| json!({"path": m.path, "why": m.why, "lines": m.lines}))
+        .collect();
 
     Ok(json!({
         "issue": strip_runtime_fields(ticket),
@@ -167,7 +170,7 @@ pub fn build_packet(repo_root: &Path, id: &str) -> Result<Value> {
         "epic": epic.map(epic_view),
         "decisions": decisions,
         "blockers": blockers(&records, ticket),
-        "docs": {"applicable": [], "map": "docs/README.md"},
+        "docs": {"applicable": docs_applicable, "map": "docs/README.md"},
         "learnings": learnings,
         "checkpoint": ticket.get("checkpoints").and_then(Value::as_array).and_then(|cps| cps.last()).cloned(),
         "last_verdicts": last_verdicts(ticket),
@@ -316,6 +319,35 @@ mod tests {
         assert_eq!(learnings[0]["do"], json!(["use a transaction"]));
         assert_eq!(learnings[0]["avoid"], json!(["split read/write"]));
         assert_eq!(learnings[0]["check"], "run it 10x");
+    }
+
+    #[test]
+    fn packet_carries_applicable_docs() {
+        let repo = git_repo();
+        crate::store::issues::mutate(repo.path(), |mut records| {
+            records.push(json!({
+                "schema": 3, "id": "TK-a3f9", "kind": "ticket", "title": "t",
+                "status": "draft", "revision": 1,
+                "created_at": "2026-09-16T00:00:00Z", "updated_at": "2026-09-16T00:00:00Z",
+                "role": "implementation",
+                "context": {"anchors": ["src/auth/refresh.rs"]},
+            }));
+            Ok(records)
+        })
+        .unwrap();
+        std::fs::create_dir_all(repo.path().join("docs")).unwrap();
+        std::fs::write(
+            repo.path().join("docs/auth.md"),
+            "---\napplies_to: [\"src/auth/**\"]\n---\n# Auth\n",
+        )
+        .unwrap();
+        std::fs::write(repo.path().join("docs/unrelated.md"), "# Unrelated\n").unwrap();
+
+        let packet = build_packet(repo.path(), "TK-a3f9").unwrap();
+        let applicable = packet["docs"]["applicable"].as_array().unwrap();
+        assert_eq!(applicable.len(), 1);
+        assert_eq!(applicable[0]["path"], "docs/auth.md");
+        assert_eq!(packet["docs"]["map"], "docs/README.md");
     }
 
     #[test]

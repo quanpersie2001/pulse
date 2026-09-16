@@ -1,5 +1,6 @@
 pub mod canonical_json;
 pub mod cli;
+pub mod docs;
 pub mod error;
 pub mod event;
 pub mod evidence;

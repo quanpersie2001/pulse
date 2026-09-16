@@ -1,5 +1,6 @@
 mod args;
 mod completion;
+mod docs;
 mod events;
 mod init;
 mod learn;
@@ -89,5 +90,6 @@ pub fn run(cli: Cli) -> Result<(), PulseError> {
                 },
         } => events::handle_tail(&repo_root, &since, id.as_deref(), follow, json),
         args::Command::Learn { command } => learn::handle(&repo_root, command),
+        args::Command::Docs { command } => docs::handle(&repo_root, command),
     }
 }
