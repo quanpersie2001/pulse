@@ -10,8 +10,11 @@
 //! replace them. `only_planning_skill_can_name_node_creation_commands` is
 //! also dropped: the v2 skill drafts that guard covered now live under
 //! `references/pulse-v2-skills/` (F3, P1.12), raw material for
-//! `pulse-shape`/`pulse-plan` rather than a live skill surface, so a guard
-//! over their command names no longer applies to anything shipped.
+//! `pulse-shape`/`pulse-plan` rather than a live skill surface. It is back
+//! (narrowed to command parsing, no node-creation ownership rule) now that
+//! `skills/pulse-shape` + `skills/pulse-plan` are a live surface again —
+//! plan §12.1: every `pulse …` named in the block and in `skills/**` must
+//! parse against the real CLI.
 //! `guidance_prose_only_names_commands_the_cli_has` is back, narrowed to the
 //! AGENTS block `pulse init` now writes (P1.10, plan §12.1).
 
@@ -404,6 +407,47 @@ fn templates_only_name_commands_the_cli_has() {
     assert!(
         total_checked >= 4,
         "expected the templates to name several commands; only {total_checked} found"
+    );
+}
+
+/// Plan §12.1: `skills/pulse-shape` + `skills/pulse-plan` are a live
+/// guidance surface again (the v2 skills they replaced were raw material
+/// under `references/pulse-v2-skills/`, guarded by nothing), so every
+/// `pulse …` command they name must parse against the real CLI — same drift
+/// risk, and same mechanism, as the AGENTS block guard above.
+#[test]
+fn skills_only_name_commands_the_cli_has() {
+    let skills_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("skills");
+    let mut pending = vec![skills_dir.clone()];
+    let mut total_checked = 0_usize;
+    let mut files = 0_usize;
+    while let Some(dir) = pending.pop() {
+        let entries = fs::read_dir(&dir)
+            .unwrap_or_else(|error| panic!("failed to read {}: {error}", dir.display()));
+        for entry in entries {
+            let path = entry
+                .expect("skills directory entry should be readable")
+                .path();
+            if path.is_dir() {
+                pending.push(path);
+                continue;
+            }
+            if path.extension().and_then(|ext| ext.to_str()) != Some("md") {
+                continue;
+            }
+            files += 1;
+            let text = fs::read_to_string(&path).unwrap();
+            let label = path.display().to_string();
+            total_checked += assert_pulse_mentions_parse(&label, &text);
+        }
+    }
+    assert!(
+        files >= 2,
+        "expected the skills/ tree to hold at least the pulse-shape and pulse-plan SKILL.md files; found {files}"
+    );
+    assert!(
+        total_checked >= 6,
+        "expected the skills to name several commands; only {total_checked} found"
     );
 }
 
