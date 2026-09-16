@@ -39,6 +39,10 @@ const GITIGNORE_ENTRIES: [&str; 2] = ["**/.pulse/runtime/", "**/.pulse/cache/"];
 
 const PULSE_MD_SEED: &str = "\
 # PULSE.md - seeded by `pulse init` (plan 0022 section 8.1). Human-editable.
+# Each profile key below is <surface>-<risk> (a Ticket/Story's own
+# `surface`/`risk` fields, e.g. a `ui` Ticket with `risk: medium` resolves
+# `ui-medium`) except `decision_work`, which every `role: decision_work`
+# Ticket uses regardless of its surface or risk.
 fence_ignore: []
 profiles:
   cli-low: {lanes: [review-correctness]}
@@ -63,6 +67,8 @@ finds broken links and stale generated sections, and confirms every path
 listed below still exists.
 
 - (add entries as `- path/to/doc.md` plus a one-line why)
+- docs/operations/run.md — lane qa-* reads this file; format in
+  scripts/qa/README.md
 ";
 
 const RUNNERS_JSON_ROLES: &[(&str, &str, u64)] = &[
@@ -186,9 +192,10 @@ is its current status? am I the actor allowed to change it? will this leave
 
 Route by shape: a small, well-understood change is `pulse work new ticket
 \"<title>\" --risk <low|medium|high> --surface <cli|api|ui|lib|docs>`, then
-`pulse work ready <id>`, then `pulse run worker <id>`. Anything bigger needs
-a Story first (`pulse work new story ...`), with an Epic above it if the
-work doesn't fit under an existing one.
+`pulse work ready <id>`, then `pulse run worker <id>` — the worker itself
+reads `.pulse/prompts/worker.md` before `{input}`, so that contract is not
+restated here. Anything bigger needs a Story first (`pulse work new story
+...`), with an Epic above it if the work doesn't fit under an existing one.
 
 `done` is never a claim, only a gate reading receipts: a Ticket goes
 `verifying -> done` only through `pulse close`, after every lane in its
@@ -196,7 +203,15 @@ profile has a passing receipt on the handoff's commit.
 
 Hit friction (a Pulse bug, an unclear doc, a missing check)? Record it:
 `pulse note <id> \"<what happened>\" --friction` — don't work around it
-silently.
+silently. Learned something worth keeping from it (a failure, a
+constraint, a technique)? `pulse learn add --title \"...\" --kind
+<failure|constraint|technique|routing> --applies-to <glob>` records a
+candidate; `pulse learn applicable <id>` shows what already applies to a
+Ticket.
+
+Need a doc before writing one? `pulse docs applicable <id>` shows which
+docs match a Ticket's anchors/tags; `pulse docs check` finds broken links
+and stale generated sections under `docs/`.
 
 Context filling up mid-Ticket? `pulse checkpoint <id> --from <cp.json>`
 recording what's done, what's next and any gotchas, then exit printing
@@ -216,6 +231,8 @@ with that checkpoint in the packet.
 | `pulse run <lane> <id>` | run one review/qa lane |
 | `pulse close <id>` / `close-story <id>` | the only way to `done` |
 | `pulse note <id> <text> [--friction]` | append-only note |
+| `pulse learn add` / `applicable <id>` | record / recall a learning |
+| `pulse docs applicable <id>` / `check` | find relevant docs / doc rot |
 ";
 
 const STATUSLINE_SH: &str = "#!/bin/sh\n\
