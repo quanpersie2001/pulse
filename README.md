@@ -14,6 +14,10 @@
 
 </div>
 
+> **v3 đang xây theo [`docs/plans/0022-thin-harness.md`](docs/plans/0022-thin-harness.md).**
+> Nội dung README dưới đây mô tả v2 và chỉ còn giá trị lịch sử cho tới khi
+> `SPEC.md` (plan 0022 Phase 3) thay thế nó; khi mâu thuẫn, plan 0022 thắng.
+
 ---
 
 ## What Pulse is

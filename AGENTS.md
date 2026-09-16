@@ -5,46 +5,38 @@ Read this file at every session start. Re-read after context compaction.
 ## What Pulse is
 
 Pulse is a local CLI truth layer for a developer using coding agents in one
-repository: work graph, packet, runner, docs, evidence gate, ratchet,
-event-log communication. It does not run agents, does not run tests, and has
+repository: a JSONL store of Epic/Story/Ticket/Decision records, a runner
+that dispatches configured worker/review/qa roles, an evidence gate, and an
+append-only event log. It does not run agents, does not run tests, and has
 no daemon.
 
-Product definition and target design: [`PRODUCT.md`](PRODUCT.md). Current
-code architecture: [`ARCHITECTURE.md`](ARCHITECTURE.md). What is being built
-next and in what order: [`ROADMAP.md`](ROADMAP.md). Scope decision:
-[Decision 0008](docs/decisions/0008-narrow-scope-to-truth-layer.md).
-When this file, README or archived material disagrees with `PRODUCT.md`,
-`PRODUCT.md` wins.
-
-Do not add features until the golden path in `PRODUCT.md` §7 runs for real.
+Pulse is mid-rewrite. **[`docs/plans/0022-thin-harness.md`](docs/plans/0022-thin-harness.md)
+(plan 0022) is the current design and implementation plan; when it
+disagrees with `PRODUCT.md`, `ARCHITECTURE.md`, `ROADMAP.md` or any
+decision before [Decision 0022](docs/decisions/0022-thin-harness.md), plan
+0022 wins.** Those older docs describe v2 and stay historical until
+`SPEC.md` (plan 0022 Phase 3) replaces `PRODUCT.md`.
 
 ## Repository roles
 
 - This repository **develops** Pulse. Never run Pulse mutations with
-  `--repo-root .` here. The legacy Node-era `.pulse/workgraph/items.jsonl`,
-  `schema.json` and `.pulse/docs/retrieval-evals/` at the root were deleted;
-  a tracked `.pulse/` at the root is not evidence of self-hosting.
-- **There is currently no dogfood target.** `examples/todolist/` was removed
-  on 2026-09-07: every run it hosted exercised Pulse without the skill surface
-  Decision 0009 specifies, so its friction data mixed "a layer is missing"
-  with "the design is wrong". Recover it with
-  `git checkout dogfood/track-b-final -- examples/todolist`; its friction log
-  survives at [`docs/dogfood-friction-track-b.md`](docs/dogfood-friction-track-b.md).
-  Until a new target exists, Pulse runs for real nowhere, and the golden path
-  gate in `PRODUCT.md` §7 has no way to be satisfied — see the note there
-  before adding features.
+  `--repo-root .` here.
+- **There is currently no dogfood target.** Plan 0022 Phase 2 creates one at
+  `~/Workspace/Personal/todolist`, outside this repository. Until then,
+  Pulse runs for real nowhere — see plan 0022 §2 before adding features.
 - `tests/fixtures/target-repos/<fixture>/` are **immutable test inputs**.
-  Tests copy them out through `tests/common/fixture_repo.rs::TestRepo` and run
-  Pulse against the temporary copy. Never run Pulse against a fixture in place
-  and never commit generated `.pulse/` state into one.
+  Tests copy them out through `tests/common/fixture_repo.rs::TestRepo` and
+  run Pulse against the temporary copy. Never run Pulse against a fixture
+  in place and never commit generated `.pulse/` state into one.
 
 ## Agent operating rules
 
-1. Orient from repository artifacts (`PRODUCT.md`, source, tests, decisions,
+1. Orient from repository artifacts (plan 0022, source, tests, decisions,
    Git history), not conversation memory.
 2. Prefer small, evidence-backed changes. Do not mark work complete unless
    tests or focused verification prove the affected behavior.
-3. Keep generated, cache and runtime outputs out of durable source.
+3. Keep generated, cache and runtime outputs (`.pulse/runtime/`,
+   `.pulse/cache/`) out of durable source.
 4. When handing off, record branch, changes, tests run, blockers and next
    action.
 
@@ -57,38 +49,36 @@ touched, invariant and allowed dependencies. Public APIs use concise `///`
 rustdoc with literal `# Errors` / `# Panics` sections when relevant.
 
 Return `Result` for recoverable or boundary failures. `panic!` only for
-genuinely unrecoverable invariants, never for user input, filesystem state or
-process outcomes. Clippy's `too_many_lines` is a review signal, not a quota;
-decompose by responsibility, not line count.
+genuinely unrecoverable invariants, never for user input, filesystem state
+or process outcomes. Every `kernel`/`runner` error code carries a hint
+through `PulseError::kernel(code, message, hint)` (plan 0022 §6 — a code
+with no hint is a bug).
 
 ## Source architecture
 
 Layers sit bottom-up; never reach up the ladder. Guarded by
-`tests/graph/architecture_guards.rs` and `tests/public_api_contract.rs`.
+`tests/architecture_guards.rs` and `tests/public_api_contract.rs`.
 
 - `src/bin/pulse.rs`: parse, run, render error; delegates to `pulse::cli`.
-- `src/cli/`: thin transport/renderer per command domain. Owns no domain
-  semantics.
-- `src/kernel/`: concrete cross-domain composition (readiness, lifecycle,
-  packet, reservation, completion, story completion, documentation, init).
-  Ticket ambiguity is parsed by `graph::model::brief`; shaping is not a
-  separate receipt ceremony. No trait abstractions.
-- `src/graph/`: `model/` (pure values) → `validation/` → `read/` (pure
-  snapshot evaluators, no I/O) → `store/` (persistence, CAS, supersession,
-  bootstrap). Only layered paths exist; do not re-add one-line re-export
-  shims under `src/graph/`.
-- `src/docs/`: eight-field registry, controlled tags, applicability, markdown
-  section extraction, tantivy index, search/get/tree, validation and checks,
-  receipt policy.
-- `src/evidence/`: immutable receipt envelope, bindings, store, kind
-  validators. Docs receipt policy lives in `src/docs/receipt_validation.rs`.
-- `src/qa/`: Story baseline parsing, checkpoint receipt semantics, executor
-  contract. The command-execution contract here is the seed of the future
-  `runner/`.
-- `src/knowledge/`: learning store, relations, validation.
-- `src/identity/`, `src/policy/`, `src/event.rs`, `src/source.rs`,
-  `src/storage/`: actor vocabulary, default-deny authority, append-only event
-  log, git source identity, atomic/lock/transaction primitives.
+- `src/cli/`: thin transport/renderer (`args`, `work`, `run`, `packet`,
+  `completion`, `events`, `init`, `output`). Owns no domain semantics.
+- `src/kernel/`: cross-domain composition — `issues` (new/update/dep/
+  transition/note), `ready` (draft -> ready gate), `roles` (actor
+  authorization matrix), `reservation` (lease), `run` (worker continue
+  loop + lane spawn), `lane` (lane input/output/seal), `completion`
+  (handoff/close/close-story gates), `packet`, `checkpoint`, `profile`
+  (`PULSE.md`), `init` (repository enrollment).
+- `src/store/issues.rs`: the one JSONL store (`.pulse/issues.jsonl`),
+  embedded-schema validation, atomic read-validate-write.
+- `src/storage/`: atomic write, lock, append-fsync, transaction and path
+  safety primitives. Generic; no domain knowledge.
+- `src/evidence/`: one receipt family (`receipt.rs`), artifact hashing,
+  redaction.
+- `src/runner/`: process-execution contract — argv split (never a shell),
+  placeholders, timeout, bounded output, final-JSON-line contract. No
+  graph truth.
+- `src/identity/`, `src/event.rs`, `src/source.rs`: actor vocabulary,
+  append-only event log, git source fence.
 
 ## Validation commands
 
@@ -105,23 +95,13 @@ cargo test --all-targets
 
 ### Test layout
 
-One Cargo integration crate per domain: `tests/<domain>.rs` is the crate root
-and wires `tests/<domain>/*.rs` with `#[path]`. Shared helpers live in
+`tests/*.rs` are flat integration-test crate roots — no per-domain
+subdirectory nesting; a crate needing more than one file wires them with
+`#[path]` (e.g. `tests/storage.rs` -> `tests/storage/storage_primitives.rs`,
+`tests/target_repo.rs` -> `tests/target_repo/*.rs`). Shared helpers live in
 `tests/common/` and are included per crate with `#[path]`. Current crates:
-`docs`, `evidence`, `graph`, `knowledge`, `process`, `storage`,
-`target_repo`, plus `tests/public_api_contract.rs` as its own crate.
-Timing-sensitive subprocess suites stay in `process`.
-
-Focused runs:
-
-```bash
-cargo test --test graph -- lifecycle
-cargo test --test graph -- workgraph
-cargo test --test docs -- docs_search_get_tree
-cargo test --test evidence -- evidence_receipts
-cargo test --test process
-cargo test --test storage -- transaction_recovery
-```
+`architecture_guards`, `communication`, `golden_path`, `public_api_contract`,
+`run`, `runner`, `storage`, `target_repo`.
 
 ## Session completion
 
