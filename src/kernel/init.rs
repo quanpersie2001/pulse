@@ -5,8 +5,11 @@
 //! Creates the `.pulse/` tree, an empty `issues.jsonl`, a `runners.json`
 //! seed wired to the prompt assets below (plan §8.2), a `PULSE.md` profile
 //! seed (plan §8.1), the runtime/cache `.gitignore` entries (plan §3), the
-//! Pulse block in `AGENTS.md` (plan §12.1), `docs/README.md` (plan §12.2)
-//! and `.pulse/prompts/*.md` (plan §8.5) if any are missing. `refresh`
+//! Pulse block in `AGENTS.md` (plan §12.1), `docs/README.md` and
+//! `docs/operations/run.md` (plan §12.2, §8.6) and `.pulse/prompts/*.md`
+//! (plan §8.5) if any are missing — so a fresh `pulse docs check` passes
+//! rather than immediately reporting `docs/README.md`'s own
+//! `docs/operations/run.md` reference as missing. `refresh`
 //! rewrites only the Pulse block region of `AGENTS.md` and overwrites the
 //! prompt files (never the rest of `AGENTS.md`, and never an existing
 //! `runners.json` a human may have already customized). `host` copies
@@ -69,6 +72,39 @@ listed below still exists.
 - (add entries as `- path/to/doc.md` plus a one-line why)
 - docs/operations/run.md — lane qa-* reads this file; format in
   scripts/qa/README.md
+";
+
+/// Referenced by [`DOCS_README_SEED`] since P1.10/A6, but never itself
+/// created until now — a fresh `pulse init` (with or without
+/// `--with-qa-templates`) left `docs check` reporting the path as missing
+/// immediately, on every repo, rather than pointing at a real starting
+/// point. Placeholder `docker compose` argv (syntactically valid, not
+/// meant to run as-is) for both blocks — `pulse init` has no way to know
+/// this repo's actual stack; a human edits `start`/`ready_url`/`stop`/`log`
+/// for how it really runs, per `scripts/qa/README.md`.
+const RUN_MD_SEED: &str = "\
+# Run
+
+Lanes `qa-ui`/`qa-api` read the two `pulse-run` blocks below to start and
+stop this repo's own app; edit `start`/`ready_url`/`stop`/`log` for how
+this repo actually runs. Block format: `scripts/qa/README.md` (copied in
+by `pulse init --with-qa-templates`).
+
+```pulse-run
+id: api
+start: [\"docker\", \"compose\", \"up\", \"-d\", \"api\"]
+ready_url: \"http://127.0.0.1:8000/health\"
+stop: [\"docker\", \"compose\", \"stop\", \"api\"]
+log: \".pulse/runtime/logs/api.log\"
+```
+
+```pulse-run
+id: ui
+start: [\"docker\", \"compose\", \"up\", \"-d\", \"ui\"]
+ready_url: \"http://127.0.0.1:3000\"
+stop: [\"docker\", \"compose\", \"stop\", \"ui\"]
+log: \".pulse/runtime/logs/ui.log\"
+```
 ";
 
 const RUNNERS_JSON_ROLES: &[(&str, &str, u64)] = &[
@@ -324,6 +360,15 @@ pub fn initialize_repository(
         created.push("docs/README.md".to_string());
     }
 
+    let run_md_path = repo_root.join("docs/operations/run.md");
+    if !run_md_path.exists() {
+        fs::create_dir_all(repo_root.join("docs/operations"))
+            .map_err(|error| PulseError::io(repo_root.join("docs/operations"), error))?;
+        fs::write(&run_md_path, RUN_MD_SEED)
+            .map_err(|error| PulseError::io(&run_md_path, error))?;
+        created.push("docs/operations/run.md".to_string());
+    }
+
     if ensure_agents_block(repo_root, refresh)? {
         created.push("AGENTS.md".to_string());
     }
@@ -505,6 +550,7 @@ mod tests {
         assert!(repo.path().join(".pulse/runners.json").exists());
         assert!(repo.path().join("PULSE.md").exists());
         assert!(repo.path().join("docs/README.md").exists());
+        assert!(repo.path().join("docs/operations/run.md").exists());
         let agents = fs::read_to_string(repo.path().join("AGENTS.md")).unwrap();
         assert!(agents.contains(AGENTS_BLOCK_BEGIN));
         assert!(agents.contains("pulse work new"));

@@ -29,6 +29,26 @@ fn first_run_initializes_and_second_run_reports_unchanged() {
 }
 
 #[test]
+fn fresh_init_passes_docs_check() {
+    let repo = TestRepo::from_fixture("minimal-service");
+
+    repo.pulse_ok(&["init", "--json"]);
+    assert!(repo.path().join("docs/operations/run.md").is_file());
+
+    let output = repo.pulse(&["docs", "check", "--json"]);
+    assert!(
+        output.status.success(),
+        "pulse docs check should exit 0 on a freshly initialized repo: stdout={} stderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let report: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("docs check JSON stdout");
+    assert_eq!(report["verdict"], "pass");
+    assert!(report["findings"].as_array().unwrap().is_empty());
+}
+
+#[test]
 fn init_preserves_an_existing_hand_edited_gitignore() {
     let repo = TestRepo::from_fixture("minimal-service");
     std::fs::write(repo.path().join(".gitignore"), "node_modules/\n").unwrap();
