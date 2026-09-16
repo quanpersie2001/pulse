@@ -52,6 +52,15 @@ pub const MAX_ARG_BYTES: usize = 4_096;
 /// Placeholders substituted in argv elements, with their meaning.
 pub const PLACEHOLDERS: &[&str] = &["input", "ticket", "repo", "artifact_dir"];
 
+const RUNNER_SPEC_HINT: &str = "a runners.json role needs \
+     {\"command\": \"...\", \"timeout_seconds\": N} — command is a non-empty \
+     command line (<=4096 bytes) split by runner::split_argv (never a shell), \
+     timeout_seconds is 1..=86400, and the optional max_output_bytes is \
+     1024..=67108864";
+
+const RUNNER_OUTPUT_FORMAT_HINT: &str =
+    "the last non-empty stdout line a role prints must be one JSON object, e.g. {\"status\": \"done\"}";
+
 /// Cancellation flag shared with a running execution.
 pub type CancelFlag = Arc<AtomicBool>;
 
@@ -83,8 +92,9 @@ impl CommandSpec {
     /// Returns a typed validation error for malformed JSON shape or bounds
     /// outside the accepted ranges.
     pub fn from_value(value: &serde_json::Value) -> PulseResult<Self> {
-        let spec: CommandSpec = serde_json::from_value(value.clone())
-            .map_err(|error| PulseError::validation("runner_spec_invalid", error.to_string()))?;
+        let spec: CommandSpec = serde_json::from_value(value.clone()).map_err(|error| {
+            PulseError::kernel("runner_spec_invalid", error.to_string(), RUNNER_SPEC_HINT)
+        })?;
         spec.validate()?;
         Ok(spec)
     }
@@ -99,25 +109,28 @@ impl CommandSpec {
     /// =[`MAX_MAX_OUTPUT_BYTES`].
     pub fn validate(&self) -> PulseResult<()> {
         if self.command.trim().is_empty() || self.command.len() > MAX_ARG_BYTES {
-            return Err(PulseError::validation(
+            return Err(PulseError::kernel(
                 "runner_spec_invalid",
                 "runner command must be a non-empty command line within 4096 bytes",
+                RUNNER_SPEC_HINT,
             ));
         }
         if !(MIN_TIMEOUT_SECONDS..=MAX_TIMEOUT_SECONDS).contains(&self.timeout_seconds) {
-            return Err(PulseError::validation(
+            return Err(PulseError::kernel(
                 "runner_spec_invalid",
                 format!(
                     "runner timeout_seconds must be between {MIN_TIMEOUT_SECONDS} and {MAX_TIMEOUT_SECONDS}"
                 ),
+                RUNNER_SPEC_HINT,
             ));
         }
         if !(MIN_MAX_OUTPUT_BYTES..=MAX_MAX_OUTPUT_BYTES).contains(&self.max_output_bytes) {
-            return Err(PulseError::validation(
+            return Err(PulseError::kernel(
                 "runner_spec_invalid",
                 format!(
                     "runner max_output_bytes must be between {MIN_MAX_OUTPUT_BYTES} and {MAX_MAX_OUTPUT_BYTES}"
                 ),
+                RUNNER_SPEC_HINT,
             ));
         }
         Ok(())
@@ -372,10 +385,20 @@ pub fn execute(
         .wait()
         .map_err(|error| PulseError::io(working_dir.to_path_buf(), error))?;
     let (stdout, stdout_truncated) = stdout_handle.join().map_err(|_| {
-        PulseError::validation("runner_output_invalid", "stdout capture thread panicked")
+        PulseError::kernel(
+            "runner_output_invalid",
+            "stdout capture thread panicked",
+            "this is an internal capture failure, not a role misconfiguration; \
+             rerun the role and report it if it recurs",
+        )
     })?;
     let (stderr, stderr_truncated) = stderr_handle.join().map_err(|_| {
-        PulseError::validation("runner_output_invalid", "stderr capture thread panicked")
+        PulseError::kernel(
+            "runner_output_invalid",
+            "stderr capture thread panicked",
+            "this is an internal capture failure, not a role misconfiguration; \
+             rerun the role and report it if it recurs",
+        )
     })?;
 
     // After a kill the wait status reflects the signal; surface the decision
@@ -464,5 +487,9 @@ pub fn parse_output_json(outcome: &Outcome) -> PulseResult<serde_json::Value> {
 }
 
 fn malformed(message: &str) -> PulseError {
-    PulseError::validation("runner_output_malformed", message.to_string())
+    PulseError::kernel(
+        "runner_output_malformed",
+        message.to_string(),
+        RUNNER_OUTPUT_FORMAT_HINT,
+    )
 }
