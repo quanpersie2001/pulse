@@ -6,6 +6,7 @@ pub mod evidence;
 pub mod id;
 pub mod identity;
 pub mod kernel;
+pub mod learn;
 pub mod runner;
 pub mod source;
 pub mod storage;

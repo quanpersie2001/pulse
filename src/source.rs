@@ -73,17 +73,52 @@ fn is_fenced_out(path: &str, fence_ignore: &[String]) -> bool {
     fence_ignore.iter().any(|pattern| glob_match(pattern, path))
 }
 
-/// Minimal glob: an exact match, a `dir/` prefix, or a `dir/**` prefix.
-/// `PULSE.md fence_ignore` entries are simple prefixes, not a full glob
-/// engine — good enough until a real need for `*`/`?` mid-pattern appears.
-fn glob_match(pattern: &str, path: &str) -> bool {
+/// Minimal glob, shared by `fence_ignore` (this module) and learnings/docs
+/// `applies_to` matching (plan §11.2/§12.2 — "dùng lại `source::glob_match`,
+/// mở rộng cho `*` một cấp nếu cần"): an exact match, a `dir/` prefix, a
+/// `dir/**` prefix (both matching `dir` itself), or — the one-level
+/// extension — a single `*` within one path segment (`docs/*.md`,
+/// `src/*/handler.rs`). No `**` in the middle of a pattern, no character
+/// classes: neither caller needs them, and a full glob engine is a crate
+/// this plan intentionally avoids.
+pub(crate) fn glob_match(pattern: &str, path: &str) -> bool {
     if let Some(prefix) = pattern.strip_suffix("/**") {
-        return path == prefix || path.starts_with(&format!("{prefix}/"));
+        if path == prefix || path.starts_with(&format!("{prefix}/")) {
+            return true;
+        }
+    } else if let Some(prefix) = pattern.strip_suffix('/') {
+        if path.starts_with(&format!("{prefix}/")) {
+            return true;
+        }
+    } else if pattern == path {
+        return true;
     }
-    if let Some(prefix) = pattern.strip_suffix('/') {
-        return path.starts_with(&format!("{prefix}/"));
+    pattern.contains('*') && segments_match(&split_segments(pattern), &split_segments(path))
+}
+
+fn split_segments(value: &str) -> Vec<&str> {
+    value.split('/').collect()
+}
+
+fn segments_match(pattern: &[&str], path: &[&str]) -> bool {
+    match (pattern.first(), path.first()) {
+        (None, None) => true,
+        (Some(p), Some(s)) => segment_glob(p, s) && segments_match(&pattern[1..], &path[1..]),
+        _ => false,
     }
-    path == pattern
+}
+
+/// One path segment against one pattern segment, with at most one `*`
+/// wildcard in the pattern segment (`*.md`, `handler-*`, `a*b`).
+fn segment_glob(pattern: &str, segment: &str) -> bool {
+    match pattern.split_once('*') {
+        None => pattern == segment,
+        Some((prefix, suffix)) => {
+            segment.len() >= prefix.len() + suffix.len()
+                && segment.starts_with(prefix)
+                && segment.ends_with(suffix)
+        }
+    }
 }
 
 fn hash_dirty_state(repo_root: &Path, dirty_paths: &[String]) -> Result<String> {
@@ -229,5 +264,26 @@ mod tests {
     fn state_repo_root_is_the_identity_function() {
         let repo = init_repo();
         assert_eq!(state_repo_root(repo.path()).unwrap(), repo.path());
+    }
+
+    #[test]
+    fn glob_match_keeps_the_original_prefix_and_exact_semantics() {
+        assert!(glob_match("works/friction.md", "works/friction.md"));
+        assert!(!glob_match("works/friction.md", "works/other.md"));
+        assert!(glob_match("works/**", "works"));
+        assert!(glob_match("works/**", "works/nested/file.md"));
+        assert!(!glob_match("works/", "works"));
+        assert!(glob_match("works/", "works/file.md"));
+    }
+
+    #[test]
+    fn glob_match_supports_a_one_level_wildcard() {
+        assert!(glob_match("docs/*.md", "docs/readme.md"));
+        assert!(!glob_match("docs/*.md", "docs/sub/readme.md"));
+        assert!(glob_match("src/*/handler.rs", "src/auth/handler.rs"));
+        assert!(!glob_match(
+            "src/*/handler.rs",
+            "src/auth/nested/handler.rs"
+        ));
     }
 }

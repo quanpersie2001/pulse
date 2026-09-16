@@ -1,14 +1,14 @@
 //! `pulse packet <id>` (plan 0022 §9): the one bounded JSON a worker reads
 //! before doing anything.
 //!
-//! `docs.applicable` and `learnings` are empty stubs here — `docs::{
-//! applicable,check}` and `learn::*` are P2.1's job, after Phase 1 finishes
-//! rebuilding the source tree. `last_verdicts` passes through
-//! `ticket.verdicts` as recorded (lane/verdict/commit); resolving each
-//! verdict's findings would mean reading the referenced receipt, which has
-//! no caller producing `verdict: fail` receipts yet (`kernel::lane` is
-//! P1.9). Packet staleness has one fence: `source` (plan §9 — "Không
-//! fingerprint từng input; fence duy nhất là `source`").
+//! `docs.applicable` is still an empty stub — `docs::{applicable,check}` is
+//! A3's job. `learnings` is populated from `learn::recall::applicable`
+//! (A2). `last_verdicts` passes through `ticket.verdicts` as recorded
+//! (lane/verdict/commit); resolving each verdict's findings would mean
+//! reading the referenced receipt, which has no caller producing `verdict:
+//! fail` receipts yet (`kernel::lane` is P1.9). Packet staleness has one
+//! fence: `source` (plan §9 — "Không fingerprint từng input; fence duy nhất
+//! là `source`").
 
 use std::path::Path;
 
@@ -94,6 +94,30 @@ fn last_verdicts(ticket: &Value) -> Vec<Value> {
         .unwrap_or_default()
 }
 
+/// The compact `{id, summary, do, avoid, check}` shape plan §9 wants in the
+/// packet, built from a learning's opaque body via
+/// `learn::store::sections`/`bullet_items`. `Check` is `- ` bulleted in the
+/// body like `Do`/`Avoid` (plan §11.1's example), but the packet shape wants
+/// one string (plan §9: `"check":"…"`), so multiple check bullets join with
+/// `"; "`.
+fn learning_view(learning: &crate::learn::store::Learning) -> Value {
+    let sections = crate::learn::store::sections(&learning.body);
+    let text = |name: &str| sections.get(name).cloned().unwrap_or_default();
+    let check_items = crate::learn::store::bullet_items(&text("Check"));
+    let check = if check_items.is_empty() {
+        text("Check")
+    } else {
+        check_items.join("; ")
+    };
+    json!({
+        "id": learning.frontmatter.id,
+        "summary": text("Summary"),
+        "do": crate::learn::store::bullet_items(&text("Do")),
+        "avoid": crate::learn::store::bullet_items(&text("Avoid")),
+        "check": check,
+    })
+}
+
 fn recent_notes(ticket: &Value, limit: usize) -> Vec<Value> {
     ticket
         .get("notes")
@@ -132,6 +156,10 @@ pub fn build_packet(repo_root: &Path, id: &str) -> Result<Value> {
         .unwrap_or_default();
 
     let snapshot = source::snapshot(repo_root, &[])?;
+    let learnings: Vec<Value> = crate::learn::recall::applicable(repo_root, id, false)?
+        .iter()
+        .map(learning_view)
+        .collect();
 
     Ok(json!({
         "issue": strip_runtime_fields(ticket),
@@ -140,7 +168,7 @@ pub fn build_packet(repo_root: &Path, id: &str) -> Result<Value> {
         "decisions": decisions,
         "blockers": blockers(&records, ticket),
         "docs": {"applicable": [], "map": "docs/README.md"},
-        "learnings": [],
+        "learnings": learnings,
         "checkpoint": ticket.get("checkpoints").and_then(Value::as_array).and_then(|cps| cps.last()).cloned(),
         "last_verdicts": last_verdicts(ticket),
         "notes": recent_notes(ticket, 8),
@@ -245,6 +273,49 @@ mod tests {
         assert_eq!(packet_notes.len(), 8);
         assert_eq!(packet_notes[0]["text"], "n2");
         assert_eq!(packet_notes[7]["text"], "n9");
+    }
+
+    #[test]
+    fn packet_carries_active_learnings_but_not_candidates() {
+        let repo = git_repo();
+        crate::store::issues::mutate(repo.path(), |mut records| {
+            records.push(json!({
+                "schema": 3, "id": "TK-a3f9", "kind": "ticket", "title": "t",
+                "status": "draft", "revision": 1,
+                "created_at": "2026-09-16T00:00:00Z", "updated_at": "2026-09-16T00:00:00Z",
+                "role": "implementation",
+                "context": {"anchors": ["src/auth/refresh.rs"]},
+            }));
+            Ok(records)
+        })
+        .unwrap();
+        let active = crate::learn::store::Learning {
+            frontmatter: crate::learn::store::Frontmatter {
+                id: "LRN-1111".to_string(),
+                status: "active".to_string(),
+                kind: "failure".to_string(),
+                applies_to: vec!["src/auth/**".to_string()],
+                tags: vec![],
+                from: vec![],
+                expected_signal: String::new(),
+                usage: crate::learn::store::UsageCounts::default(),
+            },
+            body: "## Summary\nrotation must be atomic\n## Do\n- use a transaction\n## Avoid\n- split read/write\n## Check\n- run it 10x\n".to_string(),
+        };
+        let mut candidate = active.clone();
+        candidate.frontmatter.id = "LRN-2222".to_string();
+        candidate.frontmatter.status = "candidate".to_string();
+        crate::learn::store::write(repo.path(), &active).unwrap();
+        crate::learn::store::write(repo.path(), &candidate).unwrap();
+
+        let packet = build_packet(repo.path(), "TK-a3f9").unwrap();
+        let learnings = packet["learnings"].as_array().unwrap();
+        assert_eq!(learnings.len(), 1);
+        assert_eq!(learnings[0]["id"], "LRN-1111");
+        assert_eq!(learnings[0]["summary"], "rotation must be atomic");
+        assert_eq!(learnings[0]["do"], json!(["use a transaction"]));
+        assert_eq!(learnings[0]["avoid"], json!(["split read/write"]));
+        assert_eq!(learnings[0]["check"], "run it 10x");
     }
 
     #[test]

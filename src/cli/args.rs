@@ -120,6 +120,11 @@ pub(crate) enum Command {
         #[command(subcommand)]
         command: EventsCommand,
     },
+    /// Manage learnings (plan 0022 §11): friction -> learning -> check.
+    Learn {
+        #[command(subcommand)]
+        command: super::learn::LearnCommand,
+    },
 }
 
 #[derive(Subcommand)]

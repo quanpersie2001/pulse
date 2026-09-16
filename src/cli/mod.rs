@@ -2,6 +2,7 @@ mod args;
 mod completion;
 mod events;
 mod init;
+mod learn;
 pub mod output;
 mod packet;
 mod run;
@@ -87,5 +88,6 @@ pub fn run(cli: Cli) -> Result<(), PulseError> {
                     json,
                 },
         } => events::handle_tail(&repo_root, &since, id.as_deref(), follow, json),
+        args::Command::Learn { command } => learn::handle(&repo_root, command),
     }
 }

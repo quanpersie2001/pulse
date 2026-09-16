@@ -246,6 +246,23 @@ pub fn evaluate_handoff(
         }
     }
 
+    for used in &input.learnings_used {
+        if !crate::learn::store::exists(repo_root, &used.id) {
+            violations.push(violation(
+                "learning_unknown",
+                format!("{} is not a known learning id", used.id),
+            ));
+        } else if !matches!(used.usage.as_str(), "helpful" | "not_needed" | "misleading") {
+            violations.push(violation(
+                "handoff_learning_usage_invalid",
+                format!(
+                    "{}: usage must be helpful, not_needed or misleading, got {}",
+                    used.id, used.usage
+                ),
+            ));
+        }
+    }
+
     GateReport { violations }
 }
 
@@ -309,6 +326,10 @@ pub fn handoff(repo_root: &Path, actor: &ActorRef, id: &str, input: HandoffInput
             line,
             crate::kernel::issues::NoteKind::Friction,
         )?;
+    }
+
+    for used in &input.learnings_used {
+        crate::learn::record_usage(repo_root, &used.id, &used.usage)?;
     }
 
     // Each friction note is its own read-mutate-write cycle (kernel::issues
@@ -860,6 +881,90 @@ profiles:
         input.docs_updated = vec!["docs/x.md".to_string()];
         let report = evaluate_handoff(repo.path(), &agent("worker"), &ticket, &input);
         assert!(report.is_clean(), "{:?}", report.violations);
+    }
+
+    #[test]
+    fn handoff_learning_unknown_is_reported() {
+        let repo = git_repo();
+        let ticket = active_ticket();
+        let mut input = full_handoff();
+        input.learnings_used = vec![LearningUsage {
+            id: "LRN-ffff".to_string(),
+            usage: "helpful".to_string(),
+        }];
+        let report = evaluate_handoff(repo.path(), &agent("worker"), &ticket, &input);
+        assert!(report
+            .violations
+            .iter()
+            .any(|v| v.code == "learning_unknown"));
+    }
+
+    #[test]
+    fn handoff_learning_usage_invalid_is_reported() {
+        let repo = git_repo();
+        crate::learn::store::write(
+            repo.path(),
+            &crate::learn::store::Learning {
+                frontmatter: crate::learn::store::Frontmatter {
+                    id: "LRN-1111".to_string(),
+                    status: "active".to_string(),
+                    kind: "failure".to_string(),
+                    applies_to: vec![],
+                    tags: vec![],
+                    from: vec![],
+                    expected_signal: String::new(),
+                    usage: crate::learn::store::UsageCounts::default(),
+                },
+                body: "## Summary\ns\n".to_string(),
+            },
+        )
+        .unwrap();
+        let ticket = active_ticket();
+        let mut input = full_handoff();
+        input.learnings_used = vec![LearningUsage {
+            id: "LRN-1111".to_string(),
+            usage: "vibes".to_string(),
+        }];
+        let report = evaluate_handoff(repo.path(), &agent("worker"), &ticket, &input);
+        assert!(report
+            .violations
+            .iter()
+            .any(|v| v.code == "handoff_learning_usage_invalid"));
+    }
+
+    #[test]
+    fn handoff_action_records_learning_usage() {
+        let repo = git_repo();
+        crate::learn::store::write(
+            repo.path(),
+            &crate::learn::store::Learning {
+                frontmatter: crate::learn::store::Frontmatter {
+                    id: "LRN-2222".to_string(),
+                    status: "active".to_string(),
+                    kind: "failure".to_string(),
+                    applies_to: vec![],
+                    tags: vec![],
+                    from: vec![],
+                    expected_signal: String::new(),
+                    usage: crate::learn::store::UsageCounts::default(),
+                },
+                body: "## Summary\ns\n".to_string(),
+            },
+        )
+        .unwrap();
+        crate::store::issues::mutate(repo.path(), |mut records| {
+            records.push(active_ticket());
+            Ok(records)
+        })
+        .unwrap();
+        let mut input = full_handoff();
+        input.learnings_used = vec![LearningUsage {
+            id: "LRN-2222".to_string(),
+            usage: "helpful".to_string(),
+        }];
+        handoff(repo.path(), &agent("worker"), "TK-a3f9", input).unwrap();
+        let learning = crate::learn::store::read(repo.path(), "LRN-2222").unwrap();
+        assert_eq!(learning.frontmatter.usage.helpful, 1);
     }
 
     #[test]
