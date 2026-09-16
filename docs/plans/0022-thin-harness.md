@@ -666,21 +666,14 @@ lượt, recommended answer, D-id cho quyết định); research/onboard/handoff
 
 ## 13. Board
 
-`pulse board`: đọc `issues.jsonl`, `receipts/`, `learnings/`; render một file
-HTML tự chứa (CSS/JS inline, không CDN) `.pulse/cache/board.html`:
-
-- Cột theo status Ticket; nhóm theo Story; Epic là filter.
-- Drawer Ticket: objective, AC với verdict lane, findings mở, checkpoint mới
-  nhất, deps, notes, receipt list, ảnh dưới `evidence/<id>/shots/` (đường dẫn
-  file://).
-- Tab Learnings và Doctor.
-- `--watch`: poll mtime 1s, render lại; trang có `<meta http-equiv=refresh
-  content=3>` khi được render với `--watch`.
-- `--open`: `open`/`xdg-open`.
-
-Template ở `assets/board/board.html` với placeholder `/*DATA*/`. Không server
-trong v3.0. `pulse serve` là LATER với điều kiện: người dùng mở board > 20
-lần/ngày và refresh 3s gây phiền.
+**Amended by [Decision 0023](../decisions/0023-board-serve-multi-project.md)
+(2026-09-17): the static `pulse board` is not built. `pulse serve` replaces
+it — a read-only local HTTP server (tiny_http, bind 127.0.0.1) that
+discovers every Pulse project under `--workspace` (depth ≤ 4) and serves
+one self-contained UI (project picker, kanban by status grouped by story,
+epic filter, Ticket drawer with Detail / Evidence / Event-trace tabs).
+Full API shape, discovery rules and the read-only guarantee live in the
+decision, not here.**
 
 ---
 
@@ -767,7 +760,8 @@ Thứ tự commit (mỗi dòng một commit, test xanh sau mỗi commit):
 
 ### Phase 3 — vòng học và board (≈ 1 tuần)
 
-- [ ] P3.1 `pulse board`; dùng nó thay `show` trong một ngày; ghi friction.
+- [ ] P3.1 `pulse serve` (Decision 0023 — thay board tĩnh); dùng nó thay
+      `show` trong một ngày; ghi friction.
 - [ ] P3.2 `pulse doctor` tối thiểu (11.3 + lỗi store).
 - [ ] P3.3 `pulse-learn` chạy trên friction Phase 2; ít nhất một intervention là **check** (role `check-*` trong runners.json của target).
 - [ ] P3.4 Thay `PRODUCT.md` bằng `SPEC.md` ≤ 300 dòng mô tả đúng v3 đang chạy; `ARCHITECTURE.md`, `ROADMAP.md`, `AGENTS.md` (repo Pulse) viết lại theo cây mới; `GLOSSARY.md` cắt theo.
@@ -779,7 +773,9 @@ Thứ tự commit (mỗi dòng một commit, test xanh sau mỗi commit):
 Sau v3.0, **không** bắt đầu mục nào trong danh sách sau nếu không có ≥ 2
 friction cùng loại ghi trong `.pulse/events` của dogfood: docs search, worktree
 song song, knowledge relation, authority grant, receipt signature, MCP server,
-`pulse serve`, reviewer ≥ 2 mặc định, materialization.
+reviewer ≥ 2 mặc định, materialization. (`pulse serve` được bỏ khỏi danh sách
+này bởi [Decision 0023](../decisions/0023-board-serve-multi-project.md) — nó
+nay là một phần của v3.0.)
 
 ---
 

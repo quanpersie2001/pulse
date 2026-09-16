@@ -25,7 +25,8 @@ Current decisions:
 - [0019 — Ba tầng hướng dẫn, và đúng một skill sở hữu việc tạo node](0019-guidance-layers-and-single-node-owner.md) — **guidance layers narrowed by 0020**; **skill order amended by 0021**; **superseded in scope by 0022**; lessons retained
 - [0020 — Gộp workflow thường ngày vào khối AGENTS](0020-collapse-guidance-into-agents.md) — **superseded in scope by 0022**; lessons retained
 - [0021 — Prose trước graph, và planning vào một lần](0021-prose-before-graph-and-one-planning-entry.md) — **superseded in scope by 0022**; lessons retained
-- [0022 — Pulse v3: giữ hợp đồng, bỏ máy móc](0022-thin-harness.md)
+- [0022 — Pulse v3: giữ hợp đồng, bỏ máy móc](0022-thin-harness.md) — **§13/§14 amended by 0023**
+- [0023 — `pulse serve` multi-project thay board tĩnh](0023-board-serve-multi-project.md)
 
 Add or update a decision when:
 
