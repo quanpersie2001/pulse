@@ -392,7 +392,7 @@ hard-code ngoài file `init` seed.
 ```json
 {"worker":            {"command": "claude -p --output-format text --dangerously-skip-permissions \"Pulse worker. Read {input} and follow it exactly.\"", "timeout_seconds": 3600},
  "worker-continue":   {"command": "codex exec --sandbox workspace-write \"Pulse worker continue. Read {input}.\"", "timeout_seconds": 3600},
- "review-correctness":{"command": "codex exec --sandbox read-only \"Pulse reviewer. Read {input}.\"", "timeout_seconds": 1800},
+ "review-correctness":{"command": "codex exec --sandbox workspace-write \"Pulse reviewer. Read {input}.\"", "timeout_seconds": 1800},  // workspace-write, not read-only: the lane must write its own evidence file (§8.4); source protection comes from the prompt + the lane_mutated_workspace dirty-hash check (ST-1 dogfood F5)
  "review-adversarial":{"command": "claude -p --output-format text \"Pulse adversarial reviewer. Read {input}.\"", "timeout_seconds": 1800},
  "qa-ui":             {"command": "node scripts/qa/ui.mjs {input}", "timeout_seconds": 900},
  "qa-api":            {"command": "node scripts/qa/api.mjs {input}", "timeout_seconds": 900},

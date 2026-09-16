@@ -37,6 +37,16 @@ A `fail` finding needs `owner` (the file responsible) and a `check`
 (`argv`+expected `exit`) someone else can rerun — a finding with no check
 is not treated as blocking.
 
+The output schema is CLOSED — extra keys anywhere make Pulse reject the
+whole file and your work is lost (this happened for real in the ST-1
+dogfood; see `docs/plans/0022-dogfood-st1.md` F6):
+
+- `commands_run[]` entries carry exactly `argv` (string array) and
+  `exit` (integer). No `cwd`, no `note`, no other keys — put the working
+  directory and any commentary inside `acceptance[].how` instead.
+- `environment` carries exactly `commit` (plus `server`/`tool` if used).
+  No extra keys like `worktree_dirty`.
+
 ## Last line
 
 Write the file first, then print exactly `{"status":"done"}` as your last
