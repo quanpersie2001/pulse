@@ -1,9 +1,10 @@
-# Pulse — Product Definition
+# Pulse — Product Definition (v2, historical)
 
-> **v3 đang xây theo [`docs/plans/0022-thin-harness.md`](docs/plans/0022-thin-harness.md)
-> và [Decision 0022](docs/decisions/0022-thin-harness.md).** Nội dung dưới đây
-> mô tả **v2** và chỉ còn giá trị lịch sử cho tới khi `SPEC.md` (P3.4 của plan
-> 0022) thay thế nó. Khi file này mâu thuẫn với plan 0022, plan 0022 thắng.
+> **Superseded by [`SPEC.md`](SPEC.md)** — the v3 spec, shipped at tag
+> `v3.0.0` per [`docs/plans/0022-thin-harness.md`](docs/plans/0022-thin-harness.md).
+> Everything below describes **v2** (works/ directories, graph module,
+> skill chain, static board — none of which exist in v3) and is kept only
+> as history. Do not implement from this file.
 
 > Trạng thái: chốt ngày 2026-09-05, cập nhật đến 2026-09-15 theo các Decision
 > 0009–0020. Đây là nguồn sự thật về sản phẩm và thiết kế

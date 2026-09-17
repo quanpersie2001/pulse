@@ -785,7 +785,7 @@ Trên dogfood target, bằng agent thật:
 
 1. `pulse init --host claude-code --with-qa-templates`; `pulse doctor` sạch.
 2. `pulse-shape` tạo Story `ready` với `rules`, 2 `qa_cases` (ui, api).
-3. `pulse-plan` tạo 2 Ticket `ready` (surface api risk medium; surface ui risk medium), có `blocked_by` giữa chúng.
+3. `pulse-plan` tạo 2 Ticket, có `blocked_by` giữa chúng (surface api risk medium; surface ui risk medium): ticket bị chặn chỉ `ready` sau khi blocker `done` — gate §7.1-4 là chuẩn ((ST-2 §8.2; text gốc "2 Ticket `ready`" đã sai).
 4. `pulse run worker <api>` → worker checkpoint ≥ 1 lần → handoff. `pulse run review <api>` chạy `review-correctness` + `qa-api`; qa-api để lại response + log; `pulse close` thành công; hoặc lane fail → rework → pass.
 5. `pulse run worker <ui>` → kill giữa chừng → chạy lại resume từ checkpoint → handoff. Lane `qa-ui` để lại 2 ảnh/case và console log. Close.
 6. Sửa một file source sau handoff → `pulse close` từ chối `close_source_stale` nêu đúng path.
