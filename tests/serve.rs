@@ -191,6 +191,39 @@ fn issue_payload_carries_record_events_receipts_evidence() {
 }
 
 #[test]
+fn issue_payload_links_story_and_ticket_evidence_both_ways() {
+    let repo = tempfile::tempdir().unwrap();
+    let mut ticket = sample_issue("TK-1", "ticket", "done");
+    ticket["story"] = json!("ST-1");
+    let mut other = sample_issue("TK-2", "ticket", "done");
+    other["story"] = json!("ST-9");
+    write_issues(
+        repo.path(),
+        &[sample_issue("ST-1", "story", "done"), ticket, other],
+    );
+    for (owner, file) in [
+        ("ST-1", "shots/QA-004.png"),
+        ("TK-1", "review.json"),
+        ("TK-2", "unrelated.json"),
+    ] {
+        let path = repo.path().join(".pulse/evidence").join(owner).join(file);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, b"x").unwrap();
+    }
+
+    let ticket = api::issue_payload(repo.path(), "TK-1").unwrap();
+    assert_eq!(
+        ticket["related_evidence"],
+        json!([{"issue": "ST-1", "path": "shots/QA-004.png", "size": 1}])
+    );
+    let story = api::issue_payload(repo.path(), "ST-1").unwrap();
+    assert_eq!(
+        story["related_evidence"],
+        json!([{"issue": "TK-1", "path": "review.json", "size": 1}])
+    );
+}
+
+#[test]
 fn evidence_file_serves_within_the_issue_dir_and_refuses_traversal() {
     let repo = tempfile::tempdir().unwrap();
     let shots = repo.path().join(".pulse/evidence/TK-1/shots");

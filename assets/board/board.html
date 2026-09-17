@@ -452,6 +452,7 @@
     .board { padding: 0 16px 40px; }
     .page { padding: 16px 16px 48px; }
     .grid-2 { grid-template-columns: 1fr; }
+    .grid-2 > .stack:last-child { order: -1; }
     .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
     .stat:nth-child(2) { border-right: 0; }
     .stat:nth-child(-n+2) { border-bottom: 1px solid var(--line); }
@@ -1493,7 +1494,7 @@ $("q").addEventListener("input", (ev) => {
   }, 120);
 });
 $("q").addEventListener("keydown", (ev) => {
-  if (ev.key === "Escape") { ev.target.value = ""; go({ q: "" }, true); ev.target.blur(); }
+  if (ev.key === "Escape") { ev.stopPropagation(); ev.target.value = ""; go({ q: "" }, true); ev.target.blur(); }
   if (ev.key === "Enter" && D.idx) {
     const q = ev.target.value.trim().toLowerCase();
     const exact = D.idx.issues.find((r) => r.id.toLowerCase() === q);

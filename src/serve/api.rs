@@ -63,7 +63,11 @@ pub fn board_payload(repo_root: &Path) -> Value {
 }
 
 /// `GET /api/p/<pid>/issue/<id>` — the full drawer: the record itself,
-/// every receipt naming it, its event trace, and the evidence manifest.
+/// every receipt naming it, its event trace, its evidence manifest, and
+/// the evidence of its hierarchy neighbours (`related_evidence`): a
+/// ticket's parent story (where story-scope QA lanes leave screenshots)
+/// and a story's tickets. Each related entry names its owning `issue`,
+/// the id the browser must use in `/p/<pid>/evidence/<issue>/…`.
 pub fn issue_payload(repo_root: &Path, id: &str) -> Option<Value> {
     let (records, skipped) = lenient_read_issues(repo_root);
     let issue = records
@@ -89,8 +93,44 @@ pub fn issue_payload(repo_root: &Path, id: &str) -> Option<Value> {
         "receipts": receipts,
         "events": trace,
         "evidence": evidence_manifest(repo_root, id),
+        "related_evidence": related_evidence(repo_root, &records, issue),
         "skipped_lines": skipped,
     }))
+}
+
+fn related_evidence(repo_root: &Path, records: &[Value], issue: &Value) -> Vec<Value> {
+    let str_field =
+        |record: &Value, key: &str| record.get(key).and_then(Value::as_str).map(str::to_string);
+    let related: Vec<String> = match str_field(issue, "kind").as_deref() {
+        Some("ticket") => str_field(issue, "story").into_iter().collect(),
+        Some("story") => {
+            let story = str_field(issue, "id");
+            records
+                .iter()
+                .filter(|record| {
+                    str_field(record, "kind").as_deref() == Some("ticket")
+                        && str_field(record, "story") == story
+                })
+                .filter_map(|record| str_field(record, "id"))
+                .collect()
+        }
+        _ => Vec::new(),
+    };
+    let mut out = Vec::new();
+    for owner in related {
+        // Ids come from the store, but only well-formed ones may name a
+        // directory: never let a record smuggle `..` into a path.
+        if owner.is_empty() || !owner.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
+            continue;
+        }
+        for mut entry in evidence_manifest(repo_root, &owner) {
+            if let Some(object) = entry.as_object_mut() {
+                object.insert("issue".to_string(), Value::String(owner.clone()));
+            }
+            out.push(entry);
+        }
+    }
+    out
 }
 
 /// Every file under `.pulse/evidence/<id>/`, as `{path, size}` objects
