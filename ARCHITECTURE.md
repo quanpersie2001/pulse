@@ -1,6 +1,6 @@
 # Pulse — Architecture (v3, current code)
 
-> Status: rewritten at v3.0.0 (P3.4). Describes the **code that exists
+> Status: rewritten at the v3 close-out (P3.4, tag `v0.0.1`). Describes the **code that exists
 > today**; `SPEC.md` says what the product is, this file says how the code
 > is shaped. Layer rules are guard-tested:
 > `tests/architecture_guards.rs` (source-tree scan) and

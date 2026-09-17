@@ -1,6 +1,6 @@
 # Pulse v3 — SPEC
 
-Status: shipped, tag `v3.0.0`. This file describes the v3 that actually runs
+Status: shipped, tag `v0.0.1` (owner call at close-out: a rebuild restarts the version line, it does not inherit v2's). This file describes the v3 that actually runs
 and replaces `PRODUCT.md` (kept as v2 history). Plan
 [`0022`](docs/plans/0022-thin-harness.md) and its decisions explain **why**;
 this file says **what is**. When they disagree with the code, the code wins
@@ -140,7 +140,7 @@ Every kernel/runner failure carries a code **and a mandatory hint**
 contract, the message carries gate labels (`ready_blocked_by_open`,
 `close_source_stale`, …). The audited list lives in
 [`docs/plans/0022-error-code-audit.md`](docs/plans/0022-error-code-audit.md)
-(51 surfaced codes at v3.0.0).
+(51 surfaced codes at `v0.0.1`).
 
 ## 10. Event log
 

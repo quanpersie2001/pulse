@@ -1,11 +1,11 @@
 # Pulse — Roadmap
 
-> Rewritten at v3.0.0 (P3.4). `SPEC.md` says what Pulse is; this file says
+> Rewritten at the v3 close-out (P3.4, tag `v0.0.1`). `SPEC.md` says what Pulse is; this file says
 > what comes next and, more importantly, what is deliberately not next.
 
 ## Shipped
 
-`v3.0.0` — the thin harness (plan
+`v0.0.1` — the thin harness (plan
 [`0022`](docs/plans/0022-thin-harness.md)): JSONL store, ready gate, worker
 loop with checkpoints, lanes with sealed evidence, close gates, learnings,
 docs routing, four skills, `pulse serve` (Decision 0023), `pulse doctor`,

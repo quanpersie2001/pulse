@@ -31,7 +31,7 @@ Phase 2.
 
 ## Table
 
-| Metric | Baseline 2026-09-16 | After Phase 0 | After P1.3+P1.4+P1.5 | After Phase 1 (P1.11, 2026-09-16) | After P1.12 (2026-09-16) | After Phase 2A (2026-09-16) | v3.0.0 (2026-09-17) | Target v3.0 |
+| Metric | Baseline 2026-09-16 | After Phase 0 | After P1.3+P1.4+P1.5 | After Phase 1 (P1.11, 2026-09-16) | After P1.12 (2026-09-16) | After Phase 2A (2026-09-16) | v0.0.1 (2026-09-17) | Target v3.0 |
 |---|---|---|---|---|---|---|---|---|
 | Rust lines in `src/` | 43106 | 43106 | 6517 | 10422 | 10599 | 13089 | 13542 | < 10000 |
 | Distinct error codes (wide count, see above) | 271 (grep-pattern count, not directly comparable) | 271 | 31 | 64 (methodology undocumented) | 85 | 93 | 76 wide / **51 surfaced** (audit) | < 40 |
@@ -143,7 +143,7 @@ board/doctor work must keep the one-mechanism-one-cut rule. Error codes
 unchanged this round (93; serve added none — reads degrade to payload
 notes, not new codes).
 
-## v3.0.0 close-out (2026-09-17 — Phase 3 complete)
+## v0.0.1 close-out (2026-09-17 — Phase 3 complete)
 
 Every commit this phase landed with a clean `cargo fmt --check && cargo
 clippy --all-targets --quiet -- -D warnings && cargo test --all-targets`

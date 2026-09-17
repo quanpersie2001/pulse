@@ -1,7 +1,7 @@
 # Pulse — Product Definition (v2, historical)
 
 > **Superseded by [`SPEC.md`](SPEC.md)** — the v3 spec, shipped at tag
-> `v3.0.0` per [`docs/plans/0022-thin-harness.md`](docs/plans/0022-thin-harness.md).
+> `v0.0.1` per [`docs/plans/0022-thin-harness.md`](docs/plans/0022-thin-harness.md).
 > Everything below describes **v2** (works/ directories, graph module,
 > skill chain, static board — none of which exist in v3) and is kept only
 > as history. Do not implement from this file.

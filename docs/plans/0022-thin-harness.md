@@ -766,7 +766,8 @@ Thứ tự commit (mỗi dòng một commit, test xanh sau mỗi commit):
 - [x] P3.3 `pulse-learn` chạy trên friction Phase 2; ít nhất một intervention là **check** (role `check-*` trong runners.json của target).
 - [x] P3.4 Thay `PRODUCT.md` bằng `SPEC.md` ≤ 300 dòng mô tả đúng v3 đang chạy; `ARCHITECTURE.md`, `ROADMAP.md`, `AGENTS.md` (repo Pulse) viết lại theo cây mới; `GLOSSARY.md` cắt theo.
 - [x] P3.5 Xoá `skills/pulse-{wayfind,grill,spec,planning}` sau khi `pulse-shape`/`pulse-plan` chạy thật trên P2.3; giữ eval fixture có giá trị.
-- [x] P3.6 Ghi metrics cuối; tag `v3.0.0`.
+- [x] P3.6 Ghi metrics cuối; tag `v0.0.1` (owner at close-out: a rebuild
+      restarts the version line — the plan's `v3.0.0` naming superseded).
 
 ### Điều kiện dừng
 

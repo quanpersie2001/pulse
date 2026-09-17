@@ -10,7 +10,7 @@ that dispatches configured worker/review/qa roles, an evidence gate, and an
 append-only event log. It does not run agents, does not run tests, and has
 no daemon.
 
-**v3 is shipped (tag `v3.0.0`).** [`SPEC.md`](SPEC.md) describes what runs;
+**v3 is shipped (tag `v0.0.1` — the rebuild restarts the version line).** [`SPEC.md`](SPEC.md) describes what runs;
 [`ARCHITECTURE.md`](ARCHITECTURE.md) describes the code tree; plan
 [`docs/plans/0022-thin-harness.md`](docs/plans/0022-thin-harness.md) and its
 decisions hold the reasoning. `PRODUCT.md` is v2 history — do not implement
