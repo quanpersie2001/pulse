@@ -42,12 +42,20 @@ handoff.json`.
 
 ## Last line
 
-Print exactly one JSON object as your last stdout line:
+Your FINAL stdout line — printed after every other output, including the
+output of `pulse` commands themselves — must be exactly one JSON object,
+alone on that line, nothing after it:
 
 - `{"status":"handed_off"}` after `pulse handoff` succeeds.
 - `{"status":"blocked","reason":"..."}` if you cannot proceed at all.
 - `{"status":"continue"}` if you checkpointed and are stopping to free
   context — a fresh process resumes from your checkpoint next.
+
+No prose around it, no code fence, no trailing command output: if the last
+thing you ran printed anything, print your status line after it. The
+runner classifies the whole run by parsing that one line (plan §10.1) — a
+wrapper sentence or a stray line after it turns an already-clean handoff
+into `run_inconclusive` (dogfood ST-2, F25).
 
 Never restate the Ticket's own text anywhere except your checkpoint's
 `in_progress`/`next`/`gotchas` — a reviewer rereads the Ticket itself.

@@ -96,6 +96,27 @@ was a Pulse bug.
 - `api.mjs`: every step is one `METHOD /path [json-body]` line, sent in
   order against the app started from the `id: api` block.
 
+## api steps are executed HTTP lines
+
+The api script does not read steps as prose — it EXECUTES each one as a
+real HTTP request. Every step of a `surface: "api"` case must be exactly
+one line of the shape `METHOD /path` or `METHOD /path {"json":"body"}`:
+
+```
+POST /tasks {"title":"buy milk"}
+GET /tasks
+DELETE /tasks/42
+```
+
+The body must be valid JSON on that one line — `POST /tasks {title,
+due_date: today}` is not a shorthand, it is a crash: `parseStep` does
+`JSON.parse` on the body text and one pseudo-JSON step kills the whole
+lane with `qa_api_crashed` before any artifact is written (dogfood ST-2,
+F28 — and through `pulse run` the crash output was invisible, the same
+gap as F25). Query strings are fine (`GET /tasks?view=today`); comments,
+expectations and free text belong in the case's other fields or in
+surface-ui steps, never in an api step line.
+
 ## `check` and never self-grading `pass`
 
 A `qa_cases[]` entry may carry a `check: {argv: [...], assert: [{"exit_code": N}]}`
