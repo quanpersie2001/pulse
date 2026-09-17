@@ -10,6 +10,7 @@
 
 pub mod checkpoint;
 pub mod completion;
+pub mod doctor;
 pub mod init;
 pub mod issues;
 pub mod lane;

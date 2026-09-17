@@ -195,6 +195,9 @@ impl DepType {
 /// # Errors
 /// `dep_cycle` if adding a `blocked_by` edge would create a cycle through
 /// existing `blocked_by` edges.
+/// `pulse dep rm <id> blocked_by|supersedes <other>` was removed at P3.2:
+/// undoing a dep edge is a hand edit of `.pulse/issues.jsonl`, the single
+/// human-editable store.
 pub fn dep_add(
     repo_root: &Path,
     actor: &ActorRef,
@@ -235,44 +238,6 @@ pub fn dep_add(
         actor.as_kind_id(),
         id,
         serde_json::json!({"dep_added": {"type": dep_type.as_str(), "id": other_id}}),
-        Utc::now(),
-    )?;
-    Ok(updated)
-}
-
-/// `pulse dep rm <id> blocked_by|supersedes <other>`.
-///
-/// # Errors
-/// Propagates the store's schema/lock errors; removing an absent dep is not
-/// an error (idempotent).
-pub fn dep_rm(
-    repo_root: &Path,
-    actor: &ActorRef,
-    id: &str,
-    dep_type: DepType,
-    other_id: &str,
-) -> Result<Value> {
-    authorize(actor, Action::MutateGraph)?;
-    let saved = issues::mutate(repo_root, |records| {
-        apply_to_record(records, id, |record| {
-            let object = record.as_object_mut().expect("records are always objects");
-            if let Some(deps) = object.get_mut("deps").and_then(Value::as_array_mut) {
-                deps.retain(|dep| {
-                    !(dep.get("type").and_then(Value::as_str) == Some(dep_type.as_str())
-                        && dep.get("id").and_then(Value::as_str) == Some(other_id))
-                });
-            }
-            bump(object);
-            Ok(())
-        })
-    })?;
-    let updated = require(&saved, id)?.clone();
-    emit_event(
-        repo_root,
-        "issue.updated",
-        actor.as_kind_id(),
-        id,
-        serde_json::json!({"dep_removed": {"type": dep_type.as_str(), "id": other_id}}),
         Utc::now(),
     )?;
     Ok(updated)

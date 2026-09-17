@@ -1,6 +1,7 @@
 mod args;
 mod completion;
 mod docs;
+mod doctor;
 mod events;
 mod init;
 mod learn;
@@ -121,6 +122,7 @@ fn run_in_repo(
                 },
         } => events::handle_tail(&repo_root, &since, id.as_deref(), follow, json),
         args::Command::Learn { command } => learn::handle(&repo_root, command),
+        args::Command::Doctor { json } => doctor::handle(&repo_root, json),
         args::Command::Docs { command } => docs::handle(&repo_root, command),
     }
 }

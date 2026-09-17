@@ -85,6 +85,8 @@ pub(crate) enum WorkCommand {
         #[arg(long)]
         json: bool,
     },
+    /// Undo of a dep edge is a hand edit of `.pulse/issues.jsonl` — the
+    /// store is a single human-editable file (P3.2 pairing cut).
     Dep {
         #[command(subcommand)]
         command: DepCommand,
@@ -109,15 +111,6 @@ pub(crate) enum DepCommand {
     Add {
         id: String,
         /// blocked_by | supersedes.
-        dep_type: String,
-        other: String,
-        #[arg(long)]
-        actor: Option<String>,
-        #[arg(long)]
-        json: bool,
-    },
-    Rm {
-        id: String,
         dep_type: String,
         other: String,
         #[arg(long)]
@@ -337,18 +330,6 @@ fn handle_dep(repo_root: &std::path::Path, command: DepCommand) -> Result<(), Pu
             let dep_type = parse_dep_type(&dep_type)?;
             let record = issues::dep_add(repo_root, &actor, &id, dep_type, &other)?;
             render(json, &record, format!("{id} now depends on {other}"))
-        }
-        DepCommand::Rm {
-            id,
-            dep_type,
-            other,
-            actor,
-            json,
-        } => {
-            let actor = resolve_actor(repo_root, actor.as_deref())?;
-            let dep_type = parse_dep_type(&dep_type)?;
-            let record = issues::dep_rm(repo_root, &actor, &id, dep_type, &other)?;
-            render(json, &record, format!("{id} no longer depends on {other}"))
         }
     }
 }

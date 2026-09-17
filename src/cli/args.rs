@@ -135,6 +135,13 @@ pub(crate) enum Command {
         #[command(subcommand)]
         command: super::learn::LearnCommand,
     },
+    /// Read-only health report: store, receipts, leases, evidence,
+    /// the §10.4 detector (plan 0022 §11.3 minimum). Exits non-zero on
+    /// any finding, so it can gate a script.
+    Doctor {
+        #[arg(long)]
+        json: bool,
+    },
     /// Doc routing and structural checks (plan 0022 §12.2).
     Docs {
         #[command(subcommand)]
