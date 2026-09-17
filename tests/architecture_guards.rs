@@ -8,13 +8,14 @@
 //! `works/<id>` content_dir) are dropped with the mechanism they guarded;
 //! checks for the new layer (`storage -> store(issues) -> kernel -> cli`)
 //! replace them. `only_planning_skill_can_name_node_creation_commands` is
-//! also dropped: the v2 skill drafts that guard covered now live under
-//! `references/pulse-v2-skills/` (F3, P1.12), raw material for
-//! `pulse-shape`/`pulse-plan` rather than a live skill surface. It is back
-//! (narrowed to command parsing, no node-creation ownership rule) now that
-//! `skills/pulse-shape` + `skills/pulse-plan` are a live surface again —
-//! plan §12.1: every `pulse …` named in the block and in `skills/**` must
-//! parse against the real CLI.
+//! also dropped: the v2 skill drafts that guard covered lived under
+//! `references/pulse-v2-skills/` (F3, P1.12) as raw material for
+//! `pulse-shape`/`pulse-plan`; that directory is deleted at P3.5 (ST-2 ran
+//! the golden path through the new skills), and the guard is back (narrowed
+//! to command parsing, no node-creation ownership rule) now that
+//! `skills/pulse-shape` + `skills/pulse-plan` are a live surface — plan
+//! §12.1: every `pulse …` named in the block and in `skills/**` must parse
+//! against the real CLI.
 //! `guidance_prose_only_names_commands_the_cli_has` is back, narrowed to the
 //! AGENTS block `pulse init` now writes (P1.10, plan §12.1).
 
@@ -411,10 +412,11 @@ fn templates_only_name_commands_the_cli_has() {
 }
 
 /// Plan §12.1: `skills/pulse-shape` + `skills/pulse-plan` are a live
-/// guidance surface again (the v2 skills they replaced were raw material
-/// under `references/pulse-v2-skills/`, guarded by nothing), so every
-/// `pulse …` command they name must parse against the real CLI — same drift
-/// risk, and same mechanism, as the AGENTS block guard above.
+/// guidance surface (the v2 skills they replaced — raw material once kept
+/// under `references/pulse-v2-skills/`, guarded by nothing — were deleted
+/// at P3.5), so every `pulse …` command they name must parse against the
+/// real CLI — same drift risk, and same mechanism, as the AGENTS block
+/// guard above.
 #[test]
 fn skills_only_name_commands_the_cli_has() {
     let skills_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("skills");
