@@ -106,14 +106,14 @@ pub(crate) fn handle(repo_root: &std::path::Path, command: LearnCommand) -> Resu
             } else {
                 let title = title.ok_or_else(|| {
                     PulseError::kernel(
-                        "learn_add_invalid",
+                        "learning_invalid",
                         "no --from file and no --title given",
                         "pass --from <file>, or --title <t> --kind <failure|constraint|technique|routing>",
                     )
                 })?;
                 let kind = kind.ok_or_else(|| {
                     PulseError::kernel(
-                        "learn_add_invalid",
+                        "learning_invalid",
                         "no --from file and no --kind given",
                         "pass --from <file>, or --title <t> --kind <failure|constraint|technique|routing>",
                     )

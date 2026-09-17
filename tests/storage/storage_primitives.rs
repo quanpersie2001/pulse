@@ -1,7 +1,7 @@
 use pulse::canonical_json::{hash_bytes, to_canonical_bytes};
 use pulse::error::PulseError;
 use pulse::storage::atomic::atomic_replace;
-use pulse::storage::paths::{configured_content_root, resolve_content_path, resolve_repo_relative};
+use pulse::storage::paths::resolve_repo_relative;
 use serde_json::json;
 use std::fs;
 
@@ -30,28 +30,17 @@ fn canonical_json_rejects_float_numbers() {
 fn safe_paths_reject_traversal_and_symlink_escape() {
     let tmp = tempfile::tempdir().unwrap();
     let repo = tmp.path();
-    fs::create_dir(repo.join("works")).unwrap();
 
     let traversal = resolve_repo_relative(repo, "works/../secret").unwrap_err();
     assert!(matches!(traversal, PulseError::PathTraversal { .. }));
-
-    let content_escape = resolve_content_path(repo, ".pulse/workgraph").unwrap_err();
-    assert!(matches!(
-        content_escape,
-        PulseError::ContentRootViolation { .. }
-    ));
-
-    let content_root = configured_content_root(repo, "../../works").unwrap();
-    assert_eq!(content_root, fs::canonicalize(repo).unwrap().join("works"));
-    let manifest_escape = configured_content_root(repo, "../../../outside").unwrap_err();
-    assert!(matches!(manifest_escape, PulseError::PathEscape { .. }));
 
     #[cfg(unix)]
     {
         use std::os::unix::fs::symlink;
         let outside = tempfile::tempdir().unwrap();
-        symlink(outside.path(), repo.join("works/link-out")).unwrap();
-        let escape = resolve_content_path(repo, "works/link-out/file.md").unwrap_err();
+        let link = repo.join("link-out");
+        symlink(outside.path(), &link).unwrap();
+        let escape = resolve_repo_relative(repo, "link-out/file.md").unwrap_err();
         assert!(matches!(escape, PulseError::PathEscape { .. }));
     }
 }

@@ -141,7 +141,7 @@ impl CommandSpec {
 ///
 /// Supports POSIX-style single quotes (no escapes inside), double quotes
 /// (backslash escapes inside) and backslash escapes outside quotes. An empty
-/// command line yields `runner_argv_empty`; oversized argv or arguments yield
+/// command line yields `runner_argv_invalid`; oversized argv or arguments yield
 /// `runner_argv_invalid`.
 ///
 /// # Errors
@@ -227,7 +227,7 @@ pub fn split_argv(command: &str) -> PulseResult<Vec<String>> {
     }
     if argv.is_empty() {
         return Err(PulseError::validation(
-            "runner_argv_empty",
+            "runner_argv_invalid",
             "runner command splits to an empty argv",
         ));
     }
@@ -393,7 +393,7 @@ pub fn execute(
         .map_err(|error| PulseError::io(working_dir.to_path_buf(), error))?;
     let (stdout, stdout_truncated) = stdout_handle.join().map_err(|_| {
         PulseError::kernel(
-            "runner_output_invalid",
+            "runner_output_malformed",
             "stdout capture thread panicked",
             "this is an internal capture failure, not a role misconfiguration; \
              rerun the role and report it if it recurs",
@@ -401,7 +401,7 @@ pub fn execute(
     })?;
     let (stderr, stderr_truncated) = stderr_handle.join().map_err(|_| {
         PulseError::kernel(
-            "runner_output_invalid",
+            "runner_output_malformed",
             "stderr capture thread panicked",
             "this is an internal capture failure, not a role misconfiguration; \
              rerun the role and report it if it recurs",

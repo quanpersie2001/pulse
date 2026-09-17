@@ -106,7 +106,7 @@ fn split_argv_rejects_unterminated_quotes_and_empty_commands() {
     );
     assert_eq!(
         runner::split_argv("   ").unwrap_err().code(),
-        "runner_argv_empty"
+        "runner_argv_invalid"
     );
 }
 

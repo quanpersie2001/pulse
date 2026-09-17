@@ -87,7 +87,7 @@ pub fn parse_actor(raw: &str) -> Result<ActorRef> {
 ///
 /// # Errors
 /// `actor_invalid` if an explicit or `PULSE_ACTOR` value is malformed;
-/// `actor_required` if none is given and `git config user.name` is unset.
+/// `actor_invalid` if none is given and `git config user.name` is unset.
 pub fn resolve_actor(repo_root: &std::path::Path, explicit: Option<&str>) -> Result<ActorRef> {
     if let Some(raw) = explicit {
         return parse_actor(raw);
@@ -114,7 +114,7 @@ pub fn resolve_actor(repo_root: &std::path::Path, explicit: Option<&str>) -> Res
         }
     }
     Err(PulseError::kernel(
-        "actor_required",
+        "actor_invalid",
         "no actor given and git config user.name is unset",
         "pass --from human:<name>, set PULSE_ACTOR, or run `git config user.name <name>`",
     ))

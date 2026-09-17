@@ -122,7 +122,7 @@ fn validator() -> &'static JSONSchema {
 /// Validate one record against `src/schema/issue.schema.json`.
 ///
 /// # Errors
-/// `issues_schema_invalid` lists every violation (not just the first), each
+/// `issues_record_invalid` lists every violation (not just the first), each
 /// naming the JSON pointer path that failed.
 pub fn validate_record(record: &Value) -> Result<()> {
     let outcome = validator().validate(record);
@@ -134,7 +134,7 @@ pub fn validate_record(record: &Value) -> Result<()> {
         .map(|error| format!("{}: {error}", error.instance_path))
         .collect();
     Err(PulseError::kernel(
-        "issues_schema_invalid",
+        "issues_record_invalid",
         format!("record fails schema: {}", messages.join("; ")),
         "run `pulse show <id>` after fixing the field named by the error path",
     ))
@@ -149,7 +149,7 @@ pub fn validate_record(record: &Value) -> Result<()> {
 /// written, matching plan §4.1.
 ///
 /// # Errors
-/// Propagates `transform`'s error, any `issues_schema_invalid` from the
+/// Propagates `transform`'s error, any `issues_record_invalid` from the
 /// records it returns, or an I/O error acquiring the lock or writing the
 /// file.
 pub fn mutate<F>(repo_root: &Path, transform: F) -> Result<Vec<Value>>
@@ -275,7 +275,7 @@ mod tests {
             Ok(records)
         })
         .unwrap_err();
-        assert_eq!(err.code(), "issues_schema_invalid");
+        assert_eq!(err.code(), "issues_record_invalid");
         assert!(err.hint().is_some());
 
         let after = read_all(repo.path()).expect("read");
@@ -287,7 +287,7 @@ mod tests {
         let mut broken = ticket("TK-aaaa", 1);
         broken.as_object_mut().unwrap().remove("role");
         let err = validate_record(&broken).unwrap_err();
-        assert_eq!(err.code(), "issues_schema_invalid");
+        assert_eq!(err.code(), "issues_record_invalid");
     }
 
     #[test]
@@ -310,7 +310,7 @@ mod tests {
         missing_decision.as_object_mut().unwrap().remove("decision");
         assert_eq!(
             validate_record(&missing_decision).unwrap_err().code(),
-            "issues_schema_invalid"
+            "issues_record_invalid"
         );
     }
 

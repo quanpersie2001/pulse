@@ -22,18 +22,6 @@ pub(super) fn render<T: Serialize>(
 
 pub fn print_error(err: &PulseError) {
     let value = match err {
-        PulseError::CasConflict {
-            subject,
-            expected_revision,
-            current_revision,
-        } => json!({
-            "schema_version": 1,
-            "code": err.code(),
-            "subject": subject,
-            "expected_revision": expected_revision,
-            "current_revision": current_revision,
-            "message": err.to_string(),
-        }),
         PulseError::Validation { code, .. } if code.starts_with("assignment_") => json!({
             "schema_version": 1,
             "code": "assignment_claim_failed",

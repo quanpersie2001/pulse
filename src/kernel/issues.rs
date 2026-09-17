@@ -61,7 +61,7 @@ fn initial_status(kind: &str) -> &'static str {
 ///
 /// # Errors
 /// `role_forbidden` if `actor` may not mutate the graph, or
-/// `issues_schema_invalid` if the assembled record fails the embedded
+/// `issues_record_invalid` if the assembled record fails the embedded
 /// schema (for example: a `ticket` created without `--role`).
 pub fn create(
     repo_root: &Path,

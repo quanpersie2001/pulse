@@ -48,7 +48,7 @@ fn synthesize_body(title: &str, expected_signal: &str) -> String {
 
 /// # Errors
 /// `role_forbidden` if `actor` may not add a learning; `learning_invalid` if
-/// `AddInput::FromFile`'s text fails to parse; `learning_kind_invalid` if
+/// `AddInput::FromFile`'s text fails to parse; `learning_invalid` if
 /// the resolved kind is not one of [`store::KINDS`].
 pub fn add(repo_root: &Path, actor: &ActorRef, input: AddInput) -> Result<Learning> {
     authorize(actor, Action::NoteOrLearnAdd)?;
@@ -84,7 +84,7 @@ pub fn add(repo_root: &Path, actor: &ActorRef, input: AddInput) -> Result<Learni
 
     if !store::KINDS.contains(&frontmatter.kind.as_str()) {
         return Err(PulseError::kernel(
-            "learning_kind_invalid",
+            "learning_invalid",
             format!("{} is not a valid learning kind", frontmatter.kind),
             "kind must be one of failure, constraint, technique, routing",
         ));
@@ -169,7 +169,7 @@ pub fn retire(repo_root: &Path, actor: &ActorRef, id: &str, reason: &str) -> Res
 /// depth, not the primary check.
 ///
 /// # Errors
-/// `learning_not_found`; `learning_usage_invalid` if `usage` is not
+/// `learning_not_found`; `learning_invalid` if `usage` is not
 /// `helpful`, `not_needed` or `misleading`.
 pub fn record_usage(repo_root: &Path, id: &str, usage: &str) -> Result<()> {
     let _guard = WriteGuard::acquire(repo_root)?;
@@ -180,7 +180,7 @@ pub fn record_usage(repo_root: &Path, id: &str, usage: &str) -> Result<()> {
         "misleading" => learning.frontmatter.usage.misleading += 1,
         other => {
             return Err(PulseError::kernel(
-                "learning_usage_invalid",
+                "learning_invalid",
                 format!("{other} is not a valid learning usage"),
                 "usage must be helpful, not_needed or misleading",
             ));
@@ -244,7 +244,7 @@ mod tests {
             },
         )
         .unwrap_err();
-        assert_eq!(err.code(), "learning_kind_invalid");
+        assert_eq!(err.code(), "learning_invalid");
     }
 
     #[test]
@@ -374,6 +374,6 @@ s
         )
         .unwrap();
         let err = record_usage(repo.path(), &learning.frontmatter.id, "vibes").unwrap_err();
-        assert_eq!(err.code(), "learning_usage_invalid");
+        assert_eq!(err.code(), "learning_invalid");
     }
 }

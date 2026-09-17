@@ -45,7 +45,7 @@ fn load_runner(repo_root: &Path, role: &str) -> Result<CommandSpec> {
     let value: Value = serde_json::from_slice(&bytes).map_err(PulseError::from)?;
     let entry = value.get(role).ok_or_else(|| {
         PulseError::kernel(
-            "runner_role_missing",
+            "runner_spec_invalid",
             format!("no role {role} in .pulse/runners.json"),
             "add a `{role}` entry ({{\"command\": \"...\", \"timeout_seconds\": N}}) to .pulse/runners.json",
         )

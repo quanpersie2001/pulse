@@ -36,56 +36,20 @@ pub enum PulseError {
     #[error("path traversal is not allowed: {path:?}")]
     PathTraversal { path: PathBuf },
 
-    #[error("content path must be under works/: {path:?}")]
-    ContentRootViolation { path: PathBuf },
-
     #[error("repository write lock timed out after {timeout:?}: {lock_path:?}")]
     LockTimeout {
         lock_path: PathBuf,
         timeout: Duration,
     },
 
-    #[error("durability support boundary: {message}")]
-    DurabilityUnsupported { message: String },
-
-    #[error("transaction recovery is ambiguous for {transaction_id}: {message}")]
-    AmbiguousTransaction {
-        transaction_id: String,
-        message: String,
-    },
-
-    #[error("transaction event mismatch for {transaction_id}: {message}")]
-    EventMismatch {
-        transaction_id: String,
-        message: String,
-    },
-
-    #[error("invalid transaction intent: {message}")]
-    InvalidTransaction { message: String },
-
-    #[error("test failpoint reached: {name}")]
-    Failpoint { name: &'static str },
-
     #[error("validation failed: {message}")]
     Validation { code: &'static str, message: String },
 
-    #[error("CAS conflict for {subject}: expected revision {expected_revision}, current revision {current_revision}")]
-    CasConflict {
-        subject: String,
-        expected_revision: u64,
-        current_revision: u64,
-    },
-
-    #[error("not found: {subject}")]
-    NotFound { subject: String },
-
-    #[error("already exists: {subject}")]
-    AlreadyExists { subject: String },
-
     /// v3 kernel/store error: every code here MUST carry a `hint` (plan 0022
-    /// §6 — "hint là bắt buộc cho mọi mã lỗi"). Older variants above predate
-    /// that rule and are being phased out with the modules that raise them;
-    /// new v3 code always constructs errors through [`PulseError::kernel`].
+    /// §6 — "hint là bắt buộc cho mọi mã lỗi"). The v2 variants that used to
+    /// share this enum (transactions, CAS, content roots, failpoints) were
+    /// deleted with their machinery at the error-code audit (P3.4); new v3
+    /// code always constructs errors through [`PulseError::kernel`].
     #[error("{message}")]
     Kernel {
         code: &'static str,
@@ -103,23 +67,14 @@ impl PulseError {
             Self::AbsolutePath { .. } | Self::PathEscape { .. } | Self::PathTraversal { .. } => {
                 "unsafe_path"
             }
-            Self::ContentRootViolation { .. } => "content_root_violation",
             Self::LockTimeout { .. } => "lock_timeout",
-            Self::DurabilityUnsupported { .. } => "durability_unsupported",
-            Self::AmbiguousTransaction { .. } => "ambiguous_transaction",
-            Self::EventMismatch { .. } => "event_mismatch",
-            Self::InvalidTransaction { .. } => "invalid_transaction",
-            Self::Failpoint { .. } => "failpoint",
             Self::Validation { code, .. } => code,
-            Self::CasConflict { .. } => "cas_conflict",
-            Self::NotFound { .. } => "not_found",
-            Self::AlreadyExists { .. } => "already_exists",
             Self::Kernel { code, .. } => code,
         }
     }
 
     /// Operator-facing "how to fix this" text. Only [`Self::Kernel`] carries
-    /// one today; every new v3 error code goes through [`Self::kernel`], so
+    /// one today; every new v3 error code goes through [`PulseError::kernel`], so
     /// this is never `None` for a code introduced after plan 0022.
     pub fn hint(&self) -> Option<&'static str> {
         match self {

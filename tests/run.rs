@@ -302,7 +302,7 @@ fn story_scope_lane_routes_through_its_cases_surfaces_without_force() {
     // The profile gate must let qa-ui through (the case surface routes it);
     // failing later at the missing runner entry proves the gate passed.
     let err = run_lane(repo.path(), &agent("qa-ui"), "ST-1111", "qa-ui", false).unwrap_err();
-    assert_eq!(err.code(), "runner_role_missing");
+    assert_eq!(err.code(), "runner_spec_invalid");
 }
 
 #[test]
