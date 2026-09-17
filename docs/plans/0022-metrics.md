@@ -31,15 +31,15 @@ Phase 2.
 
 ## Table
 
-| Metric | Baseline 2026-09-16 | After Phase 0 | After P1.3+P1.4+P1.5 | After Phase 1 (P1.11, 2026-09-16) | After P1.12 (2026-09-16) | After Phase 2A (2026-09-16) | Target v3.0 |
-|---|---|---|---|---|---|---|---|
-| Rust lines in `src/` | 43106 | 43106 | 6517 | 10422 | 10599 | 13089 | < 10000 |
-| Distinct error codes (wide count, see above) | 271 (grep-pattern count, not directly comparable) | 271 | 31 | 64 (methodology undocumented) | 85 | 93 | < 40 |
-| CLI leaf commands | 67 (measured; plan estimated ~60) | 67 | 13 | 20 | 19 | 27 | ≤ 22 |
-| Hand-typed commands to close one Ticket | ~11 (plan estimate) | ~11 | n/a | 5 (`new`, `ready`, `run worker`, `run review`, `close`) | 5 (unchanged; now proven end-to-end through the real `pulse` binary by `tests/golden_path.rs`, not just fixture-fake-agent unit tests) | 5 (unchanged — `learn`/`docs` are enrichments a worker/reviewer can use, not new required steps on this path) | ≤ 6 |
-| Required flags on that path | ~25 (plan estimate) | ~25 | n/a | ~2 (`--risk`, `--surface` on `new`; actor defaults from git config) | ~2 (unchanged) | ~2 (unchanged) | ≤ 4 |
-| Friction/Ticket that is a Pulse bug | Track B: majority | Track B: majority (no new dogfood yet) | (same) | (same — no new dogfood yet; Phase 2) | (same — no Phase 2 dogfood yet; but `tests/golden_path.rs`, the first true end-to-end CLI run, found exactly one real Pulse bug on its first pass — `run_lane` blocking every story-scope qa lane with `lane_not_verifying` — fixed the same session, F2 prereq of P1.12) | (same — still no Phase 2 dogfood; this session's own smoke tests of `docs check`, `learn`, `init --with-qa-templates` found no new Pulse bugs, only the two P1.12 review carryovers A1 was scoped to fix) | < 1 |
-| Repos running Pulse for real | 0 | 0 | 0 | 0 | 0 (the golden path repo is a throwaway temp dir per test run, not a persistent dogfood target) | 0 (dogfood target still doesn't exist; that's Phase 2B, P2.2 onward) | 1 (UI + API) |
+| Metric | Baseline 2026-09-16 | After Phase 0 | After P1.3+P1.4+P1.5 | After Phase 1 (P1.11, 2026-09-16) | After P1.12 (2026-09-16) | After Phase 2A (2026-09-16) | v3.0.0 (2026-09-17) | Target v3.0 |
+|---|---|---|---|---|---|---|---|---|
+| Rust lines in `src/` | 43106 | 43106 | 6517 | 10422 | 10599 | 13089 | 13542 | < 10000 |
+| Distinct error codes (wide count, see above) | 271 (grep-pattern count, not directly comparable) | 271 | 31 | 64 (methodology undocumented) | 85 | 93 | 76 wide / **51 surfaced** (audit) | < 40 |
+| CLI leaf commands | 67 (measured; plan estimated ~60) | 67 | 13 | 20 | 19 | 27 | 27 | ≤ 22 |
+| Hand-typed commands to close one Ticket | ~11 (plan estimate) | ~11 | n/a | 5 (`new`, `ready`, `run worker`, `run review`, `close`) | 5 | 5 | 5 | ≤ 6 |
+| Required flags on that path | ~25 (plan estimate) | ~25 | n/a | ~2 | ~2 | ~2 | ~2 (`--risk`, `--surface` on `new`) | ≤ 4 |
+| Friction/Ticket that is a Pulse bug | Track B: majority | Track B: majority | (same) | (same) | (same) | (same — Phase 2B pending) | **0.5** (ST-2, 1/2; ST-3 shaped, not run) | < 1 |
+| Repos running Pulse for real | 0 | 0 | 0 | 0 | 0 | 0 | **1** (`~/Workspace/Personal/todolist`, registry-registered) | 1 (UI + API) |
 
 Baseline test suite (`cargo test --all-targets`) at the Phase 0 commit: 12
 test binaries, 624 tests, 0 failures.
@@ -142,3 +142,29 @@ merges (`work dep rm`, `events` consolidation) and any Phase 3
 board/doctor work must keep the one-mechanism-one-cut rule. Error codes
 unchanged this round (93; serve added none — reads degrade to payload
 notes, not new codes).
+
+## v3.0.0 close-out (2026-09-17 — Phase 3 complete)
+
+Every commit this phase landed with a clean `cargo fmt --check && cargo
+clippy --all-targets --quiet -- -D warnings && cargo test --all-targets`
+run (266 tests green at default threading). What the final column says,
+and what it does not:
+
+- **Met**: hand-typed commands to close a Ticket (5), required flags (~2),
+  friction-per-Ticket that is a Pulse bug (0.5 at ST-2), and — for the
+  first time — **repos running Pulse for real: 1** (`todolist`, the
+  dogfood target, registered; golden path run twice end-to-end through
+  the skills, ST-3 shaped and planned under the `*-high` gate).
+- **Not met — recorded, not lowered.** `src/` is 13542 against < 10000
+  (+3542): the plan's own additions (learn/docs/serve/doctor/run-log
+  persistence) out-weighed the deletions, and the remaining large
+  candidates are `kernel/completion.rs` (1210) and `kernel/run.rs`+
+  `serve` — each needs a design pass, not a sweep. Surfaced error codes
+  are 51 against < 40 (+11; see
+  [`0022-error-code-audit.md`](0022-error-code-audit.md) for the 25 gate
+  labels that were never codes and the dead variants deleted). CLI leaves
+  are 27 against ≤ 22 (+5: serve and doctor are new surfaces, the
+  `learn list`, `events compact`, `dep rm` merges all landed). Closing
+  these three gaps is an owner decision: cut further (with named files
+  and pairings) or amend the target with the shipped surface as the new
+  baseline.

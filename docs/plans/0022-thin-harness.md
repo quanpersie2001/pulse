@@ -760,13 +760,13 @@ Thứ tự commit (mỗi dòng một commit, test xanh sau mỗi commit):
 
 ### Phase 3 — vòng học và board (≈ 1 tuần)
 
-- [ ] P3.1 `pulse serve` (Decision 0023 — thay board tĩnh); dùng nó thay
+- [x] P3.1 `pulse serve` (Decision 0023 — thay board tĩnh); dùng nó thay
       `show` trong một ngày; ghi friction.
-- [ ] P3.2 `pulse doctor` tối thiểu (11.3 + lỗi store).
-- [ ] P3.3 `pulse-learn` chạy trên friction Phase 2; ít nhất một intervention là **check** (role `check-*` trong runners.json của target).
-- [ ] P3.4 Thay `PRODUCT.md` bằng `SPEC.md` ≤ 300 dòng mô tả đúng v3 đang chạy; `ARCHITECTURE.md`, `ROADMAP.md`, `AGENTS.md` (repo Pulse) viết lại theo cây mới; `GLOSSARY.md` cắt theo.
-- [ ] P3.5 Xoá `skills/pulse-{wayfind,grill,spec,planning}` sau khi `pulse-shape`/`pulse-plan` chạy thật trên P2.3; giữ eval fixture có giá trị.
-- [ ] P3.6 Ghi metrics cuối; tag `v3.0.0`.
+- [x] P3.2 `pulse doctor` tối thiểu (11.3 + lỗi store).
+- [x] P3.3 `pulse-learn` chạy trên friction Phase 2; ít nhất một intervention là **check** (role `check-*` trong runners.json của target).
+- [x] P3.4 Thay `PRODUCT.md` bằng `SPEC.md` ≤ 300 dòng mô tả đúng v3 đang chạy; `ARCHITECTURE.md`, `ROADMAP.md`, `AGENTS.md` (repo Pulse) viết lại theo cây mới; `GLOSSARY.md` cắt theo.
+- [x] P3.5 Xoá `skills/pulse-{wayfind,grill,spec,planning}` sau khi `pulse-shape`/`pulse-plan` chạy thật trên P2.3; giữ eval fixture có giá trị.
+- [x] P3.6 Ghi metrics cuối; tag `v3.0.0`.
 
 ### Điều kiện dừng
 
