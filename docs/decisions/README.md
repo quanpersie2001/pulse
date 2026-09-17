@@ -27,6 +27,7 @@ Current decisions:
 - [0021 — Prose trước graph, và planning vào một lần](0021-prose-before-graph-and-one-planning-entry.md) — **superseded in scope by 0022**; lessons retained
 - [0022 — Pulse v3: giữ hợp đồng, bỏ máy móc](0022-thin-harness.md) — **§13/§14 amended by 0023**
 - [0023 — `pulse serve` multi-project thay board tĩnh](0023-board-serve-multi-project.md)
+- [0024 — Persist bounded run output](0024-persist-run-output.md)
 
 Add or update a decision when:
 

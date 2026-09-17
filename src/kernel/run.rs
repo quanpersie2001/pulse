@@ -78,6 +78,69 @@ fn checkpoint_count(repo_root: &Path, id: &str) -> Result<usize> {
         .map_or(0, Vec::len))
 }
 
+/// How much of each captured stream a persisted run log keeps (Decision
+/// 0024): the tail, because the interesting end of a broken run is its
+/// last lines — the final-JSON contract is judged there.
+const RUN_OUTPUT_TAIL_BYTES: usize = 32 * 1024;
+
+/// Persist the tail of a finished role run's captured streams (Decision
+/// 0024): `.pulse/evidence/<id>/run-<role>-<n>.log`, written for EVERY run
+/// — pass included, since post-mortem needs the healthy sample next to the
+/// broken one (ST-2 F25/F28: the captured bytes used to be discarded, so an
+/// inconclusive run was unprovable). `n` counts that role's existing run
+/// logs for the issue; existing files are never overwritten. The stdout
+/// contract itself is untouched — this only adds storage after capture.
+fn persist_run_output(
+    repo_root: &Path,
+    id: &str,
+    role: &str,
+    outcome: &runner::Outcome,
+) -> Result<()> {
+    let dir = evidence_dir(repo_root, id);
+    fs::create_dir_all(&dir).map_err(|error| PulseError::io(&dir, error))?;
+    let prefix = format!("run-{role}-");
+    let taken: usize = fs::read_dir(&dir)
+        .map_err(|error| PulseError::io(&dir, error))?
+        .flatten()
+        .filter(|entry| {
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            name.starts_with(&prefix) && name.ends_with(".log")
+        })
+        .count();
+    let mut n = taken + 1;
+    let mut path = dir.join(format!("{prefix}{n}.log"));
+    while path.exists() {
+        n += 1;
+        path = dir.join(format!("{prefix}{n}.log"));
+    }
+
+    let tail = |bytes: &[u8], label: &str| -> String {
+        let skipped = bytes.len().saturating_sub(RUN_OUTPUT_TAIL_BYTES);
+        let mut text = String::from_utf8_lossy(&bytes[skipped..]).into_owned();
+        if skipped > 0 {
+            text.insert_str(0, &format!("… [{skipped} earlier bytes not kept]\n"));
+        }
+        if !text.ends_with('\n') {
+            text.push('\n');
+        }
+        format!("--- {label} (tail) ---\n{text}")
+    };
+    let mut log = format!(
+        "role: {role}\nexit_code: {}\ntimed_out: {}\ncancelled: {}\nduration_ms: {}\n",
+        outcome
+            .exit_code
+            .map_or_else(|| "signal".to_string(), |code| code.to_string()),
+        outcome.timed_out,
+        outcome.cancelled,
+        outcome.duration.as_millis(),
+    );
+    log.push_str(&tail(&outcome.stdout, "stdout"));
+    log.push('\n');
+    log.push_str(&tail(&outcome.stderr, "stderr"));
+    fs::write(&path, log).map_err(|error| PulseError::io(&path, error))
+}
+
 enum RoleOutcome {
     HandedOff,
     Blocked { reason: String },
@@ -117,6 +180,7 @@ fn spawn_and_classify(
         spec.max_output_bytes,
         None,
     )?;
+    persist_run_output(repo_root, id, role, &outcome)?;
 
     if !outcome.exited_cleanly() {
         return Ok(RoleOutcome::Inconclusive {
@@ -394,6 +458,7 @@ pub fn run_lane(
         spec.max_output_bytes,
         None,
     )?;
+    persist_run_output(repo_root, id, role, &outcome)?;
     if !outcome.exited_cleanly() {
         emit_event(
             repo_root,

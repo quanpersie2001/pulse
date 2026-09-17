@@ -211,6 +211,14 @@ fn handed_off_ends_the_loop_successfully() {
 
     let updated = run_worker(repo.path(), &agent("worker"), "TK-a3f9", 3600, 5).unwrap();
     assert_eq!(updated["status"], "verifying");
+
+    // Decision 0024: every run persists its output tail, green ones
+    // included — post-mortem needs the healthy sample next to the broken
+    // one. The final JSON contract line must be readable in the tail.
+    let log =
+        fs::read_to_string(repo.path().join(".pulse/evidence/TK-a3f9/run-worker-1.log")).unwrap();
+    assert!(log.contains("role: worker\nexit_code: 0\n"), "log: {log}");
+    assert!(log.contains("{\"status\":\"handed_off\"}"), "log: {log}");
 }
 
 #[test]
@@ -314,6 +322,44 @@ fn a_nonzero_exit_is_inconclusive_and_keeps_the_lease() {
     assert!(!ticket["lease"].is_null());
 }
 
+#[test]
+fn an_inconclusive_worker_run_leaves_a_readable_output_tail() {
+    // Dogfood ST-2 F25: a worker broke the final-stdout-JSON contract and
+    // the cause was unprovable — the runner captured stdout/stderr and then
+    // threw it away. Decision 0024: every run leaves
+    // .pulse/evidence/<id>/run-<role>-<n>.log, and an inconclusive run's
+    // tail must be readable without re-running anything.
+    let repo = git_repo_with_ready_ticket();
+    let script = write_script(
+        repo.path(),
+        "worker.sh",
+        "#!/bin/sh\necho working\necho boom >&2\nexit 1\n",
+    );
+    write_runners_json(
+        repo.path(),
+        &[("worker", format!("sh {}", script.display()))],
+    );
+
+    let err = run_worker(repo.path(), &agent("worker"), "TK-a3f9", 3600, 5).unwrap_err();
+    assert_eq!(err.code(), "run_inconclusive");
+    let evidence = repo.path().join(".pulse/evidence/TK-a3f9");
+    let log = fs::read_to_string(evidence.join("run-worker-1.log")).unwrap();
+    assert!(log.contains("role: worker\n"), "log: {log}");
+    assert!(log.contains("exit_code: 1\n"), "log: {log}");
+    assert!(
+        log.contains("--- stdout (tail) ---\nworking\n"),
+        "log: {log}"
+    );
+    assert!(log.contains("--- stderr (tail) ---\nboom\n"), "log: {log}");
+
+    // A second attempt appends a new numbered file; the first is kept.
+    let err = run_worker(repo.path(), &agent("worker"), "TK-a3f9", 3600, 5).unwrap_err();
+    assert_eq!(err.code(), "run_inconclusive");
+    fs::read_to_string(evidence.join("run-worker-1.log")).unwrap();
+    let second = fs::read_to_string(evidence.join("run-worker-2.log")).unwrap();
+    assert!(second.contains("boom\n"), "second log: {second}");
+}
+
 fn flip_ticket_to_verifying(repo: &Path) {
     issues::mutate(repo, |mut records| {
         for record in records.iter_mut() {
@@ -343,7 +389,15 @@ fn a_lane_that_dies_without_sealing_still_leaves_run_events() {
     // inconclusive end must both be recorded.
     let repo = git_repo_with_ready_ticket();
     flip_ticket_to_verifying(repo.path());
-    write_runners_json(repo.path(), &[("qa-cli", "false".to_string())]);
+    let crash = write_script(
+        repo.path(),
+        "crash.sh",
+        "#!/bin/sh\necho crash-marker >&2\nexit 1\n",
+    );
+    write_runners_json(
+        repo.path(),
+        &[("qa-cli", format!("sh {}", crash.display()))],
+    );
 
     let err = run_lane(repo.path(), &agent("qa-cli"), "TK-a3f9", "qa-cli", true).unwrap_err();
     assert_eq!(err.code(), "run_inconclusive");
@@ -359,6 +413,13 @@ fn a_lane_that_dies_without_sealing_still_leaves_run_events() {
     });
     assert!(started, "no run.started event: {events:?}");
     assert!(completed, "no inconclusive run.completed event: {events:?}");
+
+    // Decision 0024: the lane's dying output is kept next to the events —
+    // a crash whose output is thrown away is F28's lesson.
+    let log =
+        fs::read_to_string(repo.path().join(".pulse/evidence/TK-a3f9/run-qa-cli-1.log")).unwrap();
+    assert!(log.contains("role: qa-cli\nexit_code: 1\n"), "log: {log}");
+    assert!(log.contains("crash-marker\n"), "log: {log}");
 }
 
 #[test]
