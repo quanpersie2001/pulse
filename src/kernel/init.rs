@@ -841,4 +841,97 @@ mod tests {
             "expected the GET / transcript to record a 200: {http}"
         );
     }
+
+    /// The block's optional `migrate: [argv]` (dogfood ST-2 F26/F29) must
+    /// run after `start` has settled and BEFORE any QA traffic: the case
+    /// step here fetches `/migrate-marker`, a file only the migrate command
+    /// creates — a 200 in the transcript proves the migrate ran before the
+    /// cases, a 404 would mean the lane graded a database the migrate never
+    /// touched. Also pins the truthful `commands_run[]` (start detached,
+    /// migrate with its real exit, stop) and the migrate tail kept in
+    /// `logs/migrate.txt`. A block WITHOUT `migrate` is covered by the two
+    /// tests above: absent key = skipped, behavior unchanged.
+    #[test]
+    fn qa_api_script_runs_the_optional_migrate_argv_before_any_qa_traffic() {
+        if std::process::Command::new("node")
+            .arg("--version")
+            .output()
+            .is_err()
+        {
+            eprintln!(
+                "skipping qa_api_script_runs_the_optional_migrate_argv_before_any_qa_traffic: \
+                 `node` is not on PATH"
+            );
+            return;
+        }
+        if std::process::Command::new("python3")
+            .arg("--version")
+            .output()
+            .is_err()
+        {
+            eprintln!(
+                "skipping qa_api_script_runs_the_optional_migrate_argv_before_any_qa_traffic: \
+                 `python3` is not on PATH"
+            );
+            return;
+        }
+        let script = Path::new(env!("CARGO_MANIFEST_DIR")).join("templates/qa/api.mjs");
+        let repo = tempfile::tempdir().unwrap();
+        fs::create_dir_all(repo.path().join("docs/operations")).unwrap();
+        fs::write(
+            repo.path().join("docs/operations/run.md"),
+            "# Run\n\n```pulse-run\nid: api\nstart: [\"python3\", \"-m\", \"http.server\", \"18083\"]\n\
+             migrate: [\"sh\", \"-c\", \"echo migrated > migrate-marker && echo migrate-ok-line\"]\n\
+             ready_url: \"http://127.0.0.1:18083/\"\nstop: [\"pkill\", \"-f\", \"http.server 18083\"]\n\
+             log: \".pulse/runtime/logs/api.log\"\nawait_exit: false\n```\n",
+        )
+        .unwrap();
+        fs::write(
+            repo.path().join("input.json"),
+            r#"{"qa_cases":[{"id":"QA-001","steps":["GET /migrate-marker"]}],"evidence_dir":".pulse/evidence/TK-qa","handoff_commit":""}"#,
+        )
+        .unwrap();
+
+        let output = std::process::Command::new("node")
+            .arg(&script)
+            .arg("input.json")
+            .current_dir(repo.path())
+            .output()
+            .expect("node child should run");
+        assert!(
+            output.status.success(),
+            "api.mjs exited {:?}: {}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr)
+        );
+
+        assert!(
+            repo.path().join("migrate-marker").exists(),
+            "the migrate argv never ran"
+        );
+        let evidence = repo.path().join(".pulse/evidence/TK-qa");
+        let migrate_log = fs::read_to_string(evidence.join("logs/migrate.txt")).unwrap();
+        assert!(
+            migrate_log.contains("migrate-ok-line"),
+            "migrate stdout must be kept in logs/migrate.txt: {migrate_log}"
+        );
+        let report: serde_json::Value =
+            serde_json::from_slice(&fs::read(evidence.join("qa-api.json")).unwrap()).unwrap();
+        assert_eq!(report["commands_run"].as_array().unwrap().len(), 3);
+        assert_eq!(
+            report["commands_run"][1]["argv"],
+            serde_json::json!([
+                "sh",
+                "-c",
+                "echo migrated > migrate-marker && echo migrate-ok-line"
+            ])
+        );
+        assert_eq!(report["commands_run"][1]["exit"], 0);
+        let http = fs::read_to_string(evidence.join("logs/QA-001.http.txt")).unwrap();
+        assert!(
+            http.contains("> GET /migrate-marker") && http.contains("< 200"),
+            "the QA case must see the migrate's file (200), not a 404 — \
+             migrate ran after the cases: {http}"
+        );
+    }
 }

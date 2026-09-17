@@ -72,13 +72,17 @@ function isRunning(pid) {
 // in a row so a recreate blip cannot count as ready. A start command that
 // never exits (a long-running dev server) must set `await_exit: false` —
 // the wait is capped and cannot tell a dev server from a pending compose.
-async function waitForStartThenReady(pid, url, awaitExit) {
-  if (awaitExit) {
-    const exitDeadline = Date.now() + 120000;
-    while (Date.now() < exitDeadline && isRunning(pid)) {
-      await new Promise((resolve) => setTimeout(resolve, 1000));
-    }
+async function waitForStartExit(pid, awaitExit) {
+  if (!awaitExit) return;
+  const exitDeadline = Date.now() + 120000;
+  while (Date.now() < exitDeadline && isRunning(pid)) {
+    await new Promise((resolve) => setTimeout(resolve, 1000));
   }
+}
+
+// `ready_url` must answer 200 several times in a row so a recreate blip
+// cannot count as ready.
+async function pollReady(url) {
   let consecutive = 0;
   const readyDeadline = Date.now() + 60000;
   while (Date.now() < readyDeadline) {
@@ -94,13 +98,45 @@ async function waitForStartThenReady(pid, url, awaitExit) {
   return false;
 }
 
+// The block's optional `migrate: [argv]` key runs after `start` has settled
+// and before `ready_url` is polled (dogfood ST-2, F26/F29: a fresh db
+// volume stays on its old schema forever when no lane step ever runs the
+// migrations). Absent or empty means the app migrates itself — skipped. A
+// failed or timed-out migrate never reaches the QA cases; the caller turns
+// the returned error into an inconclusive finding, and the command's tail
+// rides along in logs/migrate.txt (a crash whose output is thrown away is
+// exactly what made F28 undiagnosable).
+async function runMigrate(config, repoRoot, evidenceDir) {
+  const argv = config.migrate;
+  if (!Array.isArray(argv) || argv.length === 0) return { exit: null, error: null };
+  const logPath = path.join(evidenceDir, 'logs', 'migrate.txt');
+  try {
+    const { stdout, stderr } = await execFileAsync(argv[0], argv.slice(1), {
+      cwd: repoRoot,
+      timeout: 120000,
+    });
+    await writeFile(logPath, [stdout, stderr].filter(Boolean).join('\n'));
+    return { exit: 0, error: null };
+  } catch (error) {
+    const output = [error.stdout, error.stderr].filter(Boolean).join('\n').trim();
+    await writeFile(logPath, output || String(error));
+    if (error.killed) return { exit: 1, error: 'timed out after 120s' };
+    const lastLine = output.split('\n').pop() || '';
+    return {
+      exit: typeof error.code === 'number' ? error.code : 1,
+      error: `exit ${typeof error.code === 'number' ? error.code : '?'}: ${lastLine}`,
+    };
+  }
+}
+
 async function runProcess(argv, cwd) {
   return execFileAsync(argv[0], argv.slice(1), { cwd });
 }
 
 // `start` is spawned detached into its own process group so a hanging
-// command cannot take the whole lane down; waitForStartThenReady then waits
-// for it in a bounded way before trusting `ready_url` (dogfood ST-1, F2).
+// command cannot take the whole lane down; waitForStartExit then waits for
+// it in a bounded way, runMigrate runs the optional `migrate` argv, and
+// only then does pollReady trust `ready_url` (dogfood ST-1, F2).
 function startApp(argv, cwd, logPath) {
   const fullLogPath = path.join(cwd, logPath);
   mkdirSync(path.dirname(fullLogPath), { recursive: true });
@@ -201,10 +237,20 @@ async function main() {
   }
 
   const pid = startApp(config.start, repoRoot, config.log);
+  let migrateExit = null;
   let browser;
   let report;
   try {
-    if (!(await waitForStartThenReady(pid, config.ready_url, config.await_exit !== 'false'))) {
+    await waitForStartExit(pid, config.await_exit !== 'false');
+    const migrate = await runMigrate(config, repoRoot, evidenceDir);
+    migrateExit = migrate.exit;
+    if (migrate.error) {
+      report = inconclusiveReport(
+        commit,
+        `migrate (${config.migrate.join(' ')}) ${migrate.error}`,
+        'run.md migrate'
+      );
+    } else if (!(await pollReady(config.ready_url))) {
       report = inconclusiveReport(commit, `${config.ready_url} never returned 200`, config.ready_url);
     } else {
       browser = await playwright.chromium.launch();
@@ -287,6 +333,7 @@ async function main() {
     if (report) {
       report.commands_run = [
         { argv: config.start, exit: null, detached: true },
+        ...(migrateExit !== null ? [{ argv: config.migrate, exit: migrateExit }] : []),
         { argv: config.stop, exit: stopExit },
       ];
     }

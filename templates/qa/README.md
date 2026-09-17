@@ -39,7 +39,10 @@ syntax, which is also valid YAML flow-sequence syntax — the scripts parse
 this restricted subset with a few lines of hand-rolled parsing, not a real
 YAML library, to stay dependency-free); `ready_url` is polled with a plain
 `fetch` until it returns HTTP 200; `log` is a path (relative to the repo
-root) the running app writes to, tailed into each case's evidence.
+root) the running app writes to, tailed into each case's evidence. A block
+may also carry an optional `migrate` argv array (see below); every other
+key is ignored, so repo-specific notes can live in the block's neighbours,
+not inside it.
 
 `start` is spawned detached into its own process group with stdout/stderr
 redirected to `log`. With the default `await_exit: true`, the script then
@@ -59,6 +62,18 @@ exits non-zero the script falls back to sending `SIGTERM` to the process
 group `start` was spawned into, best-effort. `commands_run[]` records this
 truthfully: the detached `start` with `exit: null` and `detached: true`
 (it has no exit code during the run), then `stop` with its real exit code.
+
+The optional `migrate: [argv]` key fills the gap between those two (dogfood
+ST-2, F26/F29): it runs after `start` has settled (after the `await_exit`
+wait) and before `ready_url` is polled — the slot where
+`["docker", "compose", "run", "--rm", "api", "alembic", "upgrade", "head"]`
+belongs when nothing else migrates the database and a fresh db volume would
+otherwise stay on its old schema forever. Absent or empty means the app
+migrates itself. The migrate runs in the foreground, bounded at 120 s; a
+non-zero exit or timeout never reaches the QA cases — the report is
+`inconclusive` with one finding naming the failure, the command's tail is
+kept in `<evidence_dir>/logs/migrate.txt`, and `commands_run[]` records it
+between `start` and `stop` with its real exit code.
 
 A missing `docs/operations/run.md`, a missing block for the script's `id`,
 or a block missing any of the four keys, is not a crash: the script writes
