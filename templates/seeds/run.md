@@ -29,3 +29,8 @@ stop: ["docker", "compose", "stop", "ui"]
 log: ".pulse/runtime/logs/ui.log"
 await_exit: true
 ```
+
+Ordering: story-scope qa lanes run against the committed tree — run and
+seal them **after** the story's final commit, immediately before
+`pulse close-story`; a commit landing after the qa seal stales the
+receipts (`close_story_qa_not_satisfied`, dogfood 0025 F14).

@@ -75,7 +75,9 @@ handoff's `handoff_unreserved_changes` check is the second net.
 `verifying -> done` only through `pulse close`, after every lane in its
 profile has a passing receipt on the handoff's commit, sealed by an actor
 that is not the one that handed off. A `fail` verdict puts the Ticket back
-to `active` for rework.
+to `active` for rework. At Story scope, run and seal the qa lanes **after**
+the story's final commit — their receipts are pinned to HEAD, and
+`pulse close-story` refuses older ones (dogfood 0025, F14).
 
 Hit friction (a Pulse bug, an unclear doc, a missing check)? Record it:
 `pulse note <id> "<what happened>" --friction` — don't work around it

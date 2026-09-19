@@ -150,6 +150,19 @@ evidence next (a review lane, or a human). When a `check` fails, the
 check's own last stdout/stderr line is appended to the case's `observation`
 (`|| check: ...`) so a failed check is diagnosable from the receipt alone.
 
+## Story-scope qa runs last (after the story's final commit)
+
+A story-scope qa receipt is sealed against the repo's current HEAD, and
+`pulse close-story` only accepts receipts sealed on the HEAD it runs at
+(`close_story_qa_not_satisfied` otherwise — a receipt from an older HEAD
+is stale by definition). So the order is: finish every ticket → make the
+story's final commit (docs, scripts, anything the story still owes) → then
+run and seal the story-scope qa lanes → `pulse close-story`. Committing
+anything after the qa seal stales the receipts and costs a full qa re-run
+(the 0025 dogfood paid 10s + 25s in a warm container to learn this — cheap,
+but an easy trap). Ticket-scope lanes are unaffected: `pulse close` pins
+them to the handoff fence, not to HEAD.
+
 ## Output
 
 Both scripts write `<evidence_dir>/qa-{ui,api}.json` matching the lane §8.4
