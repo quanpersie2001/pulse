@@ -624,7 +624,7 @@ never a 500. No write endpoint, no lock, no actor.
 | `pulse frontier [story]` | what can run right now (runnable / waiting / held) |
 | `pulse reserve <id> <paths…>` | widen a held claim's `touches` mid-run |
 | `pulse release <id>` | drop a stuck/expired lease (`active → ready`) |
-| `pulse packet <id>` | the one bounded JSON a worker reads |
+| `pulse packet <id>` | the one bounded JSON a worker reads — it **is** the output (default and `--json` alike; the flag is an accepted no-op, dogfood 0025 F8) |
 | `pulse checkpoint <id> --from F` | append a checkpoint + receipt; no status change |
 | `pulse verify <id> [--timeout 900]` | run declared `verify[]` + learning checks; seal what was observed |
 | `pulse handoff <id> --from F` | the handoff gate (`active → verifying`) |
@@ -726,8 +726,10 @@ listed with their gates in §4: `ready_*` (9), `handoff_*` (8) plus
   at plan time and `pulse verify` at handoff. Reconsider per-ticket
   worktrees above one such friction per story (decision 0025 §8).
 - **`lane_commit_mismatch` mid-review.** If another ticket's commit lands
-  while a lane runs, the seal refuses and the lane re-runs. Accepted,
-  measured in dogfood — not yet measured.
+  while a lane runs, the seal refuses and the lane re-runs. Accepted;
+  the 0025 dogfood (2026-09-19) did not hit it once — the scoped fence
+  filtered cross-ticket dirt as designed — so it stays measured-too-little
+  to call resolved.
 - **Verify grandchildren survive.** A timed-out verify kills its child, not
   the process group (decision 0026 risk 1); reaping is a host concern.
 - **The hook sees only the host's edit tools.** Shell writes bypass it;
@@ -740,6 +742,14 @@ listed with their gates in §4: `ready_*` (9), `handoff_*` (8) plus
 - **Panel qa lanes don't merge `cases`.** A reconciled receipt carries an
   empty `cases` list, so a story-scope qa panel fails
   `close_story_qa_not_satisfied` loudly, never silently (decision 0027).
-- **Not dogfooded.** Phases B/D/C/E/F/G of plan 0025 have not run on a real
-  target repo (`~/Workspace/Personal/todolist`); the numbers to measure
-  and the friction table live in plan 0025's execution status.
+- **Not dogfooded — was the last known limit; now closed.** Phases
+  B/D/C/E/F/G ran on a real target repo (`~/Workspace/Personal/todolist`,
+  story ST-33d3, 2026-09-19); the friction table, the three measured
+  numbers (cross-build breakage 0 — single checkout kept;
+  `docs_maybe_stale` 0/3 correct — stays advisory; verify max 11.2s vs
+  the 900s timeout) and the decisions still pending live in
+  [`docs/plans/0025-dogfood.md`](docs/plans/0025-dogfood.md).
+  Two practical lessons already shipped as fixes: scratch files are
+  per-ticket under the fenced-out `.pulse/runtime/` (the prompt teaches
+  it; a bare shared `handoff.json` once cost a re-claim, a re-verify and
+  two lanes), and `pulse packet` prints the packet itself.

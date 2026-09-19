@@ -624,6 +624,18 @@ tổng ở cuối mỗi pha.
 
 ## Trạng thái thực thi
 
+**Dogfood: đã chạy 2026-09-19** trên `~/Workspace/Personal/todolist`
+(ST-33d3, hai worker song song + panel 3/2 + qa thật). 14 friction gốc
+(gom 28 note): **8 đã sửa trọn vẹn, 4 sửa nửa khả-dĩ** (phần còn lại là
+đổi luật — chuyển thành quyết định chờ chủ repo trong `0025-dogfood.md`
+§1.1), **2 chờ quyết định**; 0 không tái hiện, 0 chữa sai bệnh. Ba con số:
+build gãy chéo **0** (giữ single-checkout, dưới ngưỡng decision 0025),
+`docs_maybe_stale` đúng **0/3** (giữ advisory), `pulse verify` max
+**11.2s** (timeout 900s giữ nguyên). Các commit sửa: `c0c7eb7` (F8/F4),
+`5395724` (F4/F5/F6-nửa-template/F7/F9), `6940826` (F12/F13), `299cd10`
+(F10-nửa-skill/F11), `c018b89` (F2). Chi tiết xác minh từng F:
+[`docs/plans/0025-dogfood.md`](0025-dogfood.md).
+
 Đã xong (mỗi pha xanh cả ba lệnh validation, threading mặc định):
 **A** (gate verify đọc lời khai + dirty_hash lane + findings trong packet +
 lock nguyên tử), **B** (song song theo `touches`, `reserve`, `frontier`,
@@ -704,9 +716,10 @@ nghĩa mới, không xoá trắng.
   đủ một vòng dogfood để biết skill nào cần đo.
 - **E5 `learn mine`** — HOÃN: cần khảo sát định dạng transcript từng host
   (`references/better-harness/scripts/session-analysis/platforms/*.mjs`).
-- **DOGFOOD CHƯA CHẠY** cho B/D/C/E/F/G trên `~/Workspace/Personal/todolist`.
-  Ba con số phải đo: (1) build gãy chéo giữa hai worker / story — so ngưỡng
-  1 lần/story của decision 0025 để xét lại worktree; (2) tỉ lệ báo đúng của
-  `docs_maybe_stale` (F3) trước khi chuyển cảnh báo thành chặn; (3) thời
-  gian `pulse verify` thực tế so với timeout 900s. Kèm bảng friction F-số
-  theo mẫu `0022-dogfood-st1.md`.
+- **DOGFOOD — ĐÃ CHẠY 2026-09-19** (xem dòng đầu mục này và
+  [`0025-dogfood.md`](0025-dogfood.md)). Ba con số đã đo: (1) build gãy
+  chéo **0**/story → giữ single-checkout; (2) `docs_maybe_stale` đúng
+  **0/3** → chưa đủ chuyển cảnh báo thành chặn (khuyến nghị + ngưỡng xét
+  chuyển nằm trong §1.1 của file dogfood); (3) `pulse verify` max
+  **11.2s** vs timeout 900s → default ổn. Bảng friction F1–F14 đã được
+  xác minh lại từng dòng với code và sửa/quyết định như trên.
