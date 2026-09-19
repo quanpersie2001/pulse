@@ -61,8 +61,15 @@ impl Drop for WriteGuard {
 }
 
 fn is_would_block(error: &std::io::Error) -> bool {
-    matches!(
+    if matches!(
         error.kind(),
         std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
-    )
+    ) {
+        return true;
+    }
+    // Windows reports LockFileEx contention as ERROR_LOCK_VIOLATION (33),
+    // which Rust classifies as `Uncategorized` rather than `WouldBlock`;
+    // without this arm every contended acquire on Windows fails instead
+    // of retrying until the timeout.
+    cfg!(windows) && error.raw_os_error() == Some(33)
 }

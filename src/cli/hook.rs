@@ -255,8 +255,12 @@ mod tests {
             "tool_input": {"command": "*** Begin Patch\n*** Add File: src/new.rs\n+line\n*** Update File: src/old.rs\n*** Move to: src/renamed.rs\n*** End Patch"},
             "cwd": "/repo",
         });
+        let paths = payload_paths(&payload).unwrap();
+        // `base.join` spells paths with the platform separator; the parsing
+        // is what this test pins, so compare in a separator-neutral form.
+        let normalized: Vec<String> = paths.iter().map(|path| path.replace('\\', "/")).collect();
         assert_eq!(
-            payload_paths(&payload).unwrap(),
+            normalized,
             vec![
                 "/repo/src/new.rs",
                 "/repo/src/old.rs",
@@ -280,10 +284,9 @@ mod tests {
             "tool_input": {"file_path": "src/lib.rs"},
             "cwd": "/repo/sub",
         });
-        assert_eq!(
-            payload_paths(&payload).unwrap(),
-            vec!["/repo/sub/src/lib.rs"]
-        );
+        let paths = payload_paths(&payload).unwrap();
+        let normalized: Vec<String> = paths.iter().map(|path| path.replace('\\', "/")).collect();
+        assert_eq!(normalized, vec!["/repo/sub/src/lib.rs"]);
     }
 
     #[test]

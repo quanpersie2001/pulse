@@ -77,7 +77,9 @@ pub fn clean_text(repo_root: &std::path::Path, field: &str, value: &str) -> Resu
         let relative = canonical
             .strip_prefix(&repo_canonical)
             .map_err(|_| violation(field, "absolute_path_outside_repo"))?;
-        return Ok(relative.to_string_lossy().to_string());
+        // Receipts spell repo-relative paths with `/` on every platform
+        // (the store's path grammar), not the platform separator.
+        return Ok(relative.to_string_lossy().replace('\\', "/"));
     }
     Ok(value.to_string())
 }

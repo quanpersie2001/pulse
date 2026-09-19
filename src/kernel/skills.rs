@@ -319,7 +319,13 @@ fn symlink(target: &Path, link: &Path) -> Result<()> {
 
 #[cfg(windows)]
 fn symlink(target: &Path, link: &Path) -> Result<()> {
-    std::os::windows::fs::symlink_dir(target, link).map_err(|error| PulseError::io(link, error))
+    // A PathBuf can carry forward slashes inside a component
+    // (CANONICAL_DIR is spelled with `/`), and a reparse point whose
+    // substitute name contains `/` is created fine but fails to resolve
+    // later with ERROR_INVALID_NAME — spell the target with `\` at the
+    // Windows boundary (dotnet/runtime#79031 documents the same trap).
+    let native = target.to_string_lossy().replace('/', r"\");
+    std::os::windows::fs::symlink_dir(&native, link).map_err(|error| PulseError::io(link, error))
 }
 
 #[cfg(test)]

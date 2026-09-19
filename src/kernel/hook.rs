@@ -248,7 +248,11 @@ fn to_rel_string(path: &Path) -> Option<String> {
     if path.as_os_str().is_empty() {
         return None;
     }
-    path.to_str().map(str::to_string)
+    // The store's path grammar (touches patterns, fence entries, receipts)
+    // spells repo-relative paths with `/` on every platform; Windows
+    // `\` separators are normalized so `src\deep\x.rs` decides against
+    // `src/**` exactly as it does on Unix.
+    path.to_str().map(|text| text.replace('\\', "/"))
 }
 
 #[cfg(test)]
@@ -337,8 +341,13 @@ mod tests {
     #[test]
     fn a_path_outside_the_repo_is_not_ours_to_judge() {
         let repo = enrolled(&[]);
+        // A second tempdir is outside the repo and absolute on every
+        // platform — "/etc/passwd" is not absolute on Windows, where it
+        // would resolve inside the repo instead of outside it.
+        let outside = tempfile::tempdir().unwrap();
+        let outside_file = outside.path().join("x.rs");
         assert_eq!(
-            decide(repo.path(), "/etc/passwd", None),
+            decide(repo.path(), &outside_file.to_string_lossy(), None),
             EditDecision::Allow {
                 why: "outside repo"
             }
