@@ -1,0 +1,67 @@
+{
+  "skill_name": "pulse-evals",
+  "contract": {
+    "runner": "claude",
+    "verified_on": "claude 2.1.276, 2026-09-19 (smoke: `claude -p --output-format json` returns {result, num_turns, usage, is_error})",
+    "flags": [
+      "-p",
+      "--output-format json",
+      "--no-session-persistence",
+      "--permission-mode bypassPermissions"
+    ],
+    "notes": [
+      "num_turns counts agent turns (one tool action each) — that is the E3 budget metric.",
+      "No --max-turns flag was verified; the runner instead enforces a wall-clock timeout and kills the session (a killed run grades as failed, never as pass).",
+      "Contract flags come from references/repo-harness/evals/benchmark.md plus one local smoke — re-verify after a claude CLI upgrade."
+    ]
+  },
+  "fixture": "tests/fixtures/target-repos/minimal-service",
+  "actor": {
+    "human": "human:eval",
+    "worker": "agent:worker-1",
+    "seat": "agent:review-correctness"
+  },
+  "evals": [
+    {
+      "id": "E1",
+      "slug": "plan-cut",
+      "skill_file": "skills/pulse-plan/SKILL.md",
+      "graders": [
+        { "kind": "ready_all" },
+        { "kind": "tickets_have_verify" },
+        {
+          "kind": "single_doc_owner",
+          "doc": "docs/product/authentication.md"
+        },
+        {
+          "kind": "prereq_edge",
+          "creator_glob": "src/apikeys",
+          "consumer_glob": "src/keys-routes"
+        }
+      ]
+    },
+    {
+      "id": "E2",
+      "slug": "worker-handoff",
+      "skill_file": "templates/prompts/worker.md",
+      "graders": [
+        { "kind": "receipt_exists", "receipt_kind": "handoff" },
+        { "kind": "no_scratch_at_root" },
+        {
+          "kind": "transcript_not_contains",
+          "patterns": ["from_file_invalid", "handoff_acceptance_not_done"]
+        }
+      ]
+    },
+    {
+      "id": "E3",
+      "slug": "seat-budget",
+      "skill_file": "templates/prompts/review-correctness.md",
+      "graders": [
+        { "kind": "turns_at_most", "n": 30 },
+        { "kind": "seal_attempts_at_most", "n": 3 },
+        { "kind": "outcome_recorded" }
+      ]
+    }
+  ]
+}

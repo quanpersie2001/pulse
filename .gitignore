@@ -27,3 +27,4 @@ target/
 
 # Pulse docs lexical retrieval cache (disposable)
 .pulse/cache/docs-search/
+evals/.run/
