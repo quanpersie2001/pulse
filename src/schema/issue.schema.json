@@ -1,0 +1,266 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://pulse.dev/schema/issue.schema.json",
+  "title": "Pulse issue record (plan 0022 §4)",
+  "type": "object",
+  "required": [
+    "schema",
+    "id",
+    "kind",
+    "title",
+    "status",
+    "revision",
+    "created_at",
+    "updated_at"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema": { "const": 3 },
+    "id": { "type": "string", "pattern": "^(EP|ST|TK|DEC)-[0-9a-f]{4}$" },
+    "kind": { "enum": ["epic", "story", "ticket", "decision"] },
+    "title": { "type": "string", "minLength": 1 },
+    "status": { "type": "string", "minLength": 1 },
+    "revision": { "type": "integer", "minimum": 0 },
+    "created_at": { "type": "string", "minLength": 1 },
+    "updated_at": { "type": "string", "minLength": 1 },
+    "tags": { "type": "array", "items": { "type": "string" } },
+    "deps": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["type", "id"],
+        "additionalProperties": false,
+        "properties": {
+          "type": { "enum": ["blocked_by", "supersedes"] },
+          "id": { "type": "string" }
+        }
+      }
+    },
+    "notes": {
+      "type": "array",
+      "maxItems": 50,
+      "items": {
+        "type": "object",
+        "required": ["at", "from", "kind", "text"],
+        "additionalProperties": false,
+        "properties": {
+          "at": { "type": "string" },
+          "from": { "type": "string" },
+          "kind": { "enum": ["note", "friction"] },
+          "text": { "type": "string" }
+        }
+      }
+    },
+
+    "story": { "type": "string" },
+    "epic": { "type": "string" },
+    "role": { "enum": ["implementation", "decision_work"] },
+    "risk": { "type": ["string", "null"], "enum": ["low", "medium", "high", null] },
+    "surface": {
+      "type": ["string", "null"],
+      "enum": ["cli", "api", "ui", "lib", "docs", null]
+    },
+    "freedom": { "enum": ["locked", "guided", "open"] },
+    "objective": { "type": "string" },
+    "description": {
+      "description": "Ticket: free-form markdown on HOW to implement — the context an isolated worker would otherwise lack. Deliberately unstructured.",
+      "type": "string"
+    },
+    "touches": {
+      "description": "Ticket: files this ticket will edit or create, as repo-relative globs in the source::glob_match grammar (exact path, `dir/`, `dir/**`, or one `*` within one segment). The parallel-claim key (decision 0025): a claim is refused while another held ticket's touches overlap; a ticket without touches claims exclusively.",
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "question": { "type": "string" },
+    "deliverable": { "type": "string" },
+    "context": {
+      "description": "Ticket: {anchors,docs,decisions} object. Decision: markdown string. Pinned per kind below.",
+      "type": ["object", "string"],
+      "additionalProperties": false,
+      "properties": {
+        "anchors": { "type": "array", "items": { "type": "string" } },
+        "docs": { "type": "array", "items": { "type": "string" } },
+        "decisions": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "change": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "required": { "type": "array", "items": { "type": "string" } },
+        "invariants": { "type": "array", "items": { "type": "string" } },
+        "docs_to_update": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "non_scope": { "type": "array", "items": { "type": "string" } },
+    "acceptance": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "when", "then"],
+        "additionalProperties": false,
+        "properties": {
+          "id": { "type": "string" },
+          "given": { "type": "string" },
+          "when": { "type": "string", "minLength": 1 },
+          "then": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "verify": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name", "argv"],
+        "additionalProperties": false,
+        "properties": {
+          "name": { "type": "string" },
+          "argv": { "type": "array", "items": { "type": "string" }, "minItems": 1 },
+          "cwd": { "type": "string" }
+        }
+      }
+    },
+    "qa_cases": {
+      "description": "Ticket: list of QA-<n> ids from its Story. Story: full case objects (plan §4.5).",
+      "type": "array"
+    },
+    "open_questions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["q"],
+        "additionalProperties": false,
+        "properties": {
+          "q": { "type": "string" },
+          "disposition": {
+            "enum": ["resolved", "rejected", "delegated", "deferred", "blocking"]
+          },
+          "answer": { "type": "string" },
+          "ref": { "type": "string" }
+        }
+      }
+    },
+    "lease": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "properties": {
+        "role": { "type": "string" },
+        "actor": { "type": "string" },
+        "run_id": { "type": "string" },
+        "expires_at": { "type": "string" }
+      }
+    },
+    "checkpoints": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["at", "run_id"],
+        "additionalProperties": false,
+        "properties": {
+          "at": { "type": "string" },
+          "run_id": { "type": "string" },
+          "done_ac": { "type": "array", "items": { "type": "string" } },
+          "in_progress": { "type": "string" },
+          "next": { "type": "array", "items": { "type": "string" } },
+          "files": { "type": "array", "items": { "type": "string" } },
+          "decisions": { "type": "array", "items": { "type": "string" } },
+          "gotchas": { "type": "array", "items": { "type": "string" } },
+          "commands_run": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["argv", "exit"],
+              "additionalProperties": false,
+              "properties": {
+                "argv": { "type": "array", "items": { "type": "string" } },
+                "exit": { "type": "integer" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "verdicts": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "required": ["receipt", "verdict"],
+        "additionalProperties": false,
+        "properties": {
+          "receipt": { "type": "string" },
+          "verdict": { "enum": ["pass", "fail", "inconclusive"] },
+          "commit": { "type": "string" }
+        }
+      }
+    },
+
+    "outcome": { "type": "string" },
+    "rules": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "text"],
+        "additionalProperties": false,
+        "properties": {
+          "id": { "type": "string" },
+          "text": { "type": "string" }
+        }
+      }
+    },
+    "exceptions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "text"],
+        "additionalProperties": false,
+        "properties": {
+          "id": { "type": "string" },
+          "text": { "type": "string" }
+        }
+      }
+    },
+    "docs_written": {
+      "description": "Story: docs/** paths where this story's rules and exceptions now live (plan 0025 F4). The close-story gate requires every rules[].id / exceptions[].id to appear verbatim in at least one listed file.",
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "approach": { "type": ["string", "null"] },
+    "success_signals": { "type": "array", "items": { "type": "string" } },
+    "out_of_scope": { "type": "array", "items": { "type": "string" } },
+    "not_yet_specified": { "type": "array", "items": { "type": "string" } },
+
+    "options": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name", "consequences"],
+        "additionalProperties": false,
+        "properties": {
+          "name": { "type": "string" },
+          "consequences": { "type": "string" }
+        }
+      }
+    },
+    "decision": { "type": "string" },
+    "consequences": { "type": "string" },
+    "accepted_by": { "type": "string" },
+    "accepted_at": { "type": "string" }
+  },
+
+  "allOf": [
+    {
+      "if": { "properties": { "kind": { "const": "ticket" } }, "required": ["kind"] },
+      "then": {
+        "required": ["role"],
+        "properties": { "context": { "type": "object" } }
+      }
+    },
+    {
+      "if": { "properties": { "kind": { "const": "decision" } }, "required": ["kind"] },
+      "then": {
+        "required": ["decision"],
+        "properties": { "context": { "type": "string" } }
+      }
+    }
+  ]
+}

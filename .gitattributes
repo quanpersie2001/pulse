@@ -1,0 +1,6 @@
+# The store's path grammar and every embedded template spell `/`-separated
+# LF text; a CRLF checkout would compile a different program (include_str!)
+# and write different bytes into target repos (init templates, skills, qa
+# scripts). Force LF working trees everywhere — this repository is authored
+# LF-only on every platform.
+* text=auto eol=lf

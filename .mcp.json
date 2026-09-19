@@ -1,32 +1,16 @@
 {
-  "gitnexus": {
-    "type": "stdio",
-    "command": "npx",
-    "args": ["-y", "gitnexus@1.6.3", "mcp"],
-    "includeTools": [
-      "list_repos",
-      "query",
-      "context",
-      "impact",
-      "api_impact",
-      "route_map",
-      "shape_check",
-      "detect_changes"
-    ]
-  },
-  "MCP_DOCKER": {
-    "type": "stdio",
-    "command": "docker",
-    "args": ["mcp", "gateway", "run"],
-    "includeTools": ["resolve-library-id", "get-library-docs", "web_search_exa"]
-  },
-  "morph-mcp": {
-    "type": "stdio",
-    "command": "npx",
-    "args": ["-y", "@morphllm/morphmcp"],
-    "env": {
-      "ENABLED_TOOLS": "warpgrep_codebase_search"
+  "mcpServers": {
+    "exa": {
+      "type": "http",
+      "url": "https://mcp.exa.ai/mcp"
     },
-    "includeTools": ["warpgrep_codebase_search"]
+    "playwright": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@playwright/mcp@0.0.69",
+        "--extension"
+      ]
+    }
   }
 }

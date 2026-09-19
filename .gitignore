@@ -1,28 +1,30 @@
 node_modules/
 coverage/
 .DS_Store
-tests
-!standalone/**/scripts/
-!standalone/**/scripts/**
 package*
-tsconfig.json
 vitest.config.ts
 
 # bv (beads viewer) local config and caches
 .bv/
 .beads
-.pulse
 .spike
 history
 .spikes
+
+# Pulse local-only planes; canonical workgraph and events remain trackable.
+.pulse/runtime/
+.pulse/cache/
 
 # references (local-only upstream snapshots)
 references/**
 !references/lineage/
 !references/lineage/**
 
-# Eval workspace (generated artifacts)
-pulse-eval-workspace/iteration-*/
-pulse-eval-workspace/*.html
-pulse-eval-workspace/benchmark*.json
 .gitnexus
+
+# Rust build artifacts
+target/
+
+# Pulse docs lexical retrieval cache (disposable)
+.pulse/cache/docs-search/
+evals/.run/

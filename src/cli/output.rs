@@ -1,0 +1,42 @@
+use serde::Serialize;
+use serde_json::json;
+
+use crate::PulseError;
+
+pub(super) fn render<T: Serialize>(
+    json_output: bool,
+    value: &T,
+    human: String,
+) -> Result<(), PulseError> {
+    if json_output {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(value)
+                .map_err(|e| PulseError::validation("json_serialize_error", e.to_string()))?
+        );
+    } else {
+        println!("{human}");
+    }
+    Ok(())
+}
+
+pub fn print_error(err: &PulseError) {
+    let value = match err {
+        PulseError::Validation { code, .. } if code.starts_with("assignment_") => json!({
+            "schema_version": 1,
+            "code": "assignment_claim_failed",
+            "cause_code": err.code(),
+            "message": err.to_string(),
+        }),
+        _ => json!({
+            "schema_version": 1,
+            "code": err.code(),
+            "message": err.to_string(),
+            "hint": err.hint(),
+        }),
+    };
+    eprintln!(
+        "{}",
+        serde_json::to_string_pretty(&value).unwrap_or_else(|_| err.to_string())
+    );
+}

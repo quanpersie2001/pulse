@@ -1,0 +1,851 @@
+//! Narrow source-tree architecture guards (plan 0022 §14: "Cập nhật
+//! `tests/graph/architecture_guards.rs` đổi tên/đường dẫn theo cây mới").
+//!
+//! Relocated from `tests/graph/architecture_guards.rs` to the crate root
+//! since `tests/graph.rs` (its parent crate) is deleted with `graph/*`
+//! itself (plan 0022 P1.3). Checks specific to the old graph internals
+//! (model/validation/read/store layering, workgraph bootstrap ownership,
+//! `works/<id>` content_dir) are dropped with the mechanism they guarded;
+//! checks for the new layer (`storage -> store(issues) -> kernel -> cli`)
+//! replace them. `only_planning_skill_can_name_node_creation_commands` is
+//! also dropped: the v2 skill drafts that guard covered lived under
+//! `references/pulse-v2-skills/` (F3, P1.12) as raw material for
+//! `pulse-shape`/`pulse-plan`; that directory is deleted at P3.5 (ST-2 ran
+//! the golden path through the new skills), and the guard is back (narrowed
+//! to command parsing, no node-creation ownership rule) now that
+//! `skills/pulse-shape` + `skills/pulse-plan` are a live surface — plan
+//! §12.1: every `pulse …` named in the block and in `skills/**` must parse
+//! against the real CLI.
+//! `guidance_prose_only_names_commands_the_cli_has` is back, narrowed to the
+//! AGENTS block `pulse init` now writes (P1.10, plan §12.1).
+
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::process::Command;
+
+fn repo_root() -> &'static Path {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+}
+
+fn source(path: &str) -> String {
+    fs::read_to_string(repo_root().join(path))
+        .unwrap_or_else(|error| panic!("failed to read {path}: {error}"))
+}
+
+fn rust_sources(root: &str) -> Vec<(PathBuf, String)> {
+    let root = repo_root().join(root);
+    let mut pending = vec![root.clone()];
+    let mut sources = Vec::new();
+    while let Some(dir) = pending.pop() {
+        for entry in fs::read_dir(&dir)
+            .unwrap_or_else(|error| panic!("failed to read {}: {error}", dir.display()))
+        {
+            let entry = entry.expect("source directory entry should be readable");
+            let path = entry.path();
+            if path.is_dir() {
+                pending.push(path);
+            } else if path.extension().and_then(|ext| ext.to_str()) == Some("rs") {
+                let body = fs::read_to_string(&path)
+                    .unwrap_or_else(|error| panic!("failed to read {}: {error}", path.display()));
+                sources.push((path, body));
+            }
+        }
+    }
+    sources.sort_by(|left, right| left.0.cmp(&right.0));
+    sources
+}
+
+fn combined_sources(roots: &[&str]) -> String {
+    roots
+        .iter()
+        .flat_map(|root| rust_sources(root))
+        .map(|(_, source)| source)
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+#[test]
+fn daemon_runtime_tree_is_absent() {
+    assert!(
+        !repo_root().join("src/daemon").exists(),
+        "src/daemon must no longer exist in the source tree"
+    );
+    let library = source("src/lib.rs");
+    for obsolete in [
+        "pub mod daemon;",
+        "pub mod run;",
+        "pub mod process;",
+        "pub mod workspace;",
+        "pub mod assignment;",
+    ] {
+        assert!(
+            !library.contains(obsolete),
+            "obsolete public runtime contract remains: {obsolete}"
+        );
+    }
+    for obsolete in [
+        "src/process.rs",
+        "src/run.rs",
+        "src/workspace.rs",
+        "src/assignment.rs",
+        "src/cli/process.rs",
+        "src/cli/daemon.rs",
+        "src/kernel/assignment.rs",
+        "src/kernel/assignment_store.rs",
+        "src/kernel/run_store.rs",
+    ] {
+        assert!(
+            !repo_root().join(obsolete).exists(),
+            "obsolete runtime authority still exists at {obsolete}"
+        );
+    }
+}
+
+#[test]
+fn generated_and_router_surfaces_are_absent() {
+    assert!(
+        !repo_root().join("dist").exists(),
+        "generated surface still exists at dist"
+    );
+    for contract_doc in ["README.md", "CONTRIBUTING.md", "AGENTS.md"] {
+        let path = repo_root().join(contract_doc);
+        if !path.exists() {
+            continue;
+        }
+        let body = source(contract_doc);
+        for legacy_marker in ["pulse:workflow", "skills/workflow", "plugin marketplace"] {
+            assert!(
+                !body.contains(legacy_marker),
+                "{contract_doc} advertises removed legacy surface `{legacy_marker}`"
+            );
+        }
+    }
+}
+
+#[test]
+fn current_contract_names_do_not_embed_version_suffixes() {
+    for (path, body) in rust_sources("src") {
+        for token in
+            body.split(|character: char| !(character.is_ascii_alphanumeric() || character == '_'))
+        {
+            let uppercase_suffix = token.rsplit_once('V').is_some_and(|(base, suffix)| {
+                !base.is_empty()
+                    && base.chars().next().is_some_and(char::is_uppercase)
+                    && !suffix.is_empty()
+                    && suffix.chars().all(|character| character.is_ascii_digit())
+            });
+            let snake_suffix = token.rsplit_once("_v").is_some_and(|(base, suffix)| {
+                !base.is_empty()
+                    && !suffix.is_empty()
+                    && suffix.chars().all(|character| character.is_ascii_digit())
+            });
+            assert!(
+                !uppercase_suffix && !snake_suffix,
+                "{} contains version-suffixed current contract name `{token}`",
+                path.display()
+            );
+        }
+    }
+}
+
+#[test]
+fn core_domains_do_not_depend_on_daemon_runtime() {
+    for root in ["src/evidence", "src/kernel", "src/storage", "src/store"] {
+        for (path, body) in rust_sources(root) {
+            assert!(
+                !body.contains("crate::daemon"),
+                "{} must not import daemon runtime ownership",
+                path.display()
+            );
+        }
+    }
+}
+
+#[test]
+fn cli_has_no_direct_runtime_launch_path() {
+    let cli = combined_sources(&["src/cli"]);
+    for forbidden in [
+        "PULSE_CODEX_EXECUTABLE",
+        "\"app-server\"",
+        "__run-supervisor",
+        "RunRecord",
+        "RunnerProfile",
+    ] {
+        assert!(
+            !cli.contains(forbidden),
+            "CLI must not contain a direct provider/runtime path: {forbidden}"
+        );
+    }
+}
+
+#[test]
+fn cli_binary_remains_thin_adapter_over_public_library_paths() {
+    let binary = source("src/bin/pulse.rs");
+    assert!(
+        binary.contains("use pulse::cli;"),
+        "src/bin/pulse.rs should delegate through the library CLI facade"
+    );
+    assert!(
+        binary.contains("cli::run(cli::parse())"),
+        "src/bin/pulse.rs should only parse and run through the library CLI facade"
+    );
+    assert!(
+        binary.lines().count() <= 100,
+        "src/bin/pulse.rs should remain a thin adapter under 100 LOC"
+    );
+    for forbidden in [
+        "JsonGraphStore",
+        "show_node(",
+        "create_node",
+        "add_edge(",
+        "pulse::docs::",
+        "pulse::evidence::",
+        "pulse::knowledge::",
+        "mod graph",
+        "#[path",
+    ] {
+        assert!(
+            !binary.contains(forbidden),
+            "CLI binary must not contain direct domain/store wiring: {forbidden}"
+        );
+    }
+}
+
+#[test]
+fn identity_module_owns_shared_actor_types() {
+    let actor = source("src/identity/actor.rs");
+    assert!(
+        actor.contains("pub struct ActorRef"),
+        "identity::actor should own ActorRef"
+    );
+    assert!(
+        actor.contains("pub enum ActorKind"),
+        "identity::actor should own ActorKind"
+    );
+    assert!(
+        source("src/identity/mod.rs").contains("pub mod actor;"),
+        "identity module should expose the actor submodule"
+    );
+}
+
+#[test]
+fn event_module_owns_its_id_generation() {
+    // The v2 transaction machinery (and with it new_transaction_id) went
+    // with storage/transaction.rs — 0022-open A7, deleted 2026-09-16.
+    assert!(
+        source("src/event.rs").contains("pub fn new_event_id"),
+        "event module should own new_event_id generation"
+    );
+    let id = source("src/id.rs");
+    assert!(
+        id.contains("pub use crate::event::new_event_id"),
+        "id should re-export new_event_id from event for compatibility"
+    );
+    assert!(id.contains("pub enum WorkKind"));
+    assert!(id.contains("pub struct WorkId"));
+    assert!(
+        id.contains("pub fn generate_hash_id"),
+        "id should own the plan 0022 §4.2 hash-id generator"
+    );
+}
+
+#[test]
+fn storage_does_not_depend_on_the_graph_domain_or_kernel() {
+    // graph/* is deleted (plan 0022 P1.3); storage must never have needed
+    // it back, and must stay below store/kernel in the new layer order
+    // (storage -> store(issues) -> kernel -> cli).
+    for (path, src) in rust_sources("src/storage") {
+        for forbidden in ["crate::graph", "crate::store", "crate::kernel"] {
+            assert!(
+                !src.contains(forbidden),
+                "generic storage primitive {} must not depend on `{forbidden}`",
+                path.display()
+            );
+        }
+    }
+}
+
+#[test]
+fn store_issues_does_not_depend_on_kernel_or_cli() {
+    for (path, src) in rust_sources("src/store") {
+        for forbidden in ["crate::kernel", "crate::cli"] {
+            assert!(
+                !src.contains(forbidden),
+                "{} must not depend on `{forbidden}` (store sits below kernel and cli)",
+                path.display()
+            );
+        }
+    }
+}
+
+#[test]
+fn kernel_does_not_depend_on_cli() {
+    for (path, src) in rust_sources("src/kernel") {
+        assert!(
+            !src.contains("crate::cli"),
+            "{} must not depend on crate::cli (kernel sits below cli)",
+            path.display()
+        );
+    }
+}
+
+/// Scans `text` for every `pulse <subcommand> ...` mention and parses it
+/// against the real CLI (via clap), panicking (naming `source_label`) on an
+/// unknown subcommand or flag. Returns how many mentions it actually
+/// checked, so a caller can assert it found a sane minimum rather than
+/// silently checking nothing. Shared by the AGENTS block guard and the
+/// template guard below (plan §8.5: "guard test parse mọi `pulse …`
+/// trong `templates/**` bằng clap (cùng cơ chế guard khối AGENTS)").
+fn assert_pulse_mentions_parse(source_label: &str, text: &str) -> usize {
+    use clap::CommandFactory;
+
+    let mut checked = 0_usize;
+    for (index, _) in text.match_indices("pulse ") {
+        let preceded_by = text[..index].chars().next_back();
+        if preceded_by.is_some_and(|c| c.is_alphanumeric() || c == '-' || c == '/' || c == '.') {
+            continue;
+        }
+        let rest = &text[index..];
+        let end = rest
+            .find(['\n', ',', '|', ')', '`', ';', '"'])
+            .unwrap_or(rest.len());
+        let mention = rest[..end].trim().trim_end_matches('.').trim();
+        let tokens: Vec<&str> = mention.split_whitespace().collect();
+        if tokens.len() <= 1 {
+            continue;
+        }
+        checked += 1;
+
+        let root = pulse::cli::Cli::command();
+        let mut current = root.clone();
+        let mut path = vec!["pulse".to_string()];
+        let mut positional_reached = false;
+        for token in tokens.iter().skip(1) {
+            if token.starts_with("--") {
+                let flag = token
+                    .trim_start_matches("--")
+                    .split('=')
+                    .next()
+                    .unwrap_or("");
+                let known = current
+                    .get_arguments()
+                    .any(|arg| arg.get_long() == Some(flag))
+                    || root.get_arguments().any(|arg| arg.get_long() == Some(flag));
+                assert!(
+                    known,
+                    "{source_label}: `{mention}` uses --{flag}, which `{}` does not accept",
+                    path.join(" ")
+                );
+                continue;
+            }
+            if positional_reached || token.starts_with('<') {
+                positional_reached = true;
+                continue;
+            }
+            let descend = current
+                .get_subcommands()
+                .find(|sub| sub.get_name() == *token)
+                .cloned();
+            if let Some(sub) = descend {
+                current = sub;
+                path.push((*token).to_string());
+                continue;
+            }
+            assert!(
+                current.get_subcommands().next().is_none(),
+                "{source_label}: `{mention}` names `{token}`, which is not a subcommand of `{}`",
+                path.join(" ")
+            );
+            positional_reached = true;
+        }
+    }
+    checked
+}
+
+/// Plan §12.1: the AGENTS block `pulse init` writes is guidance prose, so
+/// (Decision 0009 §5, still true in v3) every `pulse …` command it names
+/// must be a real command. Without this guard the block can drift silently
+/// from the CLI it documents.
+#[test]
+fn agents_block_only_names_commands_the_cli_has() {
+    let repo = tempfile::tempdir().unwrap();
+    pulse::kernel::init::initialize_repository(repo.path(), false, false).unwrap();
+    let agents = fs::read_to_string(repo.path().join("AGENTS.md")).unwrap();
+
+    let checked = assert_pulse_mentions_parse("AGENTS.md", &agents);
+    assert!(
+        checked >= 8,
+        "expected the AGENTS block to name several commands; only {checked} found"
+    );
+}
+
+/// Plan §8.5: the worker/review prompt templates `pulse init` seeds under
+/// `.pulse/prompts/` are guidance prose, and name real `pulse` commands
+/// (`checkpoint`, `handoff`, `note`) the agent following them is expected
+/// to run — the same drift risk the AGENTS block guard covers. A8.4 moved
+/// everything `pulse init` writes into a target repo under `templates/`,
+/// so the guard now covers every markdown template there (prompts, the
+/// AGENTS block seed, the PULSE.md/docs seeds) — not just `prompts/`.
+#[test]
+fn templates_only_name_commands_the_cli_has() {
+    let templates_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("templates");
+    let mut pending = vec![templates_dir.clone()];
+    let mut total_checked = 0_usize;
+    while let Some(dir) = pending.pop() {
+        for entry in fs::read_dir(&dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                pending.push(path);
+                continue;
+            }
+            if path.extension().and_then(|ext| ext.to_str()) != Some("md") {
+                continue;
+            }
+            let text = fs::read_to_string(&path).unwrap();
+            let label = path.display().to_string();
+            total_checked += assert_pulse_mentions_parse(&label, &text);
+        }
+    }
+    assert!(
+        total_checked >= 4,
+        "expected the templates to name several commands; only {total_checked} found"
+    );
+}
+
+/// P3.5 moved the guidance skills under `templates/skills/` — everything
+/// `pulse` writes into a target repo now lives in one tree, and
+/// `templates_only_name_commands_the_cli_has` above already parses every
+/// `pulse …` they name. What that guard cannot see is a skill directory
+/// that exists on disk but is missing from `kernel::skills`' embedded
+/// list: it would be guarded, documented and never installed anywhere.
+#[test]
+fn every_skill_directory_is_one_pulse_skills_install_ships() {
+    let skills_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("templates/skills");
+    let source = source("src/kernel/skills.rs");
+    let mut found = 0_usize;
+    for entry in fs::read_dir(&skills_dir).expect("templates/skills must exist") {
+        let path = entry.expect("readable entry").path();
+        if !path.is_dir() {
+            continue;
+        }
+        let name = path.file_name().unwrap().to_string_lossy().into_owned();
+        assert!(
+            path.join("SKILL.md").is_file(),
+            "templates/skills/{name} has no SKILL.md"
+        );
+        // Every file of the skill, not just SKILL.md: a reference file
+        // that is not embedded is one `pulse skills install` never writes,
+        // so the installed SKILL.md links at a path that is not there.
+        let mut pending = vec![path.clone()];
+        while let Some(dir) = pending.pop() {
+            for entry in fs::read_dir(&dir).expect("readable skill dir") {
+                let file = entry.expect("readable entry").path();
+                if file.is_dir() {
+                    pending.push(file);
+                    continue;
+                }
+                let rel = file
+                    .strip_prefix(Path::new(env!("CARGO_MANIFEST_DIR")))
+                    .expect("inside the manifest dir")
+                    .to_string_lossy()
+                    .replace('\\', "/");
+                assert!(
+                    source.contains(&rel),
+                    "{rel} is never installed — add it to kernel::skills::SKILLS"
+                );
+            }
+        }
+        found += 1;
+    }
+    assert!(
+        found >= 3,
+        "expected the three guidance skills; found {found}"
+    );
+}
+
+/// A8.4's boundary: `assets/` is this repository's own media only,
+/// `templates/` is everything `pulse init` writes. Decision 0023 drifted
+/// the first half by landing the board UI — a 120 KB HTML file embedded
+/// into the binary — under `assets/board/`. This freezes the fix: the UI
+/// is source and lives beside the only code that embeds it
+/// (`src/serve/board.html`), while `assets/` stays image media the board
+/// reuses (the icon mark served at `/favicon.svg`, once deleted in
+/// `db33d26` for being unreferenced).
+#[test]
+fn assets_stay_media_and_the_board_ui_lives_in_serve() {
+    // Every file under assets/ is an image — no UI/source trees regrow.
+    let mut seen = 0_usize;
+    let mut pending = vec![repo_root().join("assets")];
+    while let Some(dir) = pending.pop() {
+        for entry in fs::read_dir(&dir).expect("assets/ must exist") {
+            let path = entry.expect("readable entry").path();
+            if path.is_dir() {
+                pending.push(path);
+                continue;
+            }
+            let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+            assert!(
+                matches!(ext, "svg" | "png" | "ico" | "gif" | "jpg" | "webp"),
+                "{}: assets/ is this repo's media only — source belongs beside its code",
+                path.display()
+            );
+            seen += 1;
+        }
+    }
+    assert!(seen >= 1, "expected the logo media under assets/");
+
+    // The board UI is build-time source embedded by http.rs — co-located.
+    assert!(
+        repo_root().join("src/serve/board.html").is_file(),
+        "the serve board UI lives at src/serve/board.html (Decision 0023 §1 amended)"
+    );
+    let http = source("src/serve/http.rs");
+    assert!(
+        http.contains("include_str!(\"board.html\")"),
+        "http.rs must embed the board UI beside it"
+    );
+    assert!(
+        http.contains("include_str!(\"../../assets/logo-icon.svg\")"),
+        "http.rs serves the repo icon at /favicon.svg — the logo must stay referenced"
+    );
+    assert!(
+        source("src/serve/board.html").contains("/favicon.svg"),
+        "the board's favicon and brand mark point at /favicon.svg"
+    );
+}
+
+/// The public curl bootstrap is executable source: a syntax error strands a
+/// new user before Pulse can produce its own structured hint. Its dry-run
+/// must also be truthful — no target state or install root appears.
+#[test]
+fn install_script_is_valid_bash_and_dry_run_is_non_mutating() {
+    if cfg!(windows) {
+        eprintln!("skipping Unix installer guard on Windows");
+        return;
+    }
+    if Command::new("bash").arg("--version").output().is_err() {
+        eprintln!("skipping install script guard: bash is not available");
+        return;
+    }
+
+    let script = repo_root().join("scripts/install-pulse.sh");
+    let syntax = Command::new("bash")
+        .args(["-n"])
+        .arg(&script)
+        .output()
+        .expect("run bash -n");
+    assert!(
+        syntax.status.success(),
+        "install-pulse.sh is not valid bash: {}",
+        String::from_utf8_lossy(&syntax.stderr)
+    );
+
+    let target = tempfile::tempdir().unwrap();
+    let git = Command::new("git")
+        .args(["init", "--quiet"])
+        .arg(target.path())
+        .output()
+        .expect("git is required by Pulse tests");
+    assert!(git.status.success(), "initialize installer target");
+    let install_root = target.path().join("cargo-root");
+    let output = Command::new("bash")
+        .arg(&script)
+        .arg("--source")
+        .arg(repo_root())
+        .arg("--directory")
+        .arg(target.path())
+        .arg("--install-root")
+        .arg(&install_root)
+        .args(["--host", "claude", "--yes", "--dry-run"])
+        .output()
+        .expect("run installer dry-run");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "installer dry-run failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    for expected in ["cargo install", " init ", " skills install "] {
+        assert!(
+            stdout.contains(expected),
+            "dry-run omitted {expected}: {stdout}"
+        );
+    }
+    assert!(!target.path().join(".pulse").exists());
+    assert!(!install_root.exists());
+}
+
+/// The bootstrap checks the installed binary's identity rather than trusting
+/// Cargo's exit status, so `--version` is part of the distribution contract.
+#[test]
+fn cli_reports_the_cargo_package_version() {
+    let output = Command::new(env!("CARGO_BIN_EXE_pulse"))
+        .arg("--version")
+        .output()
+        .expect("run pulse --version");
+    assert!(output.status.success());
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout).trim(),
+        format!("pulse {}", env!("CARGO_PKG_VERSION"))
+    );
+}
+
+/// A skill's frontmatter and shape are a contract, not a style
+/// preference. Two failures this freezes, both observed in the reference
+/// collections Pulse learned from:
+///
+/// * a `description` that summarizes the workflow — agents then follow the
+///   description and skip the body (superpowers `writing-skills`: a
+///   description naming "code review between tasks" made an agent run one
+///   review where the skill specified two). A description states only
+///   *when* to reach for the skill;
+/// * unbounded growth — a skill nobody can hold is one nobody reads to the
+///   end, which is what `references/` exists to prevent.
+#[test]
+fn every_skill_declares_a_trigger_only_description_and_stays_within_budget() {
+    let skills_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("templates/skills");
+    let mut checked = 0_usize;
+    for entry in fs::read_dir(&skills_dir).expect("templates/skills must exist") {
+        let dir = entry.expect("readable entry").path();
+        if !dir.is_dir() {
+            continue;
+        }
+        let name = dir.file_name().unwrap().to_string_lossy().into_owned();
+        let body = fs::read_to_string(dir.join("SKILL.md")).expect("SKILL.md is readable");
+
+        let frontmatter = body
+            .strip_prefix("---\n")
+            .and_then(|rest| rest.split_once("\n---\n"))
+            .map(|(front, _)| front)
+            .unwrap_or_else(|| panic!("{name}: SKILL.md must open with YAML frontmatter"));
+        let keys: Vec<&str> = frontmatter
+            .lines()
+            .filter(|line| !line.starts_with(char::is_whitespace))
+            .filter_map(|line| line.split_once(':'))
+            .map(|(key, _)| key)
+            .collect();
+        assert_eq!(
+            keys,
+            vec!["name", "description"],
+            "{name}: frontmatter carries exactly name and description"
+        );
+
+        let description = frontmatter
+            .lines()
+            .find_map(|line| line.strip_prefix("description: "))
+            .unwrap_or_else(|| panic!("{name}: no description"));
+        assert!(
+            description.starts_with("Use when "),
+            "{name}: a description states when to reach for the skill: {description}"
+        );
+        assert!(
+            description.len() <= 500,
+            "{name}: description is {} chars; over 500 it is a workflow summary, \
+             and an agent will follow it instead of the body",
+            description.len()
+        );
+
+        // The three skills are one family and read as one: numbered steps,
+        // then the failures worth naming, then the report the caller gets
+        // back. A skill that drops `Red flags` loses the device every
+        // reference collection converged on independently; one that drops
+        // `Report` returns prose nobody can act on.
+        let headings: Vec<&str> = body
+            .lines()
+            .scan(false, |in_fence, line| {
+                if line.starts_with("```") {
+                    *in_fence = !*in_fence;
+                }
+                Some((*in_fence, line))
+            })
+            .filter(|(in_fence, line)| !in_fence && line.starts_with("## "))
+            .map(|(_, line)| line.trim_start_matches("## "))
+            .collect();
+        let tail: Vec<&str> = headings.iter().rev().take(2).rev().copied().collect();
+        assert_eq!(
+            tail,
+            vec!["Red flags", "Report"],
+            "{name}: a skill ends with `## Red flags` then `## Report`; found {headings:?}"
+        );
+        assert!(
+            headings[..headings.len() - 2]
+                .iter()
+                .enumerate()
+                .all(|(index, heading)| heading.starts_with(&format!("{index}. "))),
+            "{name}: the steps before Red flags are numbered from 0: {headings:?}"
+        );
+
+        let lines = body.lines().count();
+        assert!(
+            lines < 200,
+            "{name}: SKILL.md is {lines} lines; move the deepest material into \
+             references/ and link it from the step that needs it"
+        );
+
+        // Every `references/...` a skill links must be there, or the
+        // installed skill points an agent at nothing.
+        for (_, link) in body.match_indices("(references/").map(|(index, _)| {
+            let rest = &body[index + 1..];
+            let end = rest.find(')').expect("a markdown link closes");
+            ((), &rest[..end])
+        }) {
+            assert!(
+                dir.join(link).is_file(),
+                "{name}: SKILL.md links {link}, which does not exist"
+            );
+        }
+        checked += 1;
+    }
+    assert!(
+        checked >= 3,
+        "expected the three guidance skills; found {checked}"
+    );
+}
+
+/// Decision 0023: `serve` is a read-only composition domain over the same
+/// storage/store/event/evidence reads the CLI uses — it must not reach
+/// into `kernel` (which owns mutations) or `cli` (which owns transport),
+/// or the read-only guarantee gets a mutation path by accident.
+#[test]
+fn serve_does_not_depend_on_kernel_or_cli() {
+    for (path, source) in rust_sources("src/serve") {
+        for line in source.lines() {
+            let trimmed = line.trim_start();
+            assert!(
+                !trimmed.starts_with("use crate::kernel"),
+                "{}: serve must not depend on kernel: {line}",
+                path.display()
+            );
+            assert!(
+                !trimmed.starts_with("use crate::cli"),
+                "{}: serve must not depend on cli: {line}",
+                path.display()
+            );
+        }
+    }
+}
+
+/// Dogfood 0025, F4: two parallel workers following the worker prompt's
+/// bare `cp.json`/`handoff.json` examples overwrote each other's payload
+/// files in the shared checkout (one handoff then failed with another
+/// ticket's `run_id`), and scratch at the root kept tripping
+/// `handoff_unreserved_changes` (F6) and the fence (F5). The prompt must
+/// teach the per-ticket, fenced-out `.pulse/runtime/` paths — and must
+/// never instruct a root-level scratch path in a command example.
+#[test]
+fn worker_prompt_scratch_files_are_per_ticket_under_runtime() {
+    let worker = source("templates/prompts/worker.md");
+    assert!(
+        worker.contains(".pulse/runtime/cp-tk-"),
+        "worker.md must name the per-ticket checkpoint path .pulse/runtime/cp-tk-<id>.json"
+    );
+    assert!(
+        worker.contains(".pulse/runtime/handoff-tk-"),
+        "worker.md must name the per-ticket handoff path .pulse/runtime/handoff-tk-<id>.json"
+    );
+    for bare in [
+        "--from cp.json",
+        "--from handoff.json",
+        "--from <cp.json>",
+        "--from <handoff.json>",
+    ] {
+        assert!(
+            !worker.contains(bare),
+            "worker.md must not instruct a root-level scratch file ({bare})"
+        );
+    }
+    // The AGENTS block seed is the host-level contract workers also read;
+    // it names the checkpoint path, so it carries the same rule.
+    let block = source("templates/seeds/agents-block.md");
+    assert!(
+        block.contains(".pulse/runtime/cp-tk-"),
+        "agents-block.md must name the per-ticket checkpoint path"
+    );
+}
+
+/// Dogfood 0025, F9: the worker prompt's Finishing section used to name
+/// `learnings_used[]` without its shape; a worker guessed, sent a bare id
+/// string, and burned handoff refusals (`from_file_invalid`) decoding the
+/// serde error. The prompt's handoff example must be real JSON that the
+/// handoff gate would accept: objects with the exact usage vocabulary,
+/// `done` acceptance statuses, bare repo-relative doc paths.
+#[test]
+fn worker_prompt_handoff_example_is_gate_valid_json() {
+    let worker = source("templates/prompts/worker.md");
+    let mut found_handoff_example = false;
+    let mut offset = 0;
+    while let Some(start) = worker[offset..].find("```json\n") {
+        let body_start = offset + start + "```json\n".len();
+        let Some(end) = worker[body_start..].find("\n```") else {
+            break;
+        };
+        let body = &worker[body_start..body_start + end];
+        offset = body_start + end;
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(body) else {
+            continue;
+        };
+        if value.get("learnings_used").is_none() {
+            continue;
+        }
+        found_handoff_example = true;
+        assert!(
+            value["run_id"].is_string(),
+            "handoff example run_id: {value}"
+        );
+        let acceptance = value["acceptance"].as_array().unwrap();
+        assert!(
+            acceptance.iter().all(|ac| ac["status"] == "done"),
+            "handoff example acceptance statuses must all be done: {value}"
+        );
+        let learnings = value["learnings_used"].as_array().unwrap();
+        assert!(
+            !learnings.is_empty(),
+            "handoff example must show at least one learnings_used entry"
+        );
+        for learning in learnings {
+            assert!(
+                learning.get("id").is_some() && learning.get("usage").is_some(),
+                "learnings_used entries are objects {{id, usage}}: {learning}"
+            );
+            assert!(
+                matches!(
+                    learning["usage"].as_str(),
+                    Some("helpful" | "not_needed" | "misleading")
+                ),
+                "usage must use the gate's exact vocabulary: {learning}"
+            );
+        }
+        for doc in value["docs_updated"].as_array().unwrap() {
+            let path = doc.as_str().unwrap();
+            assert!(
+                !path.starts_with('/'),
+                "docs_updated paths are bare and repo-relative: {path}"
+            );
+        }
+    }
+    assert!(
+        found_handoff_example,
+        "worker.md must carry a ```json handoff example with learnings_used[]"
+    );
+}
+
+/// Dogfood 0025, F7: a review seat with no stopping rule looped 9,091 tool
+/// calls / 233k tokens retrying a refused seal. Both review prompts must
+/// carry a budget-and-stopping section with a hard seal-attempt cap.
+#[test]
+fn review_prompts_carry_a_budget_and_stopping_section() {
+    for prompt in [
+        "templates/prompts/review-correctness.md",
+        "templates/prompts/review-adversarial.md",
+    ] {
+        let text = source(prompt);
+        assert!(
+            text.contains("## Budget & stopping"),
+            "{prompt} must carry a Budget & stopping section"
+        );
+        assert!(
+            text.contains("3 seal attempts"),
+            "{prompt} must cap seal attempts (the F7 seat retried without bound)"
+        );
+    }
+}
