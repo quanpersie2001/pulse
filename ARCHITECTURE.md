@@ -139,7 +139,10 @@ than one file wires them with `#[path]` (`tests/storage.rs` →
 `tests/storage/storage_primitives.rs`). Shared helpers live in
 `tests/common/`, included per crate with `#[path]`. Crates:
 `architecture_guards`, `communication`, `doctor`, `golden_path`, `hook`,
-`parallel`, `public_api_contract`, `lane`, `metrics`, `storage`, `serve`,
+`parallel`, `public_api_contract`, `qa_templates` (runs the embedded
+`templates/qa/*.mjs` lane scripts with `node` — skipped where node is
+absent; the scripts are shipped code and the 0025 dogfood found real bugs
+in them), `lane`, `metrics`, `storage`, `serve`,
 `target_repo`.
 
 The suite must pass at default thread count; races are fixed, never hidden

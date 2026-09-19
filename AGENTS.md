@@ -87,8 +87,8 @@ subdirectory nesting; a crate needing more than one file wires them with
 `tests/target_repo.rs` -> `tests/target_repo/*.rs`). Shared helpers live in
 `tests/common/` and are included per crate with `#[path]`. Current crates:
 `architecture_guards`, `communication`, `doctor`, `golden_path`, `hook`,
-`parallel`, `public_api_contract`, `lane`, `metrics`, `storage`, `serve`,
-`target_repo`.
+`parallel`, `public_api_contract`, `qa_templates`, `lane`, `metrics`,
+`storage`, `serve`, `target_repo`.
 
 ## Session completion
 

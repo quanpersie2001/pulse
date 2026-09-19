@@ -192,6 +192,33 @@ function inconclusiveReport(commit, message, owner) {
   };
 }
 
+// Dogfood 0025, F13: steps[0] = "open http://127.0.0.1:3000/" went to
+// page.goto verbatim, threw "Cannot navigate to invalid URL", and the crash
+// killed the lane minutes into app startup with no evidence file. steps[0]
+// is a BARE URL — anything else is refused as an inconclusive case naming
+// the step, before the app is even started.
+function firstStepCheck(qaCase) {
+  const url = (qaCase.steps || [])[0];
+  if (!url) return { ok: true };
+  try {
+    const parsed = new URL(url);
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+      throw new Error(`protocol ${parsed.protocol} — use a bare http(s) URL`);
+    }
+    return { ok: true };
+  } catch {
+    return {
+      ok: false,
+      case: {
+        id: qaCase.id,
+        status: 'inconclusive',
+        observation: `steps[0] must be a BARE URL to navigate to, got "${url}" — prose steps belong after it`,
+        artifacts: [],
+      },
+    };
+  }
+}
+
 async function currentCommit(repoRoot) {
   try {
     return (await runProcess(['git', 'rev-parse', 'HEAD'], repoRoot)).stdout.trim();
@@ -213,6 +240,26 @@ async function main() {
   await mkdir(path.join(evidenceDir, 'logs'), { recursive: true });
   const outputPath = path.join(evidenceDir, 'qa-ui.json');
   const commit = await currentCommit(repoRoot);
+
+  // The ui cases this lane owns, with the steps[0] URL check — before the
+  // run-config read, the playwright import, or any app start. Every case
+  // invalid: report and leave the machine alone (dogfood 0025, F13).
+  const uiCases = (input.qa_cases || []).filter((c) => !c.surface || c.surface === 'ui');
+  const checks = uiCases.map((qaCase) => ({ qaCase, check: firstStepCheck(qaCase) }));
+  const invalidChecks = checks.filter(({ check }) => !check.ok);
+  if (uiCases.length > 0 && invalidChecks.length === uiCases.length) {
+    const report = {
+      verdict: 'inconclusive',
+      acceptance: [],
+      cases: invalidChecks.map(({ check }) => check.case),
+      findings: [],
+      commands_run: [],
+      environment: { commit, server: null, tool: 'playwright' },
+    };
+    await writeFile(outputPath, JSON.stringify(report, null, 2));
+    console.log(JSON.stringify({ status: 'done' }));
+    return;
+  }
 
   const { config, error } = await readRunConfig(repoRoot, 'ui');
   if (error) {
@@ -257,33 +304,56 @@ async function main() {
       const viewports = input.viewports && input.viewports.length > 0 ? input.viewports : ['1280x800'];
       const cases = [];
       // A story-scope input carries the Story's whole qa_cases[]; this lane
-      // only runs its own surface's cases (dogfood ST-1, F16).
-      const uiCases = (input.qa_cases || []).filter((c) => !c.surface || c.surface === 'ui');
-      for (const qaCase of uiCases) {
+      // only runs its own surface's cases (dogfood ST-1, F16). Cases whose
+      // steps[0] is not a bare URL are skipped as inconclusive before any
+      // navigation (dogfood 0025, F13).
+      for (const { qaCase, check } of checks) {
+        if (!check.ok) {
+          cases.push(check.case);
+          continue;
+        }
         const [url, ...rest] = qaCase.steps || [];
         const consoleLines = [];
-        for (const viewport of viewports) {
-          const [width, height] = viewport.split('x').map(Number);
-          const page = await browser.newPage({ viewport: { width, height } });
-          page.on('console', (message) => consoleLines.push(`[${viewport}] ${message.type()}: ${message.text()}`));
-          if (url) await page.goto(url);
-          // Let client-side fetches settle so evidence shows the rendered
-          // page rather than a loading state (dogfood ST-1, F22).
-          await page.waitForLoadState('networkidle', { timeout: 5000 }).catch(() => {});
-          await page.screenshot({ path: path.join(evidenceDir, 'shots', `${qaCase.id}-${viewport}.png`) });
-          if (viewport === viewports[0]) {
-            // playwright >= 1.45 removed page.accessibility.snapshot(); the
-            // supported replacement is locator.ariaSnapshot() — a YAML
-            // string, written as-is (dogfood ST-1, F1).
-            let a11y;
-            try {
-              a11y = await page.locator('body').ariaSnapshot();
-            } catch (a11yError) {
-              a11y = `(ariaSnapshot unavailable: ${a11yError.message})`;
+        try {
+          for (const viewport of viewports) {
+            const [width, height] = viewport.split('x').map(Number);
+            const page = await browser.newPage({ viewport: { width, height } });
+            page.on('console', (message) => consoleLines.push(`[${viewport}] ${message.type()}: ${message.text()}`));
+            if (url) await page.goto(url);
+            // Let client-side fetches settle so evidence shows the rendered
+            // page rather than a loading state (dogfood ST-1, F22).
+            await page.waitForLoadState('networkidle', { timeout: 5000 }).catch(() => {});
+            await page.screenshot({ path: path.join(evidenceDir, 'shots', `${qaCase.id}-${viewport}.png`) });
+            if (viewport === viewports[0]) {
+              // playwright >= 1.45 removed page.accessibility.snapshot(); the
+              // supported replacement is locator.ariaSnapshot() — a YAML
+              // string, written as-is (dogfood ST-1, F1).
+              let a11y;
+              try {
+                a11y = await page.locator('body').ariaSnapshot();
+              } catch (a11yError) {
+                a11y = `(ariaSnapshot unavailable: ${a11yError.message})`;
+              }
+              await writeFile(path.join(evidenceDir, 'logs', `${qaCase.id}.a11y.txt`), String(a11y));
             }
-            await writeFile(path.join(evidenceDir, 'logs', `${qaCase.id}.a11y.txt`), String(a11y));
+            await page.close();
           }
-          await page.close();
+        } catch (caseError) {
+          // Dogfood 0025, F13: a crash mid-case (playwright error, dead
+          // page) used to kill the whole lane before any report was
+          // written. The case is inconclusive with the error in its
+          // observation; console output so far rides along.
+          await writeFile(
+            path.join(evidenceDir, 'logs', `${qaCase.id}.console.txt`),
+            consoleLines.join('\n')
+          );
+          cases.push({
+            id: qaCase.id,
+            status: 'inconclusive',
+            observation: `crashed before the case could be graded: ${caseError.message}`,
+            artifacts: [`logs/${qaCase.id}.console.txt`],
+          });
+          continue;
         }
         await writeFile(path.join(evidenceDir, 'logs', `${qaCase.id}.console.txt`), consoleLines.join('\n'));
 

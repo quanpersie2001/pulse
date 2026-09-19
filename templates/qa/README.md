@@ -98,11 +98,22 @@ was a Pulse bug.
   `surface: "ui"`; a case without `surface` is assumed to belong to the
   script's surface) — the other surface's steps are not `METHOD /path`
   lines (api) or URLs (ui) and would only crash the script.
-- `ui.mjs`: `steps[0]` is the URL to navigate to; every other step is free
+- `ui.mjs`: `steps[0]` is the URL to navigate to — a **bare** `http(s)`
+  URL, nothing else (`open http://…` and `navigate to http://…` are prose,
+  not URLs; dogfood 0025, F13). Anything that is not a bare URL is refused
+  before the app even starts: the case is `inconclusive` with the offending
+  step in its `observation`, and the lane still reports instead of crashing
+  minutes into app startup with no evidence file. Every other step is free
   text recorded verbatim into the case's `observation` — the script never
   interprets it as an instruction.
 - `api.mjs`: every step is one `METHOD /path [json-body]` line, sent in
-  order against the app started from the `id: api` block.
+  order against the app started from the `id: api` block. A step carrying
+  an unresolved `<…>` placeholder (`PATCH /tasks/<id>`) can never succeed —
+  it is refused as an `inconclusive` case naming the step, before anything
+  is sent (dogfood 0025, F12: the placeholder used to go on the wire
+  verbatim and the product was graded `fail` for `422 uuid_parsing`).
+  Write the real id in the step, or split the case so each step's ids are
+  known by the time it runs.
 
 ## api steps are executed HTTP lines
 
@@ -117,13 +128,16 @@ DELETE /tasks/42
 ```
 
 The body must be valid JSON on that one line — `POST /tasks {title,
-due_date: today}` is not a shorthand, it is a crash: `parseStep` does
-`JSON.parse` on the body text and one pseudo-JSON step kills the whole
-lane with `qa_api_crashed` before any artifact is written (dogfood ST-2,
-F28 — its stderr now lands in your terminal, where you dispatched it,
-instead of a captured log tail). Query strings are fine (`GET /tasks?view=today`); comments,
+due_date: today}` is not a shorthand, it is a malformed step (dogfood ST-2,
+F28 — one malformed step used to kill the whole lane with
+`qa_api_crashed` before any artifact was written; since the 0025 dogfood
+the case alone is `inconclusive` with the parse error in its `observation`,
+the HTTP transcript written so far rides along in
+`logs/<case-id>.http.txt`, and the rest of the lane still runs). Query
+strings are fine (`GET /tasks?view=today`); comments,
 expectations and free text belong in the case's other fields or in
-surface-ui steps, never in an api step line.
+surface-ui steps, never in an api step line. Never leave a `<…>`
+placeholder in a step (see above) — the step is refused, not sent.
 
 ## `check` and never self-grading `pass`
 

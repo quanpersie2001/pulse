@@ -209,6 +209,26 @@ function parseStep(step) {
   return { method, urlPath, body: bodyText ? JSON.parse(bodyText) : undefined };
 }
 
+// Dogfood 0025, F12: a step like `PATCH /tasks/<id>` used to go on the wire
+// verbatim and come back 422 uuid_parsing, grading the product `fail` for
+// what was an unfinished oracle. A step carrying an unresolved `<…>`
+// placeholder can never succeed — refuse it as inconclusive, naming the
+// case and the step, instead of sending it.
+const PLACEHOLDER = /<[^<>]*>/;
+
+function placeholderSteps(steps) {
+  return (steps || []).filter((step) => PLACEHOLDER.test(step));
+}
+
+function placeholderCase(qaCase, bad) {
+  return {
+    id: qaCase.id,
+    status: 'inconclusive',
+    observation: `unresolved <placeholder> in step — write the real id/value: ${bad.join(' | ')}`,
+    artifacts: [],
+  };
+}
+
 async function tailLines(filePath, count) {
   try {
     const text = await readFile(filePath, 'utf8');
@@ -230,6 +250,27 @@ async function main() {
   await mkdir(path.join(evidenceDir, 'logs'), { recursive: true });
   const outputPath = path.join(evidenceDir, 'qa-api.json');
   const commit = await currentCommit(repoRoot);
+
+  // The api cases this lane owns, and the placeholder check on them —
+  // before any app start. Every case invalid: report and leave the machine
+  // alone (dogfood 0025, F12).
+  const apiCases = (input.qa_cases || []).filter((c) => !c.surface || c.surface === 'api');
+  const invalidCases = apiCases
+    .map((qaCase) => ({ qaCase, bad: placeholderSteps(qaCase.steps) }))
+    .filter(({ bad }) => bad.length > 0);
+  if (apiCases.length > 0 && invalidCases.length === apiCases.length) {
+    const report = {
+      verdict: 'inconclusive',
+      acceptance: [],
+      cases: invalidCases.map(({ qaCase, bad }) => placeholderCase(qaCase, bad)),
+      findings: [],
+      commands_run: [],
+      environment: { commit, server: null, tool: 'fetch' },
+    };
+    await writeFile(outputPath, JSON.stringify(report, null, 2));
+    console.log(JSON.stringify({ status: 'done' }));
+    return;
+  }
 
   const { config, error } = await readRunConfig(repoRoot, 'api');
   if (error) {
@@ -258,43 +299,66 @@ async function main() {
       // A story-scope input carries the Story's whole qa_cases[]; this lane
       // only runs its own surface's cases — the other surface's steps are
       // not `METHOD /path` lines and would crash parseStep (dogfood ST-1,
-      // F16).
-      const apiCases = (input.qa_cases || []).filter((c) => !c.surface || c.surface === 'api');
+      // F16). Cases with unresolved <placeholder> steps are skipped as
+      // inconclusive before anything is sent (dogfood 0025, F12).
       for (const qaCase of apiCases) {
+        const preBad = placeholderSteps(qaCase.steps);
+        if (preBad.length > 0) {
+          cases.push(placeholderCase(qaCase, preBad));
+          continue;
+        }
         const httpLines = [];
         const created = [];
-        for (const step of qaCase.steps || []) {
-          const { method, urlPath, body } = parseStep(step);
-          const url = new URL(urlPath, config.ready_url).toString();
-          const response = await fetch(url, {
-            method,
-            headers: body === undefined ? {} : { 'content-type': 'application/json' },
-            body: body === undefined ? undefined : JSON.stringify(body),
-          });
-          const responseText = await response.text();
-          httpLines.push(`> ${step}`, `< ${response.status}`, responseText, '');
-          // Remember what a POST created so the case can delete it after
-          // itself (dogfood ST-1, F20 — lane steps used to leave residue
-          // rows in the dev database).
-          if (method === 'POST' && response.ok) {
-            try {
-              const created_id = JSON.parse(responseText).id;
-              if (created_id) created.push({ urlPath, id: created_id });
-            } catch {
-              // non-JSON body — nothing to track
+        try {
+          for (const step of qaCase.steps || []) {
+            const { method, urlPath, body } = parseStep(step);
+            const url = new URL(urlPath, config.ready_url).toString();
+            const response = await fetch(url, {
+              method,
+              headers: body === undefined ? {} : { 'content-type': 'application/json' },
+              body: body === undefined ? undefined : JSON.stringify(body),
+            });
+            const responseText = await response.text();
+            httpLines.push(`> ${step}`, `< ${response.status}`, responseText, '');
+            // Remember what a POST created so the case can delete it after
+            // itself (dogfood ST-1, F20 — lane steps used to leave residue
+            // rows in the dev database).
+            if (method === 'POST' && response.ok) {
+              try {
+                const created_id = JSON.parse(responseText).id;
+                if (created_id) created.push({ urlPath, id: created_id });
+              } catch {
+                // non-JSON body — nothing to track
+              }
             }
           }
-        }
-        // Cleanup before the transcript is written, so the artifact shows
-        // the steps' effects AND their cleanup (dogfood ST-1, F20).
-        for (const { urlPath, id } of created) {
-          const cleanupUrl = new URL(`${urlPath}/${id}`, config.ready_url).toString();
-          try {
-            const cleanup = await fetch(cleanupUrl, { method: 'DELETE' });
-            httpLines.push(`> DELETE ${urlPath}/${id} (cleanup)`, `< ${cleanup.status}`, '');
-          } catch (cleanupError) {
-            httpLines.push(`> DELETE ${urlPath}/${id} (cleanup)`, `< ${cleanupError.message}`, '');
+          // Cleanup before the transcript is written, so the artifact shows
+          // the steps' effects AND their cleanup (dogfood ST-1, F20).
+          for (const { urlPath, id } of created) {
+            const cleanupUrl = new URL(`${urlPath}/${id}`, config.ready_url).toString();
+            try {
+              const cleanup = await fetch(cleanupUrl, { method: 'DELETE' });
+              httpLines.push(`> DELETE ${urlPath}/${id} (cleanup)`, `< ${cleanup.status}`, '');
+            } catch (cleanupError) {
+              httpLines.push(`> DELETE ${urlPath}/${id} (cleanup)`, `< ${cleanupError.message}`, '');
+            }
           }
+        } catch (caseError) {
+          // Dogfood 0025, F13 (the api twin of the ui fix): one malformed
+          // step used to kill the whole lane with qa_api_crashed before any
+          // artifact was written. The case is inconclusive with the error in
+          // its observation; the transcript so far rides along.
+          await writeFile(
+            path.join(evidenceDir, 'logs', `${qaCase.id}.http.txt`),
+            httpLines.join('\n')
+          );
+          cases.push({
+            id: qaCase.id,
+            status: 'inconclusive',
+            observation: `step crashed before the case could be graded: ${caseError.message}`,
+            artifacts: [`logs/${qaCase.id}.http.txt`],
+          });
+          continue;
         }
         await writeFile(path.join(evidenceDir, 'logs', `${qaCase.id}.http.txt`), httpLines.join('\n'));
         const logPath = path.join(repoRoot, config.log);
