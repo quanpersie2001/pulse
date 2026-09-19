@@ -356,6 +356,15 @@ pub fn read_events(repo_root: &Path) -> PulseResult<Vec<EventEnvelope>> {
     Ok(read_event_log(repo_root)?.events)
 }
 
+/// Append an event to the log, stamping it `now`.
+///
+/// The event id's time part is derived from `now` (not the wall clock), so
+/// id order — the log's sort key — always equals `occurred_at` order, even
+/// when a caller passes a backdated or synthetic timestamp. Random low bits
+/// keep same-millisecond ids unique.
+///
+/// # Errors
+/// Returns an error when the event cannot be written (see [`write_event`]).
 pub fn emit_event(
     repo_root: &Path,
     event_type: impl Into<String>,
@@ -364,6 +373,7 @@ pub fn emit_event(
     payload: Value,
     now: DateTime<Utc>,
 ) -> PulseResult<PathBuf> {
-    let event = EventEnvelope::new(new_event_id(), event_type, actor, subject, payload, now);
+    let id = format!("evt_{}", ulid::Ulid::from_datetime(now.into()));
+    let event = EventEnvelope::new(id, event_type, actor, subject, payload, now);
     write_event(repo_root, &event)
 }
