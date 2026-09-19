@@ -711,10 +711,10 @@ nghĩa mới, không xoá trắng.
 
 ### Còn lại
 
-- **G3 eval skill** — HOÃN: cần dữ liệu dogfood thật và ngân sách token
-  cho `claude -p` có/không skill trên fixture (tham khảo
-  `references/repo-harness/evals/`). Chỉ đáng làm khi B/D/C/E/F/G đã chạy
-  đủ một vòng dogfood để biết skill nào cần đo.
+- **G3 eval skill** — có plan riêng: [`0026-eval-skills.md`](0026-eval-skills.md)
+  (nháp chờ duyệt). Điều kiện tiên quyết "một vòng dogfood đã chạy" đã thỏa;
+  ba eval (E1 plan, E2 worker, E3 review budget) được chọn thẳng từ bảng
+  friction 0025.
 - **E5 `learn mine`** — HOÃN: cần khảo sát định dạng transcript từng host
   (`references/better-harness/scripts/session-analysis/platforms/*.mjs`).
 - **DOGFOOD — ĐÃ CHẠY 2026-09-19** (xem dòng đầu mục này và
