@@ -162,8 +162,11 @@ fn walk_evidence(base: &Path, dir: &Path, out: &mut Vec<Value>) {
             continue;
         };
         let size = entry.metadata().map(|m| m.len()).unwrap_or(0);
+        // The manifest path is a URL path segment for the browser
+        // (`/p/<pid>/evidence/<rel>`), so it is spelled with `/` on every
+        // platform, never the Windows separator.
         out.push(json!({
-            "path": relative.to_string_lossy(),
+            "path": relative.to_string_lossy().replace('\\', "/"),
             "size": size,
         }));
     }
