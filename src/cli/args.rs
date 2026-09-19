@@ -51,7 +51,10 @@ pub(crate) enum Command {
         #[command(subcommand)]
         command: super::work::WorkCommand,
     },
-    /// The one bounded JSON a worker reads before doing anything.
+    /// The one bounded JSON a worker reads before doing anything. The
+    /// packet itself is the default output — `--json` is accepted but is a
+    /// no-op (dogfood 0025, F8: a 19-byte header forced every worker to
+    /// rebuild the packet from `work show --json`).
     Packet {
         id: String,
         #[arg(long)]

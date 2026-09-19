@@ -767,3 +767,40 @@ fn golden_path_new_to_close_story_driven_by_the_host() {
     assert_eq!(story["status"], "done");
     assert_issues_list_parses(repo.path());
 }
+
+/// Dogfood 0025, F8: `pulse packet` must print the packet itself, with or
+/// without `--json` — two real workers in the 0025 dogfood each got only a
+/// 19-byte `packet for TK-…` header and had to rebuild the packet from
+/// `work show --json` + `learn applicable`.
+#[test]
+fn packet_prints_the_packet_itself_without_a_json_flag() {
+    let repo = tempfile::tempdir().unwrap();
+    fs::write(repo.path().join("README.md"), "# Golden Path\n").unwrap();
+    common_git::commit_all(repo.path());
+    pulse_ok(repo.path(), &["init", "--json"]);
+
+    let ticket = pulse_ok(
+        repo.path(),
+        &[
+            "work",
+            "new",
+            "ticket",
+            "t",
+            "--risk",
+            "low",
+            "--surface",
+            "cli",
+            "--json",
+        ],
+    );
+    let id = ticket["id"].as_str().unwrap();
+
+    // No --json: stdout is the packet document, not a header line.
+    let packet = pulse_ok(repo.path(), &["packet", id]);
+    assert_eq!(packet["issue"]["id"], id);
+    assert!(packet.get("protocol").is_some(), "{packet}");
+
+    // --json keeps working (accepted, same output shape).
+    let with_flag = pulse_ok(repo.path(), &["packet", id, "--json"]);
+    assert_eq!(with_flag["issue"]["id"], id);
+}

@@ -200,8 +200,15 @@ pub fn evaluate_handoff(
     if lease_run_id != Some(input.run_id.as_str()) {
         violations.push(violation(
             "handoff_lease_mismatch",
+            // Dogfood 0025, F4: two parallel workers following the prompt's
+            // bare `handoff.json` example overwrote each other's payload,
+            // and the refusal read as a lease bug when the real cause was
+            // the shared filename. Name the likely cause in the message.
             format!(
-                "handoff run_id is {}, but the lease was claimed as {}",
+                "handoff run_id is {}, but the lease was claimed as {} — if you \
+                 did write that run_id, your payload file was probably overwritten \
+                 by a parallel worker's; keep scratch files per ticket \
+                 (e.g. .pulse/runtime/handoff-tk-<id>.json)",
                 input.run_id,
                 lease_run_id.unwrap_or("<none>")
             ),
@@ -1227,6 +1234,10 @@ profiles:
             .find(|v| v.code == "handoff_lease_mismatch")
             .unwrap();
         assert!(mismatch.message.contains("run_id"), "{mismatch:?}");
+        // Dogfood 0025, F4: the refusal must name the likely real cause —
+        // a parallel worker overwriting a shared payload file — not just
+        // restate that the lease did not match.
+        assert!(mismatch.message.contains("overwritten"), "{mismatch:?}");
     }
 
     #[test]
