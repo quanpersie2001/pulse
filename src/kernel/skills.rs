@@ -378,6 +378,22 @@ mod tests {
     }
 
     #[test]
+    fn install_with_no_hosts_writes_only_the_canonical_bodies() {
+        // The CLI's no-detected-host path lands here: several agents read
+        // `.agents/skills/` directly, so zero hosts still installs.
+        let repo = tempfile::tempdir().unwrap();
+        let report = install(repo.path(), &[]).unwrap();
+        assert_eq!(report.written.len(), shipped_file_count());
+        assert!(report.linked.is_empty());
+        assert!(report.already_linked.is_empty());
+        assert!(report.skipped.is_empty());
+        assert!(repo
+            .path()
+            .join(".agents/skills/pulse-plan/SKILL.md")
+            .is_file());
+    }
+
+    #[test]
     fn install_writes_the_canonical_bodies_and_links_the_host() {
         let repo = tempfile::tempdir().unwrap();
         let report = install(repo.path(), &[host("claude").unwrap()]).unwrap();
