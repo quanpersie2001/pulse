@@ -14,53 +14,42 @@
 
 </div>
 
-> **v3 đang xây theo [`docs/plans/0022-thin-harness.md`](docs/plans/0022-thin-harness.md).**
-> Nội dung README dưới đây mô tả v2 và chỉ còn giá trị lịch sử cho tới khi
-> `SPEC.md` (plan 0022 Phase 3) thay thế nó; khi mâu thuẫn, plan 0022 thắng.
+> **v3 đã ship (tag `v0.0.1` — bản rebuild khởi động lại vạch phiên bản).**
+> README này mô tả code hiện tại; [`ARCHITECTURE.md`](ARCHITECTURE.md) mô tả
+> cây source, [`AGENTS.md`](AGENTS.md) là hợp đồng vận hành, và plan
+> [`docs/plans/0022-thin-harness.md`](docs/plans/0022-thin-harness.md) /
+> [`docs/plans/0025-parallel-verified-learning.md`](docs/plans/0025-parallel-verified-learning.md)
+> giữ phần suy luận. Nội dung v2 dưới đây chỉ còn giá trị lịch sử cho phần
+> không bị thay thế.
 
 ---
 
 ## What Pulse is
 
-Pulse is a local CLI for one developer using one or more coding agents in one
-repository. It keeps the truth about what needs doing, hands each agent exactly
-the context for one Ticket, refuses to close work without evidence, and turns
-failures into better docs and checks.
-
-Pulse does not run agents and has no daemon; the only commands it executes are
-the argv a record declares (`verify[]`, run by `pulse verify`), and it records
-what it observed. All state lives in `.pulse/` and `docs/` under Git.
-
-The full product definition, target design and golden path are in
-[`PRODUCT.md`](PRODUCT.md). This README describes what exists today.
-
-## Status
-
-v0.1.0. The golden path from `PRODUCT.md` §7 has run for real on
-the Track B dogfood target (removed 2026-09-07, tag `dogfood/track-b-final`):
-two Tickets were closed on evidence receipts by real
-worker/reviewer agents, and the completion Story was closed on a
-`story_close` QA qualification. The friction that round produced is in
-[`docs/dogfood-friction-track-b.md`](docs/dogfood-friction-track-b.md).
-
-No dogfood target is checked in right now, so Pulse currently runs for real
-nowhere. Remaining pre-1.0 work is tracked in `PRODUCT.md` §8.
+Pulse is a local CLI truth layer for a developer using coding agents in one
+repository: a JSONL store of Epic/Story/Ticket/Decision records, gates that
+bracket the work (`claim`/`handoff` for a worker, `lane input`/`lane seal`
+for a review or qa lane), an evidence gate, and an append-only event log.
+It dispatches nothing: the host spawns the agents, Pulse decides what
+counts. It does not run agents and has no daemon; the only commands it
+executes are the argv a record declares (`pulse verify <id>` runs the
+Ticket's `verify[]`), and it records what it observed. All state lives in
+`.pulse/` and `docs/` under Git.
 
 ## What works today
 
 | Area | Commands | Notes |
 |---|---|---|
-| Repository init | `pulse init --actor kind:id` | Creates `.pulse/` planes, tags vocabulary, and a default-deny policy with Core grants |
-| Work graph | `pulse work create\|show\|list\|edit\|sync\|transition\|close\|supersede\|ready\|rollup\|packet` | Sharded JSON nodes/edges, CAS revisions, markdown Ticket contracts, lifecycle gates |
-| Graph queries | `pulse graph edge add\|validate\|export\|neighborhood\|affected-by` | Deterministic edge IDs, cycle checks |
-| Docs | `pulse docs register\|tags\|list\|show\|applicable\|search\|get\|tree\|index\|validate` | Eight-field registry, controlled tags, path/tag applicability, section-level search |
-| Evidence | `pulse evidence receipt record\|show\|verify`, `artifact put\|verify` | Immutable content-hashed receipts |
-| QA baseline | `pulse qa baseline\|resolve` | Parses the conventional headings of `works/<story>/qa.md`, including the optional `pulse-check` block; content hash per file and per case |
-| Knowledge | `pulse knowledge create\|capture\|show\|list\|edit\|validate\|promote\|applicable\|check` | Capture from a run, validate against evidence, promote by inserting the learning into a doc or `AGENTS.md`, applicability buckets shared with the packet; learnings carry a `scope` (`repository` by path/tag, `harness` via the runner prompt) |
-| Runner | `pulse run <role> --ticket <id>` | Lease, bootstrap prompt, configured command, proven outcome classification, artifact ingest, inconclusive receipts, deny-unless-`--isolation worktree`, resume after kill, qa `--scope story_close` |
-| Communication | `pulse events tail`, `pulse note` | Append-only event log with `--since`/`--ticket`/`--follow`; ticket-targeted notes surface in packets |
+| Repository init | `pulse init` / `--refresh` | Seeds `.pulse/`, `PULSE.md`, `AGENTS.md` block, prompts, docs seeds; `--refresh` three-way merges template changes (files you edited are never overwritten) |
+| Work graph | `pulse work new\|show\|list\|tree\|ready\|update\|dep\|transition` | One JSONL store, JSON-schema validated, append-only events |
+| Parallel work | `pulse frontier`, `pulse claim`, `pulse reserve`, `pulse release` | Tickets declare `touches`; disjoint tickets claim side by side in one checkout; a host hook (`pulse hook snippet claude`) makes reservations bind at edit time |
+| Evidence | `pulse packet`, `pulse checkpoint`, `pulse handoff`, `pulse verify`, `pulse close`, `pulse close-story` | Handoff reads observed receipts, not self-reported exit codes; `verify` runs exactly the declared argv and records it |
+| Review lanes | `pulse lane input\|seal\|reconcile` | Blind seats and finding reconciliation for opt-in panels; a finding's `check.argv` is run by Pulse and beats votes |
+| Learning loop | `pulse learn add\|activate\|dismiss\|friction\|applicable`, `pulse metrics` | Friction surfaces at close, active learnings' checks run inside `pulse verify` |
+| Docs | `pulse docs applicable\|check` | Broken links, stale generated sections, advisory docs-maybe-stale per ticket |
+| Health | `pulse doctor`, `pulse events tail` | Torn store, expired leases, unsealed lanes; follow the event log |
 
-Every command accepts `--json` and `--repo-root <path>`. A Ticket is created with a generated `works/<id>/ticket.md`; edit that file and run `work sync` before transitioning it.
+Every command accepts `--json` and the global `--repo-root <path>`.
 
 ## Install
 
@@ -69,20 +58,27 @@ cargo install --path .
 pulse --help
 ```
 
-Initialise only an explicit target repository, never this repository's root:
+Enroll an explicit target repository (never this repository's root if you
+are developing Pulse):
 
 ```bash
-pulse --repo-root <target-repo> init --actor human:<name> --json
+cd <target-repo>
+pulse init
+pulse hook snippet claude   # paste the printed PreToolUse config into .claude/settings.json
 ```
 
-A minimal Ticket path is:
+Then a minimal Ticket path is:
 
 ```bash
-pulse --repo-root <target-repo> work create --kind ticket --title "Fix token errors" --risk low --json
-# edit works/TK-001/ticket.md
-pulse --repo-root <target-repo> work sync TK-001 --expected-revision 1 --actor human:<name>
-pulse --repo-root <target-repo> work transition TK-001 --to shaped --expected-revision 2 --actor human:<name>
-pulse --repo-root <target-repo> work transition TK-001 --to ready --expected-revision 3 --actor human:<name>
+pulse work new ticket "Fix token errors" --risk low --surface api
+pulse work ready <id>
+pulse claim <id> --actor agent:worker-1
+pulse packet <id>            # the one input the worker reads
+# ... edit, checkpoint, verify ...
+pulse verify <id> --actor agent:worker-1
+pulse handoff <id> --from handoff.json --actor agent:worker-1
+pulse lane input <id> review-correctness
+pulse close <id>
 ```
 
 ## Development
@@ -96,8 +92,7 @@ cargo test --all-targets
 Operating rules for agents and contributors are in [`AGENTS.md`](AGENTS.md).
 Contribution workflow is in [`CONTRIBUTING.md`](CONTRIBUTING.md). Current
 code architecture is in [`ARCHITECTURE.md`](ARCHITECTURE.md). Decisions
-are under [`docs/decisions/`](docs/decisions/). Retired design material is
-under [`design/archive/`](design/archive/).
+are under [`docs/decisions/`](docs/decisions/).
 
 <div align="center">
 

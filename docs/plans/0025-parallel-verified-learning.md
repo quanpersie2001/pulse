@@ -1,6 +1,7 @@
 # Plan 0025 — Song song theo graph, bằng chứng tự quan sát, review panel, vòng học khép kín
 
-Trạng thái: **đề xuất, chưa thực thi**. Viết 2026-09-18 trên nhánh
+Trạng thái: **đã thực thi A–F, G1, G2; G3 hoãn** (xem "Trạng thái thực
+thi" cuối file). Viết 2026-09-18 trên nhánh
 `features/harness-experimental` sau một phiên đọc code (không tin docs) của
 Pulse và ba repo tham chiếu (`references/repo-harness`,
 `references/better-harness`, `references/repository-harness`).
@@ -646,3 +647,66 @@ Lệch plan đáng kể đã biết (tin code, giữ phương án ít đổi hà
 - Nghĩa của frontmatter `applies_to` chuyển từ "doc này nên đưa cho worker
   nào" sang "doc này mô tả phần code nào" (F3 sống nhờ nghĩa mới); gợi ý
   trong packet chỉ còn là công dụng phụ.
+
+**G1 — `pulse hook` (đã thực thi):** `kernel::hook::pre_edit` quyết định
+theo đường dẫn, không theo danh tính: fenced-out thì free (trừ lane chỉ
+được viết dưới `.pulse/evidence/`), lane không sửa source, không ticket
+active thì theo `hook.unclaimed` (mặc định `allow`), ticket không `touches`
+là độc quyền, path phải rơi vào `touches` của ticket đang giữ, không được
+đụng vùng `verifying`, còn lại deny kèm gợi ý `pulse reserve`. CLI
+`pulse hook pre-edit` với hợp đồng exit 0/2/1 (0 = allow im lặng, 2 = deny
+ra stderr cho host trả lại agent, 1 = lỗi nội bộ — store rách không được
+phép khoá mọi chỉnh sửa); `--stdin-json` rút path từ các khoá host đã xác
+minh trong `references/repo-harness` (`tool_input.file_path`,
+`tool_input.path`, `tool_input.notebook_path`, dòng apply-patch
+`*** Add/Update/Delete File:` của Codex, `cwd` để giải path tương đối);
+`pulse hook snippet <host>` chỉ IN cấu hình đã xác minh (Claude Code
+PreToolUse) — không bao giờ ghi file host nào; host khác →
+`hook_host_unknown`. `pulse init` thêm một dòng gợi ý snippet.
+
+Lệch G1 của session này (tin code/thực tế macOS):
+
+- **Repo-root resolution cho hook**: dùng đúng `state_repo_root` như mọi
+  lệnh khác (cwd hoặc `--repo-root`), KHÔNG đi lên tìm `.pulse` — một cơ
+  chế mới sẽ là hành vi thứ hai cho cùng việc. Host chạy hook từ project
+  root (Claude Code làm vậy).
+- **Path normalization**: path tuyệt đối được so với cả repo_root lẫn bản
+  canonicalized, và chỉ thư mục CHA của path được canonicalize (file có thể
+  chưa tồn tại) — macOS trả `current_dir` dạng `/private/tmp/…` trong khi
+  host gửi `/tmp/…`; bắt được live, có test.
+- **`--actor` không rơi về `git config user.name`** như `resolve_actor` —
+  hook mà tự nhận human thì luật actor vô nghĩa (đúng-phạn văn prompt).
+- **Không hỗ trợ snippet cho Codex** dù payload apply-patch đã được parse:
+  hình dạng cấu hình `~/.codex/hooks.json` đã xác minh qua references,
+  NHƯNG hợp đồng deny của Codex (exit 2 có bị trả lại agent không, hay cần
+  JSON decision) CHƯA xác minh được từ references — không bịa.
+
+**G2 — `pulse init --refresh` 3-way merge (đã thực thi):** mỗi lần init/
+refresh ghi một file do template sinh ra, lưu bản template vào
+`.pulse/base/` (state bền, commit — không gitignore). Refresh:
+local == new → unchanged; có base và local == base → updated; có base và
+local != base → `git merge-file` trên file tạm dưới
+`.pulse/runtime/refresh/` — merge sạch → ghi kết quả + cập nhật base,
+xung đột → KHÔNG đụng local, file marker vào `.pulse/runtime/refresh/`,
+base nguyên, báo conflict (exit vẫn 0); không có base và local != new →
+giữ local, ghi `.new`, báo kept, base vắng cho tới khi người dùng giải
+quyết bằng `--refresh --take-new <file>` hoặc `--keep-mine <file>`
+(file lạ → `init_refresh_unknown_file`). Vùng block của AGENTS.md đi qua
+cùng thuật toán như một "file" văn bản; nội dung ngoài block không bao giờ
+bị đụng. Hai test cũ khẳng định "refresh ghi đè" được viết lại theo ngữ
+nghĩa mới, không xoá trắng.
+
+### Còn lại
+
+- **G3 eval skill** — HOÃN: cần dữ liệu dogfood thật và ngân sách token
+  cho `claude -p` có/không skill trên fixture (tham khảo
+  `references/repo-harness/evals/`). Chỉ đáng làm khi B/D/C/E/F/G đã chạy
+  đủ một vòng dogfood để biết skill nào cần đo.
+- **E5 `learn mine`** — HOÃN: cần khảo sát định dạng transcript từng host
+  (`references/better-harness/scripts/session-analysis/platforms/*.mjs`).
+- **DOGFOOD CHƯA CHẠY** cho B/D/C/E/F/G trên `~/Workspace/Personal/todolist`.
+  Ba con số phải đo: (1) build gãy chéo giữa hai worker / story — so ngưỡng
+  1 lần/story của decision 0025 để xét lại worktree; (2) tỉ lệ báo đúng của
+  `docs_maybe_stale` (F3) trước khi chuyển cảnh báo thành chặn; (3) thời
+  gian `pulse verify` thực tế so với timeout 900s. Kèm bảng friction F-số
+  theo mẫu `0022-dogfood-st1.md`.
