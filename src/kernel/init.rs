@@ -250,6 +250,10 @@ pub fn initialize_repository_ext(
     let _guard = WriteGuard::acquire(repo_root)?;
     let mut created = Vec::new();
     let mut refreshed = Vec::new();
+    // Dogfood 0025, F2: a block write inside an existing AGENTS.md is not a
+    // file creation. Whether the file pre-existed decides how the block's
+    // `wrote_live` is reported below.
+    let agents_md_existed = repo_root.join("AGENTS.md").exists();
 
     for dir in DIRS {
         let path = repo_root.join(dir);
@@ -291,7 +295,12 @@ pub fn initialize_repository_ext(
     }
 
     let block = ensure_agents_block(repo_root, refresh, resolve)?;
-    if block.wrote_live {
+    // Only a file that did not exist before this run lands in `created` —
+    // `--take-new agents-block` on a living AGENTS.md used to print
+    // "created AGENTS.md" and panic operators whose file was fine
+    // (dogfood 0025, F2); the refreshed[] line tells that story instead.
+    let block_wrote_existing_file = block.wrote_live && agents_md_existed;
+    if block.wrote_live && !agents_md_existed {
         created.push("AGENTS.md".to_string());
     }
     refreshed.push(block.report);
@@ -310,7 +319,8 @@ pub fn initialize_repository_ext(
     // A conflict or a kept file is a handled outcome, not a failure — the
     // CLI exits 0 and points at the artifacts. Only actual writes make the
     // run "Initialized".
-    let mutated = !created.is_empty()
+    let mutated = block_wrote_existing_file
+        || !created.is_empty()
         || refreshed
             .iter()
             .any(|file| matches!(file.action, RefreshAction::Updated | RefreshAction::Merged));
@@ -320,8 +330,10 @@ pub fn initialize_repository_ext(
         RepositoryInitStatus::Unchanged
     };
     // Without --refresh the per-file array stays empty: the created/skipped
-    // lists above are the whole story of a plain init.
-    let refreshed = if refresh || resolve.is_some() {
+    // lists above are the whole story of a plain init — except a Pulse block
+    // appended into an existing AGENTS.md, which would otherwise be an
+    // invisible write (the file is not `created`, nothing else changed).
+    let refreshed = if refresh || resolve.is_some() || block_wrote_existing_file {
         refreshed
     } else {
         Vec::new()
@@ -984,6 +996,51 @@ mod tests {
             fs::read_to_string(repo.path().join(".pulse/base/prompts/worker.md")).unwrap(),
             text
         );
+    }
+
+    #[test]
+    fn take_new_on_the_agents_block_never_reports_the_file_as_created() {
+        // Dogfood 0025, F2: `--take-new agents-block` printed "created
+        // AGENTS.md" while the file existed — only the block region inside
+        // it had been rewritten. The file lands in `created` when it is
+        // genuinely new; otherwise the refreshed[] line carries the story.
+        let repo = tempfile::tempdir().unwrap();
+        initialize_repository(repo.path(), false, false).unwrap();
+        assert!(repo.path().join("AGENTS.md").exists());
+        // Age the block: no base, so the block resolves as kept until the
+        // user takes new.
+        fs::remove_file(repo.path().join(".pulse/base/agents-block.md")).unwrap();
+        fs::write(
+            repo.path().join("AGENTS.md"),
+            "<!-- PULSE:BEGIN -->\nsentinel\n<!-- PULSE:END -->\n",
+        )
+        .unwrap();
+
+        let report = initialize_repository_ext(
+            repo.path(),
+            true,
+            false,
+            Some(("agents-block", RefreshTake::New)),
+        )
+        .unwrap();
+        assert!(
+            !report
+                .created
+                .iter()
+                .any(|entry| entry.contains("AGENTS.md")),
+            "an existing AGENTS.md is not created: {:?}",
+            report.created
+        );
+        let block = report
+            .refreshed
+            .iter()
+            .find(|file| file.file == "agents-block")
+            .unwrap();
+        assert_eq!(block.action, RefreshAction::Updated);
+        assert_eq!(report.status, RepositoryInitStatus::Initialized);
+        let agents = fs::read_to_string(repo.path().join("AGENTS.md")).unwrap();
+        assert!(agents.starts_with("<!-- PULSE:BEGIN -->"), "{agents}");
+        assert!(!agents.contains("sentinel"), "{agents}");
     }
 
     #[test]
