@@ -475,3 +475,128 @@ fn serve_does_not_depend_on_kernel_or_cli() {
         }
     }
 }
+
+/// Dogfood 0025, F4: two parallel workers following the worker prompt's
+/// bare `cp.json`/`handoff.json` examples overwrote each other's payload
+/// files in the shared checkout (one handoff then failed with another
+/// ticket's `run_id`), and scratch at the root kept tripping
+/// `handoff_unreserved_changes` (F6) and the fence (F5). The prompt must
+/// teach the per-ticket, fenced-out `.pulse/runtime/` paths — and must
+/// never instruct a root-level scratch path in a command example.
+#[test]
+fn worker_prompt_scratch_files_are_per_ticket_under_runtime() {
+    let worker = source("templates/prompts/worker.md");
+    assert!(
+        worker.contains(".pulse/runtime/cp-tk-"),
+        "worker.md must name the per-ticket checkpoint path .pulse/runtime/cp-tk-<id>.json"
+    );
+    assert!(
+        worker.contains(".pulse/runtime/handoff-tk-"),
+        "worker.md must name the per-ticket handoff path .pulse/runtime/handoff-tk-<id>.json"
+    );
+    for bare in [
+        "--from cp.json",
+        "--from handoff.json",
+        "--from <cp.json>",
+        "--from <handoff.json>",
+    ] {
+        assert!(
+            !worker.contains(bare),
+            "worker.md must not instruct a root-level scratch file ({bare})"
+        );
+    }
+    // The AGENTS block seed is the host-level contract workers also read;
+    // it names the checkpoint path, so it carries the same rule.
+    let block = source("templates/seeds/agents-block.md");
+    assert!(
+        block.contains(".pulse/runtime/cp-tk-"),
+        "agents-block.md must name the per-ticket checkpoint path"
+    );
+}
+
+/// Dogfood 0025, F9: the worker prompt's Finishing section used to name
+/// `learnings_used[]` without its shape; a worker guessed, sent a bare id
+/// string, and burned handoff refusals (`from_file_invalid`) decoding the
+/// serde error. The prompt's handoff example must be real JSON that the
+/// handoff gate would accept: objects with the exact usage vocabulary,
+/// `done` acceptance statuses, bare repo-relative doc paths.
+#[test]
+fn worker_prompt_handoff_example_is_gate_valid_json() {
+    let worker = source("templates/prompts/worker.md");
+    let mut found_handoff_example = false;
+    let mut offset = 0;
+    while let Some(start) = worker[offset..].find("```json\n") {
+        let body_start = offset + start + "```json\n".len();
+        let Some(end) = worker[body_start..].find("\n```") else {
+            break;
+        };
+        let body = &worker[body_start..body_start + end];
+        offset = body_start + end;
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(body) else {
+            continue;
+        };
+        if value.get("learnings_used").is_none() {
+            continue;
+        }
+        found_handoff_example = true;
+        assert!(
+            value["run_id"].is_string(),
+            "handoff example run_id: {value}"
+        );
+        let acceptance = value["acceptance"].as_array().unwrap();
+        assert!(
+            acceptance.iter().all(|ac| ac["status"] == "done"),
+            "handoff example acceptance statuses must all be done: {value}"
+        );
+        let learnings = value["learnings_used"].as_array().unwrap();
+        assert!(
+            !learnings.is_empty(),
+            "handoff example must show at least one learnings_used entry"
+        );
+        for learning in learnings {
+            assert!(
+                learning.get("id").is_some() && learning.get("usage").is_some(),
+                "learnings_used entries are objects {{id, usage}}: {learning}"
+            );
+            assert!(
+                matches!(
+                    learning["usage"].as_str(),
+                    Some("helpful" | "not_needed" | "misleading")
+                ),
+                "usage must use the gate's exact vocabulary: {learning}"
+            );
+        }
+        for doc in value["docs_updated"].as_array().unwrap() {
+            let path = doc.as_str().unwrap();
+            assert!(
+                !path.starts_with('/'),
+                "docs_updated paths are bare and repo-relative: {path}"
+            );
+        }
+    }
+    assert!(
+        found_handoff_example,
+        "worker.md must carry a ```json handoff example with learnings_used[]"
+    );
+}
+
+/// Dogfood 0025, F7: a review seat with no stopping rule looped 9,091 tool
+/// calls / 233k tokens retrying a refused seal. Both review prompts must
+/// carry a budget-and-stopping section with a hard seal-attempt cap.
+#[test]
+fn review_prompts_carry_a_budget_and_stopping_section() {
+    for prompt in [
+        "templates/prompts/review-correctness.md",
+        "templates/prompts/review-adversarial.md",
+    ] {
+        let text = source(prompt);
+        assert!(
+            text.contains("## Budget & stopping"),
+            "{prompt} must carry a Budget & stopping section"
+        );
+        assert!(
+            text.contains("3 seal attempts"),
+            "{prompt} must cap seal attempts (the F7 seat retried without bound)"
+        );
+    }
+}

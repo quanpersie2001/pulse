@@ -24,10 +24,14 @@ of the evidence gate:
 
 1. **Work.** `pulse claim <id> --actor agent:worker` takes the lease, then
    `pulse packet <id>` is the one input to read (Ticket, Story, decisions,
-   applicable docs, learnings, last checkpoint). Checkpoint as you go
-   (`pulse checkpoint <id> --from <cp.json>`), run the commands the Ticket
-   declares (`pulse verify <id>` — the receipt is what the handoff gate
-   reads), then `pulse handoff <id> --from <handoff.json>`. Full contract:
+   applicable docs, learnings, last checkpoint) — it prints the packet
+   itself. Checkpoint as you go (`pulse checkpoint <id> --from
+   .pulse/runtime/cp-tk-<id>.json` — scratch files are per-ticket, under
+   the fenced-out `.pulse/runtime/`; parallel workers sharing one bare
+   `cp.json` have overwritten each other's payloads), run the commands the
+   Ticket declares (`pulse verify <id>` — the receipt is what the handoff
+   gate reads), then `pulse handoff <id> --from
+   .pulse/runtime/handoff-tk-<id>.json`. Full contract:
    `.pulse/prompts/worker.md`.
 2. **Review.** For every lane in the Ticket's `<surface>-<risk>` profile
    (see `PULSE.md`): `pulse lane input <id> <lane>` writes the lane's
@@ -100,10 +104,11 @@ check` finds broken links and stale generated sections under `docs/`, and
 staled (a doc whose `applies_to` names code the Ticket changed without
 updating the doc itself).
 
-Context filling up mid-Ticket? `pulse checkpoint <id> --from <cp.json>`
-recording what's done, what's next and any gotchas, then stop. The next
-session reads that checkpoint back out of `pulse packet <id>` and carries
-on; the lease stays yours until it expires or someone runs `pulse release`.
+Context filling up mid-Ticket? `pulse checkpoint <id> --from
+.pulse/runtime/cp-tk-<id>.json` recording what's done, what's next and any
+gotchas, then stop. The next session reads that checkpoint back out of
+`pulse packet <id>` and carries on; the lease stays yours until it expires
+or someone runs `pulse release`.
 
 | Command | Does |
 |---|---|

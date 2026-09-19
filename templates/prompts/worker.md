@@ -39,7 +39,7 @@ actor would blur their edits into work nobody can attribute.
   agent:worker-<n>` (already yours if `protocol.run_id` is set and the lease is
   yours). `checkpoint` and `handoff` are refused without it.
 - After every acceptance criterion (`acceptance[]`) you finish, run
-  `pulse checkpoint <id> --from <cp.json>` right away — not only when you
+  `pulse checkpoint <id> --from .pulse/runtime/cp-tk-<id>.json` right away — not only when you
   are about to stop.
 - Run the Ticket's declared commands through Pulse before handing off:
   `pulse verify <id> --actor agent:worker-<n>`. Pulse runs exactly the
@@ -75,7 +75,21 @@ the hook only sees your host's edit tools, and a write that slips past
 it still surfaces at your handoff (`handoff_unreserved_changes`) and in
 the other Ticket's review.
 
-## Checkpoint shape (`cp.json`, plan §4.4)
+## Scratch files (dogfood 0025, F4/F5)
+
+Every scratch or payload file you write — `cp.json`, `handoff.json`, probe
+output — goes under `.pulse/runtime/` **with the ticket id in the name**:
+`.pulse/runtime/cp-tk-<id>.json`, `.pulse/runtime/handoff-tk-<id>.json`.
+Two reasons, both paid for in the 0025 dogfood: parallel workers share one
+checkout, so a bare `handoff.json` at the repo root gets overwritten by the
+other worker's payload mid-flight (your handoff then fails with a
+`handoff_lease_mismatch` naming someone else's `run_id`); and a scratch file
+at the root is untracked dirt that the gates would force you to `pulse
+reserve` — which pulls throwaway bytes into your ticket's fence and can
+stale your own close. `.pulse/runtime/` is fenced out of every gate: write
+there freely, never reserve it.
+
+## Checkpoint shape (`.pulse/runtime/cp-tk-<id>.json`, plan §4.4)
 
 ```json
 {"run_id": "<protocol.run_id from the packet>",
@@ -88,20 +102,43 @@ the other Ticket's review.
 
 ## Finishing
 
-When every acceptance criterion is done and verified, write a
-`handoff.json` (plan §7.2 — `run_id` from your claim (`protocol.run_id`,
-and the gate refuses a handoff from an earlier run), `summary`,
-`changed_files`, `acceptance[]` with `status`+`how`, `docs_updated[]`,
-`learnings_used[]`, `friction[]`, `open_risks[]`) and run
-`pulse handoff <id> --from handoff.json --actor agent:worker-<n>`. Every
-`acceptance[].status` must be exactly `done` — the gate refuses anything
-else (`handoff_acceptance_not_done`).
+Work in this order — the 0025 dogfood burned four handoff refusals on it
+(dogfood 0025, F9): finish every edit → `pulse reserve` anything you picked
+up late → write the payload file under `.pulse/runtime/` → run `pulse
+verify` → handoff. Anything you write or edit **after** verifying — payload
+files at the root included — makes the receipt stale (`handoff_verify_stale`)
+and costs a re-run.
+
+Write a `handoff.json` (plan §7.2) at
+`.pulse/runtime/handoff-tk-<id>.json`, in exactly this shape — `run_id`
+from your claim (`protocol.run_id`; the gate refuses a handoff from an
+earlier run), and `learnings_used[]` as **objects**, each `{"id":
+"LRN-…", "usage": …}` with `usage` one of exactly `helpful`,
+`not_needed`, `misleading` (a bare id string is refused with
+`from_file_invalid`):
+
+```json
+{"run_id": "<protocol.run_id from the packet>",
+ "summary": "what changed, one paragraph",
+ "changed_files": ["src/x.rs"],
+ "acceptance": [{"id": "AC-1", "status": "done", "how": "cargo test auth -q, 12 passed"}],
+ "docs_updated": ["docs/auth.md"],
+ "learnings_used": [{"id": "LRN-ab12", "usage": "helpful"}],
+ "friction": [],
+ "open_risks": []}
+```
+
+`docs_updated[]` holds bare repo-relative paths — the ones you actually
+diffed, covering every `change.docs_to_update` entry. Then run `pulse
+handoff <id> --from .pulse/runtime/handoff-tk-<id>.json --actor
+agent:worker-<n>`. Every `acceptance[].status` must be exactly `done` — the
+gate refuses anything else (`handoff_acceptance_not_done`).
 
 Your declared `verify[]` is judged from the `verify` receipt `pulse verify`
 sealed, never from what you write: no receipt is `handoff_verify_missing`, a
 receipt sealed on a tree you have since changed is `handoff_verify_stale`,
 and an observed non-zero exit is `handoff_verify_failed`. `verify_results[]`
-in `handoff.json` is optional and changes no verdict. Not finished yet?
+in your handoff payload is optional and changes no verdict. Not finished yet?
 Checkpoint and stop; do not hand off progress. The Ticket becomes
 `verifying`; review is somebody else's turn, and you do not run it.
 

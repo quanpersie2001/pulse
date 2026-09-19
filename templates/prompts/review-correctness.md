@@ -90,6 +90,18 @@ Run every `pulse` command as `--actor agent:review-correctness`. The close gate
 reads that identity to tell review apart from the work it reviews: a lane
 sealed by the actor that handed the Ticket off is refused outright.
 
+## Budget & stopping (dogfood 0025, F7)
+
+This lane is sized to be small: verify, read the changed files, write your
+output, seal. Budget yourself — roughly 20 tool calls (hard ceiling 30) and
+at most **3 seal attempts**. A refused seal is not a reason to review
+again: read the refusal, fix exactly what it names (re-prepare when it says
+the snapshot is gone), and seal again. If the third seal is still refused,
+stop and report the refusal in plain prose — your evidence file is already
+on disk under `.pulse/evidence/<id>/`, and an orchestrator can act on an
+unsealed report; a seat that burns its budget retrying adds nothing to the
+panel.
+
 ## Sealing
 
 Write the output file, then seal it yourself:
