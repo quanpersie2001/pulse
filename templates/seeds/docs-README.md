@@ -8,7 +8,11 @@ reports docs a Ticket's edits may have staled.
 Frontmatter `applies_to` on a doc means "this doc DESCRIBES this code":
 Pulse compares it against the files a Ticket changed and warns at handoff
 when described code moved but the doc did not (`docs_maybe_stale`, plan
-0025 F3). Keep it pointed at the real code the doc explains. Its secondary
+0025 F3). Keep the globs pointed at the exact files the doc explains — a
+directory-wide glob (`api/**`) makes every ticket touching that directory
+warn about a doc it never needed (the 0025 dogfood measured 0 correct out
+of 3 warnings, all from one `api/**` doc), while a file-level glob warns
+only when the described file really moved. Its secondary
 use — `pulse docs applicable <id>` suggesting the doc for a Ticket's
 anchors/tags — is just that, a hint that is often empty and never
 exhaustive: grep/glob `docs/` first.

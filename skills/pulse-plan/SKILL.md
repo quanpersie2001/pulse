@@ -56,7 +56,11 @@ the real API — never horizontal ("add models", then "add endpoints", then
 
 The usual two-ticket cut for a Story that spans api and ui: one API ticket,
 one UI ticket integrating against it, the UI ticket `blocked_by` the API one
-when it cannot be demonstrated without the API's behavior. A shared file is
+when it cannot be demonstrated without the API's behavior. When a ticket
+consumes what another produces — a model, an endpoint, a fixture — wire
+`blocked_by` even where a shared file already forces the ordering: the
+frontier's file arithmetic cannot see a content prerequisite (dogfood 0025,
+F3). A shared file is
 not a dependency and an ordering preference is not a dependency — wire only
 edges that truly gate, because every edge delays work.
 
@@ -123,7 +127,11 @@ Ticket payload — the fields the whole harness reads:
   the worker mid-flight to add one, and a greedy entry parks an unrelated
   ticket for no reason. Two tickets whose `touches` overlap should carry a
   `blocked_by` edge, or accept that they run serially. The ready gate
-  refuses a medium/high-risk ticket without it.
+  refuses a medium/high-risk ticket without it. Every `change.docs_to_update`
+  path is a file the ticket must edit, so it belongs in `touches` too
+  (dogfood 0025, F11: three workers each had to `pulse reserve` their own
+  shared doc mid-flight because no planner put it there) — the doc's single
+  owner's `touches`.
 - `context.anchors` entries are `"path: what lives there"` — the part before
   the `:` must exist on disk; the ready gate checks it.
 - `acceptance` is EARS-minimal: one observable behavior per item, `when` and
@@ -134,7 +142,11 @@ Ticket payload — the fields the whole harness reads:
   `issues.jsonl`, plan 0025 F4). Give that writing an owner now: the last
   ticket of the Story — or whichever ticket owns the rule's code, via its
   `change.docs_to_update` — carries the doc work, so it never piles up at
-  close.
+  close. **One doc, one owner** (dogfood 0025, F10): if several tickets of
+  the Story touch the same doc, exactly one of them declares it in
+  `change.docs_to_update` — a doc is a file like any other, the reservation
+  holds it through review, and three tickets declaring it serialize the
+  whole Story at that one file.
 - `verify[].argv` is argv, never a shell string; `cwd` defaults to repo root
   and must name a directory that exists. Pulse runs these itself (decision
   0026): no shell, one at a time, each killed at the timeout — so keep them
