@@ -6,7 +6,10 @@
 //! answer (a `.claude/` left behind by someone else's clone is not
 //! consent). So the default path asks, and every non-interactive path
 //! requires the hosts to be named explicitly — Pulse never picks a host
-//! for you when it cannot ask.
+//! for you when it cannot ask. No detected host is not an error: the
+//! canonical `.agents/skills/` bodies are host-independent and several
+//! agents read them directly, so install proceeds and simply links
+//! nothing.
 //!
 //! Scope is the repository, always: there is no `--global`. A skill body
 //! is versioned with the Pulse binary that wrote it, and a user-level copy
@@ -106,11 +109,9 @@ fn install(
             .map(|key| skills::host(key))
             .collect::<Result<Vec<_>>>()?
     } else if all_detected {
-        let detected = skills::detect(repo_root);
-        if detected.is_empty() {
-            return Err(no_host_detected());
-        }
-        detected
+        // Zero detected links zero hosts — the canonical install still
+        // happens: several agents read `.agents/skills/` directly.
+        skills::detect(repo_root)
     } else {
         choose_interactively(repo_root)?
     };
@@ -167,7 +168,15 @@ fn choose_interactively(repo_root: &Path) -> Result<Vec<&'static Host>> {
     }
     let detected = skills::detect(repo_root);
     if detected.is_empty() {
-        return Err(no_host_detected());
+        // Nothing to ask about and nothing to refuse: the canonical
+        // install serves agents that read `.agents/skills/` directly, and
+        // the report says no host was linked.
+        println!(
+            "No known coding agent config directory found — \
+                 writing {CANONICAL_DIR}/ only."
+        );
+        println!("Link one later with `pulse skills install --host <host>`.\n");
+        return Ok(Vec::new());
     }
 
     let mut stdout = std::io::stdout();
@@ -225,14 +234,6 @@ fn bad_choice(token: &str) -> PulseError {
         "skills_choice_invalid",
         format!("`{token}` is not one of the numbers offered"),
         "answer with the numbers listed, `a` for all, or nothing to skip linking",
-    )
-}
-
-fn no_host_detected() -> PulseError {
-    PulseError::kernel(
-        "skills_no_host_detected",
-        "no known coding agent config directory in this repository",
-        skills::KNOWN_HOSTS_HINT,
     )
 }
 

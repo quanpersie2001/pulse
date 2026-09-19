@@ -136,12 +136,22 @@ impl Host {
 /// The `None` rows are the important ones. `.agents/skills` is the
 /// emerging cross-host convention, and for those hosts Pulse has nothing
 /// to link — it reports them as already covered instead of inventing work.
-pub const HOSTS: [Host; 7] = [
+pub const HOSTS: [Host; 8] = [
     Host {
         key: "claude",
         label: "Claude Code",
         probe: ".claude",
         skills_dir: Some(".claude/skills"),
+    },
+    Host {
+        // Pi discovers the Agent Skills standard directory
+        // (`.agents/skills/`) at project level — verified against pi's own
+        // shipped docs and the reference inventory
+        // (`references/better-harness/.../providers/pi.mjs`).
+        key: "pi",
+        label: "pi",
+        probe: ".pi",
+        skills_dir: None,
     },
     Host {
         key: "copilot",
@@ -186,7 +196,7 @@ pub const HOSTS: [Host; 7] = [
 /// [`tests::the_known_hosts_hint_names_every_host`] keeps it from drifting
 /// away from [`HOSTS`].
 pub const KNOWN_HOSTS_HINT: &str =
-    "known hosts: claude, copilot, qoder, grok, dsh, kimi, opencode. \
+    "known hosts: claude, pi, copilot, qoder, grok, dsh, kimi, opencode. \
      Several read `.agents/skills` themselves, so installing needs no host at all";
 
 pub fn host(key: &str) -> Result<&'static Host> {
@@ -375,6 +385,22 @@ mod tests {
         let error = host("emacs").unwrap_err();
         let rendered = format!("{error}");
         assert!(rendered.contains("emacs"), "{rendered}");
+    }
+
+    #[test]
+    fn install_with_no_hosts_writes_only_the_canonical_bodies() {
+        // The CLI's no-detected-host path lands here: several agents read
+        // `.agents/skills/` directly, so zero hosts still installs.
+        let repo = tempfile::tempdir().unwrap();
+        let report = install(repo.path(), &[]).unwrap();
+        assert_eq!(report.written.len(), shipped_file_count());
+        assert!(report.linked.is_empty());
+        assert!(report.already_linked.is_empty());
+        assert!(report.skipped.is_empty());
+        assert!(repo
+            .path()
+            .join(".agents/skills/pulse-plan/SKILL.md")
+            .is_file());
     }
 
     #[test]
