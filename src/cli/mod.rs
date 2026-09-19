@@ -58,9 +58,19 @@ fn run_in_repo(
         args::Command::Init {
             refresh,
             no_register,
+            take_new,
+            keep_mine,
             with_qa_templates,
             json,
-        } => init::handle(&repo_root, refresh, no_register, with_qa_templates, json),
+        } => init::handle(
+            &repo_root,
+            refresh,
+            no_register,
+            take_new,
+            keep_mine,
+            with_qa_templates,
+            json,
+        ),
         args::Command::Work { command } => work::handle(&repo_root, command),
         args::Command::Claim {
             id,

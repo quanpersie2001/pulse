@@ -8,9 +8,19 @@
 //! `docs/operations/run.md` (plan §12.2, §8.6) and `.pulse/prompts/*.md`
 //! (plan §8.5) if any are missing — so a fresh `pulse docs check` passes
 //! rather than immediately reporting `docs/README.md`'s own
-//! `docs/operations/run.md` reference as missing. `refresh` rewrites only
-//! the Pulse block region of `AGENTS.md` and overwrites the prompt files,
-//! never the rest of `AGENTS.md`.
+//! `docs/operations/run.md` reference as missing.
+//!
+//! `refresh` re-renders the Pulse block region of `AGENTS.md` and the
+//! prompt files — never the rest of `AGENTS.md` — through a three-way
+//! merge (plan 0025 G2): every template-written file keeps its as-shipped
+//! copy in `.pulse/base/` (durable, committed state — never gitignored),
+//! and `git merge-file` folds the template's new side into a file the
+//! user has edited. A clean merge lands; a conflict leaves the user's
+//! file untouched, saves the marker version under `.pulse/runtime/refresh/`
+//! and says so — a living prompt is never handed conflict markers. A file
+//! with no base (enrolled by an older Pulse) is kept as-is with the new
+//! template beside it until the user resolves it with `--take-new` or
+//! `--keep-mine`.
 //!
 //! Nothing here writes a dispatch table. The prompts describe what a worker
 //! or a lane must do and which `pulse` commands record it; how that agent
@@ -30,17 +40,28 @@ use crate::error::Result;
 use crate::storage::WriteGuard;
 use crate::PulseError;
 
-const DIRS: [&str; 7] = [
+const DIRS: [&str; 8] = [
     ".pulse",
     ".pulse/receipts",
     ".pulse/evidence",
     ".pulse/events",
     ".pulse/learnings",
     ".pulse/prompts",
+    ".pulse/base",
     ".pulse/runtime",
 ];
 
 const GITIGNORE_ENTRIES: [&str; 2] = ["**/.pulse/runtime/", "**/.pulse/cache/"];
+
+/// Where the as-shipped copies of template-written files live (plan 0025
+/// G2). Durable, committed state — deliberately NOT in
+/// [`GITIGNORE_ENTRIES`]: without a base, a later refresh cannot tell the
+/// user's edit from the template's and must fall back to keep-and-show.
+const BASE_DIR: &str = ".pulse/base";
+
+/// Where refresh keeps its bounded artifacts: temp merge inputs, and the
+/// `.conflict`/`.new` files a conflicted or base-less file points at.
+const REFRESH_DIR: &str = ".pulse/runtime/refresh";
 
 const PULSE_MD_SEED: &str = include_str!("../../templates/seeds/PULSE.md");
 
@@ -75,23 +96,87 @@ const PROMPT_FILES: [(&str, &str); 4] = [
     ),
 ];
 
-/// Writes each of [`PROMPT_FILES`] under `.pulse/prompts/` (plan §8.5):
-/// missing ones are always written; existing ones only when `refresh`
-/// (mirrors [`ensure_agents_block`]'s idempotent-unless-refresh contract,
-/// applied per-file since a prompt file has no internal region markers to
-/// preserve hand edits around).
-fn ensure_prompts(repo_root: &Path, refresh: bool) -> Result<Vec<String>> {
-    let dir = repo_root.join(".pulse/prompts");
-    let mut created = Vec::new();
-    for (name, body) in PROMPT_FILES {
-        let path = dir.join(name);
-        if path.exists() && !refresh {
-            continue;
+/// One refreshable template-written unit (plan 0025 G2): a prompt file,
+/// or the AGENTS block region treated as one text file. `label` names the
+/// file in reports and in `--take-new`/`--keep-mine`; `artifact` is the
+/// flat name for `.pulse/runtime/refresh/` artifacts; `base_rel` is where
+/// the as-shipped copy lives.
+struct RefreshUnit {
+    label: String,
+    artifact: String,
+    base_rel: String,
+    new_body: String,
+}
+
+fn refresh_units() -> Vec<RefreshUnit> {
+    let mut units: Vec<RefreshUnit> = PROMPT_FILES
+        .iter()
+        .map(|(name, body)| RefreshUnit {
+            label: format!("prompts/{name}"),
+            artifact: format!("prompts-{name}"),
+            base_rel: format!("{BASE_DIR}/prompts/{name}"),
+            new_body: (*body).to_string(),
+        })
+        .collect();
+    units.push(RefreshUnit {
+        label: "agents-block".to_string(),
+        artifact: "agents-block".to_string(),
+        base_rel: format!("{BASE_DIR}/agents-block.md"),
+        new_body: AGENTS_BLOCK_BODY.to_string(),
+    });
+    units
+}
+
+/// What the user chose for a file a refresh could not merge cleanly.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RefreshTake {
+    /// Write the template over the file and rebase `.pulse/base` on it.
+    New,
+    /// Keep the user's file; advance `.pulse/base` so the next refresh
+    /// merges for real instead of falling back to keep-and-show again.
+    Mine,
+}
+
+/// How a refreshable unit came out (plan 0025 G2). `created` is a fresh
+/// write; `unchanged` nothing to do; `updated` a file the user never
+/// touched, moved to the new template; `merged` a clean three-way merge of
+/// the user's edits and the template's; `conflict` both sides changed the
+/// same lines — the user's file is untouched, markers saved; `kept` a file
+/// with no base at all — the user's file stays, the new template is filed
+/// next to it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RefreshAction {
+    Created,
+    Unchanged,
+    Updated,
+    Merged,
+    Conflict,
+    Kept,
+}
+
+/// One refreshable unit's outcome, for the report and the CLI line.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RefreshedFile {
+    pub file: String,
+    pub action: RefreshAction,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
+}
+
+impl RefreshedFile {
+    fn new(file: &str, action: RefreshAction) -> Self {
+        Self {
+            file: file.to_string(),
+            action,
+            note: None,
         }
-        fs::write(&path, body).map_err(|error| PulseError::io(&path, error))?;
-        created.push(format!(".pulse/prompts/{name}"));
     }
-    Ok(created)
+
+    fn with_note(mut self, note: impl Into<String>) -> Self {
+        self.note = Some(note.into());
+        self
+    }
 }
 
 const AGENTS_BLOCK_BEGIN: &str = "<!-- PULSE:BEGIN -->";
@@ -123,6 +208,10 @@ pub struct RepositoryInitReport {
     /// a target repo is expected to edit, so it is never refreshed either.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub skipped: Vec<String>,
+    /// Per refreshable file outcome, populated only when `--refresh` (or a
+    /// `--take-new`/`--keep-mine` resolution) ran — plan 0025 G2.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub refreshed: Vec<RefreshedFile>,
 }
 
 /// # Errors
@@ -133,8 +222,34 @@ pub fn initialize_repository(
     refresh: bool,
     with_qa_templates: bool,
 ) -> Result<RepositoryInitReport> {
+    initialize_repository_ext(repo_root, refresh, with_qa_templates, None)
+}
+
+/// [`initialize_repository`] with an optional resolution for one file a
+/// previous refresh filed as `kept` (no base) — see [`RefreshTake`].
+///
+/// # Errors
+/// `init_refresh_unknown_file` if `resolve` names a file outside the
+/// refreshable set (the prompt files and `agents-block`). Propagates the
+/// same I/O and lock errors as [`initialize_repository`].
+pub fn initialize_repository_ext(
+    repo_root: &Path,
+    refresh: bool,
+    with_qa_templates: bool,
+    resolve: Option<(&str, RefreshTake)>,
+) -> Result<RepositoryInitReport> {
+    if let Some((name, _)) = resolve {
+        if !refresh_units().iter().any(|unit| unit.label == name) {
+            return Err(PulseError::kernel(
+                "init_refresh_unknown_file",
+                format!("\"{name}\" is not a file `pulse init --refresh` manages"),
+                "refreshable files are .pulse/prompts/<name>.md and `agents-block`",
+            ));
+        }
+    }
     let _guard = WriteGuard::acquire(repo_root)?;
     let mut created = Vec::new();
+    let mut refreshed = Vec::new();
 
     for dir in DIRS {
         let path = repo_root.join(dir);
@@ -175,11 +290,13 @@ pub fn initialize_repository(
         created.push("docs/operations/run.md".to_string());
     }
 
-    if ensure_agents_block(repo_root, refresh)? {
+    let block = ensure_agents_block(repo_root, refresh, resolve)?;
+    if block.wrote_live {
         created.push("AGENTS.md".to_string());
     }
+    refreshed.push(block.report);
 
-    created.extend(ensure_prompts(repo_root, refresh)?);
+    refreshed.extend(ensure_prompts(repo_root, refresh, resolve)?);
 
     created.extend(ensure_gitignore_entries(repo_root)?);
 
@@ -190,16 +307,31 @@ pub fn initialize_repository(
         skipped.extend(qa_skipped);
     }
 
-    let status = if created.is_empty() {
-        RepositoryInitStatus::Unchanged
-    } else {
+    // A conflict or a kept file is a handled outcome, not a failure — the
+    // CLI exits 0 and points at the artifacts. Only actual writes make the
+    // run "Initialized".
+    let mutated = !created.is_empty()
+        || refreshed
+            .iter()
+            .any(|file| matches!(file.action, RefreshAction::Updated | RefreshAction::Merged));
+    let status = if mutated {
         RepositoryInitStatus::Initialized
+    } else {
+        RepositoryInitStatus::Unchanged
+    };
+    // Without --refresh the per-file array stays empty: the created/skipped
+    // lists above are the whole story of a plain init.
+    let refreshed = if refresh || resolve.is_some() {
+        refreshed
+    } else {
+        Vec::new()
     };
     Ok(RepositoryInitReport {
         schema_version: 1,
         status,
         created,
         skipped,
+        refreshed,
     })
 }
 
@@ -232,32 +364,344 @@ fn copy_qa_templates(repo_root: &Path) -> Result<(Vec<String>, Vec<String>)> {
     Ok((created, skipped))
 }
 
-/// Writes or refreshes the Pulse block in `AGENTS.md`. Returns whether it
-/// wrote anything. A first write creates `AGENTS.md` with just the block;
-/// an existing file without markers gets the block appended; `refresh`
-/// rewrites only the region between the markers, leaving everything else
-/// in the file untouched.
-fn ensure_agents_block(repo_root: &Path, refresh: bool) -> Result<bool> {
-    let path = repo_root.join("AGENTS.md");
-    let existing = fs::read_to_string(&path).unwrap_or_default();
+/// The live location of a unit's file: a prompt path, or `AGENTS.md`
+/// itself for the block unit.
+fn live_path(repo_root: &Path, unit: &RefreshUnit) -> std::path::PathBuf {
+    if unit.label == "agents-block" {
+        repo_root.join("AGENTS.md")
+    } else {
+        repo_root.join(".pulse").join(&unit.label)
+    }
+}
 
-    let block = format!("{AGENTS_BLOCK_BEGIN}\n{AGENTS_BLOCK_BODY}{AGENTS_BLOCK_END}\n");
+fn read_base(repo_root: &Path, unit: &RefreshUnit) -> Option<String> {
+    fs::read_to_string(repo_root.join(&unit.base_rel)).ok()
+}
 
-    let has_markers = existing.contains(AGENTS_BLOCK_BEGIN) && existing.contains(AGENTS_BLOCK_END);
-    if has_markers {
-        if !refresh {
-            return Ok(false);
-        }
-        let before = existing
-            .split(AGENTS_BLOCK_BEGIN)
-            .next()
-            .unwrap_or_default();
-        let after = existing.split(AGENTS_BLOCK_END).nth(1).unwrap_or_default();
-        let updated = format!("{before}{block}{after}");
-        fs::write(&path, updated).map_err(|error| PulseError::io(&path, error))?;
-        return Ok(true);
+fn write_base(repo_root: &Path, unit: &RefreshUnit, body: &str) -> Result<()> {
+    let path = repo_root.join(&unit.base_rel);
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|error| PulseError::io(parent, error))?;
+    }
+    fs::write(&path, body).map_err(|error| PulseError::io(&path, error))
+}
+
+fn runtime_artifact(repo_root: &Path, unit: &RefreshUnit, suffix: &str) -> std::path::PathBuf {
+    repo_root
+        .join(REFRESH_DIR)
+        .join(format!("{}{suffix}", unit.artifact))
+}
+
+/// The outcome of one unit's refresh pass.
+struct UnitOutcome {
+    report: RefreshedFile,
+    wrote_live: bool,
+}
+
+/// Run the plan 0025 G2 refresh algorithm for one unit. `local` is the
+/// file's current content (`None` = the file does not exist yet — it is
+/// created, which is the only path that reports `created`).
+fn refresh_unit(
+    repo_root: &Path,
+    unit: &RefreshUnit,
+    local: Option<String>,
+    resolve: Option<RefreshTake>,
+) -> Result<UnitOutcome> {
+    let new = &unit.new_body;
+
+    // A user resolution (`--take-new`/`--keep-mine`) overrides the
+    // algorithm for this unit only.
+    if let Some(take) = resolve {
+        return Ok(match take {
+            RefreshTake::New => {
+                write_unit(repo_root, unit, new)?;
+                write_base(repo_root, unit, new)?;
+                UnitOutcome {
+                    report: RefreshedFile::new(&unit.label, RefreshAction::Updated).with_note(
+                        "resolved with --take-new: the template is now the file, and \
+                         the base is rebased on it",
+                    ),
+                    wrote_live: true,
+                }
+            }
+            RefreshTake::Mine => {
+                // The live file is untouched; the base moves to the new
+                // template so the NEXT refresh merges for real.
+                write_base(repo_root, unit, new)?;
+                UnitOutcome {
+                    report: RefreshedFile::new(&unit.label, RefreshAction::Kept).with_note(
+                        "resolved with --keep-mine: your file stays; the base moved \
+                         to the current template, so the next refresh merges",
+                    ),
+                    wrote_live: false,
+                }
+            }
+        });
     }
 
+    let Some(local_body) = local else {
+        write_unit(repo_root, unit, new)?;
+        write_base(repo_root, unit, new)?;
+        return Ok(UnitOutcome {
+            report: RefreshedFile::new(&unit.label, RefreshAction::Created),
+            wrote_live: true,
+        });
+    };
+
+    if local_body == *new {
+        // Still in sync — keep the base honest so a future user edit is
+        // recognized as the only difference.
+        write_base(repo_root, unit, new)?;
+        return Ok(UnitOutcome {
+            report: RefreshedFile::new(&unit.label, RefreshAction::Unchanged),
+            wrote_live: false,
+        });
+    }
+
+    match read_base(repo_root, unit) {
+        None => {
+            // No base (enrolled by an older Pulse): do not guess. Keep the
+            // user's file, file the new template beside it, and leave the
+            // base absent until the user resolves.
+            let artifact = runtime_artifact(repo_root, unit, ".new");
+            if let Some(parent) = artifact.parent() {
+                fs::create_dir_all(parent).map_err(|error| PulseError::io(parent, error))?;
+            }
+            fs::write(&artifact, new).map_err(|error| PulseError::io(&artifact, error))?;
+            Ok(UnitOutcome {
+                report: RefreshedFile::new(&unit.label, RefreshAction::Kept).with_note(format!(
+                    "no base to merge against — compare with {} and resolve with \
+                         `pulse init --refresh --take-new {}` or `--keep-mine {}`",
+                    artifact
+                        .strip_prefix(repo_root)
+                        .unwrap_or(&artifact)
+                        .display(),
+                    unit.label,
+                    unit.label
+                )),
+                wrote_live: false,
+            })
+        }
+        Some(base) if base == local_body => {
+            // The user never touched it: move straight to the new template.
+            write_unit(repo_root, unit, new)?;
+            write_base(repo_root, unit, new)?;
+            Ok(UnitOutcome {
+                report: RefreshedFile::new(&unit.label, RefreshAction::Updated),
+                wrote_live: true,
+            })
+        }
+        Some(base) => {
+            // Both sides may have moved: three-way merge. A clean merge
+            // lands; a conflict never touches the user's file — the marker
+            // version is filed under .pulse/runtime/refresh/ instead, so a
+            // living prompt is never handed markers.
+            match merge_three_way(repo_root, unit, &local_body, &base, new) {
+                MergeOutcome::Merged(merged) => {
+                    write_unit(repo_root, unit, &merged)?;
+                    write_base(repo_root, unit, new)?;
+                    Ok(UnitOutcome {
+                        report: RefreshedFile::new(&unit.label, RefreshAction::Merged),
+                        wrote_live: true,
+                    })
+                }
+                MergeOutcome::Conflict(markers) => {
+                    let mut report = RefreshedFile::new(&unit.label, RefreshAction::Conflict);
+                    if let Some(markers) = markers {
+                        let artifact = runtime_artifact(repo_root, unit, ".conflict");
+                        if let Some(parent) = artifact.parent() {
+                            fs::create_dir_all(parent)
+                                .map_err(|error| PulseError::io(parent, error))?;
+                        }
+                        fs::write(&artifact, &markers)
+                            .map_err(|error| PulseError::io(&artifact, error))?;
+                        report = report.with_note(format!(
+                            "your file is untouched; the merged-with-markers version is \
+                             {} — resolve with `pulse init --refresh --take-new {}` \
+                             or `--keep-mine {}`",
+                            artifact
+                                .strip_prefix(repo_root)
+                                .unwrap_or(&artifact)
+                                .display(),
+                            unit.label,
+                            unit.label
+                        ));
+                    } else {
+                        report = report
+                            .with_note("git merge-file could not run; your file is untouched");
+                    }
+                    Ok(UnitOutcome {
+                        report,
+                        wrote_live: false,
+                    })
+                }
+            }
+        }
+    }
+}
+
+fn write_unit(repo_root: &Path, unit: &RefreshUnit, body: &str) -> Result<()> {
+    if unit.label == "agents-block" {
+        write_block_region(repo_root, body)
+    } else {
+        let path = live_path(repo_root, unit);
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).map_err(|error| PulseError::io(parent, error))?;
+        }
+        fs::write(&path, body).map_err(|error| PulseError::io(&path, error))
+    }
+}
+
+enum MergeOutcome {
+    Merged(String),
+    /// `None` when git could not run at all — handled like a conflict
+    /// (report and stop) but with no marker file to point at.
+    Conflict(Option<String>),
+}
+
+/// `git merge-file -p <local> <base> <new>` on temp files under
+/// `.pulse/runtime/refresh/`. Exit 0 = clean merge on stdout; exit
+/// 1..=127 = that many conflicts, markers on stdout; anything else (git
+/// missing, killed) = [`MergeOutcome::Conflict`] with no output.
+fn merge_three_way(
+    repo_root: &Path,
+    unit: &RefreshUnit,
+    local: &str,
+    base: &str,
+    new: &str,
+) -> MergeOutcome {
+    let dir = repo_root.join(REFRESH_DIR);
+    if fs::create_dir_all(&dir).is_err() {
+        return MergeOutcome::Conflict(None);
+    }
+    let write_temp = |suffix: &str, body: &str| -> Option<std::path::PathBuf> {
+        let path = dir.join(format!("{}.{}", unit.artifact, suffix));
+        fs::write(&path, body).ok()?;
+        Some(path)
+    };
+    let (Some(local_path), Some(base_path), Some(new_path)) = (
+        write_temp("local", local),
+        write_temp("base", base),
+        write_temp("new", new),
+    ) else {
+        return MergeOutcome::Conflict(None);
+    };
+    let output = std::process::Command::new("git")
+        .current_dir(repo_root)
+        .args([
+            "merge-file",
+            "-p",
+            "-L",
+            "yours",
+            "-L",
+            "base",
+            "-L",
+            "template",
+            &local_path.to_string_lossy(),
+            &base_path.to_string_lossy(),
+            &new_path.to_string_lossy(),
+        ])
+        .output();
+    // The temps are disposable; the conflict artifact is what survives.
+    for temp in [&local_path, &base_path, &new_path] {
+        let _ = fs::remove_file(temp);
+    }
+    let Ok(output) = output else {
+        return MergeOutcome::Conflict(None);
+    };
+    let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+    match output.status.code() {
+        Some(0) => MergeOutcome::Merged(stdout),
+        Some(code) if (1..=127).contains(&code) => MergeOutcome::Conflict(Some(stdout)),
+        _ => MergeOutcome::Conflict(None),
+    }
+}
+
+/// Create/refresh every refreshable unit (plan 0025 G2). Without
+/// `refresh`, a missing file is created (and its base snapshotted); an
+/// existing one is left alone. With `refresh`, every existing file goes
+/// through [`refresh_unit`].
+fn ensure_prompts(
+    repo_root: &Path,
+    refresh: bool,
+    resolve: Option<(&str, RefreshTake)>,
+) -> Result<Vec<RefreshedFile>> {
+    let mut reports = Vec::new();
+    for unit in refresh_units() {
+        if unit.label == "agents-block" {
+            continue;
+        }
+        let local = fs::read_to_string(live_path(repo_root, &unit)).ok();
+        let resolution = resolve.and_then(|(name, take)| (name == unit.label).then_some(take));
+        // Refresh or a named resolution touches every unit; a plain init
+        // only creates what is missing and leaves the rest unreported.
+        if !(refresh || resolution.is_some() || local.is_none()) {
+            continue;
+        }
+        let outcome = refresh_unit(repo_root, &unit, local, resolution)?;
+        reports.push(outcome.report);
+    }
+    Ok(reports)
+}
+
+/// The Pulse block's current region content, without the markers (plan
+/// 0025 G2 treats the region as one refreshable text file). `None` when
+/// the markers are missing.
+fn block_region(existing: &str) -> Option<&str> {
+    let start = existing.find(AGENTS_BLOCK_BEGIN)? + AGENTS_BLOCK_BEGIN.len();
+    existing.find(AGENTS_BLOCK_END)?;
+    let body = &existing[start..];
+    let end = body.find(AGENTS_BLOCK_END)?;
+    let region = &body[..end];
+    Some(region.strip_prefix('\n').unwrap_or(region))
+}
+
+/// Splice a refreshed region back between the markers; everything outside
+/// the block is byte-for-byte untouched.
+fn write_block_region(repo_root: &Path, region: &str) -> Result<()> {
+    let path = repo_root.join("AGENTS.md");
+    let existing = fs::read_to_string(&path).unwrap_or_default();
+    let before = existing
+        .split(AGENTS_BLOCK_BEGIN)
+        .next()
+        .unwrap_or_default();
+    let after = existing.split(AGENTS_BLOCK_END).nth(1).unwrap_or_default();
+    let updated = format!("{before}{AGENTS_BLOCK_BEGIN}\n{region}{AGENTS_BLOCK_END}{after}");
+    fs::write(&path, updated).map_err(|error| PulseError::io(&path, error))
+}
+
+/// Create the Pulse block in `AGENTS.md`, or — with `refresh`/a named
+/// resolution — refresh its region through the plan 0025 G2 algorithm. A
+/// first write creates `AGENTS.md` with just the block; an existing file
+/// without markers gets the block appended (and its base snapshotted);
+/// an existing block region merges like any other refreshable file.
+fn ensure_agents_block(
+    repo_root: &Path,
+    refresh: bool,
+    resolve: Option<(&str, RefreshTake)>,
+) -> Result<UnitOutcome> {
+    let unit = refresh_units()
+        .into_iter()
+        .find(|unit| unit.label == "agents-block")
+        .expect("agents-block is a built-in refresh unit");
+    let existing = fs::read_to_string(repo_root.join("AGENTS.md")).unwrap_or_default();
+    let has_markers = existing.contains(AGENTS_BLOCK_BEGIN) && existing.contains(AGENTS_BLOCK_END);
+    let block_resolution = resolve.and_then(|(name, take)| (name == unit.label).then_some(take));
+
+    if has_markers && (refresh || block_resolution.is_some()) {
+        let local = block_region(&existing).map(str::to_string);
+        return refresh_unit(repo_root, &unit, local, block_resolution);
+    }
+    if has_markers {
+        // Plain init leaves an existing block untouched.
+        return Ok(UnitOutcome {
+            report: RefreshedFile::new(&unit.label, RefreshAction::Unchanged),
+            wrote_live: false,
+        });
+    }
+
+    // No block yet: create or append it, and snapshot the base.
+    let block = format!("{AGENTS_BLOCK_BEGIN}\n{AGENTS_BLOCK_BODY}{AGENTS_BLOCK_END}\n");
     let updated = if existing.is_empty() {
         block
     } else {
@@ -269,8 +713,13 @@ fn ensure_agents_block(repo_root: &Path, refresh: bool) -> Result<bool> {
         updated.push_str(&block);
         updated
     };
+    let path = repo_root.join("AGENTS.md");
     fs::write(&path, updated).map_err(|error| PulseError::io(&path, error))?;
-    Ok(true)
+    write_base(repo_root, &unit, AGENTS_BLOCK_BODY)?;
+    Ok(UnitOutcome {
+        report: RefreshedFile::new(&unit.label, RefreshAction::Created),
+        wrote_live: true,
+    })
 }
 
 fn ensure_gitignore_entries(repo_root: &Path) -> Result<Vec<String>> {
@@ -340,20 +789,245 @@ mod tests {
     }
 
     #[test]
-    fn refresh_overwrites_prompt_files() {
+    fn refresh_moves_an_unmodified_prompt_to_the_new_template() {
+        // Plan 0025 G2 rewrote the old overwrite semantics: an unmodified
+        // file (local == base) is recognized as the user never touching it
+        // and moves to the new template; a hand edit is merged, never
+        // clobbered. The template "evolution" is simulated by aging the
+        // base snapshot AND the on-disk file — the embedded template
+        // constant is fixed, so the pair stands for what an older Pulse
+        // shipped.
+        let repo = tempfile::tempdir().unwrap();
+        initialize_repository(repo.path(), false, false).unwrap();
+        let base_path = repo.path().join(".pulse/base/prompts/worker.md");
+        let shipped = fs::read_to_string(&base_path).unwrap();
+        let aged = shipped.replace("# Pulse worker", "# Pulse worker (aged)");
+        fs::write(&base_path, &aged).unwrap();
+        fs::write(repo.path().join(".pulse/prompts/worker.md"), &aged).unwrap();
+
+        let report = initialize_repository(repo.path(), true, false).unwrap();
+        let worker = report
+            .refreshed
+            .iter()
+            .find(|file| file.file == "prompts/worker.md")
+            .unwrap();
+        assert_eq!(worker.action, RefreshAction::Updated);
+        let text = fs::read_to_string(repo.path().join(".pulse/prompts/worker.md")).unwrap();
+        assert!(text.starts_with("# Pulse worker\n"));
+        assert_eq!(
+            fs::read_to_string(&base_path).unwrap(),
+            text,
+            "base moved with it"
+        );
+    }
+
+    #[test]
+    fn refresh_merges_a_user_edit_that_the_template_change_does_not_touch() {
+        let repo = tempfile::tempdir().unwrap();
+        initialize_repository(repo.path(), false, false).unwrap();
+        let base_path = repo.path().join(".pulse/base/prompts/worker.md");
+        let shipped = fs::read_to_string(&base_path).unwrap();
+        let aged = shipped.replace("# Pulse worker", "# Pulse worker (aged)");
+        fs::write(&base_path, &aged).unwrap();
+        // The user appended their own line and kept the aged heading — the
+        // template change (the heading) does not touch the user's line.
+        let local = format!("{aged}\nUSER NOTE LINE\n");
+        fs::write(repo.path().join(".pulse/prompts/worker.md"), &local).unwrap();
+
+        let report = initialize_repository(repo.path(), true, false).unwrap();
+        let worker = report
+            .refreshed
+            .iter()
+            .find(|file| file.file == "prompts/worker.md")
+            .unwrap();
+        assert_eq!(worker.action, RefreshAction::Merged, "{worker:?}");
+        let text = fs::read_to_string(repo.path().join(".pulse/prompts/worker.md")).unwrap();
+        assert!(text.contains("USER NOTE LINE"), "{text}");
+        assert!(
+            text.starts_with("# Pulse worker\n"),
+            "template side landed: {text}"
+        );
+    }
+
+    #[test]
+    fn refresh_leaves_a_conflicted_file_untouched_and_files_the_markers() {
+        let repo = tempfile::tempdir().unwrap();
+        initialize_repository(repo.path(), false, false).unwrap();
+        let base_path = repo.path().join(".pulse/base/prompts/worker.md");
+        let shipped = fs::read_to_string(&base_path).unwrap();
+        let aged = shipped.replace("# Pulse worker", "# Pulse worker (aged)");
+        fs::write(&base_path, &aged).unwrap();
+        // The user edited the SAME line the template changed, differently:
+        // a merge would lose one side, so it must conflict.
+        fs::write(
+            repo.path().join(".pulse/prompts/worker.md"),
+            aged.replace("# Pulse worker (aged)", "# My own worker prompt"),
+        )
+        .unwrap();
+
+        let report = initialize_repository(repo.path(), true, false).unwrap();
+        let worker = report
+            .refreshed
+            .iter()
+            .find(|file| file.file == "prompts/worker.md")
+            .unwrap();
+        assert_eq!(worker.action, RefreshAction::Conflict);
+        // The living prompt is never handed markers.
+        let text = fs::read_to_string(repo.path().join(".pulse/prompts/worker.md")).unwrap();
+        assert!(text.contains("# My own worker prompt"), "{text}");
+        assert!(!text.contains("<<<<<<<"), "{text}");
+        // The marker version is filed, and the base is unmoved.
+        let conflict = fs::read_to_string(
+            repo.path()
+                .join(".pulse/runtime/refresh/prompts-worker.md.conflict"),
+        )
+        .unwrap();
+        assert!(conflict.contains("<<<<<<<"));
+        assert_eq!(fs::read_to_string(&base_path).unwrap(), aged);
+    }
+
+    #[test]
+    fn refresh_keeps_a_baseless_file_and_files_the_new_template() {
+        // A repo enrolled before .pulse/base existed: no way to tell the
+        // user's edit from the template's, so nothing is guessed — the
+        // file stays, the new template is filed beside it, and the base
+        // stays absent until the user resolves.
         let repo = tempfile::tempdir().unwrap();
         initialize_repository(repo.path(), false, false).unwrap();
         let worker_path = repo.path().join(".pulse/prompts/worker.md");
-        // A sentinel that cannot collide with the prompt's own vocabulary —
-        // the bare word `stale` would, since the worker prompt names the
-        // real `handoff_verify_stale` violation.
         fs::write(&worker_path, "sentinel-do-not-keep\n").unwrap();
+        fs::remove_file(repo.path().join(".pulse/base/prompts/worker.md")).unwrap();
 
         let report = initialize_repository(repo.path(), true, false).unwrap();
-        assert_eq!(report.status, RepositoryInitStatus::Initialized);
+        let worker = report
+            .refreshed
+            .iter()
+            .find(|file| file.file == "prompts/worker.md")
+            .unwrap();
+        assert_eq!(worker.action, RefreshAction::Kept);
+        assert!(
+            worker
+                .note
+                .as_deref()
+                .is_some_and(|note| note.contains(".new")),
+            "{worker:?}"
+        );
+        assert_eq!(
+            fs::read_to_string(&worker_path).unwrap(),
+            "sentinel-do-not-keep\n"
+        );
+        assert!(repo
+            .path()
+            .join(".pulse/runtime/refresh/prompts-worker.md.new")
+            .exists());
+        assert!(!repo.path().join(".pulse/base/prompts/worker.md").exists());
+    }
+
+    #[test]
+    fn take_new_writes_the_template_and_rebases_and_keep_mine_advances_the_base() {
+        let repo = tempfile::tempdir().unwrap();
+        initialize_repository(repo.path(), false, false).unwrap();
+        let worker_path = repo.path().join(".pulse/prompts/worker.md");
+        fs::write(&worker_path, "sentinel-do-not-keep\n").unwrap();
+        fs::remove_file(repo.path().join(".pulse/base/prompts/worker.md")).unwrap();
+
+        // --keep-mine: the file stays, the base moves to the template so
+        // the next refresh merges for real.
+        let report = initialize_repository_ext(
+            repo.path(),
+            true,
+            false,
+            Some(("prompts/worker.md", RefreshTake::Mine)),
+        )
+        .unwrap();
+        let worker = report
+            .refreshed
+            .iter()
+            .find(|file| file.file == "prompts/worker.md")
+            .unwrap();
+        assert_eq!(worker.action, RefreshAction::Kept);
+        assert_eq!(
+            fs::read_to_string(&worker_path).unwrap(),
+            "sentinel-do-not-keep\n"
+        );
+        let base = fs::read_to_string(repo.path().join(".pulse/base/prompts/worker.md")).unwrap();
+        assert!(base.starts_with("# Pulse worker\n"), "{base}");
+
+        // The next refresh now merges (theirs == base, so the user's text
+        // wins every hunk) instead of falling back to keep-and-show.
+        let report = initialize_repository(repo.path(), true, false).unwrap();
+        let worker = report
+            .refreshed
+            .iter()
+            .find(|file| file.file == "prompts/worker.md")
+            .unwrap();
+        assert_eq!(worker.action, RefreshAction::Merged, "{worker:?}");
+
+        // --take-new: the template becomes the file and the base rebases.
+        fs::write(&worker_path, "sentinel-replaced-by-take-new\n").unwrap();
+        let report = initialize_repository_ext(
+            repo.path(),
+            true,
+            false,
+            Some(("prompts/worker.md", RefreshTake::New)),
+        )
+        .unwrap();
+        let worker = report
+            .refreshed
+            .iter()
+            .find(|file| file.file == "prompts/worker.md")
+            .unwrap();
+        assert_eq!(worker.action, RefreshAction::Updated);
         let text = fs::read_to_string(&worker_path).unwrap();
-        assert!(text.starts_with("# Pulse worker"));
-        assert!(!text.contains("sentinel-do-not-keep"));
+        assert!(text.starts_with("# Pulse worker\n"), "{text}");
+        assert_eq!(
+            fs::read_to_string(repo.path().join(".pulse/base/prompts/worker.md")).unwrap(),
+            text
+        );
+    }
+
+    #[test]
+    fn a_resolution_naming_an_unmanaged_file_is_init_refresh_unknown_file() {
+        let repo = tempfile::tempdir().unwrap();
+        initialize_repository(repo.path(), false, false).unwrap();
+        let err = initialize_repository_ext(
+            repo.path(),
+            true,
+            false,
+            Some(("docs/README.md", RefreshTake::New)),
+        )
+        .unwrap_err();
+        assert_eq!(err.code(), "init_refresh_unknown_file");
+        assert!(err.hint().is_some());
+    }
+
+    #[test]
+    fn the_pulse_base_state_is_never_gitignored() {
+        // .pulse/base is the durable side of the three-way merge: gitignored
+        // bases would silently downgrade every later refresh to keep-and-show.
+        let repo = tempfile::tempdir().unwrap();
+        initialize_repository(repo.path(), false, false).unwrap();
+        let gitignore = fs::read_to_string(repo.path().join(".gitignore")).unwrap();
+        assert!(!gitignore.contains(".pulse/base"), "{gitignore}");
+        let report = initialize_repository(repo.path(), true, false).unwrap();
+        assert!(!report
+            .created
+            .iter()
+            .any(|entry| entry.contains(".gitignore: **/.pulse/base")));
+    }
+
+    #[test]
+    fn refreshing_twice_in_a_row_reports_all_unchanged_the_second_time() {
+        let repo = tempfile::tempdir().unwrap();
+        initialize_repository(repo.path(), false, false).unwrap();
+        let first = initialize_repository(repo.path(), true, false).unwrap();
+        assert_eq!(first.status, RepositoryInitStatus::Unchanged);
+        let second = initialize_repository(repo.path(), true, false).unwrap();
+        assert_eq!(second.status, RepositoryInitStatus::Unchanged);
+        for file in &second.refreshed {
+            assert_eq!(file.action, RefreshAction::Unchanged, "{file:?}");
+        }
+        assert!(second.created.is_empty());
     }
 
     #[test]
@@ -407,7 +1081,47 @@ mod tests {
     }
 
     #[test]
-    fn refresh_rewrites_only_the_block_region() {
+    fn refresh_merges_the_block_region_and_never_touches_anything_outside_it() {
+        // Plan 0025 G2 semantics: the block region merges like any other
+        // refreshable file — a user edit survives (the old test asserted
+        // the edit was overwritten); the outside content is byte-identical
+        // in every outcome.
+        let repo = tempfile::tempdir().unwrap();
+        fs::write(
+            repo.path().join("AGENTS.md"),
+            "# My repo rules\n\nBe nice.\n\nHAND MARKER: keep me\n",
+        )
+        .unwrap();
+        initialize_repository(repo.path(), false, false).unwrap();
+        let agents_path = repo.path().join("AGENTS.md");
+        let mut hand_edited = fs::read_to_string(&agents_path).unwrap();
+        hand_edited = hand_edited.replace("Pulse is the local CLI", "STALE TEXT");
+        fs::write(&agents_path, &hand_edited).unwrap();
+
+        let report = initialize_repository(repo.path(), true, false).unwrap();
+        let block = report
+            .refreshed
+            .iter()
+            .find(|file| file.file == "agents-block")
+            .unwrap();
+        assert_eq!(block.action, RefreshAction::Merged, "{block:?}");
+        let after = fs::read_to_string(&agents_path).unwrap();
+        assert!(after.starts_with("# My repo rules\n\nBe nice.\n"));
+        assert!(
+            after.contains("HAND MARKER: keep me"),
+            "outside content intact"
+        );
+        // The user's edit survives the merge (the template did not change
+        // since init, so the merge keeps the user's side).
+        assert!(
+            after.contains("STALE TEXT"),
+            "a merge never clobbers: {after}"
+        );
+        assert!(after.contains(AGENTS_BLOCK_BEGIN));
+    }
+
+    #[test]
+    fn refresh_ages_the_block_region_to_the_new_template_when_the_user_did_not_edit() {
         let repo = tempfile::tempdir().unwrap();
         fs::write(
             repo.path().join("AGENTS.md"),
@@ -415,17 +1129,33 @@ mod tests {
         )
         .unwrap();
         initialize_repository(repo.path(), false, false).unwrap();
-        let path = repo.path().join("AGENTS.md");
-        let mut hand_edited = fs::read_to_string(&path).unwrap();
-        hand_edited = hand_edited.replace("Pulse is the local CLI", "STALE TEXT");
-        fs::write(&path, &hand_edited).unwrap();
+        let base_path = repo.path().join(".pulse/base/agents-block.md");
+        let shipped = fs::read_to_string(&base_path).unwrap();
+        // Age base AND the on-disk region together: what an older template
+        // shipped, before the constant moved on.
+        let aged = shipped.replace("## Pulse", "## Pulse (aged)");
+        fs::write(&base_path, &aged).unwrap();
+        let agents = fs::read_to_string(repo.path().join("AGENTS.md")).unwrap();
+        fs::write(
+            repo.path().join("AGENTS.md"),
+            agents.replace("## Pulse\n", "## Pulse (aged)\n"),
+        )
+        .unwrap();
 
         let report = initialize_repository(repo.path(), true, false).unwrap();
-        assert_eq!(report.status, RepositoryInitStatus::Initialized);
-        let after = fs::read_to_string(&path).unwrap();
+        let block = report
+            .refreshed
+            .iter()
+            .find(|file| file.file == "agents-block")
+            .unwrap();
+        assert_eq!(block.action, RefreshAction::Updated, "{block:?}");
+        let after = fs::read_to_string(repo.path().join("AGENTS.md")).unwrap();
         assert!(after.starts_with("# My repo rules\n\nBe nice.\n"));
-        assert!(!after.contains("STALE TEXT"));
-        assert!(after.contains("Pulse is the local CLI"));
+        assert!(
+            after.contains("## Pulse\n"),
+            "template side landed: {after}"
+        );
+        assert!(!after.contains("## Pulse (aged)"));
     }
 
     #[test]

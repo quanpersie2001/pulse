@@ -64,7 +64,12 @@ appended event.
   `profiles` and their optional `panels` — and the per-record fence — `fence_for`
   picks the scope snapshot for a record with `touches`, the whole tree
   otherwise, and `same_fence` is the one comparison rule), `learn`,
-  `docs`, `init`, `serve`, `doctor`, `metrics` (read-only computation of
+  `docs`, `init` (enrollment — and `--refresh`'s three-way merge, plan
+  0025 G2: every template-written file keeps its as-shipped copy in
+  `.pulse/base/`, `git merge-file` folds template changes into files the
+  user edited, a conflict never touches the user's file and is filed
+  under `.pulse/runtime/refresh/` with `--take-new`/`--keep-mine` to
+  resolve), `serve`, `doctor`, `metrics` (read-only computation of
   plan 0022's hand-measured numbers from the event log, receipts, store and
   learnings — every number's definition on its field, non-derivable ones
   listed as `not_derivable` with the reason; plan 0025 E6), `registry`

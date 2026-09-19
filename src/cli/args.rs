@@ -15,10 +15,24 @@ pub struct Cli {
 pub(crate) enum Command {
     /// Create `.pulse/`, `PULSE.md` and the store files it needs.
     Init {
-        /// Re-render the Pulse block in `AGENTS.md` and the lane prompts,
-        /// leaving the rest of `AGENTS.md` untouched.
+        /// Re-render the Pulse block in `AGENTS.md` and the lane prompts
+        /// through a three-way merge against their as-shipped copies
+        /// (.pulse/base): files you never touched move to the new
+        /// template, your edits merge; a conflict leaves your file
+        /// untouched and points at the marker copy under
+        /// .pulse/runtime/refresh/.
         #[arg(long)]
         refresh: bool,
+        /// Resolve one file a previous refresh kept: write the template
+        /// over it and rebase .pulse/base. Only files the refresh manages
+        /// (prompts/*.md, agents-block).
+        #[arg(long, value_name = "FILE", conflicts_with = "keep_mine")]
+        take_new: Option<String>,
+        /// Resolve one file a previous refresh kept: keep your version,
+        /// move .pulse/base to the current template so the next refresh
+        /// merges for real.
+        #[arg(long, value_name = "FILE")]
+        keep_mine: Option<String>,
         /// Skip registering this repo in the user-level project registry
         /// (~/.pulse/projects.json) that `pulse serve` reads (Decision
         /// 0023).
