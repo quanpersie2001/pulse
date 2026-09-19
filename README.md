@@ -21,6 +21,19 @@ repository can prove, not a sentence an agent wrote. The work graph,
 receipts, run observations and the event log are plain files under Git
 (`.pulse/` and `docs/`); the repository remains the system of record.
 
+## Read-only board
+
+<table>
+  <tr>
+    <td width="50%"><img src="assets/screenshots/board.png" alt="Pulse board grouped by story" /></td>
+    <td width="50%"><img src="assets/screenshots/overview.png" alt="Pulse project overview" /></td>
+  </tr>
+  <tr>
+    <td width="50%"><img src="assets/screenshots/activity.png" alt="Pulse activity timeline" /></td>
+    <td width="50%"><img src="assets/screenshots/ticket-detail.png" alt="Pulse ticket detail panel" /></td>
+  </tr>
+</table>
+
 ## Why
 
 Coding agents usually fail for ordinary engineering reasons, and none of
