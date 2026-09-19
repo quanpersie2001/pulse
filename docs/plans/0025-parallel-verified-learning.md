@@ -626,14 +626,15 @@ tổng ở cuối mỗi pha.
 
 **Dogfood: đã chạy 2026-09-19** trên `~/Workspace/Personal/todolist`
 (ST-33d3, hai worker song song + panel 3/2 + qa thật). 14 friction gốc
-(gom 28 note): **8 đã sửa trọn vẹn, 4 sửa nửa khả-dĩ** (phần còn lại là
-đổi luật — chuyển thành quyết định chờ chủ repo trong `0025-dogfood.md`
-§1.1), **2 chờ quyết định**; 0 không tái hiện, 0 chữa sai bệnh. Ba con số:
+(gom 28 note): **10 đã sửa trọn vẹn, 4 sửa nửa khả-dĩ khép ở "không đổi
+luật"** (D2/D3/D4 — chủ repo chấp nhận P1 cùng ngày); **0 còn chờ quyết
+định**; 0 không tái hiện, 0 chữa sai bệnh. Ba con số:
 build gãy chéo **0** (giữ single-checkout, dưới ngưỡng decision 0025),
 `docs_maybe_stale` đúng **0/3** (giữ advisory), `pulse verify` max
 **11.2s** (timeout 900s giữ nguyên). Các commit sửa: `c0c7eb7` (F8/F4),
 `5395724` (F4/F5/F6-nửa-template/F7/F9), `6940826` (F12/F13), `299cd10`
-(F10-nửa-skill/F11), `c018b89` (F2). Chi tiết xác minh từng F:
+(F10-nửa-skill/F11), `c018b89` (F2), `bfcecf1` (F1/D1), `b6008ea`
+(F14/D5). Chi tiết xác minh từng F + kết cục D1–D5:
 [`docs/plans/0025-dogfood.md`](0025-dogfood.md).
 
 Đã xong (mỗi pha xanh cả ba lệnh validation, threading mặc định):

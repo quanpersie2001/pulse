@@ -61,13 +61,15 @@ sửa nửa khả-dĩ + nửa còn lại là đổi luật chuyển thành quy�
 F5, F6, F10); chờ quyết định trọn vẹn 2 (F1, F14); không tái hiện được 0;
 không phải lỗi Pulse (mà là lỗi planner/target) 3 nửa (F10-half,
 F11, F12-half) — mọi chẩn đoán của dogfood đều khớp code, không có mục
-nào bị chữa sai bệnh.
+nào bị chữa sai bệnh. *(Kết cục cùng ngày: D1–D5 được chấp nhận theo
+khuyến nghị — F1, F14 khép lại thành đã sửa; F3/F5/F6/F10 khép ở
+"không đổi luật". Xem Kết cục ở §1.1.)*
 
 ### Kết quả xử lý
 
 | F# | Kết quả | Commit |
 |---|---|---|
-| F1 | chờ quyết định | — |
+| F1 | đã chốt D1-P1 — đã sửa (collapse output refresh) | `bfcecf1` |
 | F2 | đã sửa (tái phân loại pulse-bug — thông báo) | `c018b89` |
 | F3 | chờ quyết định; nửa skill đã sửa | `299cd10` |
 | F4 | đã sửa (template + message) | `5395724`, `c0c7eb7` |
@@ -80,12 +82,19 @@ nào bị chữa sai bệnh.
 | F11 | đã sửa (skill); cơ chế Pulse đúng | `299cd10` |
 | F12 | đã sửa (api.mjs); nửa oracle là lỗi human phía target | `6940826` |
 | F13 | đã sửa (ui.mjs + README) | `6940826` |
-| F14 | chờ quyết định (cơ chế giữ nguyên) | — |
+| F14 | đã chốt D5-P1 — cơ chế giữ nguyên, thứ tự qa ghi vào docs | `b6008ea` |
 
 ## 1.1 Quyết định chờ chủ repo
 
 Mỗi đoạn: vấn đề → hai phương án → khuyến nghị của session sửa + cái giá.
 Kèm trả lời thẳng ba câu số liệu ở §2.
+
+> **Kết cục:** chủ repo chấp nhận khuyến nghị P1 cho cả D1–D5 (cùng ngày
+> 2026-09-19). D1 đã thực thi (`bfcecf1` — collapse output refresh), D5 đã
+> thực thi (`b6008ea` — thứ tự qa story-scope ghi vào qa README, seed
+> run.md và AGENTS block); D2/D3/D4 khép lại ở "không đổi luật" — nửa
+> skill/docs đã sửa từ trước (`299cd10`, `5395724`). Không còn quyết định
+> nào chờ.
 
 **D1 (F1) — quy trình resolve `init --refresh`.** Vấn đề: `--take-new`
 nhận một file/lần, mỗi lần in lại toàn bộ trạng thái, `kept — no base`
