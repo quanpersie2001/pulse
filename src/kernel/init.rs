@@ -1343,11 +1343,21 @@ mod tests {
         let script = Path::new(env!("CARGO_MANIFEST_DIR")).join("templates/qa/api.mjs");
         let repo = tempfile::tempdir().unwrap();
         fs::create_dir_all(repo.path().join("docs/operations")).unwrap();
+        // `pkill` is POSIX-only; Windows stops the exact listener instead
+        // (by owning port, never by image name — parallel qa_api tests run
+        // their own python3 servers on other ports).
+        let stop = if cfg!(windows) {
+            r#"["powershell", "-Command", "Get-NetTCPConnection -LocalPort 18080 -State Listen | ForEach-Object { Stop-Process -Id $_.OwningProcess -Force }"]"#
+        } else {
+            r#"["pkill", "-f", "http.server 18080"]"#
+        };
         fs::write(
             repo.path().join("docs/operations/run.md"),
-            "# Run\n\n```pulse-run\nid: api\nstart: [\"python3\", \"-m\", \"http.server\", \"18080\"]\n\
-             ready_url: \"http://127.0.0.1:18080/\"\nstop: [\"pkill\", \"-f\", \"http.server 18080\"]\n\
-             log: \".pulse/runtime/logs/api.log\"\nawait_exit: false\n```\n",
+            format!(
+                "# Run\n\n```pulse-run\nid: api\nstart: [\"python3\", \"-m\", \"http.server\", \"18080\"]\n\
+                 ready_url: \"http://127.0.0.1:18080/\"\nstop: {stop}\n\
+                 log: \".pulse/runtime/logs/api.log\"\nawait_exit: false\n```\n"
+            ),
         )
         .unwrap();
         fs::write(
