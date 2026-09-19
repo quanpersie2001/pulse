@@ -4,6 +4,8 @@
 # `ui-medium`) except `decision_work`, which every `role: decision_work`
 # Ticket uses regardless of its surface or risk.
 fence_ignore: []
+# Panel (decision 0027): N independent reviewers for one lane, then reconcile.
+#   api-high: {lanes: [...], panels: {review-correctness: {count: 3, quorum: 2}}, human: required}
 profiles:
   cli-low: {lanes: [review-correctness]}
   lib-low: {lanes: [review-correctness]}

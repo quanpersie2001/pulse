@@ -3,7 +3,7 @@
 
 use std::path::Path;
 
-use crate::kernel::doctor::{self, DetectorStatus, DoctorReport};
+use crate::kernel::doctor::{self, DoctorReport};
 use crate::PulseError;
 
 pub(crate) fn handle(repo_root: &Path, json: bool) -> Result<(), PulseError> {
@@ -42,8 +42,10 @@ fn render(report: &DoctorReport) {
         unreadable_receipts,
         expired_leases,
         orphan_evidence,
-        detector_context_threshold,
-        host_hooks_installed,
+        stale_lane_preparations,
+        awaiting_commit,
+        learning_suspects,
+        stale_cites,
     } = report;
 
     println!("store");
@@ -67,7 +69,7 @@ fn render(report: &DoctorReport) {
     if expired_leases.is_empty() {
         println!("  no active ticket holds an expired lease");
     } else {
-        println!("  EXPIRED on active tickets — resume with `pulse run worker <id>` or `pulse release <id>`:");
+        println!("  EXPIRED on active tickets — reclaim with `pulse claim <id>` or drop with `pulse release <id>`:");
         for lease in expired_leases {
             println!(
                 "    {} actor={} run={} expired_at={}",
@@ -89,20 +91,72 @@ fn render(report: &DoctorReport) {
         }
     }
 
-    println!("detector context-threshold (plan 10.4)");
-    if !*host_hooks_installed {
-        println!("  host hooks not installed — nothing to warn about");
-        return;
+    println!("lane preparations");
+    if stale_lane_preparations.is_empty() {
+        println!("  every prepared lane was sealed");
+    } else {
+        println!(
+            "  PREPARED BUT NOT SEALED — the lane never ran, or died without writing its output:"
+        );
+        for stale in stale_lane_preparations {
+            println!(
+                "    {} {} prepared_at={} by={}",
+                stale.id,
+                stale.role,
+                stale.prepared_at.as_deref().unwrap_or("?"),
+                stale.prepared_by.as_deref().unwrap_or("?"),
+            );
+        }
     }
-    match detector_context_threshold {
-        DetectorStatus::Exercised => {
-            println!("  exercised (a continue round-trip is in the event log)")
+
+    println!("awaiting commit");
+    if awaiting_commit.is_empty() {
+        println!("  every dirty path belongs to a ticket still working");
+    } else {
+        println!(
+            "  DONE TICKETS WHOSE FILES ARE STILL UNCOMMITTED — commit them \
+             (`git add -- <path> && git commit`):"
+        );
+        for pending in awaiting_commit {
+            println!(
+                "    {} held by {}",
+                pending.path,
+                pending.held_by.join(", ")
+            );
         }
-        DetectorStatus::MarkerPending => {
-            println!("  WARNING: marker present but unconsumed — the host loop stopped mid-cycle; checkpoint and continue");
+    }
+
+    println!("learnings");
+    if learning_suspects.is_empty() && stale_cites.is_empty() {
+        println!("  no suspect learning, no stale citation");
+    }
+    if !learning_suspects.is_empty() {
+        // Plan 0025 E3: recall already excludes these; retirement is a human
+        // decision, never automatic.
+        println!(
+            "  SUSPECT (reported misleading more often than helpful; excluded from packets \
+             and `pulse verify`) — retire or re-trust by hand:"
+        );
+        for suspect in learning_suspects {
+            println!(
+                "    {} [{}] helpful={} not_needed={} misleading={} — \
+                 `pulse learn retire <id> --reason …`",
+                suspect.id, suspect.status, suspect.helpful, suspect.not_needed, suspect.misleading
+            );
         }
-        DetectorStatus::Unexercised => {
-            println!("  WARNING: never exercised — no continue round-trip recorded; the 70% context handoff is untested in this repo");
+    }
+    if !stale_cites.is_empty() {
+        // Plan 0025 E4: the code moved; the learning needs a re-read, not a
+        // retire — nothing is excluded or retired by machine.
+        println!(
+            "  STALE CITES (the cited lines changed since the learning was added) — \
+             re-read the learning by hand:"
+        );
+        for cite in stale_cites {
+            println!(
+                "    {} cites {}:{} — `pulse learn retire <id> --reason …` if it no longer holds",
+                cite.learning, cite.path, cite.lines
+            );
         }
     }
 }

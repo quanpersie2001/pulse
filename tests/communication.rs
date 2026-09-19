@@ -20,6 +20,9 @@ mod common_bin;
 #[allow(dead_code)]
 #[path = "common/fixture_repo.rs"]
 mod common_fixture_repo;
+#[allow(dead_code)]
+#[path = "common/git.rs"]
+mod common_git;
 
 use crate::common_fixture_repo::TestRepo;
 
@@ -400,4 +403,187 @@ fn the_since_cursor_crosses_a_day_boundary() {
         .map(|event| event["payload"]["text"].as_str().unwrap())
         .collect();
     assert_eq!(messages, vec!["day two"]);
+}
+
+// ---------------------------------------------------------------------------
+// Plan 0025 F3: the reverse doc gate — handoff advises, `docs check
+// --ticket` reports, nothing blocks.
+// ---------------------------------------------------------------------------
+
+/// A target repo with `docs/api.md` (frontmatter `applies_to: ["api/**"]`)
+/// and `api/x.py` in the committed baseline, plus a claimed low-risk ticket
+/// with the given `touches`, whose edits (api code, plus the doc when
+/// `edit_doc_too`) are verified and handed off. Returns the repo, the
+/// ticket id and the handoff's JSON output.
+fn setup_stale_docs_repo(touches: &[&str], edit_doc_too: bool) -> (TestRepo, String, Value) {
+    let repo = TestRepo::from_fixture("minimal-service");
+    // Payload files live outside the target repo: an untracked JSON in the
+    // tree is exactly what `handoff_unreserved_changes` exists to refuse.
+    let harness = tempfile::tempdir().unwrap();
+    repo.pulse_ok(&["init", "--json"]);
+    fs::create_dir_all(repo.path().join("docs")).unwrap();
+    fs::write(
+        repo.path().join("docs/api.md"),
+        "---\napplies_to: [\"api/**\"]\n---\n# API\nEndpoints live under api/.\n",
+    )
+    .unwrap();
+    fs::create_dir_all(repo.path().join("api")).unwrap();
+    fs::write(repo.path().join("api/x.py"), "def handler(): ...\n").unwrap();
+    common_git::commit_all(repo.path());
+
+    let created = repo.pulse_ok(&[
+        "work",
+        "new",
+        "ticket",
+        "API work",
+        "--risk",
+        "low",
+        "--surface",
+        "cli",
+        "--json",
+    ]);
+    let ticket_id = created["id"].as_str().unwrap().to_string();
+    let ticket_json = harness.path().join("ticket-payload.json");
+    fs::write(
+        &ticket_json,
+        serde_json::to_string(&serde_json::json!({
+            "objective": "adjust the api handler",
+            "context": {"anchors": ["api/x.py: the handler"]},
+            "acceptance": [{"id": "AC-1", "when": "w", "then": "t"}],
+            "verify": [{"name": "unit", "argv": ["true"]}],
+            "touches": touches,
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    repo.pulse_ok(&[
+        "work",
+        "update",
+        &ticket_id,
+        "--from",
+        ticket_json.to_str().unwrap(),
+        "--json",
+    ]);
+    repo.pulse_ok(&["work", "ready", &ticket_id, "--json"]);
+
+    let claimed = repo.pulse_ok(&["claim", &ticket_id, "--actor", "agent:worker", "--json"]);
+    let run_id = claimed["lease"]["run_id"].as_str().unwrap().to_string();
+
+    // The ticket's edits: api code, plus the doc when the caller says so.
+    fs::write(repo.path().join("api/x.py"), "def handler(): return 1\n").unwrap();
+    if edit_doc_too {
+        fs::write(
+            repo.path().join("docs/api.md"),
+            "---\napplies_to: [\"api/**\"]\n---\n# API\nEndpoints live under api/. The handler returns 1.\n",
+        )
+        .unwrap();
+    }
+    repo.pulse_ok(&["verify", &ticket_id, "--actor", "agent:worker", "--json"]);
+
+    let handoff_json = harness.path().join("handoff-payload.json");
+    fs::write(
+        &handoff_json,
+        serde_json::to_string(&serde_json::json!({
+            "run_id": run_id,
+            "summary": "done",
+            "acceptance": [{"id": "AC-1", "status": "done", "how": "ran it"}],
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let handed = repo.pulse_ok(&[
+        "handoff",
+        &ticket_id,
+        "--from",
+        handoff_json.to_str().unwrap(),
+        "--actor",
+        "agent:worker",
+        "--json",
+    ]);
+    (repo, ticket_id, handed)
+}
+
+#[test]
+fn handoff_advises_and_docs_check_ticket_reports_when_code_moved_without_the_doc() {
+    let (repo, ticket_id, handed) = setup_stale_docs_repo(&["api/**"], false);
+
+    // The handoff output carries the advisory: the doc describing the
+    // changed api code was not updated by the same hand.
+    let staled = handed["docs_maybe_stale"].as_array().unwrap();
+    assert_eq!(staled.len(), 1, "{handed}");
+    assert_eq!(staled[0]["doc"], serde_json::json!("docs/api.md"));
+    assert_eq!(staled[0]["pattern"], serde_json::json!("api/**"));
+    assert_eq!(staled[0]["because"][0], serde_json::json!("api/x.py"));
+
+    // The stored record itself stays clean — the advisory rides the CLI
+    // payload, never the record (same tier as close's unclassified_friction).
+    let stored = repo.pulse_ok(&["work", "show", &ticket_id, "--json"]);
+    assert!(
+        stored["docs_maybe_stale"].is_null(),
+        "the record itself stays clean: {stored}"
+    );
+
+    let report = repo.pulse_ok(&["docs", "check", "--ticket", &ticket_id, "--json"]);
+    assert_eq!(report["verdict"], "pass", "a low advisory must not fail");
+    let findings = report["findings"].as_array().unwrap();
+    assert_eq!(findings.len(), 1, "{report}");
+    assert_eq!(findings[0]["severity"], "low");
+    assert_eq!(findings[0]["status"], "open");
+    assert_eq!(findings[0]["owner"], "docs/api.md");
+    assert_eq!(findings[0]["ref"], "docs/api.md");
+    let summary = findings[0]["summary"].as_str().unwrap();
+    assert!(summary.contains("describes api/**"), "{summary}");
+    assert!(summary.contains(&ticket_id), "{summary}");
+    assert!(summary.contains("api/x.py"), "{summary}");
+
+    // The event log carries the advisory from the handoff.
+    let events: Vec<Value> =
+        serde_json::from_value(repo.pulse_ok(&["events", "tail", "--id", &ticket_id, "--json"]))
+            .unwrap();
+    let advisory = events
+        .iter()
+        .find(|event| event["event_type"] == "docs.maybe_stale")
+        .expect("the handoff emitted docs.maybe_stale");
+    assert_eq!(
+        advisory["payload"]["docs"][0]["doc"],
+        serde_json::json!("docs/api.md")
+    );
+    assert_eq!(
+        advisory["payload"]["docs"][0]["pattern"],
+        serde_json::json!("api/**")
+    );
+
+    // Plain `docs check` stays advisory-free.
+    let plain = repo.pulse_ok(&["docs", "check", "--json"]);
+    assert_eq!(plain["verdict"], "pass");
+    assert_eq!(plain["findings"].as_array().unwrap().len(), 0);
+
+    // An unknown ticket is the usual not-found error.
+    let missing = repo.pulse(&["docs", "check", "--ticket", "TK-zzzz", "--json"]);
+    assert_eq!(error_code(&missing), "issue_not_found");
+}
+
+#[test]
+fn a_doc_updated_alongside_its_code_is_never_advised() {
+    // `touches` covers the doc too, so the worker may edit it — and did.
+    let (repo, ticket_id, handed) = setup_stale_docs_repo(&["api/**", "docs/**"], true);
+
+    assert!(
+        handed["docs_maybe_stale"].is_null(),
+        "no advisory when the doc moved with its code: {handed}"
+    );
+
+    let report = repo.pulse_ok(&["docs", "check", "--ticket", &ticket_id, "--json"]);
+    assert_eq!(report["verdict"], "pass");
+    assert_eq!(report["findings"].as_array().unwrap().len(), 0);
+
+    let events: Vec<Value> =
+        serde_json::from_value(repo.pulse_ok(&["events", "tail", "--id", &ticket_id, "--json"]))
+            .unwrap();
+    assert!(
+        !events
+            .iter()
+            .any(|event| event["event_type"] == "docs.maybe_stale"),
+        "no advisory when the doc moved with its code"
+    );
 }

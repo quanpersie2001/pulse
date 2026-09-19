@@ -1,4 +1,17 @@
 {
   "version": 1,
-  "recommendations": []
+  "recommendations": [
+    {
+      "rulePath": "/Users/quannv.dev/Workspace/Personal/pulse/.pi/rules/(to be determined)",
+      "ruleRelativePath": ".pi/rules/(to be determined)",
+      "summary": "Kernel code that runs declared argv: no lock held, bounded+redacted output, module naming",
+      "content": "## Running a declared command from the kernel\n\n`kernel::verify::run_argv` is the one reusable runner. Any new caller (e.g. a\nfinding's `check.argv`, a learning's `check_argv`) goes through it rather than\nspawning its own process.\n\nRules that hold for that path, each learned the hard way in plan 0025 Pha D:\n\n1. **No `WriteGuard` is held while a child process runs.** Commands can run for\n   minutes and `WriteGuard` is a non-reentrant `flock`; holding it across a\n   spawn starves other workers and deadlocks any nested `issues::mutate`.\n   Run first, then take the lock (or never take one).\n2. **A child's output is captured to a file, never a pipe the parent is not\n   draining.** A pipe deadlocks the child past the ~64 KiB buffer if the parent\n   `wait()`s before reading. `run_argv` redirects stdout+stderr to one scratch\n   file under `.pulse/runtime/`.\n3. **Persisted output is bounded and redacted, and the bound is 32 KiB** — the\n   single number from Decision 0024 §3 (\"the interesting end of a broken run is\n   its last lines\"). Do not invent a second bound.\n4. **`redaction::clean_text` refuses rather than rewrites** for anything\n   starting with `/` (it treats the whole value as one path). Applied to a\n   multi-line log that means: a log beginning with an absolute path is\n   *withheld*, not scrubbed. Never let redaction drop the exit code — the exit\n   code is what gates read.\n5. **A spawn failure is an observation, not an error** (`exit: null` + a note in\n   the log), so one broken declaration cannot hide the other results. Only a\n   malformed *declaration* (empty argv, `cwd` that is not an existing repo\n   directory, a log name outside `[A-Za-z0-9._-]`) is an `Err`.\n\n## Module naming under the architecture guards\n\n`tests/architecture_guards.rs::daemon_runtime_tree_is_absent` forbids\n`src/run.rs`, `src/process.rs`, `src/workspace.rs`, `src/assignment.rs` and the\nmatching `pub mod` lines. The runner is therefore `kernel::verify`, not\n`kernel::run`.\n\n`kernel_does_not_depend_on_cli` is a **raw substring scan** for `crate::cli`\nacross `src/kernel/**` — it matches inside doc comments too. Write \"the CLI\nlayer above\" (or similar) rather than the literal path when documenting the\ndependency direction.\n",
+      "reason": "Decision 0026 added the first (and only) place Pulse spawns a process: `pulse verify` running a record's `verify[]` argv. Three non-obvious engineering constraints came out of it that a future session adding a second caller (Pha C's reconcile, Pha E's learning check) must not rediscover by breaking them.",
+      "status": "pending",
+      "id": "rec_mu7e4g1b_a2bt11jq",
+      "createdAt": 1789762065455,
+      "updatedAt": 1789762065455,
+      "mergeCount": 1
+    }
+  ]
 }

@@ -24,16 +24,24 @@ pub(crate) enum DocsCommand {
         json: bool,
     },
     /// Broken internal links, missing `docs/README.md` paths, and stale
-    /// `generated_by.check_argv`. Exits 1 if any finding is found, unless
+    /// `generated_by.check_argv`. Exits 1 if the verdict is `fail`, unless
     /// `--write` is given (a lane role never signals failure by exit code —
-    /// only through its output's `verdict`).
+    /// only through its output's `verdict`). With `--ticket <id>`, the
+    /// report also carries one low-severity finding per doc the ticket's
+    /// edits may have staled (plan 0025 F3); low findings never flip the
+    /// verdict, so they never flip the exit code either.
     Check {
         #[arg(long)]
         json: bool,
+        /// Advise for this ticket: which docs describing changed code the
+        /// ticket did not update. Unknown ids are refused.
+        #[arg(long)]
+        ticket: Option<String>,
         /// Write the lane-shape report here instead of stdout, and print
-        /// `{"status":"done"}` — wires directly as `runners.json`'s
-        /// `check-docs` role with no wrapper script, e.g.
-        /// `pulse docs check --write {artifact_dir}/check-docs.json`.
+        /// `{"status":"done"}` — this IS the `check-docs` lane, with no
+        /// agent and no wrapper script: `pulse docs check --ticket <id>
+        /// --write .pulse/evidence/<id>/check-docs.json`, then `pulse lane
+        /// seal <id> check-docs`.
         #[arg(long)]
         write: Option<PathBuf>,
     },
@@ -54,12 +62,33 @@ pub(crate) fn handle(repo_root: &Path, command: DocsCommand) -> Result<(), Pulse
                 .join("\n");
             render(json, &values, human)
         }
-        DocsCommand::Check { json, write } => handle_check(repo_root, json, write.as_deref()),
+        DocsCommand::Check {
+            json,
+            ticket,
+            write,
+        } => handle_check(repo_root, json, ticket.as_deref(), write.as_deref()),
     }
 }
 
-fn handle_check(repo_root: &Path, json: bool, write: Option<&Path>) -> Result<(), PulseError> {
-    let report = docs::check::check(repo_root)?;
+fn handle_check(
+    repo_root: &Path,
+    json: bool,
+    ticket: Option<&str>,
+    write: Option<&Path>,
+) -> Result<(), PulseError> {
+    // Plan 0025 F3: `--ticket` computes the stale-doc advisory (which docs
+    // describing changed code the ticket did not update) and rides it into
+    // the report as low findings. `pulse docs check --ticket <id> --write
+    // <path>` is the whole check-docs lane for one ticket.
+    let advisory = match ticket {
+        None => Vec::new(),
+        Some(id) => {
+            let records = crate::store::issues::read_all(repo_root)?;
+            let record = crate::kernel::issues::require(&records, id)?;
+            crate::docs::stale::for_ticket(repo_root, record)?
+        }
+    };
+    let report = docs::check::check_with(repo_root, ticket, &advisory)?;
 
     if let Some(path) = write {
         if let Some(parent) = path.parent() {
@@ -71,7 +100,6 @@ fn handle_check(repo_root: &Path, json: bool, write: Option<&Path>) -> Result<()
         return Ok(());
     }
 
-    let has_findings = !report.findings.is_empty();
     if json {
         println!(
             "{}",
@@ -86,7 +114,12 @@ fn handle_check(repo_root: &Path, json: bool, write: Option<&Path>) -> Result<()
     }
     std::io::stdout().flush().ok();
 
-    if has_findings {
+    // Exit 1 exactly when the verdict is fail (plan 0025 F3): for the plain
+    // report that is the same "any finding" rule as before — every
+    // structural finding is medium — while an advisory-only run (low
+    // findings from `--ticket`) stays exit 0, like the verdict it cannot
+    // flip.
+    if report.verdict == "fail" {
         std::process::exit(1);
     }
     Ok(())

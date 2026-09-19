@@ -1,7 +1,15 @@
 # QA templates (plan 0022 §8.6)
 
 `ui.mjs` and `api.mjs` are the `qa-ui`/`qa-api` lane scripts `pulse init
---with-qa-templates` copies into `scripts/qa/` of the target repo. Node >=
+--with-qa-templates` copies into `scripts/qa/` of the target repo. Pulse
+does not start them; you (or the host agent orchestrating the Ticket) run
+them between the two Pulse commands that bracket every lane:
+
+```
+pulse lane input <id> qa-ui                 # writes the input file, prints its path
+node scripts/qa/ui.mjs <that input path>    # runs the app and the cases
+pulse lane seal <id> qa-ui --actor agent:qa-ui
+``` Node >=
 20, no bundled dependency: prints
 a clear error if it is missing, rather than shipping its own copy. Node
 resolves that import walking UP from `scripts/qa/`, so playwright belongs
@@ -84,7 +92,7 @@ was a Pulse bug.
 
 ## `qa_cases[]` step conventions
 
-- Story-scope inputs (`pulse run qa-<x> <story-id>`) carry the Story's
+- Story-scope inputs (`pulse lane input <story-id> qa-<x>`) carry the Story's
   whole `qa_cases[]`; each script runs only the cases whose `surface`
   matches its own (`api.mjs` runs `surface: "api"`, `ui.mjs` runs
   `surface: "ui"`; a case without `surface` is assumed to belong to the
@@ -112,8 +120,8 @@ The body must be valid JSON on that one line — `POST /tasks {title,
 due_date: today}` is not a shorthand, it is a crash: `parseStep` does
 `JSON.parse` on the body text and one pseudo-JSON step kills the whole
 lane with `qa_api_crashed` before any artifact is written (dogfood ST-2,
-F28 — and through `pulse run` the crash output was invisible, the same
-gap as F25). Query strings are fine (`GET /tasks?view=today`); comments,
+F28 — its stderr now lands in your terminal, where you dispatched it,
+instead of a captured log tail). Query strings are fine (`GET /tasks?view=today`); comments,
 expectations and free text belong in the case's other fields or in
 surface-ui steps, never in an api step line.
 

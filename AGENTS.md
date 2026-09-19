@@ -5,10 +5,13 @@ Read this file at every session start. Re-read after context compaction.
 ## What Pulse is
 
 Pulse is a local CLI truth layer for a developer using coding agents in one
-repository: a JSONL store of Epic/Story/Ticket/Decision records, a runner
-that dispatches configured worker/review/qa roles, an evidence gate, and an
-append-only event log. It does not run agents, does not run tests, and has
-no daemon.
+repository: a JSONL store of Epic/Story/Ticket/Decision records, gates that
+bracket the work (`claim`/`handoff` for a worker, `lane input`/`lane seal`
+for a review or qa lane), an evidence gate, and an append-only event log.
+It dispatches nothing: the host spawns the agents, Pulse decides what
+counts. It does not run agents and has no daemon; the only commands it
+executes are the argv a record declares (`pulse verify <id>` runs the
+Ticket's `verify[]`), and it records what it observed (decision 0026).
 
 **v3 is shipped (tag `v0.0.1` — the rebuild restarts the version line).** [`SPEC.md`](SPEC.md) describes what runs;
 [`ARCHITECTURE.md`](ARCHITECTURE.md) describes the code tree; plan
@@ -49,7 +52,7 @@ rustdoc with literal `# Errors` / `# Panics` sections when relevant.
 
 Return `Result` for recoverable or boundary failures. `panic!` only for
 genuinely unrecoverable invariants, never for user input, filesystem state
-or process outcomes. Every `kernel`/`runner` error code carries a hint
+or process outcomes. Every `kernel` error code carries a hint
 through `PulseError::kernel(code, message, hint)` (plan 0022 §6 — a code
 with no hint is a bug).
 
@@ -84,7 +87,8 @@ subdirectory nesting; a crate needing more than one file wires them with
 `tests/target_repo.rs` -> `tests/target_repo/*.rs`). Shared helpers live in
 `tests/common/` and are included per crate with `#[path]`. Current crates:
 `architecture_guards`, `communication`, `doctor`, `golden_path`,
-`public_api_contract`, `run`, `runner`, `storage`, `serve`, `target_repo`.
+`parallel`, `public_api_contract`, `lane`, `metrics`, `storage`, `serve`,
+`target_repo`.
 
 ## Session completion
 

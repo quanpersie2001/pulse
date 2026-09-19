@@ -14,7 +14,7 @@ pub enum Action {
     MutateGraph,
     /// `checkpoint`/`handoff`.
     CheckpointOrHandoff,
-    /// A lane's own receipt, recorded through `pulse run <lane>`.
+    /// A lane's own receipt, recorded through `pulse lane seal`.
     LaneReceipt,
     /// `close`/`close-story`.
     Close,
@@ -22,6 +22,13 @@ pub enum Action {
     NoteOrLearnAdd,
     /// Accepting a `decision` record.
     AcceptDecision,
+    /// `verify` — running the argv a record declares and recording what was
+    /// observed (decision 0026). Deliberately open to every human and agent
+    /// actor: the worker runs it before handing off, and a review lane runs
+    /// it again to check the claim independently. It is not a graph mutation
+    /// — the commands come *from* the record, so an agent cannot use this to
+    /// introduce what Pulse runs.
+    Verify,
 }
 
 /// An agent role is a worker (may checkpoint/handoff) or a lane (may record
@@ -40,6 +47,7 @@ pub fn authorize(actor: &ActorRef, action: Action) -> Result<()> {
             Action::CheckpointOrHandoff => !is_lane_role(&actor.id),
             Action::LaneReceipt => is_lane_role(&actor.id),
             Action::NoteOrLearnAdd => true,
+            Action::Verify => true,
             Action::MutateGraph | Action::Close | Action::AcceptDecision => false,
         },
         ActorKind::System => false,
@@ -56,8 +64,9 @@ pub fn authorize(actor: &ActorRef, action: Action) -> Result<()> {
         "role_forbidden",
         format!("{kind}:{} may not perform {action:?}", actor.id),
         "human actors can do everything; agent:worker* may only checkpoint/handoff; \
-         agent:review-*/qa-*/check-* may only record a lane receipt through `pulse run`; \
-         every actor may add a note or a learning",
+         agent:review-*/qa-*/check-* may only record a lane receipt through `pulse lane seal`; \
+         every actor may add a note or a learning, and every human or agent actor may run \
+         `pulse verify` (never `system`)",
     ))
 }
 
@@ -88,6 +97,7 @@ mod tests {
             Action::Close,
             Action::NoteOrLearnAdd,
             Action::AcceptDecision,
+            Action::Verify,
         ] {
             assert!(authorize(&human("quan"), action).is_ok());
         }
@@ -134,6 +144,17 @@ mod tests {
     }
 
     #[test]
+    fn every_human_or_agent_actor_may_verify() {
+        // Decision 0026: the worker verifies before handing off and the lane
+        // verifies again, so both sides of the evidence gate need this. What
+        // Pulse runs still comes from the record, which no agent may edit.
+        assert!(authorize(&human("quan"), Action::Verify).is_ok());
+        assert!(authorize(&agent("worker"), Action::Verify).is_ok());
+        assert!(authorize(&agent("review-correctness"), Action::Verify).is_ok());
+        assert!(authorize(&agent("qa-ui"), Action::Verify).is_ok());
+    }
+
+    #[test]
     fn system_actor_may_not_perform_any_gated_action() {
         let system = ActorRef {
             kind: ActorKind::System,
@@ -141,6 +162,7 @@ mod tests {
         };
         assert!(authorize(&system, Action::NoteOrLearnAdd).is_err());
         assert!(authorize(&system, Action::MutateGraph).is_err());
+        assert!(authorize(&system, Action::Verify).is_err());
     }
 
     #[test]

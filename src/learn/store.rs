@@ -47,6 +47,33 @@ pub struct Frontmatter {
     pub expected_signal: String,
     #[serde(default)]
     pub usage: UsageCounts,
+    /// Plan 0025 E2: the argv a human chose to make this learning's check
+    /// *enforced* — once the learning is `active`, `pulse verify` runs it for
+    /// every matching ticket under the name `learning.<id>`. Empty unless
+    /// `--check-argv` was given; skipped when empty so a learning file
+    /// written before this field existed renders byte-for-byte as before.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub check_argv: Vec<String>,
+    /// Repository-relative working directory for [`Self::check_argv`], in the
+    /// same grammar as a `verify[]` entry's `cwd`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub check_cwd: Option<String>,
+    /// Plan 0025 E4: code this learning cites, hashed at `learn add` time so
+    /// drift is detectable. Skipped when empty for the same render-stability
+    /// reason as `check_argv`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub cites: Vec<Cite>,
+}
+
+/// One hash-pinned code citation: `path` is repository-relative, `lines` is
+/// the inclusive `"<from>-<to>"` range (1-based), and `sha256` is the digest
+/// of exactly those lines (joined with `\n`, no trailing newline) taken from
+/// the file on disk when the learning was added (plan 0025 E4).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct Cite {
+    pub path: String,
+    pub lines: String,
+    pub sha256: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -316,5 +343,35 @@ Refresh in parallel invalidates a token when rotation is check-then-act.
     fn a_missing_heading_reads_as_no_entry() {
         let sections = sections("## Summary\njust a summary\n");
         assert!(!sections.contains_key("Do"));
+    }
+
+    // --- Plan 0025 E2/E4: new frontmatter fields must not disturb old files ---
+
+    #[test]
+    fn a_pre_e2_learning_file_renders_back_byte_for_byte() {
+        // The dogfood repo's existing learnings have no `check_argv`,
+        // `check_cwd` or `cites`; parse -> render must be the identity on
+        // them (the fields are `default` + skipped when empty).
+        let old = "---\nid: LRN-3f2a\nstatus: candidate\nkind: failure\napplies_to:\n- src/auth/**\ntags:\n- security\nfrom:\n- TK-a3f9\nexpected_signal: a handoff touching src/auth/** says rotation is atomic\nusage:\n  helpful: 0\n  not_needed: 0\n  misleading: 0\n---\n## Summary\ns\n";
+        let learning = parse(old).unwrap();
+        assert_eq!(render(&learning).unwrap(), old);
+    }
+
+    #[test]
+    fn check_fields_round_trip_through_a_file() {
+        let mut learning = parse(SAMPLE).unwrap();
+        learning.frontmatter.check_argv = vec!["cargo".to_string(), "test".to_string()];
+        learning.frontmatter.check_cwd = Some("web".to_string());
+        learning.frontmatter.cites.push(Cite {
+            path: "src/auth/refresh.rs".to_string(),
+            lines: "10-12".to_string(),
+            sha256: "deadbeef".to_string(),
+        });
+        let rendered = render(&learning).unwrap();
+        let reparsed = parse(&rendered).unwrap();
+        assert_eq!(reparsed.frontmatter.check_argv, vec!["cargo", "test"]);
+        assert_eq!(reparsed.frontmatter.check_cwd.as_deref(), Some("web"));
+        assert_eq!(reparsed.frontmatter.cites.len(), 1);
+        assert_eq!(reparsed.frontmatter.cites[0].lines, "10-12");
     }
 }

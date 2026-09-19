@@ -43,6 +43,54 @@ pub fn snapshot(repo_root: &Path, fence_ignore: &[String]) -> Result<Source> {
     })
 }
 
+/// Content fence for one ticket (decision 0025 B6): every file matching
+/// `touches`, tracked or not, hashed by path + bytes; independent of HEAD
+/// and of every path outside `touches`.
+///
+/// Unlike [`snapshot`], the hash covers the whole scope whether or not
+/// git calls it dirty — committing an in-scope file with unchanged content
+/// leaves this fence unmoved, which is the property that lets one ticket's
+/// close survive another ticket's commit landing first. `commit` is
+/// carried for display only; the fence comparison
+/// (`kernel::profile::same_fence`) never reads it for a scoped ticket.
+///
+/// # Errors
+/// Propagates a git invocation failure (not a repository, git not on
+/// PATH, no commits yet).
+pub fn scoped_snapshot(
+    repo_root: &Path,
+    touches: &[String],
+    fence_ignore: &[String],
+) -> Result<Source> {
+    let commit = head_commit(repo_root)?;
+    // Every path git can see — tracked plus untracked-but-not-ignored —
+    // narrowed to the ticket's scope. Fence filtering runs first, so a
+    // touch naming `.pulse/**` or a `fence_ignore` glob holds nothing.
+    let tracked = git(repo_root, &["ls-files"])?;
+    let others = git(repo_root, &["ls-files", "--others", "--exclude-standard"])?;
+    let mut scope: Vec<String> = tracked
+        .lines()
+        .chain(others.lines())
+        .map(|path| path.trim_matches('"').to_string())
+        .filter(|path| !is_fenced_out(path, fence_ignore))
+        .filter(|path| touches.iter().any(|pattern| glob_match(pattern, path)))
+        .collect();
+    scope.sort();
+    scope.dedup();
+    let dirty_hash = hash_scope(repo_root, &scope)?;
+    // The dirty list stays a display aid: which in-scope paths git
+    // currently calls dirty. The fence itself is `dirty_hash`.
+    let dirty_paths: Vec<String> = dirty_paths(repo_root, fence_ignore)?
+        .into_iter()
+        .filter(|path| touches.iter().any(|pattern| glob_match(pattern, path)))
+        .collect();
+    Ok(Source {
+        commit,
+        dirty_hash,
+        dirty_paths,
+    })
+}
+
 /// Whether two snapshots describe the same tree state.
 pub fn same(a: &Source, b: &Source) -> bool {
     a.commit == b.commit && a.dirty_hash == b.dirty_hash
@@ -67,7 +115,12 @@ fn dirty_paths(repo_root: &Path, fence_ignore: &[String]) -> Result<Vec<String>>
     Ok(paths)
 }
 
-fn is_fenced_out(path: &str, fence_ignore: &[String]) -> bool {
+/// Whether `path` sits outside every source fence: `.pulse/**`, the root
+/// harness configs, and the target's own `fence_ignore` list. `snapshot`
+/// uses it to build `dirty_paths`; `kernel::lane::changed_files_since`
+/// (plan 0025 F3's shared changed-files source) applies the same rule, so
+/// a file that cannot stale a fence also cannot stale a doc.
+pub(crate) fn is_fenced_out(path: &str, fence_ignore: &[String]) -> bool {
     if path.starts_with(".pulse/") {
         return true;
     }
@@ -151,6 +204,28 @@ fn hash_dirty_state(repo_root: &Path, dirty_paths: &[String]) -> Result<String> 
         hasher.update(b"\0");
     }
     Ok(format!("sha256:{}", hex::encode(hasher.finalize())))
+}
+
+/// The scope fence hash: every path in `scope` contributes
+/// `path\0<bytes>\0`; a tracked-but-deleted file contributes the
+/// tombstone `path\0<deleted>\0`, so a deletion moves the fence like any
+/// edit. The `scope:sha256:` prefix is a different namespace from
+/// [`hash_dirty_state`]'s `sha256:` — the two fence kinds can never
+/// compare equal by accident (decision 0025 B6).
+fn hash_scope(repo_root: &Path, scope: &[String]) -> Result<String> {
+    let mut hasher = Sha256::new();
+    for path in scope {
+        hasher.update(path.as_bytes());
+        hasher.update(b"\0");
+        match std::fs::read(repo_root.join(path)) {
+            Ok(bytes) => hasher.update(&bytes),
+            // Tracked but gone from disk — read errors mean "not these
+            // bytes", which is exactly what the tombstone encodes.
+            Err(_) => hasher.update(b"<deleted>"),
+        }
+        hasher.update(b"\0");
+    }
+    Ok(format!("scope:sha256:{}", hex::encode(hasher.finalize())))
 }
 
 fn git(repo_root: &Path, args: &[&str]) -> Result<String> {
@@ -328,5 +403,102 @@ mod tests {
             "src/*/handler.rs",
             "src/auth/nested/handler.rs"
         ));
+    }
+
+    // --- scoped fence (decision 0025 B6) ---
+
+    fn repo_with_src_and_web() -> tempfile::TempDir {
+        let dir = init_repo();
+        let run = |args: &[&str]| {
+            assert!(StdCommand::new("git")
+                .arg("-C")
+                .arg(dir.path())
+                .args(args)
+                .status()
+                .unwrap()
+                .success());
+        };
+        std::fs::create_dir_all(dir.path().join("src")).unwrap();
+        std::fs::create_dir_all(dir.path().join("web")).unwrap();
+        std::fs::write(dir.path().join("src/lib.rs"), "fn a() {}\n").unwrap();
+        std::fs::write(dir.path().join("web/app.js"), "// app\n").unwrap();
+        run(&["add", "."]);
+        run(&["commit", "-q", "-m", "src and web"]);
+        dir
+    }
+
+    #[test]
+    fn the_scope_hash_ignores_everything_outside_the_touches() {
+        let repo = repo_with_src_and_web();
+        let before = scoped_snapshot(repo.path(), &["src/**".to_string()], &[]).unwrap();
+        assert!(before.dirty_hash.starts_with("scope:sha256:"));
+        // Worker-2's file, a different ticket's scope entirely.
+        std::fs::write(repo.path().join("web/app.js"), "// mutated\n").unwrap();
+        let after = scoped_snapshot(repo.path(), &["src/**".to_string()], &[]).unwrap();
+        assert_eq!(before.dirty_hash, after.dirty_hash);
+    }
+
+    #[test]
+    fn committing_an_in_scope_file_with_unchanged_content_does_not_move_the_fence() {
+        // The core property (decision 0025): HEAD is not the fence. The
+        // ticket's file landing as a commit moves HEAD but not the bytes
+        // this ticket owns.
+        let repo = repo_with_src_and_web();
+        std::fs::write(repo.path().join("src/new.rs"), "fn b() {}\n").unwrap();
+        let before = scoped_snapshot(repo.path(), &["src/**".to_string()], &[]).unwrap();
+        let run = |args: &[&str]| {
+            assert!(StdCommand::new("git")
+                .arg("-C")
+                .arg(repo.path())
+                .args(args)
+                .status()
+                .unwrap()
+                .success());
+        };
+        run(&["add", "src/new.rs"]);
+        run(&["commit", "-q", "-m", "land src"]);
+        let after = scoped_snapshot(repo.path(), &["src/**".to_string()], &[]).unwrap();
+        assert_ne!(before.commit, after.commit, "HEAD did move");
+        assert_eq!(before.dirty_hash, after.dirty_hash, "the fence did not");
+    }
+
+    #[test]
+    fn editing_a_scoped_file_moves_the_fence() {
+        let repo = repo_with_src_and_web();
+        let before = scoped_snapshot(repo.path(), &["src/**".to_string()], &[]).unwrap();
+        std::fs::write(repo.path().join("src/lib.rs"), "fn a() { changed }\n").unwrap();
+        let after = scoped_snapshot(repo.path(), &["src/**".to_string()], &[]).unwrap();
+        assert_ne!(before.dirty_hash, after.dirty_hash);
+        assert_eq!(after.dirty_paths, vec!["src/lib.rs".to_string()]);
+    }
+
+    #[test]
+    fn a_new_untracked_file_matching_the_glob_moves_the_fence() {
+        let repo = repo_with_src_and_web();
+        let before = scoped_snapshot(repo.path(), &["src/*".to_string()], &[]).unwrap();
+        std::fs::write(repo.path().join("src/extra.rs"), "fn c() {}\n").unwrap();
+        let after = scoped_snapshot(repo.path(), &["src/*".to_string()], &[]).unwrap();
+        assert_ne!(before.dirty_hash, after.dirty_hash);
+    }
+
+    #[test]
+    fn deleting_a_scoped_file_moves_the_fence() {
+        let repo = repo_with_src_and_web();
+        let before = scoped_snapshot(repo.path(), &["src/**".to_string()], &[]).unwrap();
+        std::fs::remove_file(repo.path().join("src/lib.rs")).unwrap();
+        let after = scoped_snapshot(repo.path(), &["src/**".to_string()], &[]).unwrap();
+        assert_ne!(before.dirty_hash, after.dirty_hash);
+        assert_eq!(after.dirty_paths, vec!["src/lib.rs".to_string()]);
+    }
+
+    #[test]
+    fn dot_pulse_never_enters_the_scope_even_when_touched() {
+        let repo = repo_with_src_and_web();
+        let before = scoped_snapshot(repo.path(), &[".pulse/**".to_string()], &[]).unwrap();
+        std::fs::create_dir_all(repo.path().join(".pulse")).unwrap();
+        std::fs::write(repo.path().join(".pulse/issues.jsonl"), "{}\n").unwrap();
+        let after = scoped_snapshot(repo.path(), &[".pulse/**".to_string()], &[]).unwrap();
+        assert_eq!(before.dirty_hash, after.dirty_hash);
+        assert!(after.dirty_paths.is_empty());
     }
 }

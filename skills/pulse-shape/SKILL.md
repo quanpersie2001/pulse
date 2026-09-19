@@ -11,8 +11,8 @@ cut without re-asking what the words meant.
 Shape is one interview, not three: destination, meaning and proof are the same
 conversation about one requirement at three depths, so the old
 wayfind → grill → spec chain collapsed into this skill. Shape creates no
-Ticket and writes no product code. `pulse-plan` owns the cut; `pulse run
-worker` owns the code.
+Ticket and writes no product code. `pulse-plan` owns the cut; a worker
+session (`.pulse/prompts/worker.md`) owns the code.
 
 ## 0. Establish authority
 
@@ -28,8 +28,9 @@ worker` owns the code.
    than shaping a duplicate. Ids are never recycled; a new Story under an
    existing Epic continues that Epic's story order.
 3. Read the repo as a fact source: `docs/README.md` and the docs it maps, the
-   code the requirement touches, and — once a candidate Story exists —
-   `pulse docs applicable ST-<id>`. Facts never become questions; see §1.
+   code the requirement touches — grep/glob `docs/` first; once a candidate
+   Story exists, `pulse docs applicable ST-<id>` is a frontmatter-driven
+   cross-check, not the search itself. Facts never become questions; see §1.
 
 Decide first whether shaping is needed at all. Shaping earns its place when
 the work exceeds one bounded Ticket or its meaning is genuinely contested.
@@ -106,6 +107,11 @@ Story payload:
               "steps":["…"],"expected":["…"]}],
  "open_questions":[{"q":"…","disposition":"resolved","answer":"…","ref":"D-2"}]}
 ```
+
+Every `BR-<n>`/`E-<n>` id written here must, by story close, appear in at
+least one file listed on the Story's `docs_written` (`docs/**`, plan 0025
+F4) — the gate refuses a story whose rules live only in `issues.jsonl`, so
+plan the doc that will carry them.
 
 `qa_cases[].check` (`{"argv":[…],"assert":[{"exit_code":0}]}`) is written only
 when a mechanical oracle already exists or is a small `scripts/qa/cases/`

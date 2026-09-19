@@ -28,6 +28,9 @@ Current decisions:
 - [0022 — Pulse v3: giữ hợp đồng, bỏ máy móc](0022-thin-harness.md) — **§13/§14 amended by 0023**
 - [0023 — `pulse serve` multi-project thay board tĩnh](0023-board-serve-multi-project.md)
 - [0024 — Persist bounded run output](0024-persist-run-output.md)
+- [0025 — File reservation và fence theo scope](0025-file-reservation-and-scoped-fence.md)
+- [0026 — Pulse chạy argv đã khai (`pulse verify`)](0026-pulse-runs-declared-argv.md)
+- [0027 — Review panel và đối chứng finding](0027-review-panel-and-finding-reconciliation.md)
 
 Add or update a decision when:
 

@@ -3,12 +3,16 @@ mod completion;
 mod docs;
 mod doctor;
 mod events;
+mod frontier;
 mod init;
+mod lane;
 mod learn;
+mod lease;
+mod metrics;
 pub mod output;
 mod packet;
-mod run;
 mod serve;
+mod verify;
 mod work;
 
 use clap::Parser;
@@ -53,39 +57,74 @@ fn run_in_repo(
         args::Command::Init {
             refresh,
             no_register,
-            host,
             with_qa_templates,
             json,
-        } => init::handle(
-            &repo_root,
-            refresh,
-            no_register,
-            host.as_deref(),
-            with_qa_templates,
-            json,
-        ),
+        } => init::handle(&repo_root, refresh, no_register, with_qa_templates, json),
         args::Command::Work { command } => work::handle(&repo_root, command),
-        args::Command::Run {
-            role,
+        args::Command::Claim {
             id,
             ttl,
-            continue_limit,
-            force,
             actor,
             json,
-        } => run::handle_run(
+        } => lease::handle_claim(&repo_root, &id, ttl, actor.as_deref(), json),
+        args::Command::Release { id, actor, json } => {
+            lease::handle_release(&repo_root, &id, actor.as_deref(), json)
+        }
+        args::Command::Reserve {
+            id,
+            paths,
+            actor,
+            json,
+        } => lease::handle_reserve(&repo_root, &id, &paths, actor.as_deref(), json),
+        args::Command::Frontier { story, json } => {
+            frontier::handle(&repo_root, story.as_deref(), json)
+        }
+        args::Command::Verify {
+            id,
+            timeout,
+            actor,
+            json,
+        } => verify::handle(&repo_root, &id, timeout, actor.as_deref(), json),
+        args::Command::Lane {
+            command:
+                args::LaneCommand::Input {
+                    id,
+                    role,
+                    force,
+                    seat,
+                    actor,
+                    json,
+                },
+        } => lane::handle_input(&repo_root, &id, &role, force, seat, actor.as_deref(), json),
+        args::Command::Lane {
+            command:
+                args::LaneCommand::Seal {
+                    id,
+                    role,
+                    seat,
+                    actor,
+                    json,
+                },
+        } => lane::handle_seal(&repo_root, &id, &role, seat, actor.as_deref(), json),
+        args::Command::Lane {
+            command:
+                args::LaneCommand::Reconcile {
+                    id,
+                    role,
+                    prepare,
+                    timeout,
+                    actor,
+                    json,
+                },
+        } => lane::handle_reconcile(
             &repo_root,
-            &role,
             &id,
-            ttl,
-            continue_limit,
-            force,
+            &role,
+            prepare,
+            timeout,
             actor.as_deref(),
             json,
         ),
-        args::Command::Release { id, actor, json } => {
-            run::handle_release(&repo_root, &id, actor.as_deref(), json)
-        }
         args::Command::Packet { id, json } => packet::handle_packet(&repo_root, &id, json),
         args::Command::Checkpoint {
             id,
@@ -123,6 +162,9 @@ fn run_in_repo(
         } => events::handle_tail(&repo_root, &since, id.as_deref(), follow, json),
         args::Command::Learn { command } => learn::handle(&repo_root, command),
         args::Command::Doctor { json } => doctor::handle(&repo_root, json),
+        args::Command::Metrics { since, json } => {
+            metrics::handle(&repo_root, since.as_deref(), json)
+        }
         args::Command::Docs { command } => docs::handle(&repo_root, command),
     }
 }

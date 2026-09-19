@@ -345,7 +345,7 @@ fn init_registers_into_the_registry() {
     let repo = tempfile::tempdir().unwrap();
 
     // The kernel entry point never touches the registry — only the CLI does.
-    pulse::kernel::init::initialize_repository(repo.path(), false, None, false).unwrap();
+    pulse::kernel::init::initialize_repository(repo.path(), false, false).unwrap();
     assert!(registry::registered_roots_at(&registry.path().join("projects.json")).is_empty());
 
     let output = std::process::Command::new(common_bin::bin())

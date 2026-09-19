@@ -1,10 +1,11 @@
-//! `pulse init` (plan 0022 P1.3 interim minimal version).
+//! `pulse init` against a fixture target repo.
 //!
-//! The full asset set (AGENTS block, PULSE.md profiles, docs/README.md seed,
-//! host detector files, prompts) lands in plan 0022 P1.10. This only covers
-//! what `kernel::init` does today: create `.pulse/`, an empty
-//! `issues.jsonl`, an empty `runners.json`, a placeholder `PULSE.md`, and
-//! the runtime/cache `.gitignore` entries — idempotently.
+//! Covers what `kernel::init` writes: `.pulse/` with an empty
+//! `issues.jsonl`, the `PULSE.md` profile seed, the worker/review prompts,
+//! the AGENTS block, the docs seeds and the runtime/cache `.gitignore`
+//! entries — idempotently. There is no dispatch table to seed: Pulse spawns
+//! no agents, so a host-specific runner config and detector never existed
+//! in a v3 target repo.
 
 use crate::common::fixture_repo::TestRepo;
 
@@ -17,7 +18,8 @@ fn first_run_initializes_and_second_run_reports_unchanged() {
     assert!(!first["created"].as_array().unwrap().is_empty());
 
     assert!(repo.path().join(".pulse/issues.jsonl").is_file());
-    assert!(repo.path().join(".pulse/runners.json").is_file());
+    assert!(repo.path().join(".pulse/prompts/worker.md").is_file());
+    assert!(!repo.path().join(".pulse/runners.json").exists());
     assert!(repo.path().join("PULSE.md").is_file());
     let gitignore = std::fs::read_to_string(repo.path().join(".gitignore")).unwrap();
     assert!(gitignore.contains("**/.pulse/runtime/"));

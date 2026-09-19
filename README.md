@@ -24,12 +24,12 @@
 
 Pulse is a local CLI for one developer using one or more coding agents in one
 repository. It keeps the truth about what needs doing, hands each agent exactly
-the context for one Ticket, runs any agent or script through a configured
-command, refuses to close work without evidence, and turns failures into
-better docs and checks.
+the context for one Ticket, refuses to close work without evidence, and turns
+failures into better docs and checks.
 
-Pulse does not run agents, does not run tests, and has no daemon. All state
-lives in `.pulse/`, `works/` and `docs/` under Git.
+Pulse does not run agents and has no daemon; the only commands it executes are
+the argv a record declares (`verify[]`, run by `pulse verify`), and it records
+what it observed. All state lives in `.pulse/` and `docs/` under Git.
 
 The full product definition, target design and golden path are in
 [`PRODUCT.md`](PRODUCT.md). This README describes what exists today.

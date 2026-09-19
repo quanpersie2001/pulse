@@ -3,7 +3,7 @@
 //! `generated_by.check_argv` staleness. The report reuses
 //! `kernel::lane::LaneOutput` exactly (plan: "output JSON theo shape lane
 //! §8.4"), so `pulse docs check --write <path>` can be wired directly as
-//! the `check-docs` role in `runners.json` with no wrapper script — the
+//! the `check-docs` lane's output with no agent in between — the
 //! seal-time rule that a `fail` with no checkable finding downgrades to
 //! `inconclusive` (plan §8.4) already applies uniformly once
 //! `kernel::lane::validate_and_seal` reads it back; this module does not
@@ -21,6 +21,7 @@ use crate::kernel::lane::{CheckSpec, CommandRun, Environment, Finding, LaneOutpu
 use crate::source;
 
 use super::list_docs;
+use super::stale::MaybeStale;
 
 fn link_pattern() -> &'static Regex {
     static PATTERN: OnceLock<Regex> = OnceLock::new();
@@ -174,6 +175,24 @@ fn check_generated_by(
 /// # Errors
 /// Propagates a docs-tree read error.
 pub fn check(repo_root: &Path) -> Result<LaneOutput> {
+    check_with(repo_root, None, &[])
+}
+
+/// [`check`] plus plan 0025 F3's stale-doc advisory: one low-severity open
+/// finding per [`MaybeStale`], naming the ticket whose edits may have left
+/// the doc behind. Deliberately advisory — the verdict keys off blocking
+/// findings only (mirroring the lane-seal rule that only an open *high*
+/// finding turns a pass into a fail), so a low note never does. Advising
+/// stays until dogfood proves the true-positive rate high enough to raise
+/// the stakes (plan 0025 F3).
+///
+/// # Errors
+/// Propagates a docs-tree read error.
+pub fn check_with(
+    repo_root: &Path,
+    ticket_id: Option<&str>,
+    advisory: &[MaybeStale],
+) -> Result<LaneOutput> {
     let mut findings = Vec::new();
     let mut commands_run = Vec::new();
 
@@ -181,11 +200,35 @@ pub fn check(repo_root: &Path) -> Result<LaneOutput> {
     check_readme_paths(repo_root, &mut findings);
     check_generated_by(repo_root, &mut findings, &mut commands_run)?;
 
+    let subject = ticket_id.unwrap_or("?");
+    for stale in advisory {
+        findings.push(Finding {
+            id: String::new(),
+            reference: stale.doc.clone(),
+            summary: format!(
+                "describes {}; {} matching file(s) changed in {}, doc unchanged: {}",
+                stale.pattern,
+                stale.because.len(),
+                subject,
+                stale.because.join(", ")
+            ),
+            owner: stale.doc.clone(),
+            check: None,
+            severity: "low".to_string(),
+            status: "open".to_string(),
+        });
+    }
+
     for (index, item) in findings.iter_mut().enumerate() {
         item.id = format!("F-{}", index + 1);
     }
 
-    let verdict = if findings.is_empty() { "pass" } else { "fail" }.to_string();
+    let verdict = if findings.iter().any(|f| f.severity != "low") {
+        "fail"
+    } else {
+        "pass"
+    }
+    .to_string();
     Ok(LaneOutput {
         verdict,
         acceptance: Vec::new(),
@@ -333,5 +376,63 @@ mod tests {
         let report = check(repo.path()).unwrap();
         assert!(report.findings.is_empty());
         assert_eq!(report.commands_run[0].exit, Some(0));
+    }
+
+    // --- Plan 0025 F3: the stale-doc advisory rides along, never flips ---
+
+    #[test]
+    fn an_advisory_finding_is_low_and_open_and_never_flips_the_verdict() {
+        let repo = git_repo();
+        fs::create_dir_all(repo.path().join("docs")).unwrap();
+        fs::write(repo.path().join("docs/api.md"), "# API\n").unwrap();
+        let advisory = [MaybeStale {
+            doc: "docs/api.md".to_string(),
+            because: vec!["api/x.py".to_string(), "api/y.py".to_string()],
+            pattern: "api/**".to_string(),
+        }];
+        let report = check_with(repo.path(), Some("TK-a3f9"), &advisory).unwrap();
+        assert_eq!(report.verdict, "pass", "a low advisory must not fail");
+        assert_eq!(report.findings.len(), 1);
+        let finding = &report.findings[0];
+        assert_eq!(finding.severity, "low");
+        assert_eq!(finding.status, "open");
+        assert_eq!(finding.owner, "docs/api.md");
+        assert_eq!(finding.reference, "docs/api.md");
+        assert_eq!(finding.id, "F-1");
+        assert!(finding.check.is_none());
+        assert!(finding.summary.contains("describes api/**"));
+        assert!(finding
+            .summary
+            .contains("2 matching file(s) changed in TK-a3f9"));
+        assert!(finding.summary.contains("api/x.py, api/y.py"));
+    }
+
+    #[test]
+    fn an_advisory_finding_alongside_a_structural_one_keeps_fail_and_numbering() {
+        let repo = git_repo();
+        fs::create_dir_all(repo.path().join("docs")).unwrap();
+        fs::write(repo.path().join("docs/a.md"), "See [b](b.md).\n").unwrap();
+        let advisory = [MaybeStale {
+            doc: "docs/api.md".to_string(),
+            because: vec!["api/x.py".to_string()],
+            pattern: "api/**".to_string(),
+        }];
+        let report = check_with(repo.path(), Some("TK-bbbb"), &advisory).unwrap();
+        assert_eq!(report.verdict, "fail");
+        // Structural findings first, advisory appended, one id sequence.
+        let ids: Vec<&str> = report.findings.iter().map(|f| f.id.as_str()).collect();
+        assert_eq!(ids, vec!["F-1", "F-2"]);
+        assert_eq!(report.findings[1].owner, "docs/api.md");
+    }
+
+    #[test]
+    fn an_empty_advisory_behaves_exactly_like_check() {
+        let repo = git_repo();
+        fs::create_dir_all(repo.path().join("docs")).unwrap();
+        fs::write(repo.path().join("docs/a.md"), "# A\n").unwrap();
+        let plain = check(repo.path()).unwrap();
+        let with = check_with(repo.path(), Some("TK-a3f9"), &[]).unwrap();
+        assert_eq!(plain.verdict, with.verdict);
+        assert_eq!(plain.findings.len(), with.findings.len());
     }
 }

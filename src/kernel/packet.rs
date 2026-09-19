@@ -2,12 +2,16 @@
 //! before doing anything.
 //!
 //! `docs.applicable` comes from `docs::applicable::applicable` (A3);
-//! `learnings` from `learn::recall::applicable` (A2). `last_verdicts`
-//! passes through `ticket.verdicts` as recorded (lane/verdict/commit);
-//! resolving each verdict's findings would mean reading the referenced
-//! receipt, which has no caller producing `verdict: fail` receipts yet
-//! (`kernel::lane` is P1.9). Packet staleness has one fence: `source` (plan
-//! §9 — "Không fingerprint từng input; fence duy nhất là `source`").
+//! plan 0025 F1 demoted it to a frontmatter hint — the worker grep/globs
+//! `docs/` first, and `docs::stale` (F3) is where `applies_to` does its
+//! real work now. `learnings` from `learn::recall::applicable` (A2).
+//! `last_verdicts`
+//! resolves each `ticket.verdicts[role].receipt` to its lane receipt and
+//! returns what a reworking worker must read: the still-open findings plus
+//! the failing acceptance criteria and qa cases. A receipt that cannot be
+//! read does not fail the whole packet — that entry is tagged
+//! `findings_unavailable` instead. Packet staleness has one fence: `source`
+//! (plan §9 — "Không fingerprint từng input; fence duy nhất là `source`").
 
 use std::path::Path;
 
@@ -77,23 +81,95 @@ fn blockers(records: &[Value], ticket: &Value) -> Vec<Value> {
         .unwrap_or_default()
 }
 
-fn last_verdicts(ticket: &Value) -> Vec<Value> {
-    ticket
-        .get("verdicts")
-        .and_then(Value::as_object)
-        .map(|verdicts| {
-            verdicts
+/// Keep only the fields a reworking worker needs from a finding, dropping
+/// resolved ones (plan 0025 A3).
+fn open_findings(payload: &Value) -> Vec<Value> {
+    payload
+        .get("findings")
+        .and_then(Value::as_array)
+        .map(|findings| {
+            findings
                 .iter()
-                .map(|(lane, v)| {
+                // Decision 0027 C3: `unconfirmed` is what a panel's round 2
+                // already lowered — a suspicion the reconciliation rejected.
+                // Only `open` is rework; handing a worker the rejected ones
+                // turns a cleared doubt into a demand.
+                .filter(|f| f.get("status").and_then(Value::as_str) == Some("open"))
+                .map(|f| {
                     json!({
-                        "lane": lane,
-                        "verdict": v.get("verdict"),
-                        "findings": [],
+                        "id": f.get("id"),
+                        "ref": f.get("ref"),
+                        "summary": f.get("summary"),
+                        "owner": f.get("owner"),
+                        "check": f.get("check"),
+                        "severity": f.get("severity"),
                     })
                 })
                 .collect()
         })
         .unwrap_or_default()
+}
+
+fn failed_acceptance(payload: &Value) -> Vec<Value> {
+    payload
+        .get("acceptance")
+        .and_then(Value::as_array)
+        .map(|entries| {
+            entries
+                .iter()
+                .filter(|entry| entry.get("status").and_then(Value::as_str) == Some("fail"))
+                .cloned()
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn failed_cases(payload: &Value) -> Vec<Value> {
+    payload
+        .get("cases")
+        .and_then(Value::as_array)
+        .map(|cases| {
+            cases
+                .iter()
+                .filter(|case| case.get("status").and_then(Value::as_str) != Some("pass"))
+                .cloned()
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// # Errors
+/// Never fails on a verdict whose receipt is missing or unreadable: that
+/// entry carries `findings_unavailable: true` instead, so one broken receipt
+/// cannot make the packet unreadable.
+fn last_verdicts(repo_root: &Path, ticket: &Value) -> Result<Vec<Value>> {
+    let Some(verdicts) = ticket.get("verdicts").and_then(Value::as_object) else {
+        return Ok(Vec::new());
+    };
+    let mut out = Vec::new();
+    for (lane, verdict) in verdicts {
+        let mut entry = json!({
+            "lane": lane,
+            "verdict": verdict.get("verdict"),
+            "commit": verdict.get("commit"),
+        });
+        let receipt_id = verdict.get("receipt").and_then(Value::as_str);
+        let payload = receipt_id
+            .and_then(|id| crate::evidence::receipt::load_receipt(repo_root, id).ok())
+            .map(|receipt| receipt.payload);
+        match payload {
+            Some(payload) => {
+                entry["findings"] = json!(open_findings(&payload));
+                entry["failed_acceptance"] = json!(failed_acceptance(&payload));
+                entry["failed_cases"] = json!(failed_cases(&payload));
+            }
+            None => {
+                entry["findings_unavailable"] = json!(true);
+            }
+        }
+        out.push(entry);
+    }
+    Ok(out)
 }
 
 /// The compact `{id, summary, do, avoid, check}` shape plan §9 wants in the
@@ -102,7 +178,7 @@ fn last_verdicts(ticket: &Value) -> Vec<Value> {
 /// body like `Do`/`Avoid` (plan §11.1's example), but the packet shape wants
 /// one string (plan §9: `"check":"…"`), so multiple check bullets join with
 /// `"; "`.
-fn learning_view(learning: &crate::learn::store::Learning) -> Value {
+fn learning_view(repo_root: &Path, learning: &crate::learn::store::Learning) -> Value {
     let sections = crate::learn::store::sections(&learning.body);
     let text = |name: &str| sections.get(name).cloned().unwrap_or_default();
     let check_items = crate::learn::store::bullet_items(&text("Check"));
@@ -111,6 +187,13 @@ fn learning_view(learning: &crate::learn::store::Learning) -> Value {
     } else {
         check_items.join("; ")
     };
+    // Plan 0025 E2: `enforced` says which learnings `pulse verify` will run
+    // (active + a check argv) — a candidate never runs, whatever it cites.
+    let enforced =
+        learning.frontmatter.status == "active" && !learning.frontmatter.check_argv.is_empty();
+    // Plan 0025 E4: a stale cite means the code moved since the learning was
+    // written — use with care; nothing is auto-retired.
+    let stale = !crate::learn::stale_cites(repo_root, learning).is_empty();
     json!({
         "id": learning.frontmatter.id,
         "status": learning.frontmatter.status,
@@ -118,6 +201,9 @@ fn learning_view(learning: &crate::learn::store::Learning) -> Value {
         "do": crate::learn::store::bullet_items(&text("Do")),
         "avoid": crate::learn::store::bullet_items(&text("Avoid")),
         "check": check,
+        "check_argv": learning.frontmatter.check_argv,
+        "enforced": enforced,
+        "stale": stale,
     })
 }
 
@@ -166,7 +252,7 @@ pub fn build_packet(repo_root: &Path, id: &str) -> Result<Value> {
     // its handoff feeds the two-sided activation bar.
     let learnings: Vec<Value> = crate::learn::recall::applicable(repo_root, id, true)?
         .iter()
-        .map(learning_view)
+        .map(|learning| learning_view(repo_root, learning))
         .collect();
     let docs_applicable: Vec<Value> = crate::docs::applicable::applicable(repo_root, id)?
         .iter()
@@ -182,13 +268,21 @@ pub fn build_packet(repo_root: &Path, id: &str) -> Result<Value> {
         "docs": {"applicable": docs_applicable, "map": "docs/README.md"},
         "learnings": learnings,
         "checkpoint": ticket.get("checkpoints").and_then(Value::as_array).and_then(|cps| cps.last()).cloned(),
-        "last_verdicts": last_verdicts(ticket),
+        "last_verdicts": last_verdicts(repo_root, ticket)?,
         "notes": recent_notes(ticket, 8),
         "source": {"commit": snapshot.commit, "dirty": !snapshot.dirty_paths.is_empty()},
         "protocol": {
+            // The lease's run id, so a checkpoint or handoff written from
+            // this packet correlates with the `run.started` event that
+            // claimed the Ticket (dogfood ST-1, F11 — two id spaces used to
+            // coexist in the same event field). `null` until `pulse claim`.
+            "run_id": ticket.pointer("/lease/run_id").cloned().unwrap_or(Value::Null),
+            "claim": format!("pulse claim {id}"),
             "checkpoint": format!("pulse checkpoint {id} --from <path>"),
+            // Decision 0026: the worker runs the declared verify[] itself
+            // before handing off; the receipt is what the gate reads.
+            "verify": format!("pulse verify {id}"),
             "handoff": format!("pulse handoff {id} --from <path>"),
-            "continue_exit": "{\"status\":\"continue\"}",
         },
     }))
 }
@@ -311,6 +405,9 @@ mod tests {
                 from: vec![],
                 expected_signal: String::new(),
                 usage: crate::learn::store::UsageCounts::default(),
+                    check_argv: vec![],
+                    check_cwd: None,
+                    cites: vec![],
             },
             body: "## Summary\nrotation must be atomic\n## Do\n- use a transaction\n## Avoid\n- split read/write\n## Check\n- run it 10x\n".to_string(),
         };
@@ -369,6 +466,112 @@ mod tests {
         assert_eq!(applicable.len(), 1);
         assert_eq!(applicable[0]["path"], "docs/auth.md");
         assert_eq!(packet["docs"]["map"], "docs/README.md");
+    }
+
+    #[test]
+    fn packet_carries_open_findings_from_the_last_lane_verdict() {
+        let repo = git_repo();
+        let receipt = crate::evidence::receipt::record_receipt(
+            repo.path(),
+            None,
+            crate::evidence::receipt::NewReceipt {
+                kind: "lane".to_string(),
+                subject: crate::evidence::receipt::ReceiptSubject {
+                    id: "TK-a3f9".to_string(),
+                    revision: None,
+                },
+                actor: "agent:review-correctness".to_string(),
+                source: crate::evidence::receipt::ReceiptSource {
+                    commit: "c".to_string(),
+                    dirty_hash: "sha256:0".to_string(),
+                },
+                run_id: None,
+                payload: json!({
+                    "role": "review-correctness",
+                    "verdict": "fail",
+                    "findings": [
+                        {"id": "F-1", "ref": "src/a.rs:10", "summary": "broken", "owner": "agent:worker",
+                         "check": {"argv": ["true"], "exit": 0}, "severity": "high", "status": "open"},
+                        {"id": "F-2", "ref": "src/b.rs:1", "summary": "old", "owner": "agent:worker",
+                         "severity": "low", "status": "resolved"},
+                        // Decision 0027 C3: a panel round-2 downgrade is not
+                        // rework; the worker must not be handed it back.
+                        {"id": "F-3", "ref": "src/c.rs:1", "summary": "maybe", "owner": "agent:worker",
+                         "severity": "low", "status": "unconfirmed"},
+                    ],
+                    "acceptance": [
+                        {"id": "AC-1", "status": "fail", "how": "no"},
+                        {"id": "AC-2", "status": "pass", "how": "yes"},
+                    ],
+                    "cases": [
+                        {"id": "QA-1", "status": "inconclusive"},
+                        {"id": "QA-2", "status": "pass"},
+                    ],
+                }),
+                artifact_paths: Vec::new(),
+            },
+        )
+        .unwrap();
+        crate::store::issues::mutate(repo.path(), |mut records| {
+            records.push(json!({
+                "schema": 3, "id": "TK-a3f9", "kind": "ticket", "title": "t",
+                "status": "active", "revision": 2,
+                "created_at": "2026-09-16T00:00:00Z", "updated_at": "2026-09-16T00:00:00Z",
+                "role": "implementation",
+                "verdicts": {
+                    "review-correctness": {"receipt": receipt.id, "verdict": "fail", "commit": "c"}
+                },
+            }));
+            Ok(records)
+        })
+        .unwrap();
+
+        let packet = build_packet(repo.path(), "TK-a3f9").unwrap();
+        let verdicts = packet["last_verdicts"].as_array().unwrap();
+        assert_eq!(verdicts.len(), 1);
+        assert_eq!(verdicts[0]["lane"], "review-correctness");
+        assert_eq!(verdicts[0]["verdict"], "fail");
+        assert_eq!(verdicts[0]["commit"], "c");
+        let findings = verdicts[0]["findings"].as_array().unwrap();
+        assert_eq!(
+            findings.len(),
+            1,
+            "resolved and unconfirmed findings must be dropped"
+        );
+        assert_eq!(findings[0]["id"], "F-1");
+        assert_eq!(findings[0]["ref"], "src/a.rs:10");
+        assert_eq!(findings[0]["severity"], "high");
+        assert_eq!(findings[0]["check"]["argv"][0], "true");
+        assert_eq!(
+            verdicts[0]["failed_acceptance"].as_array().unwrap().len(),
+            1
+        );
+        assert_eq!(verdicts[0]["failed_acceptance"][0]["id"], "AC-1");
+        assert_eq!(verdicts[0]["failed_cases"].as_array().unwrap().len(), 1);
+        assert_eq!(verdicts[0]["failed_cases"][0]["id"], "QA-1");
+        assert!(verdicts[0].get("findings_unavailable").is_none());
+    }
+
+    #[test]
+    fn packet_marks_a_verdict_whose_receipt_is_missing() {
+        let repo = git_repo();
+        crate::store::issues::mutate(repo.path(), |mut records| {
+            records.push(json!({
+                "schema": 3, "id": "TK-a3f9", "kind": "ticket", "title": "t",
+                "status": "active", "revision": 2,
+                "created_at": "2026-09-16T00:00:00Z", "updated_at": "2026-09-16T00:00:00Z",
+                "role": "implementation",
+                "verdicts": {
+                    "review-correctness": {"receipt": "01JNOPE00000000000000000000", "verdict": "fail", "commit": "c"}
+                },
+            }));
+            Ok(records)
+        })
+        .unwrap();
+        let packet = build_packet(repo.path(), "TK-a3f9").unwrap();
+        let verdicts = packet["last_verdicts"].as_array().unwrap();
+        assert_eq!(verdicts.len(), 1);
+        assert_eq!(verdicts[0]["findings_unavailable"], true);
     }
 
     #[test]

@@ -2,20 +2,23 @@
 //! `pulse init` seeds; P1.3 shipped a minimal interim version of this same
 //! function without the AGENTS block, docs map or host files).
 //!
-//! Creates the `.pulse/` tree, an empty `issues.jsonl`, a `runners.json`
-//! seed wired to the prompt templates below (plan §8.2), a `PULSE.md`
+//! Creates the `.pulse/` tree, an empty `issues.jsonl`, a `PULSE.md`
 //! profile seed (plan §8.1), the runtime/cache `.gitignore` entries (plan
 //! §3), the Pulse block in `AGENTS.md` (plan §12.1), `docs/README.md` and
 //! `docs/operations/run.md` (plan §12.2, §8.6) and `.pulse/prompts/*.md`
 //! (plan §8.5) if any are missing — so a fresh `pulse docs check` passes
 //! rather than immediately reporting `docs/README.md`'s own
-//! `docs/operations/run.md` reference as missing. `refresh`
-//! rewrites only the Pulse block region of `AGENTS.md` and overwrites the
-//! prompt files (never the rest of `AGENTS.md`, and never an existing
-//! `runners.json` a human may have already customized). `host` copies
-//! host-specific detector files (plan §10.4) — `"claude-code"` is the only
-//! one implemented. `with_qa_templates` copies `scripts/qa/{ui,api}.mjs`
-//! and `scripts/qa/README.md` (plan §8.6), skipping (never overwriting) any
+//! `docs/operations/run.md` reference as missing. `refresh` rewrites only
+//! the Pulse block region of `AGENTS.md` and overwrites the prompt files,
+//! never the rest of `AGENTS.md`.
+//!
+//! Nothing here writes a dispatch table. The prompts describe what a worker
+//! or a lane must do and which `pulse` commands record it; how that agent
+//! gets started is the host's business, so there is no runner config to
+//! seed and no host detector to install.
+//!
+//! `with_qa_templates` copies `scripts/qa/{ui,api}.mjs` and
+//! `scripts/qa/README.md` (plan §8.6), skipping (never overwriting) any
 //! that already exist.
 
 use std::fs;
@@ -53,34 +56,10 @@ const DOCS_README_SEED: &str = include_str!("../../templates/seeds/docs-README.m
 /// `scripts/qa/README.md`.
 const RUN_MD_SEED: &str = include_str!("../../templates/seeds/run.md");
 
-/// Plan §8.2's `runners.json` seed, now a real file at
-/// `templates/seeds/runners.json` (`include_str!`'d — a JSON file is
-/// readable, lintable and diffable outside Rust in a way a code-built table
-/// never was). The `qa-ui`/`qa-api` roles are only seeded when
-/// `--with-qa-templates` also copies the scripts these commands point at
-/// (plan §8.6) — seeding them unconditionally would give every plain
-/// `pulse init` a `runners.json` naming `scripts/qa/*.mjs` files that don't
-/// exist, so the plain run strips every `qa-*` role from the seed.
-fn runners_json_seed(with_qa_templates: bool) -> serde_json::Value {
-    let mut seed: serde_json::Value =
-        serde_json::from_str(include_str!("../../templates/seeds/runners.json"))
-            .expect("templates/seeds/runners.json must be valid JSON");
-    if !with_qa_templates {
-        seed.as_object_mut()
-            .expect("runners.json seed must be an object")
-            .retain(|role, _| !role.starts_with("qa-"));
-    }
-    seed
-}
-
 const PROMPT_FILES: [(&str, &str); 4] = [
     (
         "worker.md",
         include_str!("../../templates/prompts/worker.md"),
-    ),
-    (
-        "worker-continue.md",
-        include_str!("../../templates/prompts/worker-continue.md"),
     ),
     (
         "review-correctness.md",
@@ -89,6 +68,10 @@ const PROMPT_FILES: [(&str, &str); 4] = [
     (
         "review-adversarial.md",
         include_str!("../../templates/prompts/review-adversarial.md"),
+    ),
+    (
+        "reconcile.md",
+        include_str!("../../templates/prompts/reconcile.md"),
     ),
 ];
 
@@ -122,10 +105,6 @@ const AGENTS_BLOCK_END: &str = "<!-- PULSE:END -->";
 /// `templates/seeds/agents-block.md`, `include_str!`'d here.
 const AGENTS_BLOCK_BODY: &str = include_str!("../../templates/seeds/agents-block.md");
 
-const STATUSLINE_SH: &str = include_str!("../../templates/hosts/claude-code/statusline.sh");
-
-const POST_TOOL_USE_SH: &str = include_str!("../../templates/hosts/claude-code/post-tool-use.sh");
-
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum RepositoryInitStatus {
@@ -144,8 +123,6 @@ pub struct RepositoryInitReport {
     /// a target repo is expected to edit, so it is never refreshed either.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub skipped: Vec<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub host_settings_snippet: Vec<String>,
 }
 
 /// # Errors
@@ -154,7 +131,6 @@ pub struct RepositoryInitReport {
 pub fn initialize_repository(
     repo_root: &Path,
     refresh: bool,
-    host: Option<&str>,
     with_qa_templates: bool,
 ) -> Result<RepositoryInitReport> {
     let _guard = WriteGuard::acquire(repo_root)?;
@@ -172,13 +148,6 @@ pub fn initialize_repository(
     if !issues_path.exists() {
         fs::write(&issues_path, b"").map_err(|error| PulseError::io(&issues_path, error))?;
         created.push(".pulse/issues.jsonl".to_string());
-    }
-
-    let runners_path = repo_root.join(".pulse/runners.json");
-    if !runners_path.exists() {
-        let bytes = serde_json::to_vec_pretty(&runners_json_seed(with_qa_templates))?;
-        fs::write(&runners_path, bytes).map_err(|error| PulseError::io(&runners_path, error))?;
-        created.push(".pulse/runners.json".to_string());
     }
 
     let pulse_md_path = repo_root.join("PULSE.md");
@@ -221,20 +190,6 @@ pub fn initialize_repository(
         skipped.extend(qa_skipped);
     }
 
-    let mut host_settings_snippet = Vec::new();
-    if let Some(host) = host {
-        if host == "claude-code" {
-            created.extend(write_claude_code_host_files(repo_root)?);
-            host_settings_snippet = claude_code_settings_snippet();
-        } else {
-            return Err(PulseError::kernel(
-                "host_unsupported",
-                format!("--host {host} is not implemented"),
-                "the only implemented host is claude-code",
-            ));
-        }
-    }
-
     let status = if created.is_empty() {
         RepositoryInitStatus::Unchanged
     } else {
@@ -245,7 +200,6 @@ pub fn initialize_repository(
         status,
         created,
         skipped,
-        host_settings_snippet,
     })
 }
 
@@ -345,40 +299,6 @@ fn ensure_gitignore_entries(repo_root: &Path) -> Result<Vec<String>> {
         .collect())
 }
 
-/// Writes into `.pulse/hosts/claude-code/` (never `assets/hosts/`) — that
-/// path is Pulse's own repository layout, not a convention a target repo
-/// should adopt; `.pulse/` is where Pulse-owned generated files belong, and
-/// unlike `.pulse/runtime/`/`.pulse/cache/` it is tracked, not gitignored
-/// (plan §3, §10.4).
-fn write_claude_code_host_files(repo_root: &Path) -> Result<Vec<String>> {
-    let dir = repo_root.join(".pulse/hosts/claude-code");
-    fs::create_dir_all(&dir).map_err(|error| PulseError::io(&dir, error))?;
-    let mut written = Vec::new();
-    for (name, body) in [
-        ("statusline.sh", STATUSLINE_SH),
-        ("post-tool-use.sh", POST_TOOL_USE_SH),
-    ] {
-        let path = dir.join(name);
-        if !path.exists() {
-            fs::write(&path, body).map_err(|error| PulseError::io(&path, error))?;
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::PermissionsExt;
-                let _ = fs::set_permissions(&path, fs::Permissions::from_mode(0o755));
-            }
-            written.push(format!(".pulse/hosts/claude-code/{name}"));
-        }
-    }
-    Ok(written)
-}
-
-fn claude_code_settings_snippet() -> Vec<String> {
-    vec![
-        "statusLine: .pulse/hosts/claude-code/statusline.sh".to_string(),
-        "hooks.PostToolUse: .pulse/hosts/claude-code/post-tool-use.sh".to_string(),
-    ]
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -386,10 +306,9 @@ mod tests {
     #[test]
     fn first_run_creates_everything_and_reports_initialized() {
         let repo = tempfile::tempdir().unwrap();
-        let report = initialize_repository(repo.path(), false, None, false).unwrap();
+        let report = initialize_repository(repo.path(), false, false).unwrap();
         assert_eq!(report.status, RepositoryInitStatus::Initialized);
         assert!(repo.path().join(".pulse/issues.jsonl").exists());
-        assert!(repo.path().join(".pulse/runners.json").exists());
         assert!(repo.path().join("PULSE.md").exists());
         assert!(repo.path().join("docs/README.md").exists());
         assert!(repo.path().join("docs/operations/run.md").exists());
@@ -409,59 +328,13 @@ mod tests {
     }
 
     #[test]
-    fn runners_json_seed_points_every_role_at_its_prompt_or_a_wrapper_free_command() {
-        let repo = tempfile::tempdir().unwrap();
-        initialize_repository(repo.path(), false, None, false).unwrap();
-        let runners: serde_json::Value =
-            serde_json::from_slice(&fs::read(repo.path().join(".pulse/runners.json")).unwrap())
-                .unwrap();
-        // Every non-qa role in the seed file must survive the plain init's
-        // qa-* strip and appear in the written runners.json.
-        let seed: serde_json::Value =
-            serde_json::from_str(include_str!("../../templates/seeds/runners.json")).unwrap();
-        let base_roles: Vec<&str> = seed
-            .as_object()
-            .unwrap()
-            .keys()
-            .map(String::as_str)
-            .filter(|role| !role.starts_with("qa-"))
-            .collect();
-        assert!(!base_roles.is_empty(), "seed lost its base roles");
-        for role in base_roles {
-            assert!(runners.get(role).is_some(), "missing role {role}");
-        }
-        assert!(runners["worker"]["command"]
-            .as_str()
-            .unwrap()
-            .contains(".pulse/prompts/worker.md"));
-        assert!(runners["check-docs"]["command"]
-            .as_str()
-            .unwrap()
-            .contains("pulse docs check --write"));
-    }
-
-    #[test]
-    fn an_existing_runners_json_is_never_overwritten() {
-        let repo = tempfile::tempdir().unwrap();
-        fs::create_dir_all(repo.path().join(".pulse")).unwrap();
-        fs::write(
-            repo.path().join(".pulse/runners.json"),
-            "{\"custom\": true}\n",
-        )
-        .unwrap();
-        initialize_repository(repo.path(), true, None, false).unwrap();
-        let text = fs::read_to_string(repo.path().join(".pulse/runners.json")).unwrap();
-        assert!(text.contains("custom"));
-    }
-
-    #[test]
     fn prompts_are_written_once_and_left_alone_without_refresh() {
         let repo = tempfile::tempdir().unwrap();
-        initialize_repository(repo.path(), false, None, false).unwrap();
+        initialize_repository(repo.path(), false, false).unwrap();
         let worker_path = repo.path().join(".pulse/prompts/worker.md");
         fs::write(&worker_path, "hand edited\n").unwrap();
 
-        let report = initialize_repository(repo.path(), false, None, false).unwrap();
+        let report = initialize_repository(repo.path(), false, false).unwrap();
         assert_eq!(report.status, RepositoryInitStatus::Unchanged);
         assert_eq!(fs::read_to_string(&worker_path).unwrap(), "hand edited\n");
     }
@@ -469,22 +342,25 @@ mod tests {
     #[test]
     fn refresh_overwrites_prompt_files() {
         let repo = tempfile::tempdir().unwrap();
-        initialize_repository(repo.path(), false, None, false).unwrap();
+        initialize_repository(repo.path(), false, false).unwrap();
         let worker_path = repo.path().join(".pulse/prompts/worker.md");
-        fs::write(&worker_path, "stale\n").unwrap();
+        // A sentinel that cannot collide with the prompt's own vocabulary —
+        // the bare word `stale` would, since the worker prompt names the
+        // real `handoff_verify_stale` violation.
+        fs::write(&worker_path, "sentinel-do-not-keep\n").unwrap();
 
-        let report = initialize_repository(repo.path(), true, None, false).unwrap();
+        let report = initialize_repository(repo.path(), true, false).unwrap();
         assert_eq!(report.status, RepositoryInitStatus::Initialized);
         let text = fs::read_to_string(&worker_path).unwrap();
         assert!(text.starts_with("# Pulse worker"));
-        assert!(!text.contains("stale"));
+        assert!(!text.contains("sentinel-do-not-keep"));
     }
 
     #[test]
     fn second_run_is_idempotent_and_reports_unchanged() {
         let repo = tempfile::tempdir().unwrap();
-        initialize_repository(repo.path(), false, None, false).unwrap();
-        let report = initialize_repository(repo.path(), false, None, false).unwrap();
+        initialize_repository(repo.path(), false, false).unwrap();
+        let report = initialize_repository(repo.path(), false, false).unwrap();
         assert_eq!(report.status, RepositoryInitStatus::Unchanged);
         assert!(report.created.is_empty());
     }
@@ -493,7 +369,7 @@ mod tests {
     fn preserves_a_hand_edited_gitignore_and_only_appends_missing_entries() {
         let repo = tempfile::tempdir().unwrap();
         fs::write(repo.path().join(".gitignore"), "node_modules/\n").unwrap();
-        initialize_repository(repo.path(), false, None, false).unwrap();
+        initialize_repository(repo.path(), false, false).unwrap();
         let gitignore = fs::read_to_string(repo.path().join(".gitignore")).unwrap();
         assert!(gitignore.contains("node_modules/"));
         for entry in GITIGNORE_ENTRIES {
@@ -509,7 +385,7 @@ mod tests {
             "# My repo rules\n\nBe nice.\n",
         )
         .unwrap();
-        initialize_repository(repo.path(), false, None, false).unwrap();
+        initialize_repository(repo.path(), false, false).unwrap();
         let agents = fs::read_to_string(repo.path().join("AGENTS.md")).unwrap();
         assert!(agents.starts_with("# My repo rules\n\nBe nice.\n"));
         assert!(agents.contains(AGENTS_BLOCK_BEGIN));
@@ -518,13 +394,13 @@ mod tests {
     #[test]
     fn without_refresh_an_existing_block_is_left_untouched() {
         let repo = tempfile::tempdir().unwrap();
-        initialize_repository(repo.path(), false, None, false).unwrap();
+        initialize_repository(repo.path(), false, false).unwrap();
         let path = repo.path().join("AGENTS.md");
         let mut hand_edited = fs::read_to_string(&path).unwrap();
         hand_edited = hand_edited.replace("Pulse is the local CLI", "HAND EDITED TEXT");
         fs::write(&path, &hand_edited).unwrap();
 
-        let report = initialize_repository(repo.path(), false, None, false).unwrap();
+        let report = initialize_repository(repo.path(), false, false).unwrap();
         assert_eq!(report.status, RepositoryInitStatus::Unchanged);
         let after = fs::read_to_string(&path).unwrap();
         assert!(after.contains("HAND EDITED TEXT"));
@@ -538,13 +414,13 @@ mod tests {
             "# My repo rules\n\nBe nice.\n",
         )
         .unwrap();
-        initialize_repository(repo.path(), false, None, false).unwrap();
+        initialize_repository(repo.path(), false, false).unwrap();
         let path = repo.path().join("AGENTS.md");
         let mut hand_edited = fs::read_to_string(&path).unwrap();
         hand_edited = hand_edited.replace("Pulse is the local CLI", "STALE TEXT");
         fs::write(&path, &hand_edited).unwrap();
 
-        let report = initialize_repository(repo.path(), true, None, false).unwrap();
+        let report = initialize_repository(repo.path(), true, false).unwrap();
         assert_eq!(report.status, RepositoryInitStatus::Initialized);
         let after = fs::read_to_string(&path).unwrap();
         assert!(after.starts_with("# My repo rules\n\nBe nice.\n"));
@@ -553,31 +429,9 @@ mod tests {
     }
 
     #[test]
-    fn host_claude_code_writes_detector_files_and_a_settings_snippet() {
+    fn with_qa_templates_copies_the_scripts() {
         let repo = tempfile::tempdir().unwrap();
-        let report = initialize_repository(repo.path(), false, Some("claude-code"), false).unwrap();
-        assert!(repo
-            .path()
-            .join(".pulse/hosts/claude-code/statusline.sh")
-            .exists());
-        assert!(repo
-            .path()
-            .join(".pulse/hosts/claude-code/post-tool-use.sh")
-            .exists());
-        assert!(!report.host_settings_snippet.is_empty());
-    }
-
-    #[test]
-    fn unsupported_host_is_refused() {
-        let repo = tempfile::tempdir().unwrap();
-        let err = initialize_repository(repo.path(), false, Some("cursor"), false).unwrap_err();
-        assert_eq!(err.code(), "host_unsupported");
-    }
-
-    #[test]
-    fn with_qa_templates_copies_the_scripts_and_seeds_their_roles() {
-        let repo = tempfile::tempdir().unwrap();
-        let report = initialize_repository(repo.path(), false, None, true).unwrap();
+        let report = initialize_repository(repo.path(), false, true).unwrap();
         for (name, _) in QA_TEMPLATE_FILES {
             assert!(
                 repo.path().join("scripts/qa").join(name).exists(),
@@ -585,25 +439,13 @@ mod tests {
             );
             assert!(report.created.contains(&format!("scripts/qa/{name}")));
         }
-        let runners: serde_json::Value =
-            serde_json::from_slice(&fs::read(repo.path().join(".pulse/runners.json")).unwrap())
-                .unwrap();
-        assert_eq!(
-            runners["qa-ui"]["command"],
-            serde_json::json!("node scripts/qa/ui.mjs {input}")
-        );
-        assert!(runners.get("qa-api").is_some());
     }
 
     #[test]
-    fn without_with_qa_templates_neither_scripts_nor_roles_are_seeded() {
+    fn without_with_qa_templates_no_scripts_are_copied() {
         let repo = tempfile::tempdir().unwrap();
-        initialize_repository(repo.path(), false, None, false).unwrap();
+        initialize_repository(repo.path(), false, false).unwrap();
         assert!(!repo.path().join("scripts/qa").exists());
-        let runners: serde_json::Value =
-            serde_json::from_slice(&fs::read(repo.path().join(".pulse/runners.json")).unwrap())
-                .unwrap();
-        assert!(runners.get("qa-ui").is_none());
     }
 
     #[test]
@@ -612,7 +454,7 @@ mod tests {
         fs::create_dir_all(repo.path().join("scripts/qa")).unwrap();
         fs::write(repo.path().join("scripts/qa/ui.mjs"), "// hand written\n").unwrap();
 
-        let report = initialize_repository(repo.path(), true, None, true).unwrap();
+        let report = initialize_repository(repo.path(), true, true).unwrap();
         assert_eq!(
             fs::read_to_string(repo.path().join("scripts/qa/ui.mjs")).unwrap(),
             "// hand written\n"
@@ -632,7 +474,7 @@ mod tests {
             return;
         }
         let repo = tempfile::tempdir().unwrap();
-        initialize_repository(repo.path(), false, None, true).unwrap();
+        initialize_repository(repo.path(), false, true).unwrap();
         for name in ["ui.mjs", "api.mjs"] {
             let path = repo.path().join("scripts/qa").join(name);
             let status = std::process::Command::new("node")

@@ -2,6 +2,12 @@
 //! `learn::recall` — glob `applies_to` against `context.anchors` (path
 //! before `:`), or `tags` intersecting the issue's own `tags` — applied to
 //! every doc under `docs/**` instead of every learning.
+//!
+//! Plan 0025 F1 demoted this to a secondary hint: finding docs by content
+//! is the coding agent's own grep/glob job, and a frontmatter match is
+//! often empty and never exhaustive. The primary meaning of `applies_to` is
+//! now "which code this doc describes", which [`super::stale`] reads to
+//! warn about docs left behind by a ticket's edits.
 
 use std::path::Path;
 

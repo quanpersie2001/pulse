@@ -5,6 +5,16 @@
 //! costing one round trip per condition (the shape Track B hit repeatedly
 //! with single-error gates).
 //!
+//! `ready_description_missing` is a seventh Ticket condition added after the
+//! plan: a Ticket worked by an isolated agent needs the how, not only the
+//! what, and that how is one free-form markdown `description` field.
+//!
+//! `ready_touches_missing` is an eighth Ticket condition added for parallel
+//! work (decision 0025): a medium/high-risk Ticket declares the files it will
+//! edit or create (`touches`), because that list is the parallel-claim key —
+//! without it two workers can only run one at a time, and a repo-escaping
+//! entry would silently exempt the Ticket from every file reservation.
+//!
 //! Two error codes here (`ready_outcome_missing`, `ready_rules_or_qa_missing`)
 //! are not in the plan's literal list for §7.1, which only names the six
 //! codes for an implementation Ticket. Story's gate needs its own codes for
@@ -82,6 +92,8 @@ fn evaluate_ticket(repo_root: &Path, record: &Value, all_records: &[Value]) -> V
         check_anchors_exist(repo_root, record, &mut violations);
         check_story_and_qa_cases(record, all_records, &mut violations);
         check_classification(record, &mut violations);
+        check_description(record, &mut violations);
+        check_touches(record, &mut violations);
     }
     violations
 }
@@ -275,6 +287,72 @@ fn check_classification(record: &Value, out: &mut Vec<ReadyViolation>) {
             "ready_classification_missing",
             "risk and surface must both be set (not null) before ready",
         ));
+    }
+}
+
+// Condition 7. `description` is free-form markdown on purpose: the gate
+// checks that the how-to exists, never its shape. A low-risk ticket is the
+// one-session quick route (AGENTS.md Pulse block) and may go without one.
+fn check_description(record: &Value, out: &mut Vec<ReadyViolation>) {
+    if record.get("risk").and_then(Value::as_str) == Some("low") {
+        return;
+    }
+    let description = record
+        .get("description")
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    if description.trim().is_empty() {
+        out.push(violation(
+            "ready_description_missing",
+            "a medium/high-risk ticket needs a description: markdown on how to implement it, \
+             written for a worker that has no other context",
+        ));
+    }
+}
+
+// Condition 8. `touches` is the parallel-claim key (decision 0025): the
+// files a worker will edit or create, as repo-relative globs in the
+// `source::glob_match` grammar. As with `description`, a low-risk ticket is
+// the one-session quick route and may go without one. Existence is
+// deliberately not checked — a ticket may create new files.
+fn check_touches(record: &Value, out: &mut Vec<ReadyViolation>) {
+    if record.get("risk").and_then(Value::as_str) == Some("low") {
+        return;
+    }
+    let entries = record
+        .get("touches")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    if entries.is_empty() {
+        out.push(violation(
+            "ready_touches_missing",
+            "a medium/high-risk ticket needs touches: the files it will edit or create, \
+             as repo-relative globs — the parallel-claim key",
+        ));
+        return;
+    }
+    for (index, entry) in entries.iter().enumerate() {
+        let Some(path) = entry.as_str() else {
+            out.push(violation(
+                "ready_touches_missing",
+                format!("touches[{index}] is not a string"),
+            ));
+            continue;
+        };
+        // The same validity rule `pulse reserve` enforces mid-run — one
+        // shared check in kernel::scope (decision 0025 B4), so a touch the
+        // ready gate accepted can never be refused by a later reserve, and
+        // vice versa.
+        if !crate::kernel::scope::valid_touch(path) {
+            out.push(violation(
+                "ready_touches_missing",
+                format!(
+                    "touches[{index}] ({path}) must be a non-empty repo-relative path that \
+                     stays inside the repo",
+                ),
+            ));
+        }
     }
 }
 
@@ -584,6 +662,112 @@ mod tests {
             "rules": [{"id": "BR-1", "text": "must be fast"}],
         });
         let report = evaluate(repo.path(), &story, &[]);
+        assert!(report.is_ready(), "{:?}", report.violations);
+    }
+
+    #[test]
+    fn condition_7_a_medium_risk_ticket_without_a_description_is_reported() {
+        let repo = repo();
+        let mut ticket = base_ticket();
+        ticket["risk"] = json!("medium");
+        let report = evaluate(repo.path(), &ticket, &[]);
+        assert!(report
+            .violations
+            .iter()
+            .any(|v| v.code == "ready_description_missing"));
+
+        ticket["description"] = json!("   ");
+        let report = evaluate(repo.path(), &ticket, &[]);
+        assert!(!report.is_ready(), "whitespace is not a description");
+    }
+
+    #[test]
+    fn condition_7_any_markdown_description_satisfies_the_gate() {
+        let repo = repo();
+        let mut ticket = base_ticket();
+        ticket["risk"] = json!("high");
+        ticket["description"] = json!("## How\nExtend `foo()` the way `bar()` does.");
+        ticket["touches"] = json!(["src/lib.rs"]);
+        let report = evaluate(repo.path(), &ticket, &[]);
+        assert!(report.is_ready(), "{:?}", report.violations);
+    }
+
+    #[test]
+    fn condition_8_a_medium_risk_ticket_without_touches_is_reported() {
+        let repo = repo();
+        let mut ticket = base_ticket();
+        ticket["risk"] = json!("medium");
+        ticket["description"] = json!("## How\nDo it.");
+        let report = evaluate(repo.path(), &ticket, &[]);
+        assert!(report
+            .violations
+            .iter()
+            .any(|v| v.code == "ready_touches_missing"));
+
+        ticket["touches"] = json!([]);
+        let report = evaluate(repo.path(), &ticket, &[]);
+        assert!(!report.is_ready(), "an empty touches list claims nothing");
+
+        ticket["touches"] = json!(["src/lib.rs"]);
+        let report = evaluate(repo.path(), &ticket, &[]);
+        assert!(report.is_ready(), "{:?}", report.violations);
+    }
+
+    #[test]
+    fn condition_8_an_absolute_or_parent_escaping_touch_is_reported() {
+        let repo = repo();
+        let mut ticket = base_ticket();
+        ticket["risk"] = json!("medium");
+        ticket["description"] = json!("## How\nDo it.");
+        ticket["touches"] = json!(["/etc/passwd"]);
+        let report = evaluate(repo.path(), &ticket, &[]);
+        assert!(report
+            .violations
+            .iter()
+            .any(|v| v.code == "ready_touches_missing"));
+
+        ticket["touches"] = json!(["../escape.rs"]);
+        let report = evaluate(repo.path(), &ticket, &[]);
+        assert!(report
+            .violations
+            .iter()
+            .any(|v| v.code == "ready_touches_missing"));
+
+        ticket["touches"] = json!(["src/../../outside.rs"]);
+        let report = evaluate(repo.path(), &ticket, &[]);
+        assert!(report
+            .violations
+            .iter()
+            .any(|v| v.code == "ready_touches_missing"));
+
+        ticket["touches"] = json!([""]);
+        let report = evaluate(repo.path(), &ticket, &[]);
+        assert!(report
+            .violations
+            .iter()
+            .any(|v| v.code == "ready_touches_missing"));
+    }
+
+    #[test]
+    fn condition_8_low_risk_ticket_may_omit_touches() {
+        let repo = repo();
+        let mut ticket = base_ticket();
+        ticket["description"] = json!("## How\nDo it.");
+        assert_eq!(ticket["risk"], json!("low"));
+        let report = evaluate(repo.path(), &ticket, &[]);
+        assert!(report.is_ready(), "{:?}", report.violations);
+    }
+
+    #[test]
+    fn condition_8_a_glob_touch_that_covers_new_files_passes() {
+        // A touch names files that may not exist yet, so unlike an anchor it
+        // is never checked against disk — only against the path grammar.
+        let repo = repo();
+        let mut ticket = base_ticket();
+        ticket["risk"] = json!("medium");
+        ticket["description"] = json!("## How\nDo it.");
+        ticket["touches"] = json!(["src/generated/*.rs", "docs/new-dir/**"]);
+        let report = evaluate(repo.path(), &ticket, &[]);
         assert!(report.is_ready(), "{:?}", report.violations);
     }
 }

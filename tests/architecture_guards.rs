@@ -368,7 +368,7 @@ fn assert_pulse_mentions_parse(source_label: &str, text: &str) -> usize {
 #[test]
 fn agents_block_only_names_commands_the_cli_has() {
     let repo = tempfile::tempdir().unwrap();
-    pulse::kernel::init::initialize_repository(repo.path(), false, None, false).unwrap();
+    pulse::kernel::init::initialize_repository(repo.path(), false, false).unwrap();
     let agents = fs::read_to_string(repo.path().join("AGENTS.md")).unwrap();
 
     let checked = assert_pulse_mentions_parse("AGENTS.md", &agents);
@@ -474,48 +474,4 @@ fn serve_does_not_depend_on_kernel_or_cli() {
             );
         }
     }
-}
-
-/// Plan §10.4: the host detector shell scripts `pulse init --host
-/// claude-code` copies into the target repo live at
-/// `templates/hosts/**/*.sh` (A8.4) — they must at least parse as POSIX
-/// shell. Syntax drift here otherwise only surfaces in a target repo when
-/// the detector runs. Skipped, with a stated reason, when `sh` is not on
-/// PATH (this crate's suite must not depend on a POSIX shell).
-#[test]
-fn host_detector_templates_are_valid_shell() {
-    if std::process::Command::new("sh")
-        .arg("--version")
-        .output()
-        .is_err()
-    {
-        eprintln!("skipping host_detector_templates_are_valid_shell: `sh` is not on PATH");
-        return;
-    }
-    let hosts_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("templates/hosts");
-    let mut pending = vec![hosts_dir.clone()];
-    let mut checked = 0_usize;
-    while let Some(dir) = pending.pop() {
-        for entry in fs::read_dir(&dir).unwrap() {
-            let path = entry.unwrap().path();
-            if path.is_dir() {
-                pending.push(path);
-                continue;
-            }
-            if path.extension().and_then(|ext| ext.to_str()) != Some("sh") {
-                continue;
-            }
-            let status = std::process::Command::new("sh")
-                .arg("-n")
-                .arg(&path)
-                .status()
-                .unwrap();
-            assert!(status.success(), "sh -n failed for {}", path.display());
-            checked += 1;
-        }
-    }
-    assert!(
-        checked >= 2,
-        "expected the claude-code detector scripts to be checked; only {checked} found"
-    );
 }

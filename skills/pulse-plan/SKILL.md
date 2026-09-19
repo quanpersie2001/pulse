@@ -34,12 +34,18 @@ paths the Story's behavior touches and note what lives at each
 (`api/app/main.py: routers included here`); check how the stack runs in
 `docs/operations/run.md`, package manifests and existing tests to find verify
 commands that actually run here. A `verify[]` argv that has never executed in
-this repo is a bug baked into the Ticket before a worker ever starts.
+this repo is a bug baked into the Ticket before a worker ever starts — and
+since decision 0026 Pulse runs it itself at `pulse verify`, it has to be
+argv (never a shell string), non-interactive, and finished well inside the
+timeout (default 900s).
 
 ```text
-pulse docs applicable ST-<id>
 pulse work show <sibling-ticket> --json
 ```
+
+(You have already grep/glob'd `docs/` for what the Story touches;
+`pulse docs applicable ST-<id>` is a frontmatter-driven cross-check after
+that search, not a substitute for it.)
 
 ## 2. The cut
 
@@ -84,6 +90,8 @@ Ticket payload — the fields the whole harness reads:
 
 ```json
 {"objective":"what this ticket delivers, one paragraph",
+ "description":"## Approach\n…markdown, see below…",
+ "touches":["api/app/"],
  "context":{"anchors":["api/app/main.py:routers included here",
                        "docs/operations/run.md:how to start the stack"],
             "docs":["docs/architecture/overview.md"]},
@@ -96,12 +104,42 @@ Ticket payload — the fields the whole harness reads:
  "open_questions":[]}
 ```
 
+- `description` is the how, and it is the field that decides whether an
+  isolated worker drifts. It is free-form markdown — no fixed sections, the
+  schema checks nothing but that it is a string — and the ready gate refuses
+  a medium/high-risk ticket without one. The worker starts with none of what
+  you learned reading the code, so write it for a capable engineer who has
+  never opened this repo: the approach and why this one over the obvious
+  alternative; every file and symbol to touch and what changes in each; the
+  existing code to imitate (`path:line`, not "follow conventions"); the
+  signatures, data shapes and error codes that must come out exactly so
+  sibling tickets fit; the order to work in; the traps you hit while
+  reading. Paste the short snippet instead of describing it. If you cannot
+  write this, you have not read enough code yet — go read, do not pad.
+- `touches` lists every file the ticket will edit or create — repo-relative
+  globs (`dir/**`, one `*` within one segment; never absolute, never `..`).
+  It is the parallel-claim key (decision 0025): while another ticket holds
+  an overlapping `touches`, a claim is refused — so a missing entry stops
+  the worker mid-flight to add one, and a greedy entry parks an unrelated
+  ticket for no reason. Two tickets whose `touches` overlap should carry a
+  `blocked_by` edge, or accept that they run serially. The ready gate
+  refuses a medium/high-risk ticket without it.
 - `context.anchors` entries are `"path: what lives there"` — the part before
   the `:` must exist on disk; the ready gate checks it.
 - `acceptance` is EARS-minimal: one observable behavior per item, `when` and
   `then` non-empty, citing the Story's BR-*/E-* in `then`. Reviewer and QA
   map 1:1 against these ids.
-- `verify[].argv` is argv, never a shell string; `cwd` defaults to repo root.
+- The Story's rules and exceptions must end up in `docs/**` by id (the
+  close-story gate refuses a story whose BR-*/E-* live only in
+  `issues.jsonl`, plan 0025 F4). Give that writing an owner now: the last
+  ticket of the Story — or whichever ticket owns the rule's code, via its
+  `change.docs_to_update` — carries the doc work, so it never piles up at
+  close.
+- `verify[].argv` is argv, never a shell string; `cwd` defaults to repo root
+  and must name a directory that exists. Pulse runs these itself (decision
+  0026): no shell, one at a time, each killed at the timeout — so keep them
+  non-interactive, bounded, and prefer a command whose *output* says what
+  failed.
 - `qa_cases` holds Story case ids, and each referenced case's surface should
   match the ticket's own surface.
 - `non_scope` names the adjacent work deliberately not being done; the worker
@@ -119,6 +157,17 @@ pulse work ready TK-<id> --json
 A ticket whose blockers are still open stays put; report it blocked with the
 gate's reason codes instead of working around the gate.
 
+When every ticket is through the gate, read the parallel map of your cut:
+
+```text
+pulse frontier ST-<id> --json
+```
+
+This is decision 0025 made visible: which tickets can run at the same time
+because their `touches` are disjoint, and which one waits on which — a
+waiting ticket here is the host's signal to plan a `blocked_by` edge or a
+narrower cut, not something to fix by editing `touches` after the fact.
+
 ## Report
 
 Report exactly these sections:
@@ -135,6 +184,11 @@ Report exactly these sections:
 - TK-… pass
 - TK-… blocked: <reason codes>
 
+## Frontier
+- runnable: TK-…, TK-… — disjoint `touches`; the host spawns one worker per
+  ticket, each its own actor (`agent:worker-<n>`)
+- waiting: TK-… on TK-… (<reason: frontier | reserved | blocked_by>)
+
 ## Next
-pulse run worker TK-…
+pulse claim TK-… --actor agent:worker
 ```

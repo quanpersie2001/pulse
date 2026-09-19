@@ -62,6 +62,15 @@
     },
     "freedom": { "enum": ["locked", "guided", "open"] },
     "objective": { "type": "string" },
+    "description": {
+      "description": "Ticket: free-form markdown on HOW to implement — the context an isolated worker would otherwise lack. Deliberately unstructured.",
+      "type": "string"
+    },
+    "touches": {
+      "description": "Ticket: files this ticket will edit or create, as repo-relative globs in the source::glob_match grammar (exact path, `dir/`, `dir/**`, or one `*` within one segment). The parallel-claim key (decision 0025): a claim is refused while another held ticket's touches overlap; a ticket without touches claims exclusively.",
+      "type": "array",
+      "items": { "type": "string" }
+    },
     "question": { "type": "string" },
     "deliverable": { "type": "string" },
     "context": {
@@ -209,6 +218,11 @@
           "text": { "type": "string" }
         }
       }
+    },
+    "docs_written": {
+      "description": "Story: docs/** paths where this story's rules and exceptions now live (plan 0025 F4). The close-story gate requires every rules[].id / exceptions[].id to appear verbatim in at least one listed file.",
+      "type": "array",
+      "items": { "type": "string" }
     },
     "approach": { "type": ["string", "null"] },
     "success_signals": { "type": "array", "items": { "type": "string" } },

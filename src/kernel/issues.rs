@@ -297,7 +297,7 @@ pub fn transition(
                 "transition_not_allowed",
                 format!("cannot manually transition {id} from {current_status} to {to}"),
                 "manual transitions are draft|ready|blocked -> cancelled, and ready|active -> blocked; \
-                 draft->ready goes through `pulse ready`, active transitions through `pulse run`/`handoff`/`close`",
+                 draft->ready goes through `pulse work ready`, active transitions through `pulse claim`/`handoff`/`close`",
             ));
         }
         apply_to_record(records, id, |record| {
@@ -442,6 +442,22 @@ pub fn append_note(
         Utc::now(),
     )?;
     Ok(updated)
+}
+
+/// Set `id`'s status without going through [`transition`]'s human-only
+/// authorization: the lifecycle moves a gate makes on the graph's behalf
+/// (a lane's `fail` verdict reworking a Ticket) are system-level, not a
+/// human decision to re-authorize.
+pub(crate) fn set_status(repo_root: &Path, id: &str, status: &str) -> Result<Value> {
+    let saved = issues::mutate(repo_root, |records| {
+        apply_to_record(records, id, |record| {
+            let object = record.as_object_mut().expect("records are always objects");
+            object.insert("status".to_string(), Value::String(status.to_string()));
+            bump(object);
+            Ok(())
+        })
+    })?;
+    Ok(require(&saved, id)?.clone())
 }
 
 pub(crate) fn apply_to_record(

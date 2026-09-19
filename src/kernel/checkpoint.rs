@@ -18,8 +18,8 @@ use crate::event::emit_event;
 use crate::evidence::receipt::{record_receipt, NewReceipt, ReceiptSource, ReceiptSubject};
 use crate::identity::actor::ActorRef;
 use crate::kernel::issues::{apply_to_record, bump, now_rfc3339, require};
+use crate::kernel::profile;
 use crate::kernel::roles::{authorize, Action};
-use crate::source;
 use crate::store::issues;
 
 const MAX_CHECKPOINTS_ON_RECORD: usize = 10;
@@ -67,7 +67,9 @@ fn checkpoint_record(input: &CheckpointInput, at: &str) -> Value {
 
 /// # Errors
 /// `role_forbidden` if `actor` may not checkpoint; `checkpoint_lease_mismatch`
-/// if `actor` does not hold the Ticket's lease.
+/// if `actor` does not hold the Ticket's lease or `input.run_id` is not the
+/// run the lease was claimed under (decision 0025 B3 — a checkpoint from an
+/// earlier run must not describe this one).
 pub fn checkpoint(
     repo_root: &Path,
     actor: &ActorRef,
@@ -90,6 +92,22 @@ pub fn checkpoint(
             "only the actor holding the Ticket's lease may checkpoint it",
         ));
     }
+    // Same code as the actor mismatch — the lease did not match. The
+    // checkpoint's run_id must be the run the lease was claimed under
+    // (decision 0025 B3), so a cp.json from an earlier claim cannot
+    // describe this run's progress.
+    let lease_run_id = ticket.pointer("/lease/run_id").and_then(Value::as_str);
+    if lease_run_id != Some(input.run_id.as_str()) {
+        return Err(PulseError::kernel(
+            "checkpoint_lease_mismatch",
+            format!(
+                "checkpoint run_id is {}, but the lease was claimed as {}",
+                input.run_id,
+                lease_run_id.unwrap_or("<none>")
+            ),
+            "checkpoint with the run_id your claim returned (protocol.run_id in the packet)",
+        ));
+    }
     let revision = ticket.get("revision").and_then(Value::as_u64);
 
     let at = now_rfc3339();
@@ -106,7 +124,9 @@ pub fn checkpoint(
             },
             actor: actor.as_kind_id(),
             source: {
-                let snapshot = source::snapshot(repo_root, &[])?;
+                // Plan 0025 B6: the checkpoint receipt carries the ticket's
+                // own fence, like handoff and close do.
+                let snapshot = profile::fence_for(repo_root, ticket)?;
                 ReceiptSource {
                     commit: snapshot.commit,
                     dirty_hash: snapshot.dirty_hash,
@@ -252,6 +272,22 @@ mod tests {
     }
 
     #[test]
+    fn checkpoint_run_id_mismatch_is_rejected() {
+        // Decision 0025 B3: the checkpoint must carry the run_id of the
+        // claim it belongs to, not of some earlier run.
+        let repo = git_repo_with_leased_ticket();
+        let err = checkpoint(
+            repo.path(),
+            &agent("worker"),
+            "TK-a3f9",
+            input("run_from-an-earlier-claim"),
+        )
+        .unwrap_err();
+        assert_eq!(err.code(), "checkpoint_lease_mismatch");
+        assert!(err.to_string().contains("run_id"), "{err}");
+    }
+
+    #[test]
     fn checkpoint_appends_and_does_not_change_status() {
         let repo = git_repo_with_leased_ticket();
         let updated = checkpoint(repo.path(), &agent("worker"), "TK-a3f9", input("run_1")).unwrap();
@@ -294,27 +330,25 @@ mod tests {
     #[test]
     fn the_eleventh_checkpoint_archives_the_oldest_to_the_evidence_dir() {
         let repo = git_repo_with_leased_ticket();
+        // The run_id is pinned to the lease (decision 0025 B3), so the
+        // oldest checkpoint is told apart by its `in_progress` marker.
         for i in 0..11 {
-            checkpoint(
-                repo.path(),
-                &agent("worker"),
-                "TK-a3f9",
-                input(&format!("run_{i}")),
-            )
-            .unwrap();
+            let mut entry = input("run_1");
+            entry.in_progress = format!("AC-{i}");
+            checkpoint(repo.path(), &agent("worker"), "TK-a3f9", entry).unwrap();
         }
         let records = crate::store::issues::read_all(repo.path()).unwrap();
         let ticket = records.iter().find(|r| r["id"] == "TK-a3f9").unwrap();
         assert_eq!(ticket["checkpoints"].as_array().unwrap().len(), 10);
         assert_eq!(
-            ticket["checkpoints"][0]["run_id"], "run_1",
-            "the oldest (run_0) was archived"
+            ticket["checkpoints"][0]["in_progress"], "AC-1",
+            "the oldest (AC-0) was archived off the front"
         );
         let archived = repo
             .path()
             .join(".pulse/evidence/TK-a3f9/checkpoint-1.json");
         assert!(archived.exists());
         let archived: Value = serde_json::from_slice(&std::fs::read(&archived).unwrap()).unwrap();
-        assert_eq!(archived["run_id"], "run_0");
+        assert_eq!(archived["in_progress"], "AC-0");
     }
 }

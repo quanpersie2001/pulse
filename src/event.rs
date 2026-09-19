@@ -171,6 +171,19 @@ fn infer_subject_kind(event_type: &str, id: &str) -> String {
         }
         .to_string();
     }
+    // Plan 0025 E1: `friction.dismissed` sits on a work item (the record the
+    // friction note was written against), so the id prefix decides — same
+    // mapping as `work.` above.
+    if event_type.starts_with("friction.") {
+        return match id.split_once('-').map(|(prefix, _)| prefix) {
+            Some("EP") => "epic",
+            Some("ST") => "story",
+            Some("TK") => "ticket",
+            Some("DEC") => "decision",
+            _ => "work",
+        }
+        .to_string();
+    }
     if event_type.starts_with("docs.") {
         "document".to_string()
     } else if event_type.starts_with("evidence.receipt.") {

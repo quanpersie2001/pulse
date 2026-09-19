@@ -12,11 +12,10 @@
 //!   state (`pulse release`), but invisible without this check;
 //! * evidence directories no receipt points at (orphans — likely leftovers
 //!   of a manual experiment; reported for a human decision, never deleted);
-//! * the context-threshold detector (plan §10.4): its marker is transient
-//!   (fired → consumed → deleted), so "exercised" is inferred from a
-//!   completed `continue` round-trip in the event log; a fired-but-
-//!   unconsumed marker and an installed-but-never-exercised pair are the
-//!   two warnings (ST-1 left the mechanism `unexercised`).
+//! * a lane prepared but never sealed — `pulse lane input` recorded a
+//!   pre-run snapshot and no `pulse lane seal` consumed it, so the host
+//!   either never dispatched the lane or the lane died silently (dogfood
+//!   ST-1, F8: an unsealed lane used to leave no trace at all).
 //!
 //! The doctor owns no mutation and no lock: it reads snapshots.
 
@@ -26,23 +25,22 @@ use std::path::Path;
 
 use chrono::Utc;
 use serde::Serialize;
+use serde_json::Value;
 
 use crate::error::{PulseError, Result};
-use crate::event::read_event_log;
 use crate::evidence::receipt::list_receipts;
+use crate::kernel::profile::fence_ignore;
+use crate::kernel::reservation::touches_of;
+use crate::kernel::scope;
 use crate::store::issues::{self, validate_record};
 
-/// Whether the §10.4 context-threshold detector ever completed a cycle.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum DetectorStatus {
-    /// A `continue` round-trip exists in the event log.
-    Exercised,
-    /// The marker exists right now — fired, but the host loop stopped
-    /// before consuming it.
-    MarkerPending,
-    /// Installed, marker absent, and no `continue` round-trip recorded.
-    Unexercised,
+/// One lane whose pre-run snapshot is still on disk, so nothing sealed it.
+#[derive(Debug, Clone, Serialize)]
+pub struct StaleLanePreparation {
+    pub id: String,
+    pub role: String,
+    pub prepared_at: Option<String>,
+    pub prepared_by: Option<String>,
 }
 
 /// One Ticket in `active` whose lease expired.
@@ -52,6 +50,38 @@ pub struct ExpiredLease {
     pub actor: Option<String>,
     pub run_id: Option<String>,
     pub expires_at: Option<String>,
+}
+
+/// A dirty path whose every covering ticket is `done` (plan 0025 B6): the
+/// work was accepted but its files were never committed. The host's rule
+/// is "commit right after `pulse close`"; a path still dirty afterwards is
+/// an operator reminder, not a gate.
+#[derive(Debug, Clone, Serialize)]
+pub struct AwaitingCommit {
+    pub path: String,
+    /// Every ticket whose `touches` cover the path (all `done`).
+    pub held_by: Vec<String>,
+}
+
+/// One learning whose `misleading` count has outgrown its `helpful` count
+/// (plan 0025 E3): recall already hides it, so it silently stops being
+/// useful — the human decides whether to retire it or trust it again.
+#[derive(Debug, Clone, Serialize)]
+pub struct LearningSuspect {
+    pub id: String,
+    pub status: String,
+    pub helpful: u32,
+    pub not_needed: u32,
+    pub misleading: u32,
+}
+
+/// One learning cite whose hash no longer matches the file on disk
+/// (plan 0025 E4).
+#[derive(Debug, Clone, Serialize)]
+pub struct StaleCite {
+    pub learning: String,
+    pub path: String,
+    pub lines: String,
 }
 
 /// The full read-only health report.
@@ -66,22 +96,31 @@ pub struct DoctorReport {
     pub expired_leases: Vec<ExpiredLease>,
     /// Evidence directories no receipt names.
     pub orphan_evidence: Vec<String>,
-    pub detector_context_threshold: DetectorStatus,
-    /// Both §10.4 host hook scripts are installed.
-    pub host_hooks_installed: bool,
+    /// Lanes prepared by `pulse lane input` that no `pulse lane seal`
+    /// consumed.
+    pub stale_lane_preparations: Vec<StaleLanePreparation>,
+    /// Dirty paths only `done` tickets claim (plan 0025 B6).
+    pub awaiting_commit: Vec<AwaitingCommit>,
+    /// Learnings reported misleading more often than helpful (plan 0025
+    /// E3) — recall already excludes them; retirement is the human's call.
+    pub learning_suspects: Vec<LearningSuspect>,
+    /// Learning code citations whose hash no longer matches the file
+    /// (plan 0025 E4) — the learning needs a human re-read, not a retire.
+    pub stale_cites: Vec<StaleCite>,
 }
 
 impl DoctorReport {
     /// Number of findings a human should look at; `pulse doctor` exits
     /// non-zero when this is > 0, so it can gate a script.
     pub fn warning_count(&self) -> usize {
-        let detector_warns = self.host_hooks_installed
-            && self.detector_context_threshold != DetectorStatus::Exercised;
         self.store_torn_lines.len()
             + self.unreadable_receipts.len()
             + self.expired_leases.len()
             + self.orphan_evidence.len()
-            + usize::from(detector_warns)
+            + self.stale_lane_preparations.len()
+            + self.awaiting_commit.len()
+            + self.learning_suspects.len()
+            + self.stale_cites.len()
     }
 }
 
@@ -187,33 +226,130 @@ pub fn run(repo_root: &Path) -> Result<DoctorReport> {
         orphan_evidence.sort();
     }
 
-    let host_hooks_installed = ["statusline.sh", "post-tool-use.sh"].iter().all(|name| {
-        repo_root
-            .join(".pulse/hosts/claude-code")
-            .join(name)
-            .is_file()
-    });
-    let marker = repo_root.join(".pulse/runtime/context-threshold");
-    let detector_context_threshold = if marker.exists() {
-        DetectorStatus::MarkerPending
-    } else {
-        let continued = read_event_log(repo_root)?.events.iter().any(|event| {
-            event.event_type == "run.completed"
-                && event.payload.get("outcome").and_then(|v| v.as_str()) == Some("continue")
-        });
-        if continued {
-            DetectorStatus::Exercised
-        } else {
-            DetectorStatus::Unexercised
-        }
-    };
+    let stale_lane_preparations = stale_lane_preparations(repo_root);
+    let awaiting_commit = awaiting_commit(repo_root, &records);
+    // Plan 0025 E3: recall has already silenced a suspect learning — without
+    // this check it would vanish without a trace. Never auto-retired: a
+    // human decides, with the counts in front of them.
+    let learning_suspects = crate::learn::store::list(repo_root)?
+        .into_iter()
+        .filter(crate::learn::recall::is_suspect)
+        .map(|learning| LearningSuspect {
+            id: learning.frontmatter.id,
+            status: learning.frontmatter.status,
+            helpful: learning.frontmatter.usage.helpful,
+            not_needed: learning.frontmatter.usage.not_needed,
+            misleading: learning.frontmatter.usage.misleading,
+        })
+        .collect();
+    // Plan 0025 E4: a cite whose bytes moved is a learning pointing at code
+    // that no longer says what it said. Detection only — recall still
+    // includes it (code can change back; the lesson is not automatically
+    // wrong), and nothing is retired by machine.
+    let stale_cites = crate::learn::store::list(repo_root)?
+        .into_iter()
+        .flat_map(|learning| {
+            let id = learning.frontmatter.id.clone();
+            crate::learn::stale_cites(repo_root, &learning)
+                .into_iter()
+                .map(move |cite| StaleCite {
+                    learning: id.clone(),
+                    path: cite.path.clone(),
+                    lines: cite.lines.clone(),
+                })
+                .collect::<Vec<StaleCite>>()
+        })
+        .collect();
 
     Ok(DoctorReport {
         store_torn_lines: torn,
         unreadable_receipts: unreadable,
         expired_leases,
         orphan_evidence,
-        detector_context_threshold,
-        host_hooks_installed,
+        stale_lane_preparations,
+        awaiting_commit,
+        learning_suspects,
+        stale_cites,
     })
+}
+
+/// Dirty paths (after `fence_ignore`) that only `done` tickets claim
+/// (plan 0025 B6): the ticket closed but nobody committed its files. A
+/// path no ticket claims is not a finding — mid-run dirt is normal — and
+/// a path an open ticket claims is that ticket's work in progress. A
+/// missing or failing git (no repo, no commits) means nothing to report:
+/// the doctor reports Pulse state, not environment problems.
+fn awaiting_commit(repo_root: &Path, records: &[Value]) -> Vec<AwaitingCommit> {
+    let Ok(state) = crate::source::snapshot(repo_root, &fence_ignore(repo_root)) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for path in state.dirty_paths {
+        let covering: Vec<&Value> = records
+            .iter()
+            .filter(|record| scope::covers(&touches_of(record), &path))
+            .collect();
+        let all_done = !covering.is_empty()
+            && covering
+                .iter()
+                .all(|record| record.get("status").and_then(Value::as_str) == Some("done"));
+        if !all_done {
+            continue;
+        }
+        out.push(AwaitingCommit {
+            path,
+            held_by: covering
+                .iter()
+                .filter_map(|record| record.get("id").and_then(Value::as_str))
+                .map(str::to_string)
+                .collect(),
+        });
+    }
+    out
+}
+
+/// Every `<id>/<role>.snapshot.json` still under `.pulse/runtime/lane/`.
+/// A missing or unreadable directory is not a finding: the tree only exists
+/// once a lane has been prepared at least once.
+fn stale_lane_preparations(repo_root: &Path) -> Vec<StaleLanePreparation> {
+    let root = repo_root.join(".pulse/runtime/lane");
+    let mut stale = Vec::new();
+    let Ok(ids) = fs::read_dir(&root) else {
+        return stale;
+    };
+    for id_entry in ids.flatten() {
+        let Some(id) = id_entry.file_name().to_str().map(str::to_string) else {
+            continue;
+        };
+        let Ok(files) = fs::read_dir(id_entry.path()) else {
+            continue;
+        };
+        for file in files.flatten() {
+            let name = file.file_name();
+            let Some(role) = name
+                .to_str()
+                .and_then(|name| name.strip_suffix(".snapshot.json"))
+            else {
+                continue;
+            };
+            let snapshot: Option<serde_json::Value> = fs::read(file.path())
+                .ok()
+                .and_then(|bytes| serde_json::from_slice(&bytes).ok());
+            let field = |key: &str| {
+                snapshot
+                    .as_ref()
+                    .and_then(|value| value.get(key))
+                    .and_then(|value| value.as_str())
+                    .map(str::to_string)
+            };
+            stale.push(StaleLanePreparation {
+                id: id.clone(),
+                role: role.to_string(),
+                prepared_at: field("at"),
+                prepared_by: field("actor"),
+            });
+        }
+    }
+    stale.sort_by(|left, right| (&left.id, &left.role).cmp(&(&right.id, &right.role)));
+    stale
 }

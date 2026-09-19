@@ -5,6 +5,7 @@
 
 pub mod applicable;
 pub mod check;
+pub mod stale;
 
 use std::fs;
 use std::path::Path;

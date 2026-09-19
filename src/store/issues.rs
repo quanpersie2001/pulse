@@ -156,7 +156,26 @@ pub fn mutate<F>(repo_root: &Path, transform: F) -> Result<Vec<Value>>
 where
     F: FnOnce(Vec<Value>) -> Result<Vec<Value>>,
 {
-    let _guard = WriteGuard::acquire(repo_root)?;
+    let guard = WriteGuard::acquire(repo_root)?;
+    mutate_locked(&guard, repo_root, transform)
+}
+
+/// The body of [`mutate`] for a caller that already holds the repository
+/// write lock (plan 0025 A4).
+///
+/// `WriteGuard` is a `flock` on a freshly opened descriptor and is **not**
+/// re-entrant: a gate that holds the guard while calling [`mutate`] would
+/// block on itself for the lock timeout. Gates therefore take one guard up
+/// front and pass it here, so `read -> evaluate -> record_receipt -> write`
+/// is one critical section.
+///
+/// # Errors
+/// Propagates `transform`'s error, any `issues_record_invalid` from the
+/// records it returns, or an I/O error writing the file.
+pub fn mutate_locked<F>(_guard: &WriteGuard, repo_root: &Path, transform: F) -> Result<Vec<Value>>
+where
+    F: FnOnce(Vec<Value>) -> Result<Vec<Value>>,
+{
     let current = read_all(repo_root)?;
     let mut next = transform(current)?;
     for record in &next {
