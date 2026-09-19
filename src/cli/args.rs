@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use clap::{Parser, Subcommand};
 
 #[derive(Parser)]
-#[command(name = "pulse")]
+#[command(name = "pulse", version)]
 pub struct Cli {
     #[arg(long, global = true)]
     pub(crate) repo_root: Option<PathBuf>,
@@ -84,6 +84,17 @@ pub(crate) enum Command {
     },
     /// Run the close gate; on a clean report, `verifying -> done`.
     Close {
+        id: String,
+        #[arg(long)]
+        actor: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Run the close-epic gate; on a clean report, the Epic becomes
+    /// `done`. Every child Story must be done|cancelled and the Epic's
+    /// `not_yet_specified` fog must have graduated into a Story or into
+    /// `out_of_scope`.
+    CloseEpic {
         id: String,
         #[arg(long)]
         actor: Option<String>,
@@ -219,6 +230,14 @@ pub(crate) enum Command {
     Hook {
         #[command(subcommand)]
         command: super::hook::HookCommand,
+    },
+    /// Install the Pulse guidance skills into this repository: the
+    /// bodies go to `.agents/skills/`, and each coding agent you choose
+    /// gets a symlink to them. Project scope only, and interactive by
+    /// default — which agents you use is not something Pulse guesses.
+    Skills {
+        #[command(subcommand)]
+        command: super::skills::SkillsCommand,
     },
     /// Read-only board server over your registered Pulse projects
     /// (Decision 0023, as amended: `pulse init` registers; serve lists).

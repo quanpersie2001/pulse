@@ -120,17 +120,28 @@ appended event.
   advisory only, never a violation).
 - `src/serve/` — the board server: registry + workspace discovery
   (`registry.rs`), lenient read-only API (`api.rs`), tiny HTTP layer
-  (`http.rs`), the self-contained UI (`assets/board/board.html`).
+  (`http.rs`), the self-contained UI (`board.html` beside it, embedded
+  with `include_str!`).
 
 ## 3. Embedded assets and skills
 
 - `templates/` is everything `pulse init` writes into a target repo
   (seeds, prompts, qa scripts, schema), embedded with
   `include_str!` — a template change is a code change and is tested.
-- `assets/` is this repository's own media (the board UI).
-- `skills/` are the four guidance skills (`pulse-shape`, `pulse-plan`,
-  `pulse-review`, `pulse-learn`); a guard test parses every `pulse …`
-  command they name against the real CLI, same as the AGENTS block.
+- `assets/` is this repository's own media only — the logo mark(s).
+  `serve` embeds `assets/logo-icon.svg` and serves it at `/favicon.svg`
+  (the board UI itself is source and lives in `src/serve/`).
+- `templates/skills/` are the three guidance skills (`pulse-shape`,
+  `pulse-plan`, `pulse-learn`), embedded like every other template and
+  written into a target repo by `pulse skills install` — `.agents/skills/`
+  holds the bodies, each chosen host gets a symlink. They are guarded by
+  the same `templates_only_name_commands_the_cli_has` parse as the AGENTS
+  block, plus a guard that every directory there is one the installer
+  ships.
+- `scripts/install-pulse.sh` is the Unix distribution bootstrap: install the
+  selected Git ref through Cargo, verify `pulse --version`, then delegate
+  repository enrollment and skill linking to the installed CLI. It owns no
+  init or host-integration semantics and never edits a host settings file.
 
 ## 4. Tests
 

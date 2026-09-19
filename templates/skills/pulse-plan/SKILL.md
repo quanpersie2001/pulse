@@ -1,6 +1,6 @@
 ---
 name: pulse-plan
-description: Cut one shaped Story into Tickets and take each through the ready gate. Reads the Story's rules and QA cases plus the actual code to write full Ticket records — objective, path-annotated anchors, when/then acceptance, verify argv, qa_cases references, blocked_by dependencies. Use it when a Story is draft/ready and needs its Tickets. Do not use it to shape meaning (pulse-shape), for a single bounded change that needs no Story (the ordinary route in the AGENTS.md Pulse block), or for any execution — planning never runs a worker and never edits product source.
+description: Use when a shaped Story has no Tickets yet, or its Tickets must be re-cut after the shape changed. Not for shaping meaning, not for a single bounded change that needs no Story, and never for execution.
 ---
 
 # Pulse Plan
@@ -72,6 +72,21 @@ Every cross-cutting concern the Story implies but no ticket owns (middleware,
 a migration, config) must land in exactly one ticket's `change.required` —
 an orphaned concern is how the next friction note gets written.
 
+**Stay inside the map.** Read the Story's Epic before cutting
+(`pulse work show <epic> --json`): `out_of_scope[]` is work the effort
+ruled out, and a Ticket that delivers any of it is a cut nobody asked for —
+raise it with the human instead of planning it. `not_yet_specified[]` is
+the opposite: in-scope fog. If your cut resolves one of those items, say so
+in the report, because the Epic cannot close while the item is still listed
+and someone must move it.
+
+**Cut only the Story in front of you.** Tickets are created for work whose
+shape is settled now — never for a Story further down the Epic, and never
+as a placeholder for work the cut has not reached. A Ticket that exists
+before its Story is shaped ages into a wrong plan that someone still has to
+read, and it occupies `touches` globs that fence live work out of the
+frontier. The Epic's own record is the queue; `pulse work tree` reads it.
+
 ## 3. Put the cut to the human
 
 One message, not an interview: the proposed tickets (title, surface, risk,
@@ -90,95 +105,32 @@ pulse work new ticket "Tasks API: due dates + views" --story ST-<id> --risk medi
 pulse work dep add TK-<ui> blocked_by TK-<api> --actor human:quan --json
 ```
 
-Ticket payload — the fields the whole harness reads:
+The Ticket payload and the field-by-field rules that make a cut survive
+the gates are in
+[references/ticket-payload.md](references/ticket-payload.md) — read it when
+you are about to write a payload.
 
-```json
-{"objective":"what this ticket delivers, one paragraph",
- "description":"## Approach\n…markdown, see below…",
- "touches":["api/app/"],
- "context":{"anchors":["api/app/main.py:routers included here",
-                       "docs/operations/run.md:how to start the stack"],
-            "docs":["docs/architecture/overview.md"]},
- "change":{"required":["…"],"invariants":["…"],"docs_to_update":["docs/…"]},
- "non_scope":["…"],
- "acceptance":[{"id":"AC-1","when":"POST /tasks {\"title\":\"x\"}",
-                "then":"201 with task body; blank title 422 (BR-1, E-1)"}],
- "verify":[{"name":"pytest","argv":["uv","run","pytest","-q"],"cwd":"api"}],
- "qa_cases":["QA-001"],
- "open_questions":[]}
-```
-
-- `description` is the how, and it is the field that decides whether an
-  isolated worker drifts. It is free-form markdown — no fixed sections, the
-  schema checks nothing but that it is a string — and the ready gate refuses
-  a medium/high-risk ticket without one. The worker starts with none of what
-  you learned reading the code, so write it for a capable engineer who has
-  never opened this repo: the approach and why this one over the obvious
-  alternative; every file and symbol to touch and what changes in each; the
-  existing code to imitate (`path:line`, not "follow conventions"); the
-  signatures, data shapes and error codes that must come out exactly so
-  sibling tickets fit; the order to work in; the traps you hit while
-  reading. Paste the short snippet instead of describing it. If you cannot
-  write this, you have not read enough code yet — go read, do not pad.
-- `touches` lists every file the ticket will edit or create — repo-relative
-  globs (`dir/**`, one `*` within one segment; never absolute, never `..`).
-  It is the parallel-claim key (decision 0025): while another ticket holds
-  an overlapping `touches`, a claim is refused — so a missing entry stops
-  the worker mid-flight to add one, and a greedy entry parks an unrelated
-  ticket for no reason. Two tickets whose `touches` overlap should carry a
-  `blocked_by` edge, or accept that they run serially. The ready gate
-  refuses a medium/high-risk ticket without it. Every `change.docs_to_update`
-  path is a file the ticket must edit, so it belongs in `touches` too
-  (dogfood 0025, F11: three workers each had to `pulse reserve` their own
-  shared doc mid-flight because no planner put it there) — the doc's single
-  owner's `touches`.
-- `context.anchors` entries are `"path: what lives there"` — the part before
-  the `:` must exist on disk; the ready gate checks it.
-- `acceptance` is EARS-minimal: one observable behavior per item, `when` and
-  `then` non-empty, citing the Story's BR-*/E-* in `then`. Reviewer and QA
-  map 1:1 against these ids.
-- The Story's rules and exceptions must end up in `docs/**` by id (the
-  close-story gate refuses a story whose BR-*/E-* live only in
-  `issues.jsonl`, plan 0025 F4). Give that writing an owner now: the last
-  ticket of the Story — or whichever ticket owns the rule's code, via its
-  `change.docs_to_update` — carries the doc work, so it never piles up at
-  close. **One doc, one owner** (dogfood 0025, F10): if several tickets of
-  the Story touch the same doc, exactly one of them declares it in
-  `change.docs_to_update` — a doc is a file like any other, the reservation
-  holds it through review, and three tickets declaring it serialize the
-  whole Story at that one file.
-- `verify[].argv` is argv, never a shell string; `cwd` defaults to repo root
-  and must name a directory that exists. Pulse runs these itself (decision
-  0026): no shell, one at a time, each killed at the timeout — so keep them
-  non-interactive, bounded, and prefer a command whose *output* says what
-  failed.
-- `qa_cases` holds Story case ids, and each referenced case's surface should
-  match the ticket's own surface.
-- `non_scope` names the adjacent work deliberately not being done; the worker
-  honors it literally, so a missing boundary becomes scope creep with
-  receipts.
-
-Wire every approved `blocked_by` edge in a second pass, after all ids exist.
-Then run the gate per ticket and read the report — it lists every violation,
-so fix all of them and re-run:
+Then take each Ticket through the ready gate and read the frontier back:
 
 ```text
 pulse work ready TK-<id> --json
-```
-
-A ticket whose blockers are still open stays put; report it blocked with the
-gate's reason codes instead of working around the gate.
-
-When every ticket is through the gate, read the parallel map of your cut:
-
-```text
 pulse frontier ST-<id> --json
 ```
 
-This is decision 0025 made visible: which tickets can run at the same time
-because their `touches` are disjoint, and which one waits on which — a
-waiting ticket here is the host's signal to plan a `blocked_by` edge or a
-narrower cut, not something to fix by editing `touches` after the fact.
+A Ticket that will not go `ready` is not planned yet. Fix the record and
+re-run; never work around the gate.
+
+## Red flags
+
+- a horizontal cut — "models", then "endpoints", then "wire UI" — where no
+  single Ticket demonstrates anything;
+- Tickets for a Story that has not been shaped yet, or placeholder Tickets
+  named after a phase;
+- two Tickets whose `touches` overlap with no `blocked_by` between them;
+- a `verify[]` argv that has never run in this repo;
+- an anchor whose path does not exist on disk;
+- a `docs_to_update` path declared by more than one Ticket of the Story;
+- a cut that delivers something the Epic listed in `out_of_scope`.
 
 ## Report
 

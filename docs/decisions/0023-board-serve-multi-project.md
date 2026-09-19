@@ -27,9 +27,14 @@ trả interest cho flow đọc thủ công.
 ## Decision
 
 1. **`pulse serve` thay thế `pulse board`.** Một UI duy nhất:
-   `assets/board/board.html` — self-contained (CSS/JS inline, không CDN),
+   `src/serve/board.html` — self-contained (CSS/JS inline, không CDN),
    fetch dữ liệu từ API dưới. `pulse board` tĩnh không được build; nếu sau
    này cần export-offline, đó là quyết định mới.
+   — amended 2026-09-20: UI dời từ `assets/board/` về `src/serve/`
+   (ngay cạnh `http.rs` nhúng nó) để giữ ranh giới A8.4 — `assets/`
+   chỉ là media của chính repo này. Icon mark
+   (`assets/logo-icon.svg`, bị xoá ở `db33d26` vì unreferenced) được
+   khôi phục và serve tại `/favicon.svg` làm favicon + brand mark.
 2. **HTTP stack: `tiny_http`.** axum/hyper/tokio bị loại — dep tree quá
    nặng cho thin harness. `tiny_http` threaded, đủ cho read-only local.
 3. **Read-only tuyệt đối.** Không endpoint ghi, không lock, không lease.
@@ -60,11 +65,14 @@ trả interest cho flow đọc thủ công.
    - `GET /api/p/<pid>/issue/<id>` — record đầy đủ + receipts + evidence
      manifest (handoff, checkpoints, lane outputs, shots, logs) + event
      trace (mọi event có subject id khớp).
+   - `GET /favicon.svg` — icon mark của repo (`assets/logo-icon.svg`),
+     same-origin để board không phụ thuộc CDN hay data-URI trùng lặp.
    - `GET /p/<pid>/evidence/<rel path>` — file evidence tĩnh (ảnh, log);
      canonicalize + prefix check chống path traversal.
-7. **UI:** project picker; kanban cột theo status Ticket, nhóm Story,
-   filter Epic; drawer Ticket ba tab — Detail (record đầy đủ), Evidence
-   (manifest + ảnh + logs), Events (timeline trace).
+7. **UI:** project picker; kanban cột theo status với bộ chọn loại
+   Epic/Story/Ticket; Ticket có thể nhóm theo Story; filter Epic; drawer record
+   ba tab — Detail (record đầy đủ), Evidence (manifest + ảnh + logs), Events
+   (timeline trace).
 
 ## Consequences
 

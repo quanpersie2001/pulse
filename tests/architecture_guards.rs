@@ -21,6 +21,7 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 
 fn repo_root() -> &'static Path {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -411,45 +412,293 @@ fn templates_only_name_commands_the_cli_has() {
     );
 }
 
-/// Plan §12.1: `skills/pulse-shape` + `skills/pulse-plan` are a live
-/// guidance surface (the v2 skills they replaced — raw material once kept
-/// under `references/pulse-v2-skills/`, guarded by nothing — were deleted
-/// at P3.5), so every `pulse …` command they name must parse against the
-/// real CLI — same drift risk, and same mechanism, as the AGENTS block
-/// guard above.
+/// P3.5 moved the guidance skills under `templates/skills/` — everything
+/// `pulse` writes into a target repo now lives in one tree, and
+/// `templates_only_name_commands_the_cli_has` above already parses every
+/// `pulse …` they name. What that guard cannot see is a skill directory
+/// that exists on disk but is missing from `kernel::skills`' embedded
+/// list: it would be guarded, documented and never installed anywhere.
 #[test]
-fn skills_only_name_commands_the_cli_has() {
-    let skills_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("skills");
-    let mut pending = vec![skills_dir.clone()];
-    let mut total_checked = 0_usize;
-    let mut files = 0_usize;
+fn every_skill_directory_is_one_pulse_skills_install_ships() {
+    let skills_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("templates/skills");
+    let source = source("src/kernel/skills.rs");
+    let mut found = 0_usize;
+    for entry in fs::read_dir(&skills_dir).expect("templates/skills must exist") {
+        let path = entry.expect("readable entry").path();
+        if !path.is_dir() {
+            continue;
+        }
+        let name = path.file_name().unwrap().to_string_lossy().into_owned();
+        assert!(
+            path.join("SKILL.md").is_file(),
+            "templates/skills/{name} has no SKILL.md"
+        );
+        // Every file of the skill, not just SKILL.md: a reference file
+        // that is not embedded is one `pulse skills install` never writes,
+        // so the installed SKILL.md links at a path that is not there.
+        let mut pending = vec![path.clone()];
+        while let Some(dir) = pending.pop() {
+            for entry in fs::read_dir(&dir).expect("readable skill dir") {
+                let file = entry.expect("readable entry").path();
+                if file.is_dir() {
+                    pending.push(file);
+                    continue;
+                }
+                let rel = file
+                    .strip_prefix(Path::new(env!("CARGO_MANIFEST_DIR")))
+                    .expect("inside the manifest dir")
+                    .to_string_lossy()
+                    .replace('\\', "/");
+                assert!(
+                    source.contains(&rel),
+                    "{rel} is never installed — add it to kernel::skills::SKILLS"
+                );
+            }
+        }
+        found += 1;
+    }
+    assert!(
+        found >= 3,
+        "expected the three guidance skills; found {found}"
+    );
+}
+
+/// A8.4's boundary: `assets/` is this repository's own media only,
+/// `templates/` is everything `pulse init` writes. Decision 0023 drifted
+/// the first half by landing the board UI — a 120 KB HTML file embedded
+/// into the binary — under `assets/board/`. This freezes the fix: the UI
+/// is source and lives beside the only code that embeds it
+/// (`src/serve/board.html`), while `assets/` stays image media the board
+/// reuses (the icon mark served at `/favicon.svg`, once deleted in
+/// `db33d26` for being unreferenced).
+#[test]
+fn assets_stay_media_and_the_board_ui_lives_in_serve() {
+    // Every file under assets/ is an image — no UI/source trees regrow.
+    let mut seen = 0_usize;
+    let mut pending = vec![repo_root().join("assets")];
     while let Some(dir) = pending.pop() {
-        let entries = fs::read_dir(&dir)
-            .unwrap_or_else(|error| panic!("failed to read {}: {error}", dir.display()));
-        for entry in entries {
-            let path = entry
-                .expect("skills directory entry should be readable")
-                .path();
+        for entry in fs::read_dir(&dir).expect("assets/ must exist") {
+            let path = entry.expect("readable entry").path();
             if path.is_dir() {
                 pending.push(path);
                 continue;
             }
-            if path.extension().and_then(|ext| ext.to_str()) != Some("md") {
-                continue;
-            }
-            files += 1;
-            let text = fs::read_to_string(&path).unwrap();
-            let label = path.display().to_string();
-            total_checked += assert_pulse_mentions_parse(&label, &text);
+            let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+            assert!(
+                matches!(ext, "svg" | "png" | "ico" | "gif" | "jpg" | "webp"),
+                "{}: assets/ is this repo's media only — source belongs beside its code",
+                path.display()
+            );
+            seen += 1;
         }
     }
+    assert!(seen >= 1, "expected the logo media under assets/");
+
+    // The board UI is build-time source embedded by http.rs — co-located.
     assert!(
-        files >= 2,
-        "expected the skills/ tree to hold at least the pulse-shape and pulse-plan SKILL.md files; found {files}"
+        repo_root().join("src/serve/board.html").is_file(),
+        "the serve board UI lives at src/serve/board.html (Decision 0023 §1 amended)"
+    );
+    let http = source("src/serve/http.rs");
+    assert!(
+        http.contains("include_str!(\"board.html\")"),
+        "http.rs must embed the board UI beside it"
     );
     assert!(
-        total_checked >= 6,
-        "expected the skills to name several commands; only {total_checked} found"
+        http.contains("include_str!(\"../../assets/logo-icon.svg\")"),
+        "http.rs serves the repo icon at /favicon.svg — the logo must stay referenced"
+    );
+    assert!(
+        source("src/serve/board.html").contains("/favicon.svg"),
+        "the board's favicon and brand mark point at /favicon.svg"
+    );
+}
+
+/// The public curl bootstrap is executable source: a syntax error strands a
+/// new user before Pulse can produce its own structured hint. Its dry-run
+/// must also be truthful — no target state or install root appears.
+#[test]
+fn install_script_is_valid_bash_and_dry_run_is_non_mutating() {
+    if cfg!(windows) {
+        eprintln!("skipping Unix installer guard on Windows");
+        return;
+    }
+    if Command::new("bash").arg("--version").output().is_err() {
+        eprintln!("skipping install script guard: bash is not available");
+        return;
+    }
+
+    let script = repo_root().join("scripts/install-pulse.sh");
+    let syntax = Command::new("bash")
+        .args(["-n"])
+        .arg(&script)
+        .output()
+        .expect("run bash -n");
+    assert!(
+        syntax.status.success(),
+        "install-pulse.sh is not valid bash: {}",
+        String::from_utf8_lossy(&syntax.stderr)
+    );
+
+    let target = tempfile::tempdir().unwrap();
+    let git = Command::new("git")
+        .args(["init", "--quiet"])
+        .arg(target.path())
+        .output()
+        .expect("git is required by Pulse tests");
+    assert!(git.status.success(), "initialize installer target");
+    let install_root = target.path().join("cargo-root");
+    let output = Command::new("bash")
+        .arg(&script)
+        .arg("--source")
+        .arg(repo_root())
+        .arg("--directory")
+        .arg(target.path())
+        .arg("--install-root")
+        .arg(&install_root)
+        .args(["--host", "claude", "--yes", "--dry-run"])
+        .output()
+        .expect("run installer dry-run");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "installer dry-run failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    for expected in ["cargo install", " init ", " skills install "] {
+        assert!(
+            stdout.contains(expected),
+            "dry-run omitted {expected}: {stdout}"
+        );
+    }
+    assert!(!target.path().join(".pulse").exists());
+    assert!(!install_root.exists());
+}
+
+/// The bootstrap checks the installed binary's identity rather than trusting
+/// Cargo's exit status, so `--version` is part of the distribution contract.
+#[test]
+fn cli_reports_the_cargo_package_version() {
+    let output = Command::new(env!("CARGO_BIN_EXE_pulse"))
+        .arg("--version")
+        .output()
+        .expect("run pulse --version");
+    assert!(output.status.success());
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout).trim(),
+        format!("pulse {}", env!("CARGO_PKG_VERSION"))
+    );
+}
+
+/// A skill's frontmatter and shape are a contract, not a style
+/// preference. Two failures this freezes, both observed in the reference
+/// collections Pulse learned from:
+///
+/// * a `description` that summarizes the workflow — agents then follow the
+///   description and skip the body (superpowers `writing-skills`: a
+///   description naming "code review between tasks" made an agent run one
+///   review where the skill specified two). A description states only
+///   *when* to reach for the skill;
+/// * unbounded growth — a skill nobody can hold is one nobody reads to the
+///   end, which is what `references/` exists to prevent.
+#[test]
+fn every_skill_declares_a_trigger_only_description_and_stays_within_budget() {
+    let skills_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("templates/skills");
+    let mut checked = 0_usize;
+    for entry in fs::read_dir(&skills_dir).expect("templates/skills must exist") {
+        let dir = entry.expect("readable entry").path();
+        if !dir.is_dir() {
+            continue;
+        }
+        let name = dir.file_name().unwrap().to_string_lossy().into_owned();
+        let body = fs::read_to_string(dir.join("SKILL.md")).expect("SKILL.md is readable");
+
+        let frontmatter = body
+            .strip_prefix("---\n")
+            .and_then(|rest| rest.split_once("\n---\n"))
+            .map(|(front, _)| front)
+            .unwrap_or_else(|| panic!("{name}: SKILL.md must open with YAML frontmatter"));
+        let keys: Vec<&str> = frontmatter
+            .lines()
+            .filter(|line| !line.starts_with(char::is_whitespace))
+            .filter_map(|line| line.split_once(':'))
+            .map(|(key, _)| key)
+            .collect();
+        assert_eq!(
+            keys,
+            vec!["name", "description"],
+            "{name}: frontmatter carries exactly name and description"
+        );
+
+        let description = frontmatter
+            .lines()
+            .find_map(|line| line.strip_prefix("description: "))
+            .unwrap_or_else(|| panic!("{name}: no description"));
+        assert!(
+            description.starts_with("Use when "),
+            "{name}: a description states when to reach for the skill: {description}"
+        );
+        assert!(
+            description.len() <= 500,
+            "{name}: description is {} chars; over 500 it is a workflow summary, \
+             and an agent will follow it instead of the body",
+            description.len()
+        );
+
+        // The three skills are one family and read as one: numbered steps,
+        // then the failures worth naming, then the report the caller gets
+        // back. A skill that drops `Red flags` loses the device every
+        // reference collection converged on independently; one that drops
+        // `Report` returns prose nobody can act on.
+        let headings: Vec<&str> = body
+            .lines()
+            .scan(false, |in_fence, line| {
+                if line.starts_with("```") {
+                    *in_fence = !*in_fence;
+                }
+                Some((*in_fence, line))
+            })
+            .filter(|(in_fence, line)| !in_fence && line.starts_with("## "))
+            .map(|(_, line)| line.trim_start_matches("## "))
+            .collect();
+        let tail: Vec<&str> = headings.iter().rev().take(2).rev().copied().collect();
+        assert_eq!(
+            tail,
+            vec!["Red flags", "Report"],
+            "{name}: a skill ends with `## Red flags` then `## Report`; found {headings:?}"
+        );
+        assert!(
+            headings[..headings.len() - 2]
+                .iter()
+                .enumerate()
+                .all(|(index, heading)| heading.starts_with(&format!("{index}. "))),
+            "{name}: the steps before Red flags are numbered from 0: {headings:?}"
+        );
+
+        let lines = body.lines().count();
+        assert!(
+            lines < 200,
+            "{name}: SKILL.md is {lines} lines; move the deepest material into \
+             references/ and link it from the step that needs it"
+        );
+
+        // Every `references/...` a skill links must be there, or the
+        // installed skill points an agent at nothing.
+        for (_, link) in body.match_indices("(references/").map(|(index, _)| {
+            let rest = &body[index + 1..];
+            let end = rest.find(')').expect("a markdown link closes");
+            ((), &rest[..end])
+        }) {
+            assert!(
+                dir.join(link).is_file(),
+                "{name}: SKILL.md links {link}, which does not exist"
+            );
+        }
+        checked += 1;
+    }
+    assert!(
+        checked >= 3,
+        "expected the three guidance skills; found {checked}"
     );
 }
 

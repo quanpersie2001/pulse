@@ -1,6 +1,6 @@
 ---
 name: pulse-learn
-description: Distill a just-done Ticket's frictions into institutional memory and leave nothing unclassified — at most one learning candidate via `pulse learn add`, at most one intervention chosen on the evidence ladder check > template > doc > AGENTS, and a `pulse learn dismiss` for every friction that stays Ticket-specific. Use it right after `pulse close` succeeded (or a Story closed) and the Ticket recorded `--friction` notes. Do not use it mid-Ticket (record friction there, processing comes after done), for a Ticket with zero frictions worth generalizing (dismiss nothing if nothing was recorded — write nothing), or to edit AGENTS.md/PULSE.md as the intervention (that is owner work, never done inside a Ticket).
+description: Use when a Ticket has just reached `done`, a Story has just closed, or work was deliberately cancelled, and it recorded `--friction` notes. Not mid-Ticket, not when nothing was recorded, and not for editing AGENTS.md or PULSE.md.
 ---
 
 # Pulse Learn
@@ -15,7 +15,12 @@ that keeps the gate honest.
 
 ## 0. Preconditions
 
-The Ticket is `done` (or its Story just closed). List what it recorded:
+The Ticket is `done`, its Story just closed, or the work was **cancelled**.
+Cancelled work is not exempt: its frictions are knowledge Pulse already
+counts — `close-story` refuses while any of them stays unclassified, so a
+Ticket abandoned with lessons still ends here.
+
+List what it recorded:
 
 ```text
 pulse learn friction <ticket-id> --json
@@ -32,6 +37,10 @@ crash the lane classified is a friction candidate even when nobody notated
 it. No frictions, nothing generalizable: stop here and say so. Forcing a
 learning from noise is how `candidate` piles grow unread.
 
+Read what is there; never reconstruct what should have been there. When the
+evidence is thin, the honest output is a dismissal naming the gap, not a
+learning assembled from what probably happened.
+
 ## 1. Distill at most one learning
 
 A learning is a *generalized* failure, constraint, technique or routing —
@@ -43,28 +52,14 @@ component) into the docs instead.
 pulse learn add --title "<the generalized failure>" --kind failure|constraint|technique|routing --applies-to "<glob>" --expected-signal "<the concrete thing a future handoff must show>" --friction <ticket-id>#<evt-id> --cite <path>:<from>-<to> --actor human:quan
 ```
 
-- `--friction <subject>#<evt-id>` cites the friction this learning
-  classifies — that is what turns its state to `learned`. Repeat the flag
-  when one lesson covers several recorded frictions.
-- `--cite <path>:<from>-<to>` pins the code the lesson is about: Pulse
-  hashes those exact lines itself, and `pulse doctor` reports the cite when
-  the code moves (`stale` in the packet) — a signal to re-read, not an
-  auto-retire.
-- If the lesson is *checkable by a command*, pass
-  `--check-argv '["cargo","test","--lib"]'` (and `--check-cwd <dir>` if
-  needed). That is the highest rung of the evidence ladder, made executable:
-  after a human runs `pulse learn activate <LRN-id>`, Pulse runs that check
-  inside `pulse verify` for every matching Ticket — the packet flags it
-  `"enforced": true`, a failing run blocks the handoff, and a worker that
-  reads the learning fixes the cause. Only human activation arms it (a
-  candidate never runs); say that in the report.
-
-Or write the full file (frontmatter `id/status/kind/applies_to/tags`,
-body `## Summary / ## Do / ## Avoid / ## Check`) and
-`pulse learn add --from <file> --friction …`. The `Check` section is the
-part that earns activation: one command or observation proving the learning
-was applied. `applies_to` globs come from the anchors this Ticket actually
-touched — a learning aimed everywhere applies nowhere.
+Every flag on that command earns its place —
+[references/learning-record.md](references/learning-record.md) has what
+each one does, and the full-file form for a learning too long to pass as
+flags. Two that decide whether the learning is worth anything:
+`--applies-to` globs come from the anchors this Ticket actually touched (a
+learning aimed everywhere applies nowhere), and `--check-argv` turns the
+lesson into a command `pulse verify` runs once a human activates it — the
+highest rung of the ladder in §2, made executable.
 
 The new learning is a `candidate`: it enters packets only after a handoff
 records it `helpful` and a human runs `pulse learn activate`. Say so in the
@@ -130,23 +125,31 @@ pulse learn dismiss <ticket-id> --all --reason "<ticket-specific: the rename was
 ## 4. Keep the loop honest
 
 ```text
-pulse learn show
-pulse learn applicable <ticket-or-story-id> --all
-pulse learn activate <LRN-id> --actor human:quan
-pulse learn retire <LRN-id> --reason "<why>" --actor human:quan
-pulse metrics --json
+pulse learn applicable <next-ticket-id> --all
 ```
 
-`learn show` with no id lists everything. `applicable` is the gate a
-learning must pass to matter: after adding, run it against the next
-Ticket's id and confirm the match fires through `applies_to` or `tags`.
-`--all` also shows `suspect` learnings — reported `misleading` more often
-than `helpful`, already excluded from packets and from `pulse verify`,
-waiting for a human to retire or re-trust them. Activation needs a handoff
-to have recorded `helpful` first — the two halves of trust. Retire with a
-reason when a learning misleads; the file stays. `pulse metrics` is the
-loop's scoreboard: friction per done Ticket, unclassified remaining,
-rework rate, verify runs, learning usage.
+`applicable` is the gate a learning must pass to matter: after adding, run
+it against the next Ticket and confirm the match fires through `applies_to`
+or `tags`. A learning nothing matches was written for nowhere.
+
+The rest of the loop's upkeep — activation and the two halves of trust,
+`suspect` learnings, retiring a misleading one, and reading `pulse metrics`
+as the loop's scoreboard — is in
+[references/loop-hygiene.md](references/loop-hygiene.md).
+
+## Red flags
+
+Each names a failure this loop has actually produced:
+
+- a learning whose `applies_to` is a directory-wide glob — aimed everywhere,
+  so it fires on every Ticket and gets ignored on all of them;
+- a learning that restates the Ticket ("the tags endpoint needed a
+  migration") instead of the generalization that outlives it;
+- a `--check-argv` nobody ran against the broken state first;
+- more than one learning or more than one intervention from one Ticket;
+- a dismissal whose reason is a shrug (`"not important"`) rather than a why;
+- finishing while `pulse learn friction <id>` still lists anything
+  unclassified.
 
 ## Report
 

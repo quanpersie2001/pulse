@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 
 use crate::cli::output::render;
 use crate::identity::actor::resolve_actor;
-use crate::kernel::completion::{close, close_story, handoff, HandoffInput};
+use crate::kernel::completion::{close, close_epic, close_story, handoff, HandoffInput};
 use crate::PulseError;
 pub(crate) fn handle_handoff(
     repo_root: &Path,
@@ -94,6 +94,17 @@ pub(crate) fn handle_close(
         ));
     }
     render(json, &value, human)
+}
+
+pub(crate) fn handle_close_epic(
+    repo_root: &Path,
+    id: &str,
+    actor: Option<&str>,
+    json: bool,
+) -> Result<(), PulseError> {
+    let actor = resolve_actor(repo_root, actor)?;
+    let record = close_epic(repo_root, &actor, id)?;
+    render(json, &record, format!("{id} closed"))
 }
 
 pub(crate) fn handle_close_story(

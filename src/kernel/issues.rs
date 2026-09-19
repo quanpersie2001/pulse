@@ -100,6 +100,7 @@ pub fn create(
     let record = Value::Object(record);
 
     let saved = issues::mutate(repo_root, |mut records| {
+        check_parents(&records, &record)?;
         records.push(record);
         Ok(records)
     })?;
@@ -113,6 +114,45 @@ pub fn create(
         Utc::now(),
     )?;
     Ok(created)
+}
+
+/// A record's declared parent must exist and be the right kind (decision
+/// 0028). Without this a Story could name an Epic that was never created —
+/// the ready gate checks that every `context.anchors` path exists on disk,
+/// so a dangling *parent* slipping through was the larger hole: `pulse work
+/// tree` silently drops the Story, and the Epic's `out_of_scope` never
+/// reaches the planner that needed it.
+fn check_parents(records: &[Value], record: &Value) -> Result<()> {
+    for (field, parent_kind) in [("epic", "epic"), ("story", "story")] {
+        let Some(parent_id) = record.get(field).and_then(Value::as_str) else {
+            continue;
+        };
+        if parent_id.trim().is_empty() {
+            continue;
+        }
+        let found = records
+            .iter()
+            .find(|candidate| candidate.get("id").and_then(Value::as_str) == Some(parent_id));
+        match found {
+            Some(parent) if parent.get("kind").and_then(Value::as_str) == Some(parent_kind) => {}
+            Some(parent) => {
+                let actual = parent.get("kind").and_then(Value::as_str).unwrap_or("?");
+                return Err(PulseError::kernel(
+                    "issue_parent_unknown",
+                    format!("{field} {parent_id} is a {actual}, not a {parent_kind}"),
+                    "point the field at a record of the right kind",
+                ));
+            }
+            None => {
+                return Err(PulseError::kernel(
+                    "issue_parent_unknown",
+                    format!("{field} {parent_id} does not exist"),
+                    "create the parent first, or check the id with `pulse work list`",
+                ));
+            }
+        }
+    }
+    Ok(())
 }
 
 fn kind_for(kind: &str) -> Result<crate::id::WorkKind> {
@@ -153,14 +193,18 @@ pub fn update(
         }
     }
     let saved = issues::mutate(repo_root, |records| {
-        apply_to_record(records, id, |record| {
+        let records = apply_to_record(records, id, |record| {
             let object = record.as_object_mut().expect("records are always objects");
             for (key, value) in &updates {
                 object.insert(key.clone(), value.clone());
             }
             bump(object);
             Ok(())
-        })
+        })?;
+        // After the merge, not before: `--set epic=EP-…` is exactly the
+        // path that would otherwise introduce a dangling parent.
+        check_parents(&records, require(&records, id)?)?;
+        Ok(records)
     })?;
     let updated = require(&saved, id)?.clone();
     let revision = updated.get("revision").and_then(Value::as_u64);
@@ -483,4 +527,50 @@ pub(crate) fn bump(object: &mut Map<String, Value>) {
     let revision = object.get("revision").and_then(Value::as_u64).unwrap_or(0);
     object.insert("revision".to_string(), Value::from(revision + 1));
     object.insert("updated_at".to_string(), Value::String(now_rfc3339()));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn epic() -> Value {
+        json!({"id": "EP-1111", "kind": "epic", "title": "e"})
+    }
+
+    #[test]
+    fn a_parent_that_exists_and_has_the_right_kind_passes() {
+        let story = json!({"id": "ST-2222", "kind": "story", "epic": "EP-1111"});
+        check_parents(&[epic()], &story).unwrap();
+    }
+
+    #[test]
+    fn a_parent_that_does_not_exist_is_refused() {
+        let story = json!({"id": "ST-2222", "kind": "story", "epic": "EP-ffff"});
+        let error = check_parents(&[epic()], &story).unwrap_err();
+        assert_eq!(error.code(), "issue_parent_unknown");
+        assert!(format!("{error}").contains("EP-ffff"));
+    }
+
+    #[test]
+    fn a_parent_of_the_wrong_kind_is_refused() {
+        // Pointing `epic` at a Story id is the typo this catches: both are
+        // four hex characters, so nothing else would notice.
+        let other = json!({"id": "ST-9999", "kind": "story"});
+        let story = json!({"id": "ST-2222", "kind": "story", "epic": "ST-9999"});
+        let error = check_parents(&[other], &story).unwrap_err();
+        assert_eq!(error.code(), "issue_parent_unknown");
+        assert!(format!("{error}").contains("not a epic"), "{error}");
+    }
+
+    #[test]
+    fn a_record_with_no_parent_field_passes() {
+        check_parents(&[], &epic()).unwrap();
+    }
+
+    #[test]
+    fn an_empty_parent_string_is_treated_as_absent() {
+        let story = json!({"id": "ST-2222", "kind": "story", "epic": ""});
+        check_parents(&[], &story).unwrap();
+    }
 }

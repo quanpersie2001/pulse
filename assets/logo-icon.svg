@@ -1,0 +1,18 @@
+<svg viewBox="0 0 320 320" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc">
+  <title id="title">Pulse icon</title>
+  <desc id="desc">Icon-only Pulse mark with a dark rounded square, open gate frame, and centered pulse arrow.</desc>
+
+  <rect x="0" y="0" width="320" height="320" rx="40" fill="#141413" />
+
+  <g id="gate-frame">
+    <path d="M 240 112 Q 240 80 208 80 H 112 Q 80 80 80 112 V 208 Q 80 240 112 240 H 208 Q 240 240 240 208"
+      fill="none" stroke="#c96442" stroke-width="20" stroke-linecap="round" stroke-linejoin="round" />
+  </g>
+
+  <g id="pulse-pattern">
+    <path d="M 60 160 H 120 L 140 126 L 160 194 L 180 126 L 200 160 H 240" fill="none" stroke="#f5f4ed"
+      stroke-width="20" stroke-linecap="round" stroke-linejoin="round" />
+    <path d="M 244 142 L 277 160 L 244 178 Z" fill="#f5f4ed" stroke="#f5f4ed" stroke-width="12"
+      stroke-linejoin="round" />
+  </g>
+</svg>

@@ -26,4 +26,5 @@ pub mod ready;
 pub mod reservation;
 pub mod roles;
 pub mod scope;
+pub mod skills;
 pub mod verify;

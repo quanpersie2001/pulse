@@ -52,6 +52,9 @@ pub fn run(
 
 enum Route<'a> {
     Index,
+    /// `/favicon.svg` — the repository's icon mark (`assets/logo-icon.svg`),
+    /// served same-origin so the board HTML stays free of CDN references.
+    Favicon,
     Projects,
     Board {
         pid: &'a str,
@@ -74,6 +77,7 @@ fn route(path: &str) -> Route<'_> {
     let segments: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
     match segments.as_slice() {
         [] => Route::Index,
+        ["favicon.svg"] => Route::Favicon,
         ["api", "projects"] => Route::Projects,
         ["api", "p", pid, "board"] => Route::Board { pid },
         ["api", "p", pid, "issue", id] => Route::Issue { pid, id },
@@ -101,7 +105,7 @@ fn respond(
 
     match route(path) {
         Route::Index => {
-            let html = include_str!("../../assets/board/board.html");
+            let html = include_str!("board.html");
             bytes_response(
                 request,
                 200,
@@ -109,6 +113,14 @@ fn respond(
                 html.as_bytes().to_vec(),
             )
         }
+        Route::Favicon => bytes_response(
+            request,
+            200,
+            "image/svg+xml",
+            include_str!("../../assets/logo-icon.svg")
+                .as_bytes()
+                .to_vec(),
+        ),
         Route::Projects => json_response(request, 200, &api::projects_payload(registry, workspace)),
         Route::Board { pid } => {
             match api::with_project(registry, workspace, pid, api::board_payload) {

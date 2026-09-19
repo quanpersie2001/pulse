@@ -512,6 +512,21 @@ fn latest_receipt<'a>(
 /// `BR-1` is satisfied by "BR-1." or "(BR-1)" but not by `BR-10` (digit
 /// after) nor `X-BR-1` (dash before) — plan 0025 F4. Hand-rolled because
 /// the ids are short ASCII and a regex crate is one this plan avoids.
+/// Every readable `*.md` directly under `docs/decisions/`. A missing
+/// directory is simply no bodies: the caller reports the ids as
+/// undocumented, which is the accurate finding.
+fn decision_doc_bodies(repo_root: &Path) -> Vec<String> {
+    let Ok(entries) = std::fs::read_dir(repo_root.join("docs/decisions")) else {
+        return Vec::new();
+    };
+    entries
+        .filter_map(std::result::Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| path.extension().and_then(|ext| ext.to_str()) == Some("md"))
+        .filter_map(|path| std::fs::read_to_string(path).ok())
+        .collect()
+}
+
 fn contains_word(text: &str, needle: &str) -> bool {
     if needle.is_empty() {
         return false;
@@ -945,6 +960,41 @@ pub fn evaluate_close_story(
         }
     }
 
+    // A decision the Story or a child Ticket cites (`context.decisions[]`)
+    // must be readable under docs/decisions/, not only in issues.jsonl —
+    // the same mechanical rule as rules/exceptions above: the DEC id appears
+    // verbatim as a word in at least one file there.
+    let mut decision_ids: Vec<&str> = std::iter::once(story)
+        .chain(children.iter().copied())
+        .filter_map(|record| record.pointer("/context/decisions"))
+        .filter_map(Value::as_array)
+        .flatten()
+        .filter_map(Value::as_str)
+        .filter(|id| !id.is_empty())
+        .collect();
+    decision_ids.sort_unstable();
+    decision_ids.dedup();
+    if !decision_ids.is_empty() {
+        let bodies = decision_doc_bodies(repo_root);
+        let undocumented: Vec<&str> = decision_ids
+            .iter()
+            .copied()
+            .filter(|id| !bodies.iter().any(|body| contains_word(body, id)))
+            .collect();
+        if !undocumented.is_empty() {
+            violations.push(violation(
+                "close_story_decisions_undocumented",
+                format!(
+                    "decisions cited by {story_id} or its tickets with no file under \
+                     docs/decisions/ naming them: {} — write \
+                     `docs/decisions/<DEC-id>-<slug>.md` (question, options, decision, \
+                     consequences) for each",
+                    undocumented.join(", ")
+                ),
+            ));
+        }
+    }
+
     // Source fence (dogfood ST-1 F15): ticket-level close compares a handoff
     // snapshot, but a Story hands nothing off — the story milestone must
     // simply not close over uncommitted work. Committed changes are fine:
@@ -1040,6 +1090,148 @@ pub fn evaluate_close_story(
 /// # Errors
 /// `role_forbidden` if `actor` may not close; `gate_failed` listing every
 /// [`evaluate_close_story`] violation otherwise.
+/// The close-epic gate (decision 0028 §4.8). An Epic is the map of an
+/// effort, so closing it asserts the map is finished, not merely that its
+/// Stories stopped: every child Story is `done` or `cancelled` with at
+/// least one `done`, and the fog it declared has been resolved.
+///
+/// `not_yet_specified[]` is the one condition worth explaining. It holds
+/// in-scope work the Epic could see but could not yet shape. Fog graduates
+/// one of two ways — into a Story that shaped it, or into `out_of_scope[]`
+/// when the effort decided against it. Closing an Epic with fog still
+/// listed would file the unshaped work as finished, which is the failure
+/// this gate exists to prevent.
+///
+/// # Errors
+/// Propagates store read failures.
+pub fn evaluate_close_epic(epic: &Value, all_records: &[Value]) -> Result<GateReport> {
+    let mut violations = Vec::new();
+    let epic_id = epic.get("id").and_then(Value::as_str).unwrap_or("");
+
+    let children: Vec<&Value> = all_records
+        .iter()
+        .filter(|record| {
+            record.get("kind").and_then(Value::as_str) == Some("story")
+                && record.get("epic").and_then(Value::as_str) == Some(epic_id)
+        })
+        .collect();
+    let done_count = children
+        .iter()
+        .filter(|child| child.get("status").and_then(Value::as_str) == Some("done"))
+        .count();
+    let incomplete: Vec<&str> = children
+        .iter()
+        .filter(|child| {
+            !matches!(
+                child.get("status").and_then(Value::as_str),
+                Some("done" | "cancelled")
+            )
+        })
+        .filter_map(|child| child.get("id").and_then(Value::as_str))
+        .collect();
+    if !incomplete.is_empty() {
+        violations.push(violation(
+            "close_epic_children_incomplete",
+            format!("stories not done|cancelled: {}", incomplete.join(", ")),
+        ));
+    }
+    if done_count == 0 {
+        violations.push(violation(
+            "close_epic_children_incomplete",
+            "no child story is done",
+        ));
+    }
+
+    let fog: Vec<&str> = epic
+        .get("not_yet_specified")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(Value::as_str)
+                .filter(|item| !item.trim().is_empty())
+                .collect()
+        })
+        .unwrap_or_default();
+    if !fog.is_empty() {
+        violations.push(violation(
+            "close_epic_fog_unresolved",
+            format!(
+                "not_yet_specified still lists {}: {} — graduate each into a story \
+                 that shaped it, or move it to out_of_scope",
+                fog.len(),
+                fog.join(", ")
+            ),
+        ));
+    }
+
+    Ok(GateReport { violations })
+}
+
+/// Run [`evaluate_close_epic`]; on a clean report seal a `close_epic`
+/// receipt and move the Epic to `done`.
+///
+/// # Errors
+/// `role_forbidden`, `gate_failed`, or a store failure.
+pub fn close_epic(repo_root: &Path, actor: &ActorRef, id: &str) -> Result<Value> {
+    authorize(actor, Action::Close)?;
+    let saved = {
+        let guard = WriteGuard::acquire(repo_root)?;
+        let records = issues::read_all(repo_root)?;
+        let epic = require(&records, id)?;
+        if epic.get("kind").and_then(Value::as_str) != Some("epic") {
+            return Err(PulseError::kernel(
+                "close_epic_not_an_epic",
+                format!("{id} is not an epic"),
+                "close a story with `pulse close-story`, a ticket with `pulse close`",
+            ));
+        }
+        let report = evaluate_close_epic(epic, &records)?;
+        if !report.is_clean() {
+            return Err(fail(&report));
+        }
+
+        let revision = epic.get("revision").and_then(Value::as_u64);
+        record_receipt(
+            repo_root,
+            None,
+            NewReceipt {
+                kind: "close_epic".to_string(),
+                subject: ReceiptSubject {
+                    id: id.to_string(),
+                    revision,
+                },
+                actor: actor.as_kind_id(),
+                source: ReceiptSource {
+                    commit: source::head_commit(repo_root).unwrap_or_default(),
+                    dirty_hash: String::new(),
+                },
+                run_id: None,
+                payload: serde_json::json!({}),
+                artifact_paths: Vec::new(),
+            },
+        )?;
+
+        issues::mutate_locked(&guard, repo_root, |records| {
+            apply_to_record(records, id, |record| {
+                let object = record.as_object_mut().expect("records are always objects");
+                object.insert("status".to_string(), Value::String("done".to_string()));
+                bump(object);
+                Ok(())
+            })
+        })?
+    };
+    emit_event(
+        repo_root,
+        "issue.transitioned",
+        actor.as_kind_id(),
+        id,
+        serde_json::json!({"to": "done"}),
+        Utc::now(),
+    )?;
+    Ok(require(&saved, id)?.clone())
+}
+
 pub fn close_story(repo_root: &Path, actor: &ActorRef, id: &str) -> Result<Value> {
     authorize(actor, Action::Close)?;
     // One lock for read -> evaluate -> receipt -> transition (plan 0025 A4).
@@ -2313,6 +2505,103 @@ profiles:
                 .violations
                 .iter()
                 .any(|v| v.code == "close_story_docs_missing"),
+            "{:?}",
+            report.violations
+        );
+    }
+
+    fn epic_with_story(status: &str, fog: Value) -> (Value, Vec<Value>) {
+        let epic = json!({
+            "id": "EP-2222", "kind": "epic", "title": "e", "status": "ready",
+            "outcome": "d", "success_signals": ["s"], "not_yet_specified": fog,
+        });
+        let story = json!({
+            "id": "ST-3333", "kind": "story", "title": "s",
+            "epic": "EP-2222", "status": status,
+        });
+        let all = vec![epic.clone(), story];
+        (epic, all)
+    }
+
+    #[test]
+    fn close_epic_refuses_while_a_story_is_still_open() {
+        let (epic, all) = epic_with_story("active", json!([]));
+        let report = evaluate_close_epic(&epic, &all).unwrap();
+        let violation = report
+            .violations
+            .iter()
+            .find(|v| v.code == "close_epic_children_incomplete")
+            .expect("an open story must block the epic");
+        assert!(violation.message.contains("ST-3333"), "{violation:?}");
+    }
+
+    #[test]
+    fn close_epic_refuses_while_fog_is_still_listed() {
+        let (epic, all) = epic_with_story("done", json!(["bulk edit, shape unknown"]));
+        let violation = evaluate_close_epic(&epic, &all)
+            .unwrap()
+            .violations
+            .into_iter()
+            .find(|v| v.code == "close_epic_fog_unresolved")
+            .expect("unshaped fog must block the epic");
+        assert!(violation.message.contains("bulk edit"), "{violation:?}");
+        assert!(violation.message.contains("out_of_scope"), "{violation:?}");
+    }
+
+    #[test]
+    fn close_epic_passes_once_every_story_closed_and_the_fog_graduated() {
+        let (epic, all) = epic_with_story("done", json!([]));
+        assert!(evaluate_close_epic(&epic, &all).unwrap().is_clean());
+    }
+
+    #[test]
+    fn close_epic_refuses_an_epic_whose_only_story_was_cancelled() {
+        // `cancelled` counts as resolved, but an epic that delivered
+        // nothing is not a destination reached.
+        let (epic, all) = epic_with_story("cancelled", json!([]));
+        assert!(evaluate_close_epic(&epic, &all)
+            .unwrap()
+            .violations
+            .iter()
+            .any(|v| v.code == "close_epic_children_incomplete"));
+    }
+
+    #[test]
+    fn a_cited_decision_with_no_file_under_docs_decisions_blocks_the_story() {
+        let repo = git_repo();
+        let _ = story_with_ticket(repo.path(), "done");
+        let story = story_with_ids(repo.path(), json!({"context": {"decisions": ["DEC-ab12"]}}));
+        let all = crate::store::issues::read_all(repo.path()).unwrap();
+        let report = evaluate_close_story(repo.path(), &story, &all).unwrap();
+        let violation = report
+            .violations
+            .iter()
+            .find(|v| v.code == "close_story_decisions_undocumented")
+            .expect("a cited decision with no doc must block the story");
+        assert!(violation.message.contains("DEC-ab12"), "{violation:?}");
+        assert!(
+            violation.message.contains("docs/decisions/"),
+            "{violation:?}"
+        );
+    }
+
+    #[test]
+    fn a_cited_decision_named_by_a_docs_decisions_file_satisfies_the_gate() {
+        let repo = git_repo();
+        let _ = story_with_ticket(repo.path(), "done");
+        write_story_doc(
+            repo.path(),
+            "docs/decisions/DEC-ab12-free-form-tags.md",
+            "# DEC-ab12 — tags are free-form\n",
+        );
+        let story = story_with_ids(repo.path(), json!({"context": {"decisions": ["DEC-ab12"]}}));
+        let all = crate::store::issues::read_all(repo.path()).unwrap();
+        let report = evaluate_close_story(repo.path(), &story, &all).unwrap();
+        assert!(
+            !report
+                .violations
+                .iter()
+                .any(|v| v.code == "close_story_decisions_undocumented"),
             "{:?}",
             report.violations
         );

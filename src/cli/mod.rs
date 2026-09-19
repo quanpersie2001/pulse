@@ -13,6 +13,7 @@ mod metrics;
 pub mod output;
 mod packet;
 mod serve;
+mod skills;
 mod verify;
 mod work;
 
@@ -152,6 +153,9 @@ fn run_in_repo(
         args::Command::Close { id, actor, json } => {
             completion::handle_close(&repo_root, &id, actor.as_deref(), json)
         }
+        args::Command::CloseEpic { id, actor, json } => {
+            completion::handle_close_epic(&repo_root, &id, actor.as_deref(), json)
+        }
         args::Command::CloseStory { id, actor, json } => {
             completion::handle_close_story(&repo_root, &id, actor.as_deref(), json)
         }
@@ -178,5 +182,6 @@ fn run_in_repo(
         }
         args::Command::Docs { command } => docs::handle(&repo_root, command),
         args::Command::Hook { command } => hook::handle(&repo_root, command),
+        args::Command::Skills { command } => skills::handle(&repo_root, command),
     }
 }

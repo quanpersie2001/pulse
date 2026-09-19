@@ -77,7 +77,19 @@ const DOCS_README_SEED: &str = include_str!("../../templates/seeds/docs-README.m
 /// `scripts/qa/README.md`.
 const RUN_MD_SEED: &str = include_str!("../../templates/seeds/run.md");
 
-const PROMPT_FILES: [(&str, &str); 4] = [
+/// The starting shape of `docs/architecture/overview.md`: headed sections
+/// a planner fills in, so the doc `docs/README.md` maps exists from the
+/// first `pulse init` and says what belongs in it.
+const ARCHITECTURE_MD_SEED: &str = include_str!("../../templates/seeds/architecture-overview.md");
+
+const DOC_SEEDS: [(&str, &str); 3] = [
+    ("docs/README.md", DOCS_README_SEED),
+    ("docs/operations/run.md", RUN_MD_SEED),
+    ("docs/architecture/overview.md", ARCHITECTURE_MD_SEED),
+];
+
+const PROMPT_FILES: [(&str, &str); 5] = [
+    ("host.md", include_str!("../../templates/prompts/host.md")),
     (
         "worker.md",
         include_str!("../../templates/prompts/worker.md"),
@@ -276,22 +288,18 @@ pub fn initialize_repository_ext(
         created.push("PULSE.md".to_string());
     }
 
-    let docs_readme_path = repo_root.join("docs/README.md");
-    if !docs_readme_path.exists() {
-        fs::create_dir_all(repo_root.join("docs"))
-            .map_err(|error| PulseError::io(repo_root.join("docs"), error))?;
-        fs::write(&docs_readme_path, DOCS_README_SEED)
-            .map_err(|error| PulseError::io(&docs_readme_path, error))?;
-        created.push("docs/README.md".to_string());
-    }
-
-    let run_md_path = repo_root.join("docs/operations/run.md");
-    if !run_md_path.exists() {
-        fs::create_dir_all(repo_root.join("docs/operations"))
-            .map_err(|error| PulseError::io(repo_root.join("docs/operations"), error))?;
-        fs::write(&run_md_path, RUN_MD_SEED)
-            .map_err(|error| PulseError::io(&run_md_path, error))?;
-        created.push("docs/operations/run.md".to_string());
+    // Write-once doc seeds: the repo owns them from here on, so an
+    // existing file is never touched and `--refresh` does not reach them.
+    for (rel, seed) in DOC_SEEDS {
+        let path = repo_root.join(rel);
+        if path.exists() {
+            continue;
+        }
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).map_err(|error| PulseError::io(parent, error))?;
+        }
+        fs::write(&path, seed).map_err(|error| PulseError::io(&path, error))?;
+        created.push(rel.to_string());
     }
 
     let block = ensure_agents_block(repo_root, refresh, resolve)?;
@@ -773,6 +781,7 @@ mod tests {
         assert!(repo.path().join("PULSE.md").exists());
         assert!(repo.path().join("docs/README.md").exists());
         assert!(repo.path().join("docs/operations/run.md").exists());
+        assert!(repo.path().join("docs/architecture/overview.md").exists());
         let agents = fs::read_to_string(repo.path().join("AGENTS.md")).unwrap();
         assert!(agents.contains(AGENTS_BLOCK_BEGIN));
         assert!(agents.contains("pulse work new"));

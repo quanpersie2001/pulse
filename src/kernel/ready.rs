@@ -66,6 +66,7 @@ pub fn evaluate(repo_root: &Path, record: &Value, all_records: &[Value]) -> Read
     let violations = match kind {
         "ticket" => evaluate_ticket(repo_root, record, all_records),
         "story" => evaluate_story(record),
+        "epic" => evaluate_epic(record),
         _ => Vec::new(),
     };
     ReadyReport { violations }
@@ -94,6 +95,40 @@ fn evaluate_ticket(repo_root: &Path, record: &Value, all_records: &[Value]) -> V
         check_classification(record, &mut violations);
         check_description(record, &mut violations);
         check_touches(record, &mut violations);
+    }
+    violations
+}
+
+/// An Epic is the map of an effort (decision 0028): `outcome` is the
+/// destination every Story under it orients to, and `success_signals[]` is
+/// how anyone tells the destination was reached. Both are required before
+/// the map is worth planning against — an Epic readied empty is the grouping
+/// label Pulse used to allow, which no gate could read and no planner could
+/// use. `out_of_scope[]`/`not_yet_specified[]` stay optional here: an effort
+/// may genuinely have no fog yet, and both are read at close (§4.8).
+fn evaluate_epic(record: &Value) -> Vec<ReadyViolation> {
+    let mut violations = Vec::new();
+    let outcome = record.get("outcome").and_then(Value::as_str).unwrap_or("");
+    if outcome.trim().is_empty() {
+        violations.push(violation(
+            "ready_outcome_missing",
+            "epic has no outcome; write the destination this effort is heading to",
+        ));
+    }
+    let signals = record
+        .get("success_signals")
+        .and_then(Value::as_array)
+        .map_or(0, |signals| {
+            signals
+                .iter()
+                .filter(|signal| signal.as_str().is_some_and(|text| !text.trim().is_empty()))
+                .count()
+        });
+    if signals == 0 {
+        violations.push(violation(
+            "ready_success_signals_missing",
+            "epic has no success_signals; name how anyone tells the outcome was reached",
+        ));
     }
     violations
 }
@@ -769,5 +804,42 @@ mod tests {
         ticket["touches"] = json!(["src/generated/*.rs", "docs/new-dir/**"]);
         let report = evaluate(repo.path(), &ticket, &[]);
         assert!(report.is_ready(), "{:?}", report.violations);
+    }
+    #[test]
+    fn an_epic_without_outcome_or_success_signals_is_not_ready() {
+        let repo = tempfile::tempdir().unwrap();
+        let epic = json!({"id": "EP-1111", "kind": "epic", "title": "e"});
+        let report = evaluate(repo.path(), &epic, &[]);
+        let codes: Vec<&str> = report.violations.iter().map(|v| v.code).collect();
+        assert!(codes.contains(&"ready_outcome_missing"), "{codes:?}");
+        assert!(
+            codes.contains(&"ready_success_signals_missing"),
+            "{codes:?}"
+        );
+    }
+
+    #[test]
+    fn an_epic_with_a_destination_and_a_signal_is_ready() {
+        let repo = tempfile::tempdir().unwrap();
+        let epic = json!({
+            "id": "EP-1111", "kind": "epic", "title": "e",
+            "outcome": "a user can manage tags",
+            "success_signals": ["tag filter used in a real session"],
+        });
+        assert!(evaluate(repo.path(), &epic, &[]).is_ready());
+    }
+
+    #[test]
+    fn a_blank_success_signal_does_not_count() {
+        let repo = tempfile::tempdir().unwrap();
+        let epic = json!({
+            "id": "EP-1111", "kind": "epic", "title": "e",
+            "outcome": "x", "success_signals": ["   "],
+        });
+        let report = evaluate(repo.path(), &epic, &[]);
+        assert!(report
+            .violations
+            .iter()
+            .any(|v| v.code == "ready_success_signals_missing"));
     }
 }
