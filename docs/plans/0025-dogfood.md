@@ -361,7 +361,48 @@ doctor: clean
 6. **Workers tự dựng packet** khi `pulse packet` chỉ in header (F8):
    `work show --json` + `pulse learn applicable` — không sửa pulse repo.
 
-## 7. Ghi chú kết thúc
+## 7. Round 2 (cùng ngày): ST-2e5f — panel-on-signal vận hành thật
+
+Story Google OAuth (2 ticket): TK-ce5e (api-high) + TK-307d (ui-high, phát
+hiện còn draft khi close-story từ chối). Cả hai done, story closed. Chuỗi:
+worker api → **adversarial fail** (F-1 medium: OAuth state không bind
+browser/không single-use — login-CSRF; F-2 low: compose fallback dev-secret)
+→ rework (state cookie-bound + single-use; secret required) → **panel 3/2**
+(3 seat mù, 3/3 pass, 0 findings — unanimous) → adversarial tái chạy pass →
+qa-api pass → close (human) → cut + ready TK-307d → worker ui (38/38 vitest)
+→ review + adversarial + qa-api + qa-ui pass → close → story-scope qa trên
+HEAD (đúng thứ tự F14) → close-story.
+
+Số liệu round 2: build gãy chéo **0** (single-checkout tiếp tục giữ);
+`rework_rate` **0.10** — lần đầu ≠ 0, đúng cơ chế (adversarial bounce);
+panel-on-signal: panel chỉ mở sau signal, và trên ticket đã fix nó vẫn
+0 finding — tiếp tục khẳng định khuyến nghị (c); `docs_maybe_stale` round 2:
+1 cảnh báo (overview.md sau khi main.py thêm allow_credentials) — nội dung
+docs vẫn đúng, tính đúng/sai tranh cãi → tiếp tục advisory;
+**LRN-2b26 active + enforcement green trong ≥6 verify receipt** (worker +
+seats + adversarial) — vòng học E2 khép trọn lần đầu.
+
+Friction mới cho quyết định sau (đã ghi note trên todolist):
+
+1. **Reserve thu hẹp claim độc quyền**: TK-ce5e khởi phát touches-less;
+reserve giữa chừng biến claim thành đúng các path được nêu — các edit thật
+khác (main.py, models/task.py, routers/tasks.py, docs) chỉ còn được phủ
+bởi ticket `done` cũ → reviewer mù diff đó + doctor `awaiting_commit` trỏ
+nhầm ticket. Ứng viên quyết định: reserve trên ticket độc quyền nên
+widen-or-warn thay vì narrow.
+2. **Fix bảo mật có chi phí workflow**: `SESSION_SECRET` required làm qa
+lane cần export secret (hoặc `.env` gitignored — đã tạo). Lần đầu chạy ra
+inconclusive (migrate interpolation fail), lần sau pass.
+3. **Oracle rot**: QA-005/QA-006 shaped trước auth, không có `check` →
+story-scope qa inconclusive vĩnh viễn sau khi BR-3 biến `GET /tasks` thành
+401-by-design. Chủ repo bổ sung check (pytest auth / vitest sign-in) —
+quyết định đúng precedent ST-33d3. Gợi ý tương lai: oracle rot là
+`docs_maybe_stale` cho qa_cases.
+4. **Budget data cho E3**: correctness 12–27 calls; adversarial 38 (>30)
+rồi 22 (trần 45 hợp lý); 1 seat tự deviate sang plain lane khi profile lỗi —
+`lane input --seat` fail bằng error JSON im lặng, phía host phải đọc stderr.
+
+## 8. Ghi chú kết thúc
 
 - ST-2e5f (Google OAuth) không bị đụng. Không repo nào được push. Repo pulse
   chỉ nhận đúng file báo cáo này, không commit.

@@ -637,6 +637,8 @@ build gãy chéo **0** (giữ single-checkout, dưới ngưỡng decision 0025),
 (F14/D5). Chi tiết xác minh từng F + kết cục D1–D5:
 [`docs/plans/0025-dogfood.md`](0025-dogfood.md).
 
+**Round 2 (cùng ngày): ST-2e5f closed** — 2 ticket (api-high + ui-high), 1 vòng rework có panel-on-signal vận hành đúng quyết định (c), LRN-2b26 active + enforcement green. Số liệu và friction mới (reserve-narrowing, oracle rot, budget adversarial) ở §7 của `0025-dogfood.md`.
+
 Đã xong (mỗi pha xanh cả ba lệnh validation, threading mặc định):
 **A** (gate verify đọc lời khai + dirty_hash lane + findings trong packet +
 lock nguyên tử), **B** (song song theo `touches`, `reserve`, `frontier`,
