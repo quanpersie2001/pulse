@@ -136,12 +136,22 @@ impl Host {
 /// The `None` rows are the important ones. `.agents/skills` is the
 /// emerging cross-host convention, and for those hosts Pulse has nothing
 /// to link — it reports them as already covered instead of inventing work.
-pub const HOSTS: [Host; 7] = [
+pub const HOSTS: [Host; 8] = [
     Host {
         key: "claude",
         label: "Claude Code",
         probe: ".claude",
         skills_dir: Some(".claude/skills"),
+    },
+    Host {
+        // Pi discovers the Agent Skills standard directory
+        // (`.agents/skills/`) at project level — verified against pi's own
+        // shipped docs and the reference inventory
+        // (`references/better-harness/.../providers/pi.mjs`).
+        key: "pi",
+        label: "pi",
+        probe: ".pi",
+        skills_dir: None,
     },
     Host {
         key: "copilot",
@@ -186,7 +196,7 @@ pub const HOSTS: [Host; 7] = [
 /// [`tests::the_known_hosts_hint_names_every_host`] keeps it from drifting
 /// away from [`HOSTS`].
 pub const KNOWN_HOSTS_HINT: &str =
-    "known hosts: claude, copilot, qoder, grok, dsh, kimi, opencode. \
+    "known hosts: claude, pi, copilot, qoder, grok, dsh, kimi, opencode. \
      Several read `.agents/skills` themselves, so installing needs no host at all";
 
 pub fn host(key: &str) -> Result<&'static Host> {
