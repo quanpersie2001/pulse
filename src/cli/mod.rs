@@ -4,6 +4,7 @@ mod docs;
 mod doctor;
 mod events;
 mod frontier;
+mod hook;
 mod init;
 mod lane;
 mod learn;
@@ -166,5 +167,6 @@ fn run_in_repo(
             metrics::handle(&repo_root, since.as_deref(), json)
         }
         args::Command::Docs { command } => docs::handle(&repo_root, command),
+        args::Command::Hook { command } => hook::handle(&repo_root, command),
     }
 }

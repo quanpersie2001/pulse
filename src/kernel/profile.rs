@@ -57,6 +57,30 @@ pub struct PulseConfig {
     pub fence_ignore: Vec<String>,
     #[serde(default)]
     pub profiles: BTreeMap<String, Profile>,
+    /// Pre-edit hook behaviour (plan 0025 G1). Absent means the default —
+    /// an edit with no active ticket is allowed, so installing the hook
+    /// alone changes nothing until a ticket is claimed.
+    #[serde(default)]
+    pub hook: HookConfig,
+}
+
+/// What an edit may do when no ticket holds a live lease (plan 0025 G1).
+/// `Allow` (the default) keeps an unenrolled-feeling repo fully editable;
+/// `Deny` turns the hook into "claim before you edit" for every path the
+/// reservation rules would otherwise leave outside all `touches`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum UnclaimedPolicy {
+    #[default]
+    Allow,
+    Deny,
+}
+
+/// The `hook:` block of `PULSE.md` (plan 0025 G1).
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct HookConfig {
+    #[serde(default)]
+    pub unclaimed: UnclaimedPolicy,
 }
 
 /// Read and parse `PULSE.md` at the repo root. `#` lines are YAML comments

@@ -31,6 +31,8 @@ pub(crate) enum Command {
         #[arg(long)]
         json: bool,
     },
+    /// Create records, read them, and edit them: the graph side of Pulse
+    /// (plan 0022 §4/§7) — everything that is not a gate or a receipt.
     Work {
         #[command(subcommand)]
         command: super::work::WorkCommand,
@@ -191,6 +193,15 @@ pub(crate) enum Command {
     Docs {
         #[command(subcommand)]
         command: super::docs::DocsCommand,
+    },
+    /// The pre-edit gate a host hook calls before a file-writing tool
+    /// fires (plan 0025 G1): this is the only place a reservation binds on
+    /// an edit that never runs a `pulse` command. Pulse never installs
+    /// anything into a host — `pulse hook snippet <host>` prints the
+    /// configuration for you to paste.
+    Hook {
+        #[command(subcommand)]
+        command: super::hook::HookCommand,
     },
     /// Read-only board server over your registered Pulse projects
     /// (Decision 0023, as amended: `pulse init` registers; serve lists).

@@ -29,11 +29,11 @@ fn lease_expires_at(ticket: &Value) -> Option<chrono::DateTime<Utc>> {
         .map(|dt| dt.with_timezone(&Utc))
 }
 
-fn lease_actor(ticket: &Value) -> Option<&str> {
+pub(crate) fn lease_actor(ticket: &Value) -> Option<&str> {
     ticket.pointer("/lease/actor").and_then(Value::as_str)
 }
 
-fn lease_is_live(ticket: &Value, now: chrono::DateTime<Utc>) -> bool {
+pub(crate) fn lease_is_live(ticket: &Value, now: chrono::DateTime<Utc>) -> bool {
     lease_actor(ticket).is_some() && lease_expires_at(ticket).is_some_and(|expires| expires > now)
 }
 

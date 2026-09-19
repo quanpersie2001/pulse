@@ -62,6 +62,19 @@ outside your own invalidates another Ticket's review. The host watches `pulse
 events tail --follow` for the blocking ticket's `done` (or a release) and
 spawns the work again; your checkpoint carries the state forward.
 
+## When the hook refuses your edit
+
+If your host has the pre-edit hook installed, an edit to a file outside
+every held Ticket's `touches` (or inside another Ticket's scope) is
+refused before the write happens, with the reason on stderr. Read it:
+the message names the holding Ticket or tells you the path is outside
+every `touches`. If the file is yours, widen the claim (`pulse reserve
+<id> <path>`) and retry. If it is not yours, stop and checkpoint — do
+**not** write the file by another route (a shell redirect, `sed -i`):
+the hook only sees your host's edit tools, and a write that slips past
+it still surfaces at your handoff (`handoff_unreserved_changes`) and in
+the other Ticket's review.
+
 ## Checkpoint shape (`cp.json`, plan §4.4)
 
 ```json

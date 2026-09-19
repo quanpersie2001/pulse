@@ -20,7 +20,7 @@ appended event.
 
 - `src/bin/pulse.rs` — parse, run, render errors. Delegates to `pulse::cli`.
 - `src/cli/` — thin transport/renderer per command family (`args`, `work`,
-  `lane`, `lease`, `frontier`, `learn`, `docs`, `events`, `init`, `serve`,
+  `lane`, `lease`, `frontier`, `hook`, `learn`, `docs`, `events`, `init`, `serve`,
   `doctor`, `metrics`, `packet`, `checkpoint`, `completion`, `output`). Owns no
   domain semantics; resolves the repo root, renders JSON or text, maps
   failures to exit codes.
@@ -31,6 +31,25 @@ appended event.
   widens it mid-run), `scope` (pure touches-overlap arithmetic behind
   parallel claims), `frontier` (read-only scheduling view: what can run
   now, and what blocks the rest — decision 0025 B5),
+  `hook` (the pre-edit gate, plan 0025 G1: given the path a host hook is
+  about to let an agent write, decide allow/deny from the path alone —
+  the one place a reservation binds on an edit that never runs a `pulse`
+  command. Rules in order: fenced-out paths are free, except a review/qa
+  lane may only write under `.pulse/evidence/`; a lane never edits
+  source; nothing active → the `hook.unclaimed` policy (default allow);
+  a touches-less active ticket is exclusive; otherwise the path must fall
+  inside a held `touches`, never inside a verifying one, and outside
+  everything it is denied with the `pulse reserve` hint. Read-only, no
+  lock, no event — it runs on every edit. The decision is deliberately
+  NOT identity-based: at edit time no host says which subagent calls, and
+  `--actor` is self-declared (decision 0026), so an absent actor only
+  weakens the cross-ticket denials, never the scope rule. Honest limits:
+  the hook sees only the host's edit tools — a file written through a
+  shell (`sed -i`, `>`) bypasses it, and `handoff_unreserved_changes`
+  (decision 0025 B6) is the second net; `pulse hook snippet <host>`
+  prints verified host configuration for the user to paste (Claude Code's
+  PreToolUse; any other host is `hook_host_unknown` rather than an
+  invented config), and Pulse never writes a host settings file),
   `lane` (profile check + bounded lane input + §8.4 validation and seal;
   an opt-in profile **panel** runs the same lane `count` times as blind
   `--seat` reviewers and `pulse lane reconcile` merges their findings into
@@ -101,7 +120,7 @@ appended event.
 ## 3. Embedded assets and skills
 
 - `templates/` is everything `pulse init` writes into a target repo
-  (seeds, prompts, qa scripts, host hooks, schema), embedded with
+  (seeds, prompts, qa scripts, schema), embedded with
   `include_str!` — a template change is a code change and is tested.
 - `assets/` is this repository's own media (the board UI).
 - `skills/` are the four guidance skills (`pulse-shape`, `pulse-plan`,
@@ -114,7 +133,7 @@ appended event.
 than one file wires them with `#[path]` (`tests/storage.rs` →
 `tests/storage/storage_primitives.rs`). Shared helpers live in
 `tests/common/`, included per crate with `#[path]`. Crates:
-`architecture_guards`, `communication`, `doctor`, `golden_path`,
+`architecture_guards`, `communication`, `doctor`, `golden_path`, `hook`,
 `parallel`, `public_api_contract`, `lane`, `metrics`, `storage`, `serve`,
 `target_repo`.
 

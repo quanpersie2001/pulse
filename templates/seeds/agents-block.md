@@ -60,6 +60,13 @@ uncommitted work; then `pulse frontier` again. A Ticket's files stay held
 from claim to `done`, review included — that is why the close of one
 Ticket survives another's commit landing first.
 
+Reservations bind on edits only when a host hook feeds them to Pulse:
+`pulse hook snippet <host>` prints the configuration to paste into the
+host's settings (never written by Pulse itself). With it, an edit outside
+every held Ticket's `touches` is refused at the edit, not at the handoff.
+Without it the reservation is a convention between sessions — the
+handoff's `handoff_unreserved_changes` check is the second net.
+
 `done` is never a claim, only a gate reading receipts: a Ticket goes
 `verifying -> done` only through `pulse close`, after every lane in its
 profile has a passing receipt on the handoff's commit, sealed by an actor
@@ -121,3 +128,4 @@ on; the lease stays yours until it expires or someone runs `pulse release`.
 | `pulse metrics` | the loop's numbers, from the log |
 | `pulse docs applicable <id>` / `check` | frontmatter hint / doc rot + docs a ticket may have staled (`check --ticket <id>`) |
 | `pulse doctor` | torn store, stale lease, unsealed lane |
+| `pulse hook snippet <host>` | the pre-edit hook config, for pasting — reservations made binding |

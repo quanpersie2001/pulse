@@ -38,6 +38,12 @@ pub(crate) fn handle(
             report.skipped.join(", ")
         ));
     }
+    // One hint line, plan 0025 G1: reservations bind only when a host hook
+    // calls the gate. The configuration itself is printed on demand —
+    // `pulse init` never writes into a host's settings.
+    human.push_str(
+        "\n`pulse hook snippet <host>` prints the PreToolUse config that makes reservations binding",
+    );
     human.push_str(&register_note);
     render(json, &report, human)
 }

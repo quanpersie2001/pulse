@@ -33,8 +33,10 @@ pub enum Action {
 
 /// An agent role is a worker (may checkpoint/handoff) or a lane (may record
 /// a lane receipt) — the exact runner role name beyond that prefix does not
-/// matter to authorization.
-fn is_lane_role(agent_id: &str) -> bool {
+/// matter to authorization. Shared with the pre-edit gate (plan 0025 G1),
+/// which holds a lane to the same shape from the other side: a lane writes
+/// evidence, never source.
+pub(crate) fn is_lane_role(agent_id: &str) -> bool {
     agent_id.starts_with("review-") || agent_id.starts_with("qa-") || agent_id.starts_with("check-")
 }
 
