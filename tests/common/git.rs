@@ -3,6 +3,10 @@
 //! `git` runs a git command inside a target repo and asserts success; `commit_all`
 //! establishes a clean committed baseline (initializing the repo idempotently) and
 //! returns `HEAD`. Wired only into crates that drive target-repo git state.
+//!
+//! Every commit carries its own author identity through `-c` flags: test repos
+//! must commit on machines with no global git identity (CI runners) and must
+//! never depend on the developer's `~/.gitconfig`.
 
 use std::path::Path;
 use std::process::Command;
@@ -23,18 +27,49 @@ pub fn git(repo: &Path, args: &[&str]) -> String {
     String::from_utf8_lossy(&output.stdout).trim().to_string()
 }
 
+/// Commit staged changes in `repo` under the shared test identity.
+///
+/// Identity rides the command line (`-c`), so no repo-local or global git
+/// config is ever required — unlike persisted `git config`, this works on a
+/// fresh runner and on a repo another helper already initialized.
+pub fn commit(repo: &Path, message: &str) -> String {
+    git(
+        repo,
+        &[
+            "-c",
+            "user.name=Pulse Test",
+            "-c",
+            "user.email=pulse@example.test",
+            "commit",
+            "-m",
+            message,
+        ],
+    )
+}
+
 /// Initialize (idempotently) and commit all of `repo`, returning `HEAD`.
 ///
 /// The `.git` existence guard makes this safe to call on a fresh tempdir or an
-/// already-initialized repo; every caller operates on a fresh tempdir, so the
-/// guard is equivalent to unconditional init for all existing call sites.
+/// already-initialized repo (either from this helper or `TestRepo::from_fixture`,
+/// whose baseline commit leaves no identity behind); the guard is equivalent to
+/// unconditional init for all existing call sites.
 pub fn commit_all(repo: &Path) -> String {
     if !repo.join(".git").exists() {
         git(repo, &["init"]);
-        git(repo, &["config", "user.email", "test@example.com"]);
-        git(repo, &["config", "user.name", "Test User"]);
     }
     git(repo, &["add", "."]);
-    git(repo, &["commit", "--allow-empty", "-m", "snapshot"]);
+    git(
+        repo,
+        &[
+            "-c",
+            "user.name=Pulse Test",
+            "-c",
+            "user.email=pulse@example.test",
+            "commit",
+            "--allow-empty",
+            "-m",
+            "snapshot",
+        ],
+    );
     git(repo, &["rev-parse", "HEAD"])
 }

@@ -241,7 +241,7 @@ fn two_workers_share_one_checkout_across_claim_handoff_lane_and_close() {
     // does not — B's lane and close must not go stale (decision 0025: a
     // scoped ticket's fence is not HEAD).
     common_git::git(repo.path(), &["add", "api"]);
-    common_git::git(repo.path(), &["commit", "-m", "land api"]);
+    common_git::commit(repo.path(), "land api");
     run_lane(&repo, &tk_b);
     let closed = repo.pulse_ok(&["close", &tk_b, "--actor", "human:quan", "--json"]);
     assert_eq!(closed["status"], "done");

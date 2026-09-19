@@ -20,6 +20,7 @@ use serde_json::{json, Value};
 
 #[path = "common/bin.rs"]
 mod common_bin;
+#[allow(dead_code)]
 #[path = "common/git.rs"]
 mod common_git;
 
@@ -51,11 +52,18 @@ fn write_file(path: &Path, body: &str) -> PathBuf {
 
 fn pulse_output(repo: &Path, args: &[&str], env: &[(&str, &str)]) -> Output {
     let mut command = Command::new(common_bin::bin());
+    command.arg("--repo-root").arg(repo).args(args);
+    if env.iter().any(|(key, _)| *key == "PULSE_ACTOR") {
+        // Drop any developer-exported value; the per-call env entries
+        // below supply the test's own actor.
+        command.env_remove("PULSE_ACTOR");
+    } else {
+        // Fixed default so actor-recording commands never depend on the
+        // machine's `git config user.name` (unset on CI runners); an
+        // explicit `--actor` flag still wins by resolver precedence.
+        command.env("PULSE_ACTOR", "human:test");
+    }
     command
-        .arg("--repo-root")
-        .arg(repo)
-        .args(args)
-        .env_remove("PULSE_ACTOR")
         // `pulse init` registers into the user registry (Decision 0023);
         // tests must never touch the real ~/.pulse.
         .env(

@@ -38,7 +38,8 @@ impl TestRepo {
 
     pub fn pulse(&self, args: &[&str]) -> Output {
         assert_safe_target(self.path()).expect("refuse unsafe Pulse target");
-        Command::new(pulse_binary())
+        let mut command = Command::new(pulse_binary());
+        command
             .arg("--repo-root")
             .arg(self.path())
             .args(args)
@@ -47,7 +48,16 @@ impl TestRepo {
             .env(
                 "PULSE_REGISTRY",
                 std::env::temp_dir().join("pulse-test-registry.json"),
-            )
+            );
+        // Actor-recording subcommands resolve one even when the test passes
+        // no flag; the resolver's last fallback is the machine's
+        // `git config user.name`, which CI runners do not have. Default to a
+        // fixed actor instead — an explicit `--actor`/`--from` flag or a
+        // test-set `PULSE_ACTOR` still wins by `resolve_actor` precedence.
+        if std::env::var_os("PULSE_ACTOR").is_none() {
+            command.env("PULSE_ACTOR", "human:test");
+        }
+        command
             .output()
             .expect("run Pulse against target repository fixture copy")
     }
